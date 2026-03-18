@@ -767,12 +767,18 @@ Add Hive integration alongside what's already there.
 
 IMPORTANT — Scheduling conflict detection:
 9. Check for existing agent scheduling that would conflict with Hive's orchestrator:
-   - launchd plist files: look for *.plist in the repo root, in a LaunchAgents/ folder, or referenced in any docs/README
-   - cron jobs: check crontab references, .github/workflows for scheduled actions, vercel.json cron entries
-   - Any scripts that auto-run agents, dispatchers, or Claude CLI on a schedule
-   If found, create an escalation approval via POST /api/approvals with:
-   { gate_type: "escalation", company_id: "${imp.company_id || ""}", title: "Conflicting agent schedule detected in ${imp.name}", description: "Found existing scheduling: [list what you found]. These must be disabled to avoid conflicts with Hive orchestrator. Recommended: [specific unload/disable commands]" }
-   Also note findings in the scan report output.`,
+
+   CLOUD-BASED (disable directly — you have the credentials):
+   - GitHub Actions with schedule triggers: delete or disable the workflow files via GitHub API
+   - Vercel cron entries in vercel.json: remove the crons array (Hive manages its own cron)
+   - Any CI/CD pipelines that auto-deploy or run agents on a schedule: disable them
+
+   LOCAL (escalate — only Carlos can do this):
+   - launchd plist files (*.plist): if found in the repo or referenced in docs, create an escalation
+     approval via POST /api/approvals with:
+     { gate_type: "escalation", company_id: "${imp.company_id || ""}", title: "Local launchd schedule detected in ${imp.name}", description: "Found plist files: [list files]. Carlos needs to manually unload: launchctl unload ~/Library/LaunchAgents/[filename]" }
+
+   Log all findings (both resolved and escalated) in the action output.`,
         cwd: `/Users/carlos/code/${imp.slug}`,
       });
 
