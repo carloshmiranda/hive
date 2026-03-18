@@ -85,6 +85,13 @@
 **Prevention:** When reimplementing crypto logic outside the Next.js app, always verify the format matches `src/lib/crypto.ts`. Add a comment referencing the canonical implementation.
 **Affects:** hive
 
+### 2026-03-18 rsync from update archive overwrites deployment fixes
+**What happened:** P1 update archive was built before auth/middleware fixes were applied. `rsync` overwrote `auth.ts` and `middleware.ts` with broken versions, causing all settings to appear erased (401 from API).
+**Root cause:** The archive was a snapshot from before deployment. rsync blindly synced all source files including ones that had been fixed post-deploy.
+**Fix applied:** Re-applied the JWT `githubId` callback and middleware auth enforcement.
+**Prevention:** After rsync from an update archive, always diff `auth.ts` and `middleware.ts` against the last known-good commit. Better: build update archives from the deployed repo (post-fix), not from a pre-deploy snapshot. Consider using `git format-patch` instead of tar archives for updates.
+**Affects:** hive
+
 ### 2026-03-18 Settings table column name mismatch
 **What happened:** Orchestrator queried `is_encrypted` column, but the actual column is `is_secret`.
 **Root cause:** Column was renamed during development but the orchestrator's direct SQL query wasn't updated.
