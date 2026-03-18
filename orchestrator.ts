@@ -587,6 +587,18 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
     const playbook = await getPlaybook();
     const directives = await getDirectives(company.id);
 
+    // Load research reports for this company (if they exist)
+    const researchReports = await sql`
+      SELECT report_type, summary, content FROM research_reports
+      WHERE company_id = ${company.id}
+      ORDER BY report_type
+    `;
+    const researchContext = researchReports.length > 0
+      ? `\nRESEARCH REPORTS:\n${researchReports.map((r: any) =>
+          `[${r.report_type}] ${r.summary || JSON.stringify(r.content).slice(0, 300)}`
+        ).join("\n")}`
+      : "";
+
     const context = `
 COMPANY: ${company.name} (${company.slug})
 STATUS: ${company.status}
@@ -598,14 +610,113 @@ ${JSON.stringify(metrics, null, 2)}
 
 PLAYBOOK (top learnings):
 ${playbook.map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.confidence})`).join("\n")}
-
-${directives.length > 0 ? `DIRECTIVES FROM CARLOS (must address these):
+${researchContext}
+${directives.length > 0 ? `\nDIRECTIVES FROM CARLOS (must address these):
 ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.agent})` : ""}`).join("\n")}` : ""}
     `.trim();
 
+    const companyCtx = { name: company.name, slug: company.slug };
+
+    // === Research Analyst ===
+    // Cycle 0: Full research (market + competitive + SEO) on first run
+    // Every 7 cycles: Refresh competitive analysis only (market shifts)
+    // On directive: "refresh research" triggers full re-run
+    const isFirstCycle = cycleNumber === 1 && researchReports.length === 0;
+    const isRefreshCycle = cycleNumber > 1 && cycleNumber % 7 === 0;
+    const hasRefreshDirective = directives.some(d => d.text.toLowerCase().includes("refresh research"));
+    const needsResearch = isFirstCycle || isRefreshCycle || hasRefreshDirective;
+
+    if (needsResearch) {
+      const researchType = isFirstCycle ? "full (Cycle 0)" : isRefreshCycle ? "competitive refresh" : "directive refresh";
+      console.log(`  ├─ 🔬 Research Analyst (${researchType})...`);
+
+      const researchPrompt = await getActivePrompt("research_analyst", companyCtx);
+
+      const reportsToGenerate = isFirstCycle || hasRefreshDirective
+        ? "all 3 research reports (market_research, competitive_analysis, seo_keywords)"
+        : "a competitive analysis refresh ONLY (just the ===COMPETITIVE_ANALYSIS=== block)";
+
+      const reportMarkers = isFirstCycle || hasRefreshDirective
+        ? `Output 3 separate JSON blocks, each wrapped in markers:
+
+===MARKET_RESEARCH===
+{...json...}
+===END===
+
+===COMPETITIVE_ANALYSIS===
+{...json...}
+===END===
+
+===SEO_KEYWORDS===
+{...json...}
+===END===`
+        : `Output 1 JSON block wrapped in markers:
+
+===COMPETITIVE_ANALYSIS===
+{...json...}
+===END===
+
+Focus on: new competitors since last analysis, pricing changes, feature launches, market share shifts.`;
+
+      const researchOutput = await dispatch({
+        prompt: researchPrompt + `\n\nProduce ${reportsToGenerate} for this company.
+
+COMPANY: ${company.name}
+DESCRIPTION: ${company.description}
+TARGET AUDIENCE: ${(company as any).target_audience || "see idea proposal context"}
+${researchReports.length > 0 ? `\nEXISTING REPORTS (for reference/update):\n${researchReports.map((r: any) => `[${r.report_type}] ${r.summary}`).join("\n")}` : ""}
+
+Use web search extensively.
+${reportMarkers}
+
+After each JSON block, write a 1-2 sentence summary.`,
+        maxTurns: isFirstCycle ? 30 : 15,
+        timeoutMs: isFirstCycle ? 15 * 60 * 1000 : 10 * 60 * 1000,
+      });
+
+      // Parse and store each research report
+      const reportTypes = [
+        { marker: "MARKET_RESEARCH", type: "market_research" },
+        { marker: "COMPETITIVE_ANALYSIS", type: "competitive_analysis" },
+        { marker: "SEO_KEYWORDS", type: "seo_keywords" },
+      ];
+
+      for (const rt of reportTypes) {
+        try {
+          const regex = new RegExp(`===${rt.marker}===([\\s\\S]*?)===END===`);
+          const match = researchOutput.match(regex);
+          if (match) {
+            const jsonMatch = match[1].match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const content = JSON.parse(jsonMatch[0]);
+              // Extract summary (text after the JSON block)
+              const afterJson = match[1].slice(match[1].lastIndexOf("}") + 1).trim();
+              const summary = afterJson.split("\n")[0]?.trim() || null;
+
+              await sql`
+                INSERT INTO research_reports (company_id, report_type, content, summary)
+                VALUES (${company.id}, ${rt.type}, ${JSON.stringify(content)}, ${summary})
+                ON CONFLICT (company_id, report_type) DO UPDATE SET
+                  content = ${JSON.stringify(content)}, summary = ${summary}, updated_at = now()
+              `;
+              console.log(`    ✓ ${rt.type}: ${summary?.slice(0, 60) || "stored"}`);
+            }
+          }
+        } catch (parseErr: any) {
+          console.log(`    ⚠ Failed to parse ${rt.type}: ${parseErr.message}`);
+        }
+      }
+
+      // Log the research action
+      await sql`
+        INSERT INTO agent_actions (company_id, cycle_id, agent, action_type, description, status, started_at, finished_at)
+        VALUES (${company.id}, ${cycleId}, 'research_analyst', 'cycle_0_research',
+          ${`Cycle 0 research completed: ${reportTypes.length} reports`}, 'success', now(), now())
+      `;
+    }
+
     // Step 1: CEO plans (incorporating directives)
     console.log("  ├─ CEO planning...");
-    const companyCtx = { name: company.name, slug: company.slug };
     const ceoPrompt = await getActivePrompt("ceo", companyCtx);
     const ceoPlan = await executeAgent({
       agent: "ceo",
@@ -633,16 +744,142 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
       cwd: `/Users/carlos/code/${company.slug}`, // local repo path
     });
 
-    // Step 3: Growth executes
+    // Step 3: Growth executes (inbound: content, SEO, social)
     console.log("  ├─ Growth executing...");
     const growthPrompt = await getActivePrompt("growth", companyCtx);
     await executeAgent({
       agent: "growth",
       companyId: company.id,
       cycleId,
-      prompt: growthPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the growth tasks.`,
+      prompt: growthPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the growth tasks. You have access to research reports — use SEO keywords and market research to inform content.`,
       context,
     });
+
+    // Step 3b: Outreach executes (outbound: lead gen, cold email, community engagement)
+    // Skipped for companies with no research reports yet (wait for Cycle 0 to complete)
+    if (researchReports.length > 0) {
+      console.log("  ├─ Outreach executing...");
+      const outreachPrompt = await getActivePrompt("outreach", companyCtx);
+
+      // Load existing lead list and outreach log
+      const [leadList] = await sql`
+        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'lead_list'
+      `;
+      const [outreachLog] = await sql`
+        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'outreach_log'
+      `;
+
+      const outreachContext = `${context}
+
+EXISTING LEADS: ${leadList ? JSON.stringify(leadList.content) : "None yet — build the lead list first."}
+
+OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach yet."}`;
+
+      const outreachResult = await executeAgent({
+        agent: "outreach",
+        companyId: company.id,
+        cycleId,
+        prompt: outreachPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\n` +
+          (leadList ? "Review your existing lead list. Draft new cold emails for uncontacted leads. Plan follow-ups for leads that haven't replied. Find new leads if the list is thin (<10 active leads)."
+            : "No lead list yet. Build the initial lead list using web search. Find 10-20 potential customers matching the target audience.") +
+          "\n\nOutput your results as JSON. Use the lead_list and outreach_log report type formats from your instructions.",
+        context: outreachContext,
+      });
+
+      // Parse and store outreach results
+      try {
+        const output = outreachResult.output;
+
+        // Extract lead list updates
+        const leadMatch = output.match(/lead_list['":\s]*(\{[\s\S]*?\})\s*(?:outreach|$)/i) || output.match(/["']leads["']\s*:/);
+        const fullJson = output.match(/\{[\s\S]*\}/);
+        if (fullJson) {
+          const parsed = JSON.parse(fullJson[0]);
+
+          // If it has leads, update lead_list
+          if (parsed.leads?.length) {
+            await sql`
+              INSERT INTO research_reports (company_id, report_type, content, summary)
+              VALUES (${company.id}, 'lead_list', ${JSON.stringify(parsed)}, ${`${parsed.leads.length} leads tracked`})
+              ON CONFLICT (company_id, report_type) DO UPDATE SET
+                content = ${JSON.stringify(parsed)}, summary = ${`${parsed.leads.length} leads tracked`}, updated_at = now()
+            `;
+            console.log(`    📧 ${parsed.leads.length} leads in pipeline`);
+          }
+
+          // If it has emails_drafted, update outreach_log
+          if (parsed.emails_drafted?.length) {
+            await sql`
+              INSERT INTO research_reports (company_id, report_type, content, summary)
+              VALUES (${company.id}, 'outreach_log', ${JSON.stringify(parsed)}, ${`${parsed.emails_drafted.length} emails drafted`})
+              ON CONFLICT (company_id, report_type) DO UPDATE SET
+                content = ${JSON.stringify(parsed)}, summary = ${`${parsed.emails_drafted.length} emails drafted`}, updated_at = now()
+            `;
+
+            // Send approved cold emails via Resend
+            const resendKey = await getSettingValueDirect("resend_api_key");
+            if (resendKey) {
+              // Only auto-send if we've had outreach approved before
+              const [outreachApproved] = await sql`
+                SELECT id FROM approvals 
+                WHERE company_id = ${company.id} AND gate_type = 'outreach_batch' AND status = 'approved'
+                LIMIT 1
+              `;
+
+              if (outreachApproved) {
+                // Auto-send (previously approved approach)
+                let sent = 0;
+                for (const email of parsed.emails_drafted.filter((e: any) => e.status === "drafted").slice(0, 10)) {
+                  if (!email.to || !email.subject || !email.body) continue;
+                  try {
+                    const res = await fetch("https://api.resend.com/emails", {
+                      method: "POST",
+                      headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        from: `${company.name} <outreach@${company.slug}.hive.local>`,
+                        to: email.to,
+                        subject: email.subject,
+                        html: email.body.replace(/\n/g, "<br>"),
+                      }),
+                    });
+                    if (res.ok) { email.status = "sent"; email.sent_at = new Date().toISOString(); sent++; }
+                  } catch { /* individual send failure, continue */ }
+                }
+                if (sent > 0) {
+                  console.log(`    ✉ ${sent} cold emails sent`);
+                  // Update the log with sent statuses
+                  await sql`
+                    UPDATE research_reports SET content = ${JSON.stringify(parsed)}, updated_at = now()
+                    WHERE company_id = ${company.id} AND report_type = 'outreach_log'
+                  `;
+                }
+              } else {
+                // First outreach batch — needs approval
+                await sql`
+                  INSERT INTO approvals (company_id, gate_type, title, description, context)
+                  VALUES (
+                    ${company.id}, 'outreach_batch',
+                    ${`Approve cold outreach for ${company.name}`},
+                    ${`The Outreach agent drafted ${parsed.emails_drafted.length} cold emails.\n\n` +
+                      `**Sample email:**\n` +
+                      `To: ${parsed.emails_drafted[0]?.to || "N/A"}\n` +
+                      `Subject: ${parsed.emails_drafted[0]?.subject || "N/A"}\n` +
+                      `Body: ${(parsed.emails_drafted[0]?.body || "").slice(0, 300)}\n\n` +
+                      `Approving this gate allows future batches to auto-send (max 10/day).`},
+                    ${JSON.stringify({ email_count: parsed.emails_drafted.length })}
+                  )
+                `;
+                console.log(`    📋 First outreach batch — approval gate created`);
+              }
+            }
+          }
+        }
+      } catch {
+        // Non-critical: if parsing fails, the raw output is still logged by executeAgent
+      }
+    } else {
+      console.log("  ├─ Outreach — skipped (no research reports yet)");
+    }
 
     // Step 4: Ops collects metrics
     console.log("  ├─ Ops collecting metrics...");
@@ -910,12 +1147,12 @@ Output a brief portfolio summary.`,
   const hasEnoughData = results.filter(r => r.status === "complete").length > 0;
 
   if (hasEnoughData && !SINGLE_COMPANY && !SCOUT_ONLY) {
-    const agents = ["ceo", "engineer", "growth", "ops"];
+    const agents = ["ceo", "engineer", "growth", "ops", "research_analyst", "outreach"];
     let evolverTriggered = false;
 
     for (const agent of agents) {
       try {
-        // Check if this agent needs prompt evolution
+        // Get performance data for this agent over last 14 days
         const recentActions = await sql`
           SELECT status, error, reflection, description, finished_at
           FROM agent_actions
@@ -925,19 +1162,20 @@ Output a brief portfolio summary.`,
           LIMIT 50
         `;
 
-        const totalActions = recentActions.length;
-        const successCount = recentActions.filter((a: any) => a.status === "success").length;
-        const successRate = totalActions > 0 ? successCount / totalActions : 1;
+        const total = recentActions.length;
+        const successes = recentActions.filter((a: any) => a.status === "success").length;
+        const failures = recentActions.filter((a: any) => a.status === "failed").length;
+        const successRate = total > 0 ? successes / total : 1;
 
         // Check prompt staleness
-        const [currentPrompt] = await sql`
+        const [promptRow] = await sql`
           SELECT updated_at FROM agent_prompts WHERE agent = ${agent} AND is_active = true LIMIT 1
         `;
-        const promptAge = currentPrompt?.updated_at
-          ? (Date.now() - new Date(currentPrompt.updated_at).getTime()) / (1000 * 60 * 60 * 24)
+        const promptAge = promptRow?.updated_at
+          ? (Date.now() - new Date(promptRow.updated_at).getTime()) / (1000 * 60 * 60 * 24)
           : 999;
 
-        const needsEvolution = (totalActions >= 10 && successRate < 0.7) || promptAge >= 14;
+        const needsEvolution = (total >= 10 && successRate < 0.7) || promptAge >= 14;
 
         if (!needsEvolution) continue;
 
@@ -945,10 +1183,6 @@ Output a brief portfolio summary.`,
           console.log("\n🧬 Prompt Evolver — triggered by performance data");
           evolverTriggered = true;
         }
-
-        const total = totalActions;
-        const successes = successCount;
-        const failures = recentActions.filter((a: any) => a.status === "failed").length;
 
         // Get version info for next prompt
         const [latestVersion] = await sql`
@@ -960,8 +1194,8 @@ Output a brief portfolio summary.`,
 
         console.log(`  ├─ ${agent}: ${Math.round(successRate * 100)}% success, ${failures} failures — generating variant...`);
 
-        // Get current prompt text
-        const currentPromptText = await getActivePrompt(agent);
+        // Get current prompt
+        const currentPrompt = await getActivePrompt(agent);
 
         // Gather failure patterns
         const failureDetails = recentActions
@@ -980,7 +1214,7 @@ Output a brief portfolio summary.`,
 ${failureDetails || "No specific failures logged"}
 
 ## Current prompt:
-${currentPromptText.slice(0, 3000)}
+${currentPrompt.slice(0, 3000)}
 
 ## Your task:
 1. Analyze the failure patterns — what's causing the agent to fail?
@@ -1042,7 +1276,7 @@ ${currentPromptText.slice(0, 3000)}
       }
     }
 
-    if (!evolverTriggered && !SINGLE_COMPANY && !SCOUT_ONLY) {
+    if (!evolverTriggered) {
       console.log("\n🧬 Prompt Evolver — skipped (all agents performing well or insufficient data)");
     }
   } else if (!SINGLE_COMPANY && !SCOUT_ONLY) {

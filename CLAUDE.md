@@ -130,12 +130,16 @@ THEN: Provision approved companies
   Onboard scanned imports (with pattern extraction)
 
 FOR EACH company WHERE status IN ('mvp', 'active'):
+  0. Research Analyst (Cycle 0: full market/competitive/SEO, every 7 cycles: competitive refresh, on directive: full refresh)
+     - Uses web search to produce market_research, competitive_analysis, seo_keywords reports
+     - Stored in research_reports table, fed to CEO + Growth + Outreach as context
   1. Read open directives from Carlos (dashboard/GitHub Issues)
-  2. CEO: Read metrics + playbook + directives → write plan to cycles table
+  2. CEO: Read metrics + playbook + research + directives → write plan to cycles table
   3. Engineer: Execute code tasks from plan → commit to GitHub → deploy
-  4. Growth: Execute marketing tasks from plan → send emails, schedule posts
-  5. Ops: Verify metrics (webhooks pre-collected most data) → fill gaps → check health
-  6. CEO: Review cycle results → write ceo_review → score cycle 1-10 → close directives
+  4. Growth (inbound): SEO blog posts from keywords report, social media, content calendar, landing page optimization
+  5. Outreach (outbound): Build lead list from research, draft cold emails, send via Resend (first batch needs approval gate, then auto-sends max 10/day), community engagement
+  6. Ops: Verify metrics (webhooks pre-collected most data) → fill gaps → check health
+  7. CEO: Review cycle results → write ceo_review → score cycle 1-10 → close directives
      - Playbook extraction: if review contains playbook_entry, writes to playbook table
      - Kill flag: if review sets kill_flag=true, auto-creates kill_company approval gate
      - Graceful: if review JSON can't be parsed, cycle still completes normally

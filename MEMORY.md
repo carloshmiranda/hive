@@ -84,3 +84,4 @@ Before starting work in any Claude Code session:
 - 2026-03-18: All P2 items completed: Prompt Evolver (weekly Wednesday), social media posting (X API v2), Resend transactional templates (welcome, receipt, password reset). Full backlog cleared.
 - 2026-03-18: Critical bugs fixed: auth.ts env var names (GITHUB_OAUTH_ID → AUTH_GITHUB_ID), middleware excluding webhooks/cron/health, GitHub webhook HMAC-SHA256 verification added. These were being overwritten by every archive update.
 - 2026-03-18: Deployment confirmed live at hive-phi.vercel.app (READY). Vercel project prj_n9JaPbWmRv0SKoHgkdXYOEGQtjRv. 71 files, 20 pages, all P0/P1/P2 complete.
+- 2026-03-18: Polsia feature parity: Outreach agent wired into nightly cycle (lead gen + cold email pipeline via Resend), periodic research refresh (competitive analysis every 7 cycles), research reports rendered in company detail page.

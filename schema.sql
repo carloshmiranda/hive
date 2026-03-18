@@ -216,3 +216,24 @@ CREATE INDEX idx_playbook_domain ON playbook(domain);
 CREATE INDEX idx_infra_company ON infra(company_id);
 CREATE INDEX idx_directives_open ON directives(status) WHERE status = 'open';
 CREATE INDEX idx_imports_company ON imports(company_id);
+
+-- Research reports: market research, competitive analysis, lead lists per company
+CREATE TABLE research_reports (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id    TEXT NOT NULL REFERENCES companies(id),
+  report_type   TEXT NOT NULL CHECK (report_type IN (
+                  'market_research',      -- TAM, trends, demand signals, target audience
+                  'competitive_analysis', -- competitors: pricing, features, gaps, positioning
+                  'lead_list',            -- potential customers for cold outreach
+                  'seo_keywords',         -- keyword research for organic growth
+                  'outreach_log'          -- cold email sends, responses, conversion
+                )),
+  content       JSONB NOT NULL,
+  summary       TEXT,
+  sources       JSONB,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(company_id, report_type)
+);
+
+CREATE INDEX idx_research_company ON research_reports(company_id);

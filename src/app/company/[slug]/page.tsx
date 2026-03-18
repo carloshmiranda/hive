@@ -49,6 +49,7 @@ export default function CompanyDetailPage() {
   const [actions, setActions] = useState<Action[]>([]);
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [research, setResearch] = useState<Array<{ id: string; report_type: string; summary: string | null; content: any; updated_at: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [directive, setDirective] = useState("");
   const [sending, setSending] = useState(false);
@@ -63,16 +64,18 @@ export default function CompanyDetailPage() {
     setCompany(comp);
 
     // Fetch all data for this company
-    const [cyRes, acRes, meRes, apRes] = await Promise.all([
+    const [cyRes, acRes, meRes, apRes, reRes] = await Promise.all([
       fetch(`/api/cycles?company_id=${comp.id}&limit=20`),
       fetch(`/api/actions?company_id=${comp.id}&limit=50`),
       fetch(`/api/metrics?company_id=${comp.id}`),
       fetch(`/api/approvals?company_id=${comp.id}&status=all`),
+      fetch(`/api/research?company_id=${comp.id}`),
     ]);
     if (cyRes.ok) setCycles((await cyRes.json()).data || []);
     if (acRes.ok) setActions((await acRes.json()).data || []);
     if (meRes.ok) setMetrics((await meRes.json()).data || []);
     if (apRes.ok) setApprovals((await apRes.json()).data || []);
+    if (reRes.ok) setResearch((await reRes.json()).data || []);
     setLoading(false);
   }, [slug]);
 
@@ -203,6 +206,60 @@ export default function CompanyDetailPage() {
               </div>
             );
           })()}
+        </div>
+      )}
+
+      {/* Research Reports */}
+      {research.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <h3 style={{ fontSize: 14, color: "#f0f0ec", margin: "0 0 12px", fontWeight: 500 }}>Research intelligence</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {research.map(r => {
+              const icons: Record<string, string> = {
+                market_research: "📊", competitive_analysis: "🎯", seo_keywords: "🔍",
+                lead_list: "📧", outreach_log: "✉",
+              };
+              const labels: Record<string, string> = {
+                market_research: "Market research", competitive_analysis: "Competitive analysis",
+                seo_keywords: "SEO keywords", lead_list: "Lead pipeline", outreach_log: "Outreach log",
+              };
+              const content = typeof r.content === "string" ? JSON.parse(r.content) : r.content;
+
+              // Quick stats per report type
+              let stats = "";
+              if (r.report_type === "competitive_analysis" && content.direct_competitors) {
+                stats = `${content.direct_competitors.length} competitors mapped`;
+              } else if (r.report_type === "seo_keywords" && content.primary_keywords) {
+                stats = `${content.primary_keywords.length} keywords, ${content.content_ideas?.length || 0} content ideas`;
+              } else if (r.report_type === "lead_list" && content.leads) {
+                const contacted = content.leads.filter((l: any) => l.status !== "new").length;
+                stats = `${content.leads.length} leads (${contacted} contacted)`;
+              } else if (r.report_type === "outreach_log" && content.emails_drafted) {
+                const sent = content.emails_drafted.filter((e: any) => e.status === "sent").length;
+                stats = `${content.emails_drafted.length} drafted, ${sent} sent`;
+              } else if (r.report_type === "market_research" && content.tam) {
+                stats = `TAM: ${content.tam.value || "N/A"}`;
+              }
+
+              return (
+                <details key={r.id} style={{ background: "#111", borderRadius: 6, border: "1px solid #222" }}>
+                  <summary style={{ padding: "10px 12px", cursor: "pointer", fontSize: 13, color: "#c8c8c0", listStyle: "none", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span>{icons[r.report_type] || "📄"}</span>
+                    <span style={{ color: "#f0f0ec", fontWeight: 500 }}>{labels[r.report_type] || r.report_type}</span>
+                    {stats && <span style={{ fontSize: 11, color: "#888" }}>— {stats}</span>}
+                    <span style={{ marginLeft: "auto", fontSize: 10, color: "#555" }}>{timeAgo(r.updated_at)}</span>
+                  </summary>
+                  <div style={{ padding: "0 12px 12px" }}>
+                    {r.summary && <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8 }}>{r.summary}</div>}
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 11, color: "#888", maxHeight: 300, overflow: "auto",
+                      padding: 8, background: "#0a0a09", borderRadius: 4 }}>
+                      {JSON.stringify(content, null, 2).slice(0, 2000)}
+                    </pre>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
         </div>
       )}
 
