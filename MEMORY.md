@@ -6,7 +6,7 @@
 Carlos Miranda — solo entrepreneur based in Amadora, Lisbon, Portugal. 15+ years IT experience. Building Hive as a personal venture orchestrator. Bilingual Portuguese/English. Comfortable with playful humour but expects direct, honest technical feedback.
 
 ## Current State
-- **Phase:** Pre-deployment (build complete, not yet deployed)
+- **Phase:** Deployed — all P0/P1/P2 complete
 - **Active companies:** None yet
 - **Subscription:** Claude Max 5x ($100/mo)
 - **Vercel team:** Eidolon's projects (team_Z4AsGtjfy6pAjCOtvJqzMT8d)
@@ -78,3 +78,4 @@ Before starting work in any Claude Code session:
 - 2026-03-18: Bug fixes: dispatch() rewritten with spawn (was execSync), digest email inlined in orchestrator (can't import Next.js modules), health check endpoint added.
 - 2026-03-18: Playbook learning loop + company detail page built. CEO review output parsed for playbook entries and kill flags. Dashboard links to /company/[slug].
 - 2026-03-18: All P2 items completed: Prompt Evolver (weekly Wednesday), social media posting (X API v2), Resend transactional templates (welcome, receipt, password reset). Full backlog cleared.
+- 2026-03-18: Final P2 deployed to https://hive-phi.vercel.app. All backlog items complete. Only P3 future vision remains.
