@@ -763,7 +763,16 @@ Instead:
 8. If there's no Stripe integration and the project needs one, create a product + price
 
 Key difference from new companies: RESPECT the existing codebase. Don't overwrite files.
-Add Hive integration alongside what's already there.`,
+Add Hive integration alongside what's already there.
+
+IMPORTANT — Scheduling conflict detection:
+9. Check for existing agent scheduling that would conflict with Hive's orchestrator:
+   - launchd plist files: look for *.plist in the repo root, in a LaunchAgents/ folder, or referenced in any docs/README
+   - cron jobs: check crontab references, .github/workflows for scheduled actions, vercel.json cron entries
+   - Any scripts that auto-run agents, dispatchers, or Claude CLI on a schedule
+   If found, create an escalation approval via POST /api/approvals with:
+   { gate_type: "escalation", company_id: "${imp.company_id || ""}", title: "Conflicting agent schedule detected in ${imp.name}", description: "Found existing scheduling: [list what you found]. These must be disabled to avoid conflicts with Hive orchestrator. Recommended: [specific unload/disable commands]" }
+   Also note findings in the scan report output.`,
         cwd: `/Users/carlos/code/${imp.slug}`,
       });
 
