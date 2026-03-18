@@ -6,4 +6,4 @@ node_modules/
 logs/
 .DS_Store
 .vercel
-.env*.local
+*.tar.gz

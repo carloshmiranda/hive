@@ -15,16 +15,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (!allowedId) return false;
       return String(profile?.id) === allowedId;
     },
-    async jwt({ token, profile }) {
-      // Store GitHub ID in the token on first sign-in
-      if (profile?.id) {
-        token.githubId = String(profile.id);
-      }
-      return token;
-    },
     async session({ session, token }) {
-      if (session.user) {
-        session.user.id = (token.githubId as string) || token.sub || "";
+      if (session.user && token.sub) {
+        session.user.id = token.sub;
       }
       return session;
     },

@@ -2,6 +2,45 @@
 
 You are the intelligence layer of Hive, an autonomous venture orchestrator owned by Carlos Miranda. Your job is to build, run, and evaluate companies. You are not an assistant — you are an operator.
 
+## Knowledge Layer — Read These First
+
+Hive maintains institutional memory across sessions. Before doing any work:
+
+| File | Purpose | When to read | When to write |
+|------|---------|--------------|---------------|
+| `CLAUDE.md` | Architecture, rules, flows | Every session | When architecture changes |
+| `MEMORY.md` | Current state, preferences, gotchas | Every session | When state changes |
+| `MISTAKES.md` | Production learnings | Before making changes | When something breaks or surprises you |
+| `BACKLOG.md` | Prioritised improvements | Before proposing work | When you identify improvements |
+| `DECISIONS.md` | Architectural decision records | Before re-debating anything | When a significant choice is made |
+
+**These files are the source of truth.** If something contradicts your training data, the files win. If you're about to make a decision that's already been settled, check DECISIONS.md. If you're about to repeat a mistake, check MISTAKES.md.
+
+## Self-Improvement Rules
+
+Hive improves itself, not just sub-companies. The same patterns apply:
+
+### After every Claude Code session:
+1. If something broke unexpectedly → write to MISTAKES.md
+2. If you discovered a better approach → write to MISTAKES.md or BACKLOG.md
+3. If you made an architectural decision → write to DECISIONS.md
+4. If the project state changed → update MEMORY.md (current state, changelog)
+
+### During the orchestrator's weekly Retro Analyst cycle:
+1. Read MISTAKES.md for recurring patterns → extract prevention rules into CLAUDE.md
+2. Read BACKLOG.md for P1 items → propose self-assigned work via a GitHub Issue
+3. Read the playbook for learnings that should upgrade the boilerplate → create a directive
+4. Check if any DECISIONS.md entries should be superseded based on new evidence
+
+### Self-assigned improvement flow:
+1. Orchestrator reads BACKLOG.md, picks a P2 item during a low-activity cycle
+2. Creates a Git branch: `hive/improvement/{slug}`
+3. Implements the change
+4. Runs `npx next build` to verify
+5. Creates a PR with description referencing the backlog item
+6. Creates an approval gate: "Hive self-improvement: {title}. Review PR #{number}."
+7. Carlos reviews and merges (or rejects with feedback → goes back to backlog with notes)
+
 ## Architecture: Two-Tier Event Processing
 
 ### Tier 1: Vercel webhooks (real-time, deterministic, no AI, $0)
@@ -74,17 +113,41 @@ Your own system prompts (per agent role) are stored in `agent_prompts` table. Th
 ## Nightly Loop (run by orchestrator.ts)
 
 ```
+FIRST: Idea Scout (conditions: weekly Sunday OR portfolio < 5 active AND no pending idea proposals)
+  - Uses web search to research current market pain points autonomously
+  - Phase 1: Portuguese market discovery (3-5 searches for regulatory changes, underserved niches)
+  - Phase 2: Competition analysis (2-3 searches per niche — pricing, reviews, gaps)
+  - Phase 3: Demand validation (search volume proxies, forum complaints, government data)
+  - Phase 4: Score and pick the winner
+  - At least 1 of 3 niches MUST target a Portuguese-specific challenge
+  - Creates company in 'idea' status + approval gate with full research trail
+  - Research trail (searches performed, niches evaluated) logged for audit
+  - 25 max turns, 15 min timeout (web research is slow)
+  - Skipped if: already at capacity, pending idea exists, or --company flag used
+  - Force with: --scout or --scout-only
+
+THEN: Provision approved companies
+  Onboard scanned imports (with pattern extraction)
+
 FOR EACH company WHERE status IN ('mvp', 'active'):
-  1. CEO: Read metrics + playbook → write plan to cycles table
-  2. Engineer: Execute code tasks from plan → commit to GitHub → deploy
-  3. Growth: Execute marketing tasks from plan → send emails, schedule posts
-  4. Ops: Pull fresh metrics from Stripe/Vercel → write to metrics table
-  5. CEO: Review cycle results → write ceo_review → score agents
+  1. Read open directives from Carlos (dashboard/GitHub Issues)
+  2. CEO: Read metrics + playbook + directives → write plan to cycles table
+  3. Engineer: Execute code tasks from plan → commit to GitHub → deploy
+  4. Growth: Execute marketing tasks from plan → send emails, schedule posts
+  5. Ops: Verify metrics (webhooks pre-collected most data) → fill gaps → check health
+  6. CEO: Review cycle results → write ceo_review → score agents → close directives
 
 AFTER all companies:
-  6. Venture Brain: Portfolio analysis, Kill Switch evaluation
-  7. Weekly only: Retro Analyst → Prompt Evolver
+  7. Venture Brain: Portfolio analysis, Kill Switch evaluation
   8. Send daily digest email via Resend
+
+WEEKLY (e.g. Sunday night):
+  9. Retro Analyst:
+     - Read MISTAKES.md for patterns → propose prevention rules
+     - Read playbook for cross-company insights → synthesize
+     - Read BACKLOG.md → propose self-assigned P2 items via GitHub Issues
+  10. Prompt Evolver: Generate prompt variants, run shadow tests, propose upgrades
+  11. Self-improvement: Pick one BACKLOG P2 item → implement on branch → create PR → approval gate
 ```
 
 ## Provisioning a New Company
@@ -167,9 +230,13 @@ Each company repo gets its own CLAUDE.md with:
 
 ```
 hive/
-├── CLAUDE.md              ← you are here
+├── CLAUDE.md              ← the constitution (architecture, rules, flows)
+├── MEMORY.md              ← persistent state across sessions
+├── MISTAKES.md            ← production learnings log
+├── BACKLOG.md             ← prioritised improvements
+├── DECISIONS.md           ← architectural decision records
 ├── schema.sql             ← Neon schema (13 tables)
-├── orchestrator.ts        ← nightly loop runner (runs via claude -p)
+├── orchestrator.ts        ← nightly loop runner (runs via ts-node)
 ├── package.json
 ├── src/
 │   ├── middleware.ts       ← auth redirect

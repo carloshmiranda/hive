@@ -12,8 +12,11 @@
  *   npx ts-node orchestrator.ts --dry-run    # plan only, no execution
  */
 
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
+import { createDecipheriv } from "crypto";
 import { neon } from "@neondatabase/serverless";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
 
 // === CONFIG ===
 const HIVE_API = process.env.HIVE_API_URL || "http://localhost:3000/api";
@@ -23,6 +26,8 @@ const REFLECTION_ATTEMPTS = 2;
 const MESSAGES_PER_COMPANY = 40; // budget from Max 5x window
 const DRY_RUN = process.argv.includes("--dry-run");
 const SINGLE_COMPANY = process.argv.find((_, i, a) => a[i - 1] === "--company");
+const FORCE_SCOUT = process.argv.includes("--scout"); // Force idea generation
+const SCOUT_ONLY = process.argv.includes("--scout-only"); // Run only idea scout, skip companies
 
 const sql = neon(DATABASE_URL);
 
@@ -32,13 +37,14 @@ interface DispatchOptions {
   cwd?: string;
   allowedTools?: string[];
   maxTurns?: number;
+  timeoutMs?: number; // default 5min, research tasks need more
 }
 
 async function dispatch(opts: DispatchOptions): Promise<string> {
   // TODAY: Claude Code CLI with subscription auth
   // TOMORROW: Claude Agent SDK with API key (one function swap)
   const args = [
-    "claude", "-p", `"${opts.prompt.replace(/"/g, '\\"')}"`,
+    "-p", opts.prompt,
     "--output-format", "text",
   ];
   if (opts.cwd) args.push("--cwd", opts.cwd);
@@ -52,19 +58,75 @@ async function dispatch(opts: DispatchOptions): Promise<string> {
     return "[DRY RUN] No output";
   }
 
-  try {
-    const result = execSync(args.join(" "), {
-      encoding: "utf-8",
-      timeout: 5 * 60 * 1000, // 5 min per dispatch
-      env: { ...process.env }, // inherits Claude auth
+  const timeout = opts.timeoutMs || 5 * 60 * 1000;
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn("claude", args, {
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    return result.trim();
-  } catch (error: any) {
-    throw new Error(`Dispatch failed: ${error.message}`);
-  }
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+
+    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    // Timeout: kill the process if it exceeds the limit
+    const timer = setTimeout(() => {
+      killed = true;
+      proc.kill("SIGTERM");
+      // Give it 5s to clean up, then force kill
+      setTimeout(() => {
+        if (!proc.killed) proc.kill("SIGKILL");
+      }, 5000);
+    }, timeout);
+
+    proc.on("close", (code: number | null) => {
+      clearTimeout(timer);
+      if (killed) {
+        reject(new Error(`Dispatch timed out after ${Math.round(timeout / 1000)}s — process killed`));
+      } else if (code !== 0) {
+        reject(new Error(`Dispatch exited with code ${code}: ${stderr.slice(0, 500)}`));
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+
+    proc.on("error", (err: Error) => {
+      clearTimeout(timer);
+      reject(new Error(`Dispatch spawn failed: ${err.message}`));
+    });
+  });
 }
 
 // === DATABASE HELPERS ===
+
+// Direct settings reader for orchestrator (can't import from Next.js app)
+async function getSettingValueDirect(key: string): Promise<string | null> {
+  const [row] = await sql`SELECT value, is_secret FROM settings WHERE key = ${key}`;
+  if (!row) return null;
+  if (!row.is_secret) return row.value;
+
+  // Decrypt AES-256-GCM (format: iv_hex:tag_hex:encrypted_hex)
+  const encKey = process.env.ENCRYPTION_KEY;
+  if (!encKey) return null;
+  try {
+    const [ivHex, tagHex, encryptedHex] = row.value.split(":");
+    if (!ivHex || !tagHex || !encryptedHex) return null;
+    const iv = Buffer.from(ivHex, "hex");
+    const tag = Buffer.from(tagHex, "hex");
+    const decipher = createDecipheriv("aes-256-gcm", Buffer.from(encKey, "hex"), iv);
+    decipher.setAuthTag(tag);
+    let decrypted = decipher.update(encryptedHex, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch {
+    return null;
+  }
+}
+
 async function getActiveCompanies() {
   const rows = await sql`
     SELECT * FROM companies 
@@ -144,13 +206,22 @@ async function getPlaybook(domain?: string) {
   return sql`SELECT * FROM playbook WHERE superseded_by IS NULL ORDER BY confidence DESC LIMIT 20`;
 }
 
-async function getActivePrompt(agent: string) {
+async function getActivePrompt(agent: string, company?: { name: string; slug: string }) {
   const [row] = await sql`
     SELECT prompt_text FROM agent_prompts 
     WHERE agent = ${agent} AND is_active = true 
     LIMIT 1
   `;
-  return row?.prompt_text || getDefaultPrompt(agent);
+  // DB-stored prompts (from Prompt Evolver) take priority over file-based prompts
+  if (row?.prompt_text) {
+    let text = row.prompt_text;
+    if (company) {
+      text = text.replace(/\{\{COMPANY_NAME\}\}/g, company.name);
+      text = text.replace(/\{\{COMPANY_SLUG\}\}/g, company.slug);
+    }
+    return text;
+  }
+  return getDefaultPrompt(agent, company);
 }
 
 async function getDirectives(companyId?: string) {
@@ -196,32 +267,28 @@ async function getPendingApprovals() {
   return sql`SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at ASC`;
 }
 
-// === DEFAULT PROMPTS (used before Prompt Evolver creates versions) ===
-function getDefaultPrompt(agent: string): string {
-  const prompts: Record<string, string> = {
-    ceo: `You are the CEO agent for this company. Your job is to evaluate the current state, 
-decide priorities for tonight's cycle, and review results at the end. 
-Read the metrics, check what's working, and write a clear plan with 2-3 priorities.
-Output JSON: { plan: { priorities: string[], reasoning: string }, review?: { assessment: string, score: number } }`,
-    
-    engineer: `You are the Engineer agent. Execute the coding tasks from the CEO's plan.
-Write clean TypeScript, push to GitHub, and deploy via Vercel.
-Use the project's CLAUDE.md for context and coding standards.
-Output JSON: { tasks_completed: string[], commits: string[], tests_passed: boolean, errors?: string[] }`,
-    
-    growth: `You are the Growth agent. Execute marketing tasks from the CEO's plan.
-Check the playbook for proven strategies before trying new ones.
-Generate content, schedule social posts, send emails.
-Output JSON: { content_created: string[], emails_sent: number, posts_scheduled: number, learnings?: string }`,
-    
-    ops: `You are the Ops agent. Ensure infrastructure health and fill metric gaps.
-Stripe metrics (revenue, MRR, customers) are already collected by webhooks in real-time.
-Vercel Analytics (page views) is collected by a twice-daily cron.
-Your job: check for gaps in today's metrics, pull anything missing, monitor error logs,
-verify deploys are healthy, and flag any infrastructure issues.
-Output JSON: { metrics_filled: string[], issues?: string[], deploys_healthy: boolean }`,
+// === PROMPT LOADER (files > DB versions > fallback) ===
+function getDefaultPrompt(agent: string, company?: { name: string; slug: string }): string {
+  // Try loading from /prompts/{agent}.md first
+  const promptPath = join(__dirname, "prompts", `${agent}.md`);
+  if (existsSync(promptPath)) {
+    let content = readFileSync(promptPath, "utf-8");
+    // Template in company details
+    if (company) {
+      content = content.replace(/\{\{COMPANY_NAME\}\}/g, company.name);
+      content = content.replace(/\{\{COMPANY_SLUG\}\}/g, company.slug);
+    }
+    return content;
+  }
+
+  // Fallback: minimal inline prompts (should never hit this in production)
+  const fallbacks: Record<string, string> = {
+    ceo: "You are the CEO agent. Evaluate metrics, set 2-3 priorities, review results. Output JSON with plan and review.",
+    engineer: "You are the Engineer agent. Execute coding tasks from the CEO's plan. Push to GitHub, deploy via Vercel. Output JSON with tasks_completed.",
+    growth: "You are the Growth agent. Create content, schedule posts, run experiments. Check the playbook first. Output JSON with content_created.",
+    ops: "You are the Ops agent. Monitor infrastructure, fill metric gaps, verify deploys. Output JSON with health status.",
   };
-  return prompts[agent] || "Execute the assigned task and return results as JSON.";
+  return fallbacks[agent] || "Execute the assigned task and return results as JSON.";
 }
 
 // === AGENT EXECUTION WITH RETRY + REFLECTION ===
@@ -319,8 +386,209 @@ async function runNightlyCycle() {
   console.log(`\n🐝 HIVE Orchestrator — ${new Date().toISOString()}`);
   console.log(`${"─".repeat(50)}`);
 
+  // === IDEA SCOUT: Generate new business ideas ===
+  // Runs weekly (Sunday) or when portfolio has fewer than MAX_ACTIVE_COMPANIES
+  const MAX_ACTIVE_COMPANIES = 5;
+  const isWeekly = new Date().getDay() === 0; // Sunday
+  const allCompanies = await sql`SELECT id, slug, name, status, description FROM companies`;
+  const activeCount = allCompanies.filter(c => ["mvp", "active", "provisioning", "approved"].includes(c.status)).length;
+  const pendingIdeas = await sql`SELECT count(*) as cnt FROM approvals WHERE gate_type = 'new_company' AND status = 'pending'`;
+  const hasPendingIdea = Number(pendingIdeas[0].cnt) > 0;
+
+  const shouldScout = FORCE_SCOUT || SCOUT_ONLY || ((isWeekly || activeCount < MAX_ACTIVE_COMPANIES) && !hasPendingIdea && !SINGLE_COMPANY);
+
+  if (shouldScout) {
+    console.log("\n💡 Idea Scout — searching for opportunities");
+
+    const playbook = await getPlaybook();
+    const killedCompanies = allCompanies.filter(c => c.status === "killed");
+    const liveCompanies = allCompanies.filter(c => ["mvp", "active"].includes(c.status));
+
+    const ideaScoutOutput = await dispatch({
+      prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
+
+YOUR JOB: Research the market using web search and propose ONE business idea that Carlos should build next.
+
+## Carlos's profile
+- 15+ years IT experience (identity/access management, device management, SaaS operations, onboarding automation)
+- Based in Lisbon, Portugal
+- Solo entrepreneur — all companies are run by AI agents with his approval
+- Interests: personal finance, crypto/DeFi, developer tools, automation
+- Existing tech stack: Next.js, Vercel, Neon, Stripe, Tailwind
+
+## Current portfolio (${liveCompanies.length} active):
+${liveCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description}`).join("\n") || "No active companies yet"}
+
+## Previously killed (avoid similar ideas):
+${killedCompanies.map(c => `- ${c.name}: ${c.description} — killed because too similar or no traction`).join("\n") || "None"}
+
+## Playbook learnings (what works):
+${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
+
+## Constraints:
+- Must be buildable as a SaaS or digital product (no physical goods)
+- MVP must be shippable in 1-2 weeks by AI agents
+- Must have a clear monetisation path (subscription, one-time, or usage-based)
+- Must NOT overlap with existing portfolio companies
+- Prefer niches where Carlos's IT/SaaS background is an advantage
+- Prefer markets with validated demand (people already searching for solutions)
+- Target: €500-€5,000 MRR within 3 months if the idea works
+- MANDATORY: At least 1 of the 3 niches MUST solve a challenge specific to the Portuguese market
+
+## RESEARCH METHODOLOGY (you must follow this):
+
+You have access to web search. USE IT. Do not rely on your training data alone.
+
+### Phase 1: Portuguese market discovery (3-5 searches)
+Search for CURRENT pain points in Portugal. Example queries:
+- "Portugal small business challenges ${new Date().getFullYear()}"
+- "Portugal housing crisis rental market ${new Date().getFullYear()}"
+- "Portugal freelancer tax compliance problems"
+- "Portugal digital transformation SME gaps"
+- "Portugal new laws regulations ${new Date().getFullYear()}"
+Look for: regulatory changes creating new compliance burdens, underserved demographics, 
+markets where existing tools are foreign/generic and don't understand Portuguese specifics,
+pain points people complain about on forums and social media.
+
+### Phase 2: Competition analysis (2-3 searches per niche)
+For each niche you identify, search for existing solutions:
+- "[niche] software Portugal"
+- "[niche] SaaS tool"
+- Search competitor names you find, check their pricing, reviews, feature gaps
+You want niches where competitors are: too expensive, too generic (not PT-localised), 
+enterprise-only, or simply don't exist yet.
+
+### Phase 3: Demand validation (1-2 searches per niche)
+Search for evidence people actually want this:
+- Search volume proxies: "how to [solve problem]" queries
+- Forum complaints, Reddit threads, social media frustration
+- Government data on market size (number of landlords, freelancers, SMEs, etc.)
+- News articles about the problem growing
+
+### Phase 4: Pick the winner and build the proposal
+Score each niche on: demand strength, competition gap, timing (regulatory tailwind?), 
+MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
+
+## Output format (JSON only, no markdown wrapping):
+{
+  "research": {
+    "searches_performed": ["query1", "query2", ...],
+    "niches_considered": [
+      { 
+        "niche": "...", 
+        "market": "Portugal" or "Global",
+        "demand_evidence": "what you found in search results",
+        "competitors_found": ["name: pricing — gaps"],
+        "timing": "why now",
+        "verdict": "pursue / pass — reason"
+      }
+    ]
+  },
+  "proposal": {
+    "name": "Product Name",
+    "slug": "product-slug",
+    "description": "One-line pitch",
+    "target_audience": "Who this is for",
+    "problem": "What pain point it solves",
+    "solution": "How it solves it",
+    "monetisation": "Pricing model and target",
+    "mvp_scope": "What the first version includes (bullet points)",
+    "competitive_advantage": "Why this wins against alternatives",
+    "estimated_tam": "Total addressable market estimate with source",
+    "confidence": 0.0-1.0
+  }
+}`,
+      maxTurns: 25,
+      timeoutMs: 15 * 60 * 1000, // 15 min — research agent does many web searches
+    });
+
+    // Parse the output and create the company + approval gate
+    try {
+      // Extract JSON from the output (Claude may wrap it in markdown)
+      const jsonMatch = ideaScoutOutput.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const idea = JSON.parse(jsonMatch[0]);
+        const proposal = idea.proposal;
+
+        if (proposal?.name && proposal?.slug) {
+          // Create the company in 'idea' status
+          const [newCompany] = await sql`
+            INSERT INTO companies (name, slug, description, status)
+            VALUES (${proposal.name}, ${proposal.slug}, ${proposal.description}, 'idea')
+            ON CONFLICT (slug) DO NOTHING
+            RETURNING *
+          `;
+
+          if (newCompany) {
+            // Build research summary for the approval gate
+            const researchSummary = idea.research ? [
+              idea.research.searches_performed?.length 
+                ? `**Searches performed:** ${idea.research.searches_performed.length} web queries` : "",
+              ...(idea.research.niches_considered || []).map((n: any) =>
+                `- **${n.niche}** (${n.market || "unknown market"}): ${n.verdict}`
+              ),
+            ].filter(Boolean).join("\n") : "";
+
+            // Create the approval gate with full context + research trail
+            await sql`
+              INSERT INTO approvals (company_id, gate_type, title, description, context)
+              VALUES (
+                ${newCompany.id},
+                'new_company',
+                ${"Launch " + proposal.name},
+                ${`**${proposal.description}**\n\n` +
+                  `**Problem:** ${proposal.problem}\n` +
+                  `**Solution:** ${proposal.solution}\n` +
+                  `**Target:** ${proposal.target_audience}\n` +
+                  `**Monetisation:** ${proposal.monetisation}\n` +
+                  `**MVP scope:** ${proposal.mvp_scope}\n` +
+                  `**Competitive advantage:** ${proposal.competitive_advantage || "N/A"}\n` +
+                  `**TAM:** ${proposal.estimated_tam}\n` +
+                  `**Confidence:** ${Math.round((proposal.confidence || 0.5) * 100)}%\n\n` +
+                  `---\n### Research trail\n${researchSummary}`},
+                ${JSON.stringify(idea)}
+              )
+            `;
+
+            console.log(`  ✓ Proposed: ${proposal.name} (${proposal.slug}) — awaiting approval`);
+            if (idea.research?.searches_performed?.length) {
+              console.log(`    Research: ${idea.research.searches_performed.length} web searches, ${(idea.research.niches_considered || []).length} niches evaluated`);
+            }
+
+            // Log the action with full research output
+            await sql`
+              INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+              VALUES (${newCompany.id}, 'idea_scout', 'generate_idea', ${`Proposed: ${proposal.name} — ${proposal.description} (${(idea.research?.searches_performed || []).length} searches, confidence: ${proposal.confidence})`}, 'success', ${JSON.stringify(idea)}, now(), now())
+            `;
+          } else {
+            console.log(`  ⓘ Slug "${proposal.slug}" already exists — skipping`);
+          }
+        }
+      }
+    } catch (e: any) {
+      console.log(`  ⚠ Failed to parse Idea Scout output: ${e.message}`);
+      // Still log the raw output so it's not lost
+      await sql`
+        INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, output, started_at, finished_at)
+        VALUES (${null}, 'idea_scout', 'generate_idea', 'Failed to parse idea proposal', 'failed', ${e.message}, ${JSON.stringify({ raw: ideaScoutOutput })}, now(), now())
+      `;
+    }
+  } else if (!SINGLE_COMPANY) {
+    const reason = hasPendingIdea ? "pending idea awaiting approval" : 
+                   activeCount >= MAX_ACTIVE_COMPANIES ? `at capacity (${activeCount}/${MAX_ACTIVE_COMPANIES})` :
+                   "not weekly scout day";
+    console.log(`\n💡 Idea Scout — skipped (${reason})`);
+  }
+
+  // If scout-only mode, exit before company processing
+  if (SCOUT_ONLY) {
+    const totalDuration = Math.round((Date.now() - startTime) / 1000);
+    console.log(`\n🐝 Scout-only run complete in ${totalDuration}s`);
+    return;
+  }
+
   const companies = await getActiveCompanies();
-  console.log(`📋 ${companies.length} active companies to process\n`);
+  console.log(`\n📋 ${companies.length} active companies to process\n`);
 
   const results: Array<{ company: string; status: string; duration: number }> = [];
 
@@ -328,6 +596,7 @@ async function runNightlyCycle() {
     const companyStart = Date.now();
     console.log(`\n▸ ${company.name} (${company.slug}) — ${company.status}`);
 
+    try {
     const cycleNumber = await getLatestCycleNumber(company.id);
     const cycleId = await createCycle(company.id, cycleNumber);
     const metrics = await getMetrics(company.id);
@@ -352,7 +621,8 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 
     // Step 1: CEO plans (incorporating directives)
     console.log("  ├─ CEO planning...");
-    const ceoPrompt = await getActivePrompt("ceo");
+    const companyCtx = { name: company.name, slug: company.slug };
+    const ceoPrompt = await getActivePrompt("ceo", companyCtx);
     const ceoPlan = await executeAgent({
       agent: "ceo",
       companyId: company.id,
@@ -369,7 +639,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 
     // Step 2: Engineer executes
     console.log("  ├─ Engineer executing...");
-    const engPrompt = await getActivePrompt("engineer");
+    const engPrompt = await getActivePrompt("engineer", companyCtx);
     await executeAgent({
       agent: "engineer",
       companyId: company.id,
@@ -381,7 +651,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 
     // Step 3: Growth executes
     console.log("  ├─ Growth executing...");
-    const growthPrompt = await getActivePrompt("growth");
+    const growthPrompt = await getActivePrompt("growth", companyCtx);
     await executeAgent({
       agent: "growth",
       companyId: company.id,
@@ -392,7 +662,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 
     // Step 4: Ops collects metrics
     console.log("  ├─ Ops collecting metrics...");
-    const opsPrompt = await getActivePrompt("ops");
+    const opsPrompt = await getActivePrompt("ops", companyCtx);
     await executeAgent({
       agent: "ops",
       companyId: company.id,
@@ -416,6 +686,21 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
     const duration = Math.round((Date.now() - companyStart) / 1000);
     console.log(`  ✓ Cycle ${cycleNumber} complete (${duration}s)`);
     results.push({ company: company.slug, status: "complete", duration });
+
+    } catch (companyError: any) {
+      // Graceful skip: log the failure and continue to the next company
+      const duration = Math.round((Date.now() - companyStart) / 1000);
+      console.log(`  ✗ FAILED after ${duration}s: ${companyError.message}`);
+      results.push({ company: company.slug, status: "failed", duration });
+
+      // Log failure to DB so it shows in the dashboard
+      try {
+        await sql`
+          INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
+          VALUES (${company.id}, 'orchestrator', 'cycle_failed', ${`Company cycle failed: ${companyError.message}`}, 'failed', ${companyError.message}, now(), now())
+        `;
+      } catch { /* don't let logging failure cascade */ }
+    }
   }
 
   // === PROVISION APPROVED COMPANIES ===
@@ -559,18 +844,63 @@ Output a brief portfolio summary.`,
   console.log("\n📧 Sending daily digest...");
   const pendingApprovals = await getPendingApprovals();
 
-  await dispatch({
-    prompt: `Send a daily digest email via the Resend API.
+  try {
+    const digestTo = await getSettingValueDirect("digest_email");
+    const resendApiKey = await getSettingValueDirect("resend_api_key");
+    const dashboardUrl = process.env.NEXT_PUBLIC_URL || "http://localhost:3000";
 
-Results from tonight:
-${results.map(r => `- ${r.company}: ${r.status} (${r.duration}s)`).join("\n")}
+    if (!digestTo || !resendApiKey) {
+      console.log(`  ⓘ ${!digestTo ? "No digest_email" : "No resend_api_key"} configured — skipping`);
+    } else {
+      // Build a simple digest summary
+      const duration = `${Math.round((Date.now() - startTime) / 1000)}s`;
+      const dateStr = new Date().toLocaleDateString("en-PT", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+      const companySummary = results.length
+        ? results.map(r => `<li><strong>${r.company}</strong>: ${r.status}</li>`).join("")
+        : "<li>No active companies</li>";
+      const approvalSummary = pendingApprovals.length
+        ? pendingApprovals.map((a: any) => `<li>${a.gate_type}: ${a.title}</li>`).join("")
+        : "<li>No pending approvals</li>";
+      const errorSummary = results.filter(r => r.status === "failed").map(r => r.company).join(", ");
 
-Pending approvals: ${pendingApprovals.length}
-${pendingApprovals.map(a => `- [${a.gate_type}] ${a.title}`).join("\n")}
+      const digestHtml = `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#0a0a09;font-family:-apple-system,sans-serif;color:#B4B2A9">
+        <div style="max-width:600px;margin:0 auto;padding:24px">
+          <div style="text-align:center;margin-bottom:24px">
+            <h1 style="color:#EF9F27;font-size:20px;margin:8px 0 0">🐝 Hive nightly digest</h1>
+            <div style="color:#888780;font-size:13px">${dateStr} · ${duration}</div>
+          </div>
+          <h2 style="color:#F0F0EC;font-size:16px">Companies</h2>
+          <ul>${companySummary}</ul>
+          <h2 style="color:#F0F0EC;font-size:16px">Pending approvals</h2>
+          <ul>${approvalSummary}</ul>
+          ${errorSummary ? `<p style="color:#E24B4A">⚠ Errors: ${errorSummary}</p>` : ""}
+          <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #2C2C2A">
+            <a href="${dashboardUrl}" style="color:#EF9F27;text-decoration:none">Open Hive dashboard</a>
+          </div>
+        </div>
+      </body></html>`;
 
-Use the Resend SDK to send to carlos@hive.dev with subject "🐝 Hive Digest — ${new Date().toLocaleDateString()}".
-Keep it scannable: company results, pending approvals, key metrics.`,
-  });
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: `Hive <noreply@${await getSettingValueDirect("resend_domain") || "hive.local"}>`,
+          to: digestTo,
+          subject: `🐝 Hive Digest — ${new Date().toLocaleDateString()}`,
+          html: digestHtml,
+        }),
+      });
+
+      if (res.ok) {
+        console.log(`  ✓ Digest sent to ${digestTo}`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.log(`  ⚠ Digest failed: ${(err as any).message || `HTTP ${res.status}`}`);
+      }
+    }
+  } catch (digestErr: any) {
+    console.log(`  ⚠ Digest error: ${digestErr.message}`);
+  }
 
   const totalDuration = Math.round((Date.now() - startTime) / 1000);
   console.log(`\n🐝 Nightly cycle complete in ${totalDuration}s`);

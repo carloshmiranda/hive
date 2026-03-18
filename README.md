@@ -120,7 +120,7 @@ Bring projects like Flolio or acquired codebases under Hive management:
 ## Commands
 
 ```bash
-# Full nightly run
+# Full nightly run (includes idea scout if conditions met)
 npx ts-node orchestrator.ts
 
 # Single company only
@@ -128,6 +128,12 @@ npx ts-node orchestrator.ts --company pawly
 
 # Dry run (plan only, no execution)
 npx ts-node orchestrator.ts --dry-run
+
+# Force idea generation regardless of schedule
+npx ts-node orchestrator.ts --scout
+
+# Run ONLY the idea scout, skip company cycles
+npx ts-node orchestrator.ts --scout-only
 
 # Check orchestrator logs
 tail -f ~/code/hive/logs/orchestrator.stdout.log

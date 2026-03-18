@@ -62,6 +62,40 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           await sql`UPDATE agent_prompts SET is_active = true, promoted_at = now() WHERE agent = ${ctx.agent} AND version = ${ctx.version}`;
         }
         break;
+
+      case "vercel_pro_upgrade": {
+        // Vercel doesn't have a plan upgrade API — log the manual action required
+        const upgradeCtx = approval.context as { project_slug?: string; vercel_project_id?: string } | null;
+        if (approval.company_id) {
+          await sql`
+            INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+            VALUES (
+              ${approval.company_id}, 'orchestrator', 'vercel_upgrade_approved',
+              ${`Vercel Pro upgrade approved. Manual action: go to https://vercel.com/${upgradeCtx?.project_slug || "dashboard"}/settings/billing and upgrade to Pro.`},
+              'pending_manual', now(), now()
+            )
+          `;
+        }
+        break;
+      }
+
+      case "first_revenue": {
+        // First paying customer detected — create the Vercel Pro upgrade gate
+        if (approval.company_id) {
+          const [comp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
+          await sql`
+            INSERT INTO approvals (company_id, gate_type, title, description, context)
+            VALUES (
+              ${approval.company_id},
+              'vercel_pro_upgrade',
+              ${`Upgrade ${comp?.slug || "company"} to Vercel Pro`},
+              ${`This company has its first paying customer. Vercel Hobby plan is non-commercial — it must be upgraded to Pro (€20/mo). Go to the Vercel dashboard to upgrade.`},
+              ${JSON.stringify({ project_slug: comp?.slug })}
+            )
+          `;
+        }
+        break;
+      }
     }
   }
 

@@ -91,6 +91,7 @@ export default function DashboardPage() {
   const [cmdInput, setCmdInput] = useState("");
   const [cmdSending, setCmdSending] = useState(false);
   const [cmdFeedback, setCmdFeedback] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [importUrl, setImportUrl] = useState("");
   const [importName, setImportName] = useState("");
@@ -108,9 +109,15 @@ export default function DashboardPage() {
     if (apRes.ok) setApprovals((await apRes.json()).data);
     if (plRes.ok) setPlaybook((await plRes.json()).data);
     setLoading(false);
+    setLastRefresh(new Date());
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll();
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(fetchAll, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchAll]);
 
   const handleApproval = async (id: string, decision: "approved" | "rejected") => {
     const res = await fetch(`/api/approvals/${id}/decide`, {
@@ -193,6 +200,12 @@ export default function DashboardPage() {
             </div>
           )}
           <Link href="/settings" style={{ fontSize: 11, color: "var(--hive-muted)", fontFamily: "var(--hive-mono)", textDecoration: "none" }}>Settings</Link>
+          {lastRefresh && (
+            <span onClick={() => fetchAll()} style={{ fontSize: 10, color: "var(--hive-dim)", fontFamily: "var(--hive-mono)", cursor: "pointer", opacity: 0.6 }}
+              title="Click to refresh now. Auto-refreshes every 30s.">
+              ↻ {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            </span>
+          )}
           <button onClick={() => signOut()} style={{ fontSize: 11, color: "var(--hive-dim)", fontFamily: "var(--hive-mono)",
             background: "none", border: "none", cursor: "pointer" }}>Sign out</button>
         </div>
