@@ -21,7 +21,6 @@ import { join } from "path";
 const HIVE_API = process.env.HIVE_API_URL || "http://localhost:3000/api";
 const DATABASE_URL = process.env.DATABASE_URL!;
 const MAX_RETRIES = 3;
-const REFLECTION_ATTEMPTS = 2;
 const MESSAGES_PER_COMPANY = 40; // budget from Max 5x window
 const DRY_RUN = process.argv.includes("--dry-run");
 const SINGLE_COMPANY = process.argv.find((_, i, a) => a[i - 1] === "--company");
@@ -275,7 +274,7 @@ function getDefaultPrompt(agent: string, company?: { name: string; slug: string 
   return fallbacks[agent] || "Execute the assigned task and return results as JSON.";
 }
 
-// === AGENT EXECUTION WITH RETRY + REFLECTION ===
+// === AGENT EXECUTION WITH RETRY + SELF-HEAL ===
 async function executeAgent(opts: {
   agent: string;
   companyId: string;
@@ -285,18 +284,38 @@ async function executeAgent(opts: {
   cwd?: string;
   allowedTools?: string[];
 }): Promise<{ success: boolean; output: string }> {
-  let lastReflection = "";
+  let lastError = "";
+  let lastOutput = "";
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const fullPrompt = attempt === 1
-        ? `${opts.context}\n\n${opts.prompt}`
-        : `${opts.context}\n\nPREVIOUS ATTEMPT FAILED. Reflection: ${lastReflection}\n\nTry a different approach.\n\n${opts.prompt}`;
+      let fullPrompt: string;
+
+      if (attempt === 1) {
+        fullPrompt = `${opts.context}\n\n${opts.prompt}`;
+      } else {
+        // On retry: give the agent its previous error AND instructions to fix it
+        fullPrompt = `${opts.context}\n\n${opts.prompt}
+
+⚠ PREVIOUS ATTEMPT ${attempt - 1} FAILED:
+Error: ${lastError}
+${lastOutput ? `Last output (partial): ${lastOutput.slice(0, 500)}` : ""}
+
+INSTRUCTIONS FOR THIS RETRY:
+- Read the error carefully. It tells you exactly what went wrong.
+- If it's a build error: find the file and line, fix the TypeScript/syntax issue.
+- If it's a timeout: do less this cycle, focus on the most important task only.
+- If it's a JSON parse error: your output wasn't valid JSON. Output ONLY JSON, no markdown.
+- If it's a database error: check the schema — the column/table might not exist.
+- Do NOT repeat the same approach. Change something specific based on the error.
+- After making changes, verify with \`npm run build\` before committing.`;
+      }
 
       const output = await dispatch({
         prompt: fullPrompt,
         cwd: opts.cwd,
-        maxTurns: 10,
+        maxTurns: attempt === 1 ? 10 : 15, // more room on retries
+        timeoutMs: attempt === 1 ? 5 * 60 * 1000 : 8 * 60 * 1000, // more time on retries
         allowedTools: opts.allowedTools,
       });
 
@@ -314,48 +333,30 @@ async function executeAgent(opts: {
       return { success: true, output };
 
     } catch (error: any) {
-      // Reflection on attempts 1 and 2
-      if (attempt <= REFLECTION_ATTEMPTS) {
-        try {
-          lastReflection = await dispatch({
-            prompt: `The ${opts.agent} agent failed with error: ${error.message}\n\nReflect on why this failed and suggest a different approach. Be specific and actionable. Output plain text.`,
-          });
-        } catch {
-          lastReflection = "Reflection failed. Will retry with original approach.";
-        }
+      lastError = error.message;
+      lastOutput = ""; // dispatch failed, no output
 
-        await logAction({
-          cycleId: opts.cycleId,
-          companyId: opts.companyId,
-          agent: opts.agent,
-          actionType: "cycle_task",
-          description: `Attempt ${attempt} failed`,
-          status: "failed",
-          error: error.message,
-          reflection: lastReflection,
-          retryCount: attempt,
-        });
-      }
+      await logAction({
+        cycleId: opts.cycleId,
+        companyId: opts.companyId,
+        agent: opts.agent,
+        actionType: "cycle_task",
+        description: `Attempt ${attempt} failed: ${error.message.slice(0, 150)}`,
+        status: "failed",
+        error: error.message,
+        retryCount: attempt,
+      });
+
+      console.log(`    ⚠ ${opts.agent} attempt ${attempt}/${MAX_RETRIES}: ${error.message.slice(0, 80)}`);
 
       // Final attempt: escalate
       if (attempt === MAX_RETRIES) {
-        await logAction({
-          cycleId: opts.cycleId,
-          companyId: opts.companyId,
-          agent: opts.agent,
-          actionType: "cycle_task",
-          description: `All ${MAX_RETRIES} attempts failed — escalating`,
-          status: "escalated",
-          error: error.message,
-          retryCount: attempt,
-        });
-
         await createApproval({
           companyId: opts.companyId,
           gateType: "escalation",
           title: `${opts.agent} agent failed for ${opts.companyId}`,
-          description: `Failed after ${MAX_RETRIES} attempts. Last error: ${error.message}`,
-          context: { agent: opts.agent, lastReflection, error: error.message },
+          description: `Failed after ${MAX_RETRIES} attempts.\n\nLast error: ${error.message}\n\nThis needs manual investigation.`,
+          context: { agent: opts.agent, lastError, attempts: MAX_RETRIES },
         });
 
         return { success: false, output: error.message };
@@ -371,6 +372,52 @@ async function runNightlyCycle() {
   const startTime = Date.now();
   console.log(`\n🐝 HIVE Orchestrator — ${new Date().toISOString()}`);
   console.log(`${"─".repeat(50)}`);
+
+  // === PRE-FLIGHT HEALTH CHECK ===
+  console.log("\n🔧 Pre-flight checks...");
+  try {
+    // Verify DB connection
+    await sql`SELECT 1`;
+    console.log("  ✓ Database connection");
+
+    // Check for unresolved errors from last run
+    const lastRunErrors = await sql`
+      SELECT agent, description, error, company_id, finished_at
+      FROM agent_actions 
+      WHERE status = 'failed' AND started_at > now() - interval '48 hours'
+      ORDER BY finished_at DESC LIMIT 20
+    `;
+    if (lastRunErrors.length > 0) {
+      console.log(`  ⚠ ${lastRunErrors.length} errors from last 48h (self-healing will address after company cycles)`);
+    } else {
+      console.log("  ✓ No recent errors");
+    }
+
+    // Verify orchestrator can reach Claude CLI
+    if (!DRY_RUN) {
+      try {
+        const { execSync: execSyncCheck } = require("child_process");
+        execSyncCheck("claude --version", { encoding: "utf-8", timeout: 10000 });
+        console.log("  ✓ Claude CLI reachable");
+      } catch {
+        console.log("  ✗ Claude CLI not reachable — aborting");
+        return;
+      }
+    }
+  } catch (healthErr: any) {
+    console.log(`  ✗ Pre-flight failed: ${healthErr.message}`);
+    console.log("  Cannot proceed without database. Exiting.");
+    return;
+  }
+
+  // Collect errors during this run for the self-healing cycle
+  const runErrors: Array<{
+    company: string;
+    companyId: string;
+    agent: string;
+    error: string;
+    phase: string;
+  }> = [];
 
   // === IDEA SCOUT: Generate new business ideas ===
   // Runs weekly (Sunday) or when portfolio has fewer than MAX_ACTIVE_COMPANIES
@@ -491,10 +538,7 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
 
     // Parse the output and create the company + approval gate
     try {
-      // Log raw output length for debugging
       console.log(`  ⓘ Scout output: ${ideaScoutOutput.length} chars`);
-
-      // Extract JSON from the output (Claude may wrap it in markdown)
       const jsonMatch = ideaScoutOutput.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         console.log(`  ⚠ No JSON found in Idea Scout output`);
@@ -506,7 +550,6 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
         if (!proposal?.name || !proposal?.slug) {
           console.log(`  ⚠ Parsed JSON but missing proposal.name or proposal.slug`);
           console.log(`  ⓘ Keys found: ${Object.keys(idea).join(", ")}`);
-          if (proposal) console.log(`  ⓘ Proposal keys: ${Object.keys(proposal).join(", ")}`);
         } else {
           // Create the company in 'idea' status
           const [newCompany] = await sql`
@@ -977,6 +1020,15 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
       console.log(`  ✗ FAILED after ${duration}s: ${companyError.message}`);
       results.push({ company: company.slug, status: "failed", duration });
 
+      // Collect for self-healing analysis
+      runErrors.push({
+        company: company.slug,
+        companyId: company.id,
+        agent: "orchestrator",
+        error: companyError.message,
+        phase: "company_cycle",
+      });
+
       // Log failure to DB so it shows in the dashboard
       try {
         await sql`
@@ -1014,7 +1066,7 @@ Execute these steps using the APIs available to you:
 9. Update company status to 'mvp' and set vercel_url
 
 Report what was created and any issues encountered.`,
-          cwd: `/Users/carlos/code/hive`,
+          cwd: `/Users/carlos.miranda/Documents/Github/hive`,
           timeoutMs: 10 * 60 * 1000, // 10 min for provisioning
         });
 
@@ -1060,7 +1112,7 @@ Scan Report: ${JSON.stringify(scanReport, null, 2)}
 
 This is an EXISTING project, not a new one. Do NOT re-create infrastructure.
 Instead:
-1. Clone the repo locally to /Users/carlos/code/${imp.slug}
+1. Clone the repo locally to /Users/carlos.miranda/Documents/Github/${imp.slug}
 2. If CLAUDE.md doesn't exist, generate one based on the scan report and actual code
 3. If .env.example doesn't exist, create one by scanning the code for env var usage
 4. Verify the project builds (npm install && npm run build)
@@ -1071,7 +1123,7 @@ Instead:
 
 Key difference from new companies: RESPECT the existing codebase. Don't overwrite files.
 Add Hive integration alongside what's already there.`,
-        cwd: `/Users/carlos/code/${imp.slug}`,
+        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
       });
 
       // Phase 2: Pattern extraction — learn from the imported codebase
@@ -1114,12 +1166,162 @@ Only write genuinely useful patterns. Confidence should reflect how proven the p
 
 If you find patterns that should update the Hive boilerplate, create a directive via:
 POST /api/directives with { text: "hive: [suggestion]" }`,
-        cwd: `/Users/carlos/code/${imp.slug}`,
+        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
       });
 
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
       console.log(`  ✓ ${imp.name} onboarded with patterns extracted`);
     }
+  }
+
+  // === SELF-HEALING CYCLE ===
+  // Analyzes errors from this run + recent history, dispatches fixes
+  const failedCount = results.filter(r => r.status === "failed").length;
+  const recentErrors = await sql`
+    SELECT aa.agent, aa.error, aa.description, aa.company_id, 
+           c.slug as company_slug, c.name as company_name,
+           aa.finished_at
+    FROM agent_actions aa
+    LEFT JOIN companies c ON c.id = aa.company_id
+    WHERE aa.status IN ('failed', 'escalated')
+      AND aa.started_at > now() - interval '48 hours'
+    ORDER BY aa.finished_at DESC
+    LIMIT 30
+  `;
+
+  if (recentErrors.length > 0 && !SCOUT_ONLY && !DRY_RUN) {
+    console.log(`\n🔧 Self-healing — ${recentErrors.length} errors in last 48h`);
+
+    // Classify errors: systemic (same error in multiple companies) vs company-specific
+    const errorPatterns: Record<string, { count: number; companies: string[]; error: string; agent: string }> = {};
+    for (const err of recentErrors) {
+      // Normalize error to find patterns (strip timestamps, IDs, company-specific details)
+      const normalized = (err.error || "")
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<ID>")
+        .replace(/\d{4}-\d{2}-\d{2}T[\d:.Z]+/g, "<TIMESTAMP>")
+        .replace(/https?:\/\/[^\s]+/g, "<URL>")
+        .slice(0, 200);
+      
+      if (!errorPatterns[normalized]) {
+        errorPatterns[normalized] = { count: 0, companies: [], error: normalized, agent: err.agent };
+      }
+      errorPatterns[normalized].count++;
+      if (err.company_slug && !errorPatterns[normalized].companies.includes(err.company_slug)) {
+        errorPatterns[normalized].companies.push(err.company_slug);
+      }
+    }
+
+    const systemicErrors = Object.values(errorPatterns).filter(p => p.companies.length > 1 || p.count >= 3);
+    const companyErrors = Object.values(errorPatterns).filter(p => p.companies.length === 1 && p.count < 3);
+
+    if (systemicErrors.length > 0) {
+      console.log(`  🔴 ${systemicErrors.length} systemic error(s) (affect multiple companies)`);
+      for (const pattern of systemicErrors) {
+        console.log(`    - [${pattern.agent}] ${pattern.error.slice(0, 80)} (${pattern.count}x across ${pattern.companies.join(", ")})`);
+      }
+    }
+
+    // Dispatch the Healer agent to fix systemic issues
+    // The Healer works on the Hive codebase itself (not company repos)
+    if (systemicErrors.length > 0) {
+      console.log("  ├─ Dispatching Healer for systemic fixes...");
+      try {
+        const healerOutput = await dispatch({
+          prompt: `You are the Healer agent for Hive. Your job is to fix bugs that are breaking the orchestrator.
+
+## Systemic errors (happening across multiple companies):
+${systemicErrors.map(e => `- Agent: ${e.agent} | Error: ${e.error} | Occurrences: ${e.count} | Companies: ${e.companies.join(", ")}`).join("\n")}
+
+## Recent error context:
+${recentErrors.slice(0, 10).map(e => `- [${e.agent}] ${e.company_slug || "hive"}: ${(e.error || e.description || "").slice(0, 150)}`).join("\n")}
+
+## Your process:
+1. Read the error messages carefully. Identify the ROOT CAUSE.
+2. Look at the relevant source files — the error usually tells you which file and line.
+3. Fix the actual bug. Common issues:
+   - Database queries referencing columns that don't exist
+   - JSON parsing errors (agent returned markdown instead of JSON)
+   - API calls to endpoints that require auth but don't have it
+   - Type errors in TypeScript
+   - Missing environment variables
+   - Timeout issues (dispatch() default is 5min, some tasks need more)
+4. Run \`npm run build\` to verify your fix compiles.
+5. If the fix is in orchestrator.ts, just save it — it runs via ts-node next cycle.
+6. If the fix is in src/, run \`npm run build\` and commit + push to deploy.
+
+## Rules:
+- Fix the SIMPLEST thing that addresses the error. Don't refactor.
+- If you can't identify the root cause, write your analysis to MISTAKES.md so the next session can pick it up.
+- Never fix by removing functionality. Fix by making the functionality work.
+- Always run \`npm run build\` after changes to verify compilation.
+- Commit with message format: "fix: [what was broken] — [what you changed]"
+
+Output JSON:
+{
+  "errors_analyzed": number,
+  "fixes_applied": [{ "file": "...", "description": "..." }],
+  "could_not_fix": [{ "error": "...", "reason": "..." }],
+  "committed": boolean,
+  "build_passed": boolean
+}`,
+          cwd: process.cwd(), // Hive's own repo
+          maxTurns: 20,
+          timeoutMs: 10 * 60 * 1000,
+        });
+
+        // Parse healer output
+        try {
+          const healerJson = healerOutput.match(/\{[\s\S]*\}/);
+          if (healerJson) {
+            const result = JSON.parse(healerJson[0]);
+            const fixCount = result.fixes_applied?.length || 0;
+            const unfixable = result.could_not_fix?.length || 0;
+            console.log(`  ✓ Healer: ${fixCount} fix(es) applied, ${unfixable} could not fix, build ${result.build_passed ? "passed" : "FAILED"}`);
+
+            // Log the healing action
+            await sql`
+              INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
+              VALUES ('healer', 'self_heal', ${`Fixed ${fixCount} systemic error(s)${unfixable > 0 ? `, ${unfixable} unfixable` : ""}`}, 
+                ${fixCount > 0 ? "success" : "partial"}, ${JSON.stringify(result)}, now(), now())
+            `;
+
+            // Write unfixable errors to MISTAKES.md via the healer (it already does this in the prompt)
+          }
+        } catch {
+          console.log("  ⚠ Could not parse Healer output");
+        }
+      } catch (healErr: any) {
+        console.log(`  ⚠ Healer failed: ${healErr.message}`);
+      }
+    }
+
+    // For company-specific errors, dispatch fixes to the company's repo
+    for (const pattern of companyErrors.slice(0, 3)) { // max 3 company fixes per night
+      const companySlug = pattern.companies[0];
+      if (!companySlug) continue;
+
+      console.log(`  ├─ Fixing ${companySlug}: ${pattern.error.slice(0, 60)}...`);
+      try {
+        await dispatch({
+          prompt: `You are the Engineer fixing a bug for ${companySlug}.
+
+Error: ${pattern.error}
+Agent: ${pattern.agent}
+Occurrences: ${pattern.count}
+
+Read the error, find the file, fix the bug, run \`npm run build\`, and commit if it passes.
+Keep the fix minimal — address only this error. Commit message: "fix: [description]"`,
+          cwd: `/Users/carlos.miranda/Documents/Github/${companySlug}`,
+          maxTurns: 15,
+          timeoutMs: 8 * 60 * 1000,
+        });
+        console.log(`  ✓ ${companySlug} fix attempted`);
+      } catch (fixErr: any) {
+        console.log(`  ⚠ ${companySlug} fix failed: ${fixErr.message}`);
+      }
+    }
+  } else if (!SCOUT_ONLY) {
+    console.log(`\n🔧 Self-healing — ${recentErrors.length === 0 ? "no recent errors" : `skipped (${failedCount} failures this run, ${recentErrors.length} in 48h)`}`);
   }
 
   // === VENTURE BRAIN: Portfolio-level analysis ===
@@ -1191,7 +1393,6 @@ Output a brief portfolio summary.`,
           : 999;
 
         const needsEvolution = (total >= 10 && successRate < 0.7) || promptAge >= 14;
-
         if (!needsEvolution) continue;
 
         if (!evolverTriggered) {

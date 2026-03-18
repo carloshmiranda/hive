@@ -160,6 +160,41 @@ WEEKLY (Wednesday night):
   11. Prompt Evolver runs (see step 8 above)
 ```
 
+## Self-Healing Architecture
+
+Hive has three layers of error recovery:
+
+### Layer 1: Agent retry (within a cycle)
+Each agent gets 3 attempts per task. On failure:
+- Attempt 2: receives the full error message + instructions for common fix patterns (build errors, JSON parse, DB errors, timeouts)
+- Attempt 3: same but with more time (8min timeout, 15 turns)
+- After 3 failures: escalation approval gate created for Carlos
+
+Retries are action-oriented, not just reflective. The agent sees its error and is told to FIX IT, not just "try again".
+
+### Layer 2: Healer agent (after all companies process)
+Runs at the end of every nightly cycle if there are errors in the last 48h. Two modes:
+
+**Systemic errors** (same error in 2+ companies, or 3+ occurrences):
+- Indicates a bug in the orchestrator, shared template, or API
+- Healer dispatched with cwd = Hive repo, reads errors → finds root cause → fixes code → builds → commits
+- Example: a bad SQL query in orchestrator.ts referencing a column that doesn't exist
+
+**Company-specific errors** (only in one company):
+- Indicates a bug in that company's code
+- Engineer dispatched with cwd = company repo, same fix process
+- Max 3 company fixes per night (don't burn the whole budget on fixes)
+
+### Layer 3: Pre-flight health check (start of every run)
+Before any agents dispatch:
+- Verify database connection
+- Check for unresolved errors from last 48h
+- Verify Claude CLI is reachable
+- If pre-flight fails, the run aborts (don't waste quota on a broken system)
+
+### Error classification
+Errors are normalized (strip UUIDs, timestamps, URLs) and grouped into patterns. This prevents the Healer from treating 10 instances of the same error as 10 separate problems.
+
 ## Social Media
 
 Social accounts are tracked in the `social_accounts` table per company. Account creation is ALWAYS manual (no platform allows programmatic signup). The flow:

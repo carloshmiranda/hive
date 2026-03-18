@@ -114,3 +114,15 @@ Runs weekly on Wednesdays. For each agent (ceo, engineer, growth, ops): calculat
 
 ### ✅ 2026-03-18 — Resend transactional email templates
 `src/lib/resend.ts` extended with `renderWelcomeEmail()`, `renderReceiptEmail()`, `renderPasswordResetEmail()`. Clean light-themed templates for company boilerplates. All use `emailShell()` wrapper with configurable accent color.
+
+### ✅ 2026-03-18 — Outreach agent wired into nightly cycle
+Runs after Growth, before Ops. Builds lead lists via web search, drafts cold emails, sends via Resend API. First batch requires approval gate; subsequent batches auto-send (max 10/day). Pipeline tracked in research_reports table (lead_list + outreach_log).
+
+### ✅ 2026-03-18 — Periodic research refresh
+Competitive analysis refreshes every 7 cycles. Full research re-runs on "refresh research" directive. Existing reports fed as context for delta analysis. Reduced turns/timeout for refresh vs full Cycle 0 run.
+
+### ✅ 2026-03-18 — Research reports in company detail page
+`/company/[slug]` shows expandable research reports with per-type quick stats (competitor count, lead pipeline, keywords, outreach). Expandable JSON viewer for full content.
+
+### ✅ 2026-03-18 — Self-healing architecture
+Three layers: (1) Action-oriented retries — agents see their error + fix instructions on attempts 2-3, more time/turns per retry. (2) Healer agent — runs after company cycles, classifies systemic vs company-specific errors, dispatches fixes to Hive repo or company repos, max 3 company fixes/night. (3) Pre-flight health check — DB connection, recent errors summary, Claude CLI reachability, abort if broken. Error normalization groups duplicate errors into patterns.
