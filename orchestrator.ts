@@ -1139,7 +1139,7 @@ ${currentPrompt.slice(0, 3000)}
         method: "POST",
         headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          from: "Hive <noreply@hive.local>",
+          from: `Hive <${await getSettingValueDirect("resend_domain") ? "noreply@" + await getSettingValueDirect("resend_domain") : "onboarding@resend.dev"}>`,
           to: digestTo,
           subject: `🐝 Hive Digest — ${new Date().toLocaleDateString()}`,
           html: digestHtml,
