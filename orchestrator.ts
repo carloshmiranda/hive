@@ -923,51 +923,50 @@ Output a brief portfolio summary.`,
     console.log(`\n🧠 Venture Brain — skipped (need 2+ active companies, have ${activeForBrain.length})`);
   }
 
-  // === PROMPT EVOLVER: Weekly prompt improvement ===
-  // Runs on Wednesdays (offset from Sunday Idea Scout to spread load)
-  const isWednesday = new Date().getDay() === 3;
-  const hasEnoughData = results.filter(r => r.status === "complete").length > 0;
-
-  if (isWednesday && hasEnoughData && !SINGLE_COMPANY && !SCOUT_ONLY) {
-    console.log("\n🧬 Prompt Evolver — analyzing agent performance");
+  // === PROMPT EVOLVER: Data-driven prompt improvement ===
+  // Runs every night, but only evolves agents that have enough data and need it.
+  // Triggers: 10+ actions since last evolution with <70% success, OR 14+ days since last evolution.
+  if (!SINGLE_COMPANY && !SCOUT_ONLY) {
+    console.log("\n🧬 Prompt Evolver — checking agent performance");
 
     const agents = ["ceo", "engineer", "growth", "ops"];
 
     for (const agent of agents) {
       try {
-        // Get performance data for this agent over last 14 days
+        // Check when we last evolved this agent's prompt
+        const [latestVersion] = await sql`
+          SELECT version, created_at FROM agent_prompts
+          WHERE agent = ${agent}
+          ORDER BY version DESC LIMIT 1
+        `;
+        const lastEvolvedAt = latestVersion ? new Date(latestVersion.created_at) : new Date(0);
+        const daysSinceLastEvolve = Math.floor((Date.now() - lastEvolvedAt.getTime()) / 86400000);
+        const nextVersion = (latestVersion?.version || 0) + 1;
+
+        // Get actions SINCE last evolution (not arbitrary 14-day window)
         const recentActions = await sql`
           SELECT status, error, reflection, description, finished_at
-          FROM agent_actions 
-          WHERE agent = ${agent} 
-            AND started_at > now() - interval '14 days'
+          FROM agent_actions
+          WHERE agent = ${agent}
+            AND started_at > ${lastEvolvedAt.toISOString()}
           ORDER BY finished_at DESC
           LIMIT 50
         `;
 
-        if (recentActions.length < 5) {
-          console.log(`  ⓘ ${agent}: not enough data (${recentActions.length} actions) — skipping`);
-          continue;
+        // Need at least 10 actions since last evolution to have meaningful data
+        if (recentActions.length < 10 && daysSinceLastEvolve < 14) {
+          continue; // Not enough data and not stale — silently skip
         }
 
         const total = recentActions.length;
         const successes = recentActions.filter((a: any) => a.status === "success").length;
         const failures = recentActions.filter((a: any) => a.status === "failed").length;
-        const successRate = successes / total;
+        const successRate = total > 0 ? successes / total : 1;
 
-        // Check when we last evolved this agent's prompt
-        const [latestVersion] = await sql`
-          SELECT version, created_at FROM agent_prompts 
-          WHERE agent = ${agent} 
-          ORDER BY version DESC LIMIT 1
-        `;
-        const daysSinceLastEvolve = latestVersion
-          ? Math.floor((Date.now() - new Date(latestVersion.created_at).getTime()) / 86400000)
-          : 999;
-        const nextVersion = (latestVersion?.version || 0) + 1;
-
-        // Evolve if: success rate < 70%, or hasn't been evolved in 30+ days
-        const shouldEvolve = successRate < 0.7 || daysSinceLastEvolve >= 30;
+        // Evolve if: success rate < 70% with 10+ actions, OR 14+ days stale with any data
+        const poorPerformance = total >= 10 && successRate < 0.7;
+        const stalePrompt = daysSinceLastEvolve >= 14 && total >= 5;
+        const shouldEvolve = poorPerformance || stalePrompt;
 
         if (!shouldEvolve) {
           console.log(`  ✓ ${agent}: ${Math.round(successRate * 100)}% success rate (${total} actions) — no evolution needed`);
@@ -1057,9 +1056,6 @@ ${currentPrompt.slice(0, 3000)}
         console.log(`  ⚠ ${agent} evolution failed: ${evolveErr.message}`);
       }
     }
-  } else if (!SINGLE_COMPANY && !SCOUT_ONLY) {
-    const reason = !isWednesday ? "not Wednesday" : "no completed cycles to analyze";
-    console.log(`\n🧬 Prompt Evolver — skipped (${reason})`);
   }
 
   // === DAILY DIGEST EMAIL ===
