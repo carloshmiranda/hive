@@ -946,39 +946,22 @@ Output a brief portfolio summary.`,
           evolverTriggered = true;
         }
 
-        if (recentActions.length < 5) {
-          console.log(`  ⓘ ${agent}: not enough data (${recentActions.length} actions) — skipping`);
-          continue;
-        }
-
-        const total = recentActions.length;
-        const successes = recentActions.filter((a: any) => a.status === "success").length;
+        const total = totalActions;
+        const successes = successCount;
         const failures = recentActions.filter((a: any) => a.status === "failed").length;
-        const successRate = successes / total;
 
-        // Check when we last evolved this agent's prompt
+        // Get version info for next prompt
         const [latestVersion] = await sql`
-          SELECT version, created_at FROM agent_prompts 
-          WHERE agent = ${agent} 
+          SELECT version, created_at FROM agent_prompts
+          WHERE agent = ${agent}
           ORDER BY version DESC LIMIT 1
         `;
-        const daysSinceLastEvolve = latestVersion
-          ? Math.floor((Date.now() - new Date(latestVersion.created_at).getTime()) / 86400000)
-          : 999;
         const nextVersion = (latestVersion?.version || 0) + 1;
-
-        // Evolve if: success rate < 70%, or hasn't been evolved in 30+ days
-        const shouldEvolve = successRate < 0.7 || daysSinceLastEvolve >= 30;
-
-        if (!shouldEvolve) {
-          console.log(`  ✓ ${agent}: ${Math.round(successRate * 100)}% success rate (${total} actions) — no evolution needed`);
-          continue;
-        }
 
         console.log(`  ├─ ${agent}: ${Math.round(successRate * 100)}% success, ${failures} failures — generating variant...`);
 
-        // Get current prompt
-        const currentPrompt = await getActivePrompt(agent);
+        // Get current prompt text
+        const currentPromptText = await getActivePrompt(agent);
 
         // Gather failure patterns
         const failureDetails = recentActions
@@ -997,7 +980,7 @@ Output a brief portfolio summary.`,
 ${failureDetails || "No specific failures logged"}
 
 ## Current prompt:
-${currentPrompt.slice(0, 3000)}
+${currentPromptText.slice(0, 3000)}
 
 ## Your task:
 1. Analyze the failure patterns — what's causing the agent to fail?
