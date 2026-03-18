@@ -9,11 +9,11 @@
     <array>
         <string>/usr/local/bin/npx</string>
         <string>ts-node</string>
-        <string>/Users/carlos/code/hive/orchestrator.ts</string>
+        <string>/Users/carlos.miranda/Documents/Github/hive/orchestrator.ts</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/carlos/code/hive</string>
+    <string>/Users/carlos.miranda/Documents/Github/hive</string>
 
     <!-- Run at midnight every day -->
     <key>StartCalendarInterval</key>
@@ -30,16 +30,16 @@
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>DATABASE_URL</key>
-        <string>YOUR_NEON_CONNECTION_STRING</string>
+        <string>postgresql://neondb_owner:npg_sT6mLbxz5BAp@ep-frosty-meadow-ag9xf51n-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require</string>
         <key>HIVE_API_URL</key>
         <string>https://hive-dashboard.vercel.app/api</string>
     </dict>
 
     <!-- Logging -->
     <key>StandardOutPath</key>
-    <string>/Users/carlos/code/hive/logs/orchestrator.stdout.log</string>
+    <string>/Users/carlos.miranda/Documents/Github/hive/logs/orchestrator.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/carlos/code/hive/logs/orchestrator.stderr.log</string>
+    <string>/Users/carlos.miranda/Documents/Github/hive/logs/orchestrator.stderr.log</string>
 
     <!-- Keep alive on crash -->
     <key>KeepAlive</key>
