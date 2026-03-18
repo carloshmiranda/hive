@@ -71,30 +71,9 @@
 **Prevention:** Agent prompts should contain METHODOLOGY, not ANSWERS. If the human knows the answer, the agent doesn't need to exist. The prompt should teach the agent HOW to find answers, not WHAT the answers are. The only pre-loaded data should be dynamic state (portfolio, killed companies, playbook).
 **Affects:** idea_scout, all future agents
 
-### 2026-03-18 orchestrator.ts uses require() but runs as ESM
-**What happened:** Digest email failed with "require is not defined". Also affected child_process and crypto imports.
-**Root cause:** Node detected ESM (import statements at top), but three places still used `require()` inline: child_process spawn, crypto, and the resend module.
-**Fix applied:** Added `spawn` and `createDecipheriv` to top-level imports. Replaced resend `require()` with direct `fetch()` to Resend API (can't import Next.js modules from orchestrator anyway).
-**Prevention:** Never use `require()` in orchestrator.ts. All imports must be ESM `import` at the top. For Next.js modules that can't be imported (path aliases like `@/lib/*`), reimplement the logic inline.
-**Affects:** hive
-
-### 2026-03-18 Settings decryption format mismatch in orchestrator
-**What happened:** `getSettingValueDirect()` tried to parse encrypted values as a single hex blob. Failed silently (returned null).
-**Root cause:** `crypto.ts` stores encrypted values as `iv_hex:tag_hex:encrypted_hex` (colon-separated), but the orchestrator tried `Buffer.from(value, "hex")` on the whole string.
-**Fix applied:** Split on `:` first, then parse each part separately.
-**Prevention:** When reimplementing crypto logic outside the Next.js app, always verify the format matches `src/lib/crypto.ts`. Add a comment referencing the canonical implementation.
-**Affects:** hive
-
-### 2026-03-18 rsync from update archive overwrites deployment fixes
-**What happened:** P1 update archive was built before auth/middleware fixes were applied. `rsync` overwrote `auth.ts` and `middleware.ts` with broken versions, causing all settings to appear erased (401 from API).
-**Root cause:** The archive was a snapshot from before deployment. rsync blindly synced all source files including ones that had been fixed post-deploy.
-**Fix applied:** Re-applied the JWT `githubId` callback and middleware auth enforcement.
-**Prevention:** After rsync from an update archive, always diff `auth.ts` and `middleware.ts` against the last known-good commit. Better: build update archives from the deployed repo (post-fix), not from a pre-deploy snapshot. Consider using `git format-patch` instead of tar archives for updates.
-**Affects:** hive
-
-### 2026-03-18 Settings table column name mismatch
-**What happened:** Orchestrator queried `is_encrypted` column, but the actual column is `is_secret`.
-**Root cause:** Column was renamed during development but the orchestrator's direct SQL query wasn't updated.
-**Fix applied:** Changed to `is_secret` in orchestrator.ts.
-**Prevention:** The settings table schema is in `src/app/api/settings/route.ts` (CREATE TABLE IF NOT EXISTS). Any direct SQL against settings must match that schema, not assume column names.
-**Affects:** hive
+### 2026-03-18 Orchestrator can't import Next.js app modules
+**What happened:** Digest email code did `require("./src/lib/resend")` which chains to `@/lib/settings` → `@/lib/db`. These are Next.js path aliases that `ts-node` can't resolve.
+**Root cause:** The orchestrator runs as a standalone `ts-node` process outside of Next.js. It can't use path aliases like `@/lib/*`. Any module that lives in `src/` and uses these aliases is inaccessible from the orchestrator.
+**Fix applied:** Inlined the digest email HTML and Resend API call directly in `orchestrator.ts` using its own Neon connection and `getSettingValueDirect()`. The `src/lib/resend.ts` file remains for use within the Next.js app (API routes) where path aliases work fine.
+**Prevention:** The orchestrator must be fully self-contained. It can share DATA with the Next.js app (via Neon), but it cannot share CODE. Never `require()` anything from `src/` in `orchestrator.ts`. If both need the same logic, duplicate it or extract to a standalone module with no path aliases.
+**Affects:** orchestrator, digest email

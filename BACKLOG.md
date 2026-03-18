@@ -23,23 +23,14 @@
 
 ## Planned
 
-### 🟢 P2 — Playbook learning loop
-Schema and API exist but nothing writes to the playbook during normal company cycles. The CEO agent's review step should extract insights when metrics improve or decline significantly. The Retro Analyst (weekly) should synthesize across companies.
-
 ### 🟢 P2 — Prompt Evolver shadow testing
 Schema supports versioned prompts but the shadow testing pipeline isn't built. Need: generate variant prompts, run them against the same inputs as production, compare outputs, and propose upgrades through approval gates.
 
 ### 🟢 P2 — Social media posting integration
 Start with X API (free tier, 1,500 posts/mo) + LinkedIn API. Growth agent generates content, Late.dev or direct API handles posting. Social accounts are manual creation — add approval gate when a company validates.
 
-### 🟢 P2 — Company detail page
-Dashboard shows portfolio overview but no per-company deep dive. Need: full metrics history with charts, all agent actions for that company, its CLAUDE.md content, infra status, and a company-specific directive input.
-
 ### 🟢 P2 — Resend email lib wrapper
-`src/lib/resend.ts` is referenced in the architecture but doesn't exist. Need: send function with company-specific from address, React Email template rendering, digest email helper, and transactional email helpers (welcome, receipt, password reset).
-
-### 🟢 P2 — Health check endpoint
-Add `/api/health` that verifies: Neon connection works, all required settings are configured, GitHub token is valid, Stripe key is valid. The orchestrator calls this before starting the nightly loop. Dashboard shows a status indicator.
+`src/lib/resend.ts` exists with `sendEmail()` and `renderDigestHtml()` for use within the Next.js app (API routes). The orchestrator uses its own inline implementation. Need: transactional email helpers (welcome, receipt) for company boilerplates to use.
 
 ---
 
@@ -106,3 +97,18 @@ Approval side effects for `first_revenue` gate → auto-creates `vercel_pro_upgr
 
 ### ✅ 2026-03-18 — Dashboard real-time refresh
 30-second auto-polling via `setInterval`. Last refresh timestamp shown in header (clickable for manual refresh). All data sources (portfolio, companies, actions, approvals, playbook) refresh together.
+
+### ✅ 2026-03-18 — Health check endpoint
+`/api/health` verifies: Neon connection, all required settings configured, schema tables present. Returns overall status (healthy/degraded/unhealthy) with per-check detail. Auth-guarded.
+
+### ✅ 2026-03-18 — Bug fix: orchestrator can't import Next.js modules
+`require("./src/lib/resend")` broke because of `@/lib/*` path aliases. Digest email logic inlined in orchestrator.ts with direct Neon + fetch. Rule: orchestrator shares DATA via Neon, never CODE via imports.
+
+### ✅ 2026-03-18 — Bug fix: dispatch() rewritten with spawn
+Replaced `execSync` with proper `spawn` import. Removed dead `require("child_process")` inside function body.
+
+### ✅ 2026-03-18 — Playbook learning loop
+CEO review step now parses playbook_entry from output JSON and writes to the playbook table with source_company_id and evidence. Also extracts cycle score into ceo_review JSONB. Kill flag auto-creates kill_company approval gate. Non-critical: if parsing fails, cycle continues.
+
+### ✅ 2026-03-18 — Company detail page
+`/company/[slug]` — full deep-dive per company with: directive input, pending approvals with approve/reject, latest metrics grid, expandable cycle history with CEO plan/review and score, agent activity feed. 30s auto-refresh. Dashboard company names and activity feed slugs link to detail pages.

@@ -12,7 +12,7 @@
  *   npx ts-node orchestrator.ts --dry-run    # plan only, no execution
  */
 
-import { execSync, spawn } from "child_process";
+import { spawn } from "child_process";
 import { createDecipheriv } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { readFileSync, existsSync } from "fs";
@@ -41,22 +41,16 @@ interface DispatchOptions {
 }
 
 async function dispatch(opts: DispatchOptions): Promise<string> {
-  // TODAY: Claude Code CLI with subscription auth
-  // TOMORROW: Claude Agent SDK with API key (one function swap)
-  const args = [
-    "-p", opts.prompt,
-    "--output-format", "text",
-  ];
-  if (opts.cwd) args.push("--cwd", opts.cwd);
-  if (opts.allowedTools?.length) {
-    args.push("--allowedTools", opts.allowedTools.join(","));
-  }
-  if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
-
   if (DRY_RUN) {
     console.log(`[DRY RUN] Would dispatch: ${opts.prompt.slice(0, 100)}...`);
     return "[DRY RUN] No output";
   }
+
+  // Build args
+  const args = ["-p", opts.prompt, "--output-format", "text"];
+  if (opts.cwd) args.push("--cwd", opts.cwd);
+  if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
+  if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
 
   const timeout = opts.timeoutMs || 5 * 60 * 1000;
 
@@ -73,25 +67,17 @@ async function dispatch(opts: DispatchOptions): Promise<string> {
     proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
-    // Timeout: kill the process if it exceeds the limit
     const timer = setTimeout(() => {
       killed = true;
       proc.kill("SIGTERM");
-      // Give it 5s to clean up, then force kill
-      setTimeout(() => {
-        if (!proc.killed) proc.kill("SIGKILL");
-      }, 5000);
+      setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
     }, timeout);
 
     proc.on("close", (code: number | null) => {
       clearTimeout(timer);
-      if (killed) {
-        reject(new Error(`Dispatch timed out after ${Math.round(timeout / 1000)}s — process killed`));
-      } else if (code !== 0) {
-        reject(new Error(`Dispatch exited with code ${code}: ${stderr.slice(0, 500)}`));
-      } else {
-        resolve(stdout.trim());
-      }
+      if (killed) reject(new Error(`Dispatch timed out after ${Math.round(timeout / 1000)}s`));
+      else if (code !== 0) reject(new Error(`Dispatch exited ${code}: ${stderr.slice(0, 500)}`));
+      else resolve(stdout.trim());
     });
 
     proc.on("error", (err: Error) => {
@@ -109,7 +95,7 @@ async function getSettingValueDirect(key: string): Promise<string | null> {
   if (!row) return null;
   if (!row.is_secret) return row.value;
 
-  // Decrypt AES-256-GCM (format: iv_hex:tag_hex:encrypted_hex)
+  // Decrypt AES-256-GCM (format: iv_hex:tag_hex:encrypted_hex — must match src/lib/crypto.ts)
   const encKey = process.env.ENCRYPTION_KEY;
   if (!encKey) return null;
   try {
@@ -673,15 +659,63 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 
     // Step 5: CEO reviews
     console.log("  └─ CEO reviewing cycle...");
-    await executeAgent({
+    const ceoReview = await executeAgent({
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + "\n\nReview tonight's cycle results. Score each agent 0-1. Write assessment.",
+      prompt: ceoPrompt + "\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.",
       context,
     });
 
-    await updateCycle(cycleId, { status: "completed", ceo_plan: ceoPlan.output });
+    // Extract playbook entry and score from CEO review
+    let cycleScore: number | null = null;
+    try {
+      const reviewJson = ceoReview.output.match(/\{[\s\S]*\}/);
+      if (reviewJson) {
+        const review = JSON.parse(reviewJson[0]);
+        const r = review.review || review;
+
+        // Write cycle score
+        if (r.score) {
+          cycleScore = Number(r.score);
+        }
+
+        // Write playbook entry if present
+        if (r.playbook_entry?.insight) {
+          const entry = r.playbook_entry;
+          await sql`
+            INSERT INTO playbook (domain, insight, confidence, source_company_id, evidence)
+            VALUES (
+              ${entry.domain || "general"},
+              ${entry.insight},
+              ${entry.confidence || 0.5},
+              ${company.id},
+              ${JSON.stringify({ cycle_id: cycleId, cycle_number: cycleNumber })}
+            )
+          `;
+          console.log(`    📖 Playbook: [${entry.domain}] ${entry.insight.slice(0, 60)}...`);
+        }
+
+        // Write kill flag if CEO recommends killing
+        if (r.kill_flag === true) {
+          await sql`
+            INSERT INTO approvals (company_id, gate_type, title, description, context)
+            VALUES (
+              ${company.id},
+              'kill_company',
+              ${"Kill Switch: " + company.name},
+              ${`CEO agent recommends killing this company.\n\nAssessment: ${r.assessment || "No assessment"}\nScore: ${r.score || "N/A"}/10`},
+              ${JSON.stringify(r)}
+            )
+          `;
+          console.log(`    ⚠ Kill flag raised — approval gate created`);
+        }
+      }
+    } catch {
+      // Non-critical: if we can't parse the review, just continue
+    }
+
+    await updateCycle(cycleId, { status: "completed", ceo_plan: ceoPlan.output, ceo_review: ceoReview.output });
 
     const duration = Math.round((Date.now() - companyStart) / 1000);
     console.log(`  ✓ Cycle ${cycleNumber} complete (${duration}s)`);
@@ -861,58 +895,97 @@ Output a brief portfolio summary.`,
   const pendingApprovals = await getPendingApprovals();
 
   try {
+    const resendKey = await getSettingValueDirect("resend_api_key");
     const digestTo = await getSettingValueDirect("digest_email");
-    const resendApiKey = await getSettingValueDirect("resend_api_key");
     const dashboardUrl = process.env.NEXT_PUBLIC_URL || "http://localhost:3000";
 
-    if (!digestTo || !resendApiKey) {
-      console.log(`  ⓘ ${!digestTo ? "No digest_email" : "No resend_api_key"} configured — skipping`);
-    } else {
-      // Build a simple digest summary
-      const duration = `${Math.round((Date.now() - startTime) / 1000)}s`;
-      const dateStr = new Date().toLocaleDateString("en-PT", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-      const companySummary = results.length
-        ? results.map(r => `<li><strong>${r.company}</strong>: ${r.status}</li>`).join("")
-        : "<li>No active companies</li>";
-      const approvalSummary = pendingApprovals.length
-        ? pendingApprovals.map((a: any) => `<li>${a.gate_type}: ${a.title}</li>`).join("")
-        : "<li>No pending approvals</li>";
-      const errorSummary = results.filter(r => r.status === "failed").map(r => r.company).join(", ");
+    if (digestTo && resendKey) {
+      // Gather portfolio metrics
+      const portfolioMetrics = await sql`
+        SELECT 
+          COALESCE(SUM(m.mrr), 0) as total_mrr,
+          COALESCE(SUM(m.customers), 0) as total_customers
+        FROM metrics m
+        JOIN companies c ON c.id = m.company_id
+        WHERE c.status IN ('mvp', 'active')
+          AND m.date >= CURRENT_DATE
+      `;
 
-      const digestHtml = `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#0a0a09;font-family:-apple-system,sans-serif;color:#B4B2A9">
+      const totalMrr = Number(portfolioMetrics[0]?.total_mrr || 0);
+      const totalCustomers = Number(portfolioMetrics[0]?.total_customers || 0);
+      const durationStr = `${Math.round((Date.now() - startTime) / 1000)}s`;
+      const dateStr = new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+      // Build company results rows
+      const companyRows = results.map(r => {
+        const statusColor = r.status === "complete" ? "#1D9E75" : "#E24B4A";
+        const statusIcon = r.status === "complete" ? "✓" : "✗";
+        return `<tr><td style="padding:10px 16px;border-bottom:1px solid #2C2C2A">
+          <strong style="color:#F0F0EC">${r.company}</strong>
+          <span style="margin-left:8px;padding:2px 8px;border-radius:10px;font-size:12px;background:${statusColor};color:#fff">${statusIcon} ${r.status}</span>
+          <span style="color:#888780;font-size:12px;margin-left:8px">${r.duration}s</span>
+        </td></tr>`;
+      }).join("");
+
+      // Build approvals rows
+      const approvalRows = pendingApprovals.length
+        ? pendingApprovals.map((a: any) =>
+          `<tr><td style="padding:8px 16px;border-bottom:1px solid #2C2C2A;color:#F0F0EC;font-size:14px">
+            <span style="padding:2px 8px;border-radius:4px;background:#534AB7;color:#fff;font-size:12px;margin-right:8px">${a.gate_type}</span>${a.title}
+          </td></tr>`).join("")
+        : `<tr><td style="padding:8px 16px;color:#888780;font-size:14px">No pending approvals</td></tr>`;
+
+      // Build error section
+      const failedCompanies = results.filter(r => r.status === "failed");
+      const errorsHtml = failedCompanies.length
+        ? `<div style="margin:16px 0;padding:12px 16px;border-left:3px solid #E24B4A;background:#1a1a18">
+            <strong style="color:#E24B4A">Errors:</strong>
+            <ul style="margin:4px 0 0;padding-left:18px;font-size:13px;color:#F09595">${failedCompanies.map(r => `<li>${r.company} cycle failed</li>`).join("")}</ul>
+          </div>` : "";
+
+      const digestHtml = `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#0a0a09;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#B4B2A9">
         <div style="max-width:600px;margin:0 auto;padding:24px">
           <div style="text-align:center;margin-bottom:24px">
-            <h1 style="color:#EF9F27;font-size:20px;margin:8px 0 0">🐝 Hive nightly digest</h1>
-            <div style="color:#888780;font-size:13px">${dateStr} · ${duration}</div>
+            <h1 style="color:#EF9F27;font-size:20px;margin:8px 0 0">Hive nightly digest</h1>
+            <div style="color:#888780;font-size:13px">${dateStr} — ${durationStr}</div>
           </div>
-          <h2 style="color:#F0F0EC;font-size:16px">Companies</h2>
-          <ul>${companySummary}</ul>
-          <h2 style="color:#F0F0EC;font-size:16px">Pending approvals</h2>
-          <ul>${approvalSummary}</ul>
-          ${errorSummary ? `<p style="color:#E24B4A">⚠ Errors: ${errorSummary}</p>` : ""}
+          <table style="width:100%;margin-bottom:16px"><tr>
+            <td style="text-align:center;padding:12px;background:#1a1a18;border-radius:8px"><div style="color:#EF9F27;font-size:22px;font-weight:600">€${totalMrr}</div><div style="color:#888780;font-size:12px">MRR</div></td>
+            <td style="width:8px"></td>
+            <td style="text-align:center;padding:12px;background:#1a1a18;border-radius:8px"><div style="color:#5DCAA5;font-size:22px;font-weight:600">${totalCustomers}</div><div style="color:#888780;font-size:12px">Customers</div></td>
+            <td style="width:8px"></td>
+            <td style="text-align:center;padding:12px;background:#1a1a18;border-radius:8px"><div style="color:#AFA9EC;font-size:22px;font-weight:600">${results.length}</div><div style="color:#888780;font-size:12px">Companies</div></td>
+          </tr></table>
+          ${errorsHtml}
+          <h2 style="color:#F0F0EC;font-size:16px;margin:20px 0 8px">Company results</h2>
+          <table style="width:100%;border-collapse:collapse;background:#111110;border-radius:8px;overflow:hidden">${companyRows || `<tr><td style="padding:12px 16px;color:#888780">No active companies</td></tr>`}</table>
+          <h2 style="color:#F0F0EC;font-size:16px;margin:20px 0 8px">Awaiting your decision</h2>
+          <table style="width:100%;border-collapse:collapse;background:#111110;border-radius:8px;overflow:hidden">${approvalRows}</table>
           <div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #2C2C2A">
-            <a href="${dashboardUrl}" style="color:#EF9F27;text-decoration:none">Open Hive dashboard</a>
+            <a href="${dashboardUrl}" style="color:#EF9F27;text-decoration:none;font-size:13px">Open Hive dashboard</a>
           </div>
-        </div>
-      </body></html>`;
+        </div></body></html>`;
 
-      const res = await fetch("https://api.resend.com/emails", {
+      // Send via Resend API
+      const emailRes = await fetch("https://api.resend.com/emails", {
         method: "POST",
-        headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          from: `Hive <noreply@${await getSettingValueDirect("resend_domain") || "hive.local"}>`,
+          from: "Hive <noreply@hive.local>",
           to: digestTo,
           subject: `🐝 Hive Digest — ${new Date().toLocaleDateString()}`,
           html: digestHtml,
         }),
       });
 
-      if (res.ok) {
+      if (emailRes.ok) {
         console.log(`  ✓ Digest sent to ${digestTo}`);
       } else {
-        const err = await res.json().catch(() => ({}));
-        console.log(`  ⚠ Digest failed: ${(err as any).message || `HTTP ${res.status}`}`);
+        const emailErr = await emailRes.text();
+        console.log(`  ⚠ Digest failed: ${emailErr}`);
       }
+    } else {
+      console.log(`  ⓘ Skipped — ${!resendKey ? "no resend_api_key" : "no digest_email"} in settings`);
     }
   } catch (digestErr: any) {
     console.log(`  ⚠ Digest error: ${digestErr.message}`);

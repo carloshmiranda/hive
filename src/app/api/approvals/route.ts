@@ -12,7 +12,14 @@ export async function GET(req: Request) {
   const sql = getDb();
   let approvals;
 
-  if (companyId) {
+  if (companyId && status === "all") {
+    approvals = await sql`
+      SELECT a.*, c.name as company_name, c.slug as company_slug
+      FROM approvals a LEFT JOIN companies c ON c.id = a.company_id
+      WHERE (a.company_id = ${companyId} OR a.company_id IS NULL)
+      ORDER BY a.created_at DESC LIMIT 50
+    `;
+  } else if (companyId) {
     approvals = await sql`
       SELECT a.*, c.name as company_name, c.slug as company_slug
       FROM approvals a LEFT JOIN companies c ON c.id = a.company_id

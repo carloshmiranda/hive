@@ -340,7 +340,9 @@ export default function DashboardPage() {
                     opacity: isDead ? 0.6 : 1 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                       <div>
-                        <div style={{ fontSize: 15, fontWeight: 600, color: "#f0f0f4", marginBottom: 4 }}>{c.name}</div>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "#f0f0f4", marginBottom: 4 }}>
+                          <Link href={`/company/${c.slug}`} style={{ color: "#f0f0f4", textDecoration: "none" }}>{c.name}</Link>
+                        </div>
                         <div style={{ fontSize: 12, color: "var(--hive-muted)" }}>{c.description}</div>
                       </div>
                       <StatusBadge status={c.status} />
@@ -431,7 +433,7 @@ export default function DashboardPage() {
                       <div>
                         <div style={{ fontSize: 14, fontWeight: 600, color: "#f0f0f4" }}>{a.title}</div>
                         <div style={{ fontSize: 10, color: "var(--hive-muted)", fontFamily: "var(--hive-mono)" }}>
-                          {a.company_slug || "portfolio"} · {timeAgo(a.created_at)}
+                          {a.company_slug ? <Link href={`/company/${a.company_slug}`} style={{ color: "var(--hive-muted)", textDecoration: "none" }}>{a.company_slug}</Link> : "portfolio"} · {timeAgo(a.created_at)}
                         </div>
                       </div>
                     </div>
@@ -499,7 +501,9 @@ export default function DashboardPage() {
                         )}
                       </div>
                       <div style={{ minWidth: 80, textAlign: "right" }}>
-                        <div style={{ fontSize: 10, color: "var(--hive-dim)", fontFamily: "var(--hive-mono)" }}>{a.company_slug}</div>
+                        <div style={{ fontSize: 10, color: "var(--hive-dim)", fontFamily: "var(--hive-mono)" }}>
+                          {a.company_slug ? <Link href={`/company/${a.company_slug}`} style={{ color: "var(--hive-dim)", textDecoration: "none" }}>{a.company_slug}</Link> : "—"}
+                        </div>
                         <div style={{ fontSize: 10, color: "var(--hive-dim)", fontFamily: "var(--hive-mono)" }}>{a.tokens_used?.toLocaleString()}t</div>
                         <div style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", marginTop: 4,
                           background: isFail ? "var(--hive-red)" : a.status === "success" ? "var(--hive-green)" : "var(--hive-amber)" }} />
