@@ -769,9 +769,10 @@ IMPORTANT — Scheduling conflict detection:
 9. Check for existing agent scheduling that would conflict with Hive's orchestrator:
 
    CLOUD-BASED (disable directly — you have the credentials):
-   - GitHub Actions with schedule triggers: delete or disable the workflow files via GitHub API
-   - Vercel cron entries in vercel.json: remove the crons array (Hive manages its own cron)
-   - Any CI/CD pipelines that auto-deploy or run agents on a schedule: disable them
+   - GitHub Actions that run AI agents or Claude CLI on a schedule: disable these workflow files via GitHub API
+   - Vercel cron entries that trigger agent/AI logic: remove those entries from vercel.json
+   - Do NOT disable standard CI/CD (build, test, lint, deploy) — each company keeps its own deployment pipeline
+   - Do NOT disable Vercel's auto-deploy-on-push — that's how company code gets deployed
 
    LOCAL (escalate — only Carlos can do this):
    - launchd plist files (*.plist): if found in the repo or referenced in docs, create an escalation
