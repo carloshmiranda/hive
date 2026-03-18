@@ -32,7 +32,9 @@
         <key>DATABASE_URL</key>
         <string>YOUR_NEON_CONNECTION_STRING</string>
         <key>HIVE_API_URL</key>
-        <string>https://hive-dashboard.vercel.app/api</string>
+        <string>https://hive-phi.vercel.app/api</string>
+        <key>NEXT_PUBLIC_URL</key>
+        <string>https://hive-phi.vercel.app</string>
     </dict>
 
     <!-- Logging -->
