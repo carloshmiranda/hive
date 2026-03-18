@@ -13,7 +13,6 @@
  */
 
 import { spawn } from "child_process";
-import { createDecipheriv } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -95,19 +94,18 @@ async function getSettingValueDirect(key: string): Promise<string | null> {
   if (!row) return null;
   if (!row.is_secret) return row.value;
 
-  // Decrypt AES-256-GCM (format: iv_hex:tag_hex:encrypted_hex — must match src/lib/crypto.ts)
+  // Decrypt AES-256-GCM (format: iv_hex:tag_hex:encrypted_hex)
   const encKey = process.env.ENCRYPTION_KEY;
   if (!encKey) return null;
   try {
-    const [ivHex, tagHex, encryptedHex] = row.value.split(":");
-    if (!ivHex || !tagHex || !encryptedHex) return null;
+    const { createDecipheriv } = await import("crypto");
+    const [ivHex, tagHex, encrypted] = row.value.split(":");
+    if (!ivHex || !tagHex || !encrypted) return null;
     const iv = Buffer.from(ivHex, "hex");
     const tag = Buffer.from(tagHex, "hex");
     const decipher = createDecipheriv("aes-256-gcm", Buffer.from(encKey, "hex"), iv);
     decipher.setAuthTag(tag);
-    let decrypted = decipher.update(encryptedHex, "hex", "utf8");
-    decrypted += decipher.final("utf8");
-    return decrypted;
+    return decipher.update(encrypted, "hex", "utf8") + decipher.final("utf8");
   } catch {
     return null;
   }
@@ -820,23 +818,7 @@ Instead:
 8. If there's no Stripe integration and the project needs one, create a product + price
 
 Key difference from new companies: RESPECT the existing codebase. Don't overwrite files.
-Add Hive integration alongside what's already there.
-
-IMPORTANT — Scheduling conflict detection:
-9. Check for existing agent scheduling that would conflict with Hive's orchestrator:
-
-   CLOUD-BASED (disable directly — you have the credentials):
-   - GitHub Actions that run AI agents or Claude CLI on a schedule: disable these workflow files via GitHub API
-   - Vercel cron entries that trigger agent/AI logic: remove those entries from vercel.json
-   - Do NOT disable standard CI/CD (build, test, lint, deploy) — each company keeps its own deployment pipeline
-   - Do NOT disable Vercel's auto-deploy-on-push — that's how company code gets deployed
-
-   LOCAL (escalate — only Carlos can do this):
-   - launchd plist files (*.plist): if found in the repo or referenced in docs, create an escalation
-     approval via POST /api/approvals with:
-     { gate_type: "escalation", company_id: "${imp.company_id || ""}", title: "Local launchd schedule detected in ${imp.name}", description: "Found plist files: [list files]. Carlos needs to manually unload: launchctl unload ~/Library/LaunchAgents/[filename]" }
-
-   Log all findings (both resolved and escalated) in the action output.`,
+Add Hive integration alongside what's already there.`,
         cwd: `/Users/carlos/code/${imp.slug}`,
       });
 
@@ -924,49 +906,69 @@ Output a brief portfolio summary.`,
   }
 
   // === PROMPT EVOLVER: Data-driven prompt improvement ===
-  // Runs every night, but only evolves agents that have enough data and need it.
-  // Triggers: 10+ actions since last evolution with <70% success, OR 14+ days since last evolution.
-  if (!SINGLE_COMPANY && !SCOUT_ONLY) {
-    console.log("\n🧬 Prompt Evolver — checking agent performance");
+  // Triggers when an agent has 10+ actions with <70% success rate, or prompt is 14+ days stale
+  const hasEnoughData = results.filter(r => r.status === "complete").length > 0;
 
+  if (hasEnoughData && !SINGLE_COMPANY && !SCOUT_ONLY) {
     const agents = ["ceo", "engineer", "growth", "ops"];
+    let evolverTriggered = false;
 
     for (const agent of agents) {
       try {
-        // Check when we last evolved this agent's prompt
-        const [latestVersion] = await sql`
-          SELECT version, created_at FROM agent_prompts
-          WHERE agent = ${agent}
-          ORDER BY version DESC LIMIT 1
-        `;
-        const lastEvolvedAt = latestVersion ? new Date(latestVersion.created_at) : new Date(0);
-        const daysSinceLastEvolve = Math.floor((Date.now() - lastEvolvedAt.getTime()) / 86400000);
-        const nextVersion = (latestVersion?.version || 0) + 1;
-
-        // Get actions SINCE last evolution (not arbitrary 14-day window)
+        // Check if this agent needs prompt evolution
         const recentActions = await sql`
           SELECT status, error, reflection, description, finished_at
           FROM agent_actions
           WHERE agent = ${agent}
-            AND started_at > ${lastEvolvedAt.toISOString()}
+            AND started_at > now() - interval '14 days'
           ORDER BY finished_at DESC
           LIMIT 50
         `;
 
-        // Need at least 10 actions since last evolution to have meaningful data
-        if (recentActions.length < 10 && daysSinceLastEvolve < 14) {
-          continue; // Not enough data and not stale — silently skip
+        const totalActions = recentActions.length;
+        const successCount = recentActions.filter((a: any) => a.status === "success").length;
+        const successRate = totalActions > 0 ? successCount / totalActions : 1;
+
+        // Check prompt staleness
+        const [currentPrompt] = await sql`
+          SELECT updated_at FROM agent_prompts WHERE agent = ${agent} AND is_active = true LIMIT 1
+        `;
+        const promptAge = currentPrompt?.updated_at
+          ? (Date.now() - new Date(currentPrompt.updated_at).getTime()) / (1000 * 60 * 60 * 24)
+          : 999;
+
+        const needsEvolution = (totalActions >= 10 && successRate < 0.7) || promptAge >= 14;
+
+        if (!needsEvolution) continue;
+
+        if (!evolverTriggered) {
+          console.log("\n🧬 Prompt Evolver — triggered by performance data");
+          evolverTriggered = true;
+        }
+
+        if (recentActions.length < 5) {
+          console.log(`  ⓘ ${agent}: not enough data (${recentActions.length} actions) — skipping`);
+          continue;
         }
 
         const total = recentActions.length;
         const successes = recentActions.filter((a: any) => a.status === "success").length;
         const failures = recentActions.filter((a: any) => a.status === "failed").length;
-        const successRate = total > 0 ? successes / total : 1;
+        const successRate = successes / total;
 
-        // Evolve if: success rate < 70% with 10+ actions, OR 14+ days stale with any data
-        const poorPerformance = total >= 10 && successRate < 0.7;
-        const stalePrompt = daysSinceLastEvolve >= 14 && total >= 5;
-        const shouldEvolve = poorPerformance || stalePrompt;
+        // Check when we last evolved this agent's prompt
+        const [latestVersion] = await sql`
+          SELECT version, created_at FROM agent_prompts 
+          WHERE agent = ${agent} 
+          ORDER BY version DESC LIMIT 1
+        `;
+        const daysSinceLastEvolve = latestVersion
+          ? Math.floor((Date.now() - new Date(latestVersion.created_at).getTime()) / 86400000)
+          : 999;
+        const nextVersion = (latestVersion?.version || 0) + 1;
+
+        // Evolve if: success rate < 70%, or hasn't been evolved in 30+ days
+        const shouldEvolve = successRate < 0.7 || daysSinceLastEvolve >= 30;
 
         if (!shouldEvolve) {
           console.log(`  ✓ ${agent}: ${Math.round(successRate * 100)}% success rate (${total} actions) — no evolution needed`);
@@ -1056,6 +1058,12 @@ ${currentPrompt.slice(0, 3000)}
         console.log(`  ⚠ ${agent} evolution failed: ${evolveErr.message}`);
       }
     }
+
+    if (!evolverTriggered && !SINGLE_COMPANY && !SCOUT_ONLY) {
+      console.log("\n🧬 Prompt Evolver — skipped (all agents performing well or insufficient data)");
+    }
+  } else if (!SINGLE_COMPANY && !SCOUT_ONLY) {
+    console.log("\n🧬 Prompt Evolver — skipped (no completed cycles to analyze)");
   }
 
   // === DAILY DIGEST EMAIL ===
@@ -1139,7 +1147,7 @@ ${currentPrompt.slice(0, 3000)}
         method: "POST",
         headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          from: `Hive <${await getSettingValueDirect("resend_domain") ? "noreply@" + await getSettingValueDirect("resend_domain") : "onboarding@resend.dev"}>`,
+          from: "Hive <onboarding@resend.dev>",
           to: digestTo,
           subject: `🐝 Hive Digest — ${new Date().toLocaleDateString()}`,
           html: digestHtml,

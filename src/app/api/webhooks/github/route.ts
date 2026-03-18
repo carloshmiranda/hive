@@ -1,16 +1,32 @@
 import { getDb } from "@/lib/db";
+import { createHmac, timingSafeEqual } from "crypto";
 
-// Receives GitHub webhook events — no auth check (verified by webhook secret)
-// Tracks: push events, deploy statuses, PR merges
+// Receives GitHub webhook events
+// Auth: HMAC-SHA256 signature verification via GITHUB_WEBHOOK_SECRET
+
+function verifyGitHubSignature(payload: string, signature: string | null, secret: string): boolean {
+  if (!signature) return false;
+  const expected = "sha256=" + createHmac("sha256", secret).update(payload).digest("hex");
+  try {
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
 
 export async function POST(req: Request) {
-  const body = await req.json();
+  const rawBody = await req.text();
   const event = req.headers.get("x-github-event");
-  const sql = getDb();
+  const signature = req.headers.get("x-hub-signature-256");
 
-  // Verify webhook secret
-  // In production, verify HMAC signature from X-Hub-Signature-256
-  // Skipped here for brevity — add before production
+  // Verify webhook signature
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (secret && !verifyGitHubSignature(rawBody, signature, secret)) {
+    return Response.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  const body = JSON.parse(rawBody);
+  const sql = getDb();
 
   switch (event) {
     case "push": {

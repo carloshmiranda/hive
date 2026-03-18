@@ -6,11 +6,14 @@
 Carlos Miranda — solo entrepreneur based in Amadora, Lisbon, Portugal. 15+ years IT experience. Building Hive as a personal venture orchestrator. Bilingual Portuguese/English. Comfortable with playful humour but expects direct, honest technical feedback.
 
 ## Current State
-- **Phase:** Deployed — all P0/P1/P2 complete
-- **Active companies:** None yet
+- **Phase:** Deployed — all P0/P1/P2 complete. Ready for first orchestrator run.
+- **Production URL:** https://hive-phi.vercel.app
+- **Vercel project ID:** prj_n9JaPbWmRv0SKoHgkdXYOEGQtjRv
+- **Latest deploy:** READY (dpl_HgG1x6GKfteZCq8UyEEWVcBeT2Pg)
+- **Active companies:** None yet — run `--scout-only` to generate first idea
 - **Subscription:** Claude Max 5x ($100/mo)
 - **Vercel team:** Eidolon's projects (team_Z4AsGtjfy6pAjCOtvJqzMT8d)
-- **Existing Vercel projects:** accrue, verdedesk
+- **Other Vercel projects:** accrue, verdedesk (candidates for import into Hive)
 
 ## Tech Stack
 - Next.js 15 (App Router) + Tailwind CSS 4 + TypeScript
@@ -40,7 +43,8 @@ Carlos Miranda — solo entrepreneur based in Amadora, Lisbon, Portugal. 15+ yea
 ## Known Gotchas
 - next-auth v5 is beta. Pin exact versions.
 - Never export helpers from route.ts files. Shared logic goes in src/lib/.
-- orchestrator.ts uses Node.js APIs (execSync, crypto). Must be excluded from Next.js build via tsconfig.
+- orchestrator.ts uses Node.js APIs (spawn, crypto). Must be excluded from Next.js build via tsconfig.
+- orchestrator.ts cannot import from src/ (path aliases don't resolve in ts-node). Shares DATA via Neon, never CODE.
 - Vercel Hobby is non-commercial. Any company generating revenue needs Pro ($20/mo).
 - Claude Code subscription quota is shared across CLI, web, and desktop. Budget ~40 messages per company in nightly loop.
 - Vercel Functions have 60s timeout on Hobby. Chain long tasks via QStash or sequential API calls.
@@ -78,4 +82,5 @@ Before starting work in any Claude Code session:
 - 2026-03-18: Bug fixes: dispatch() rewritten with spawn (was execSync), digest email inlined in orchestrator (can't import Next.js modules), health check endpoint added.
 - 2026-03-18: Playbook learning loop + company detail page built. CEO review output parsed for playbook entries and kill flags. Dashboard links to /company/[slug].
 - 2026-03-18: All P2 items completed: Prompt Evolver (weekly Wednesday), social media posting (X API v2), Resend transactional templates (welcome, receipt, password reset). Full backlog cleared.
-- 2026-03-18: Final P2 deployed to https://hive-phi.vercel.app. All backlog items complete. Only P3 future vision remains.
+- 2026-03-18: Critical bugs fixed: auth.ts env var names (GITHUB_OAUTH_ID → AUTH_GITHUB_ID), middleware excluding webhooks/cron/health, GitHub webhook HMAC-SHA256 verification added. These were being overwritten by every archive update.
+- 2026-03-18: Deployment confirmed live at hive-phi.vercel.app (READY). Vercel project prj_n9JaPbWmRv0SKoHgkdXYOEGQtjRv. 71 files, 20 pages, all P0/P1/P2 complete.
