@@ -36,7 +36,22 @@ interface DispatchOptions {
   allowedTools?: string[];
   maxTurns?: number;
   timeoutMs?: number; // default 5min, research tasks need more
+  model?: string; // "opus" for strategic, "sonnet" for execution
 }
+
+// Agents that need deep reasoning get Opus; execution agents get Sonnet
+const AGENT_MODELS: Record<string, string> = {
+  ceo: "opus",
+  research_analyst: "opus",
+  idea_scout: "opus",
+  venture_brain: "opus",
+  healer: "opus",
+  prompt_evolver: "opus",
+  engineer: "sonnet",
+  growth: "sonnet",
+  outreach: "sonnet",
+  ops: "sonnet",
+};
 
 async function dispatch(opts: DispatchOptions): Promise<string> {
   if (DRY_RUN) {
@@ -46,6 +61,7 @@ async function dispatch(opts: DispatchOptions): Promise<string> {
 
   // Build args
   const args = ["-p", opts.prompt, "--output-format", "text"];
+  if (opts.model) args.push("--model", opts.model);
   if (opts.cwd) args.push("--cwd", opts.cwd);
   if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
   if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
@@ -314,6 +330,7 @@ INSTRUCTIONS FOR THIS RETRY:
       const output = await dispatch({
         prompt: fullPrompt,
         cwd: opts.cwd,
+        model: AGENT_MODELS[opts.agent] || "sonnet",
         maxTurns: attempt === 1 ? 10 : 15, // more room on retries
         timeoutMs: attempt === 1 ? 5 * 60 * 1000 : 8 * 60 * 1000, // more time on retries
         allowedTools: opts.allowedTools,
@@ -438,6 +455,7 @@ async function runNightlyCycle() {
     const liveCompanies = allCompanies.filter(c => ["mvp", "active"].includes(c.status));
 
     const ideaScoutOutput = await dispatch({
+      model: AGENT_MODELS.idea_scout,
       allowedTools: ["WebSearch", "WebFetch"],
       prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
 
@@ -715,6 +733,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 Focus on: new competitors since last analysis, pricing changes, feature launches, market share shifts.`;
 
       const researchOutput = await dispatch({
+        model: AGENT_MODELS.research_analyst,
         allowedTools: ["WebSearch", "WebFetch"],
         prompt: researchPrompt + `\n\nProduce ${reportsToGenerate} for this company.
 
@@ -1227,6 +1246,7 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
       console.log("  ├─ Dispatching Healer for systemic fixes...");
       try {
         const healerOutput = await dispatch({
+          model: AGENT_MODELS.healer,
           prompt: `You are the Healer agent for Hive. Your job is to fix bugs that are breaking the orchestrator.
 
 ## Systemic errors (happening across multiple companies):
@@ -1340,6 +1360,7 @@ Keep the fix minimal — address only this error. Commit message: "fix: [descrip
 
     try {
       await dispatch({
+        model: AGENT_MODELS.venture_brain,
         prompt: `You are the Venture Brain. Analyze the portfolio:
 
 ${JSON.stringify(allMetrics, null, 2)}
@@ -1421,6 +1442,7 @@ Output a brief portfolio summary.`,
           .join("\n");
 
         const evolverOutput = await dispatch({
+          model: AGENT_MODELS.prompt_evolver,
           prompt: `You are the Prompt Evolver. Your job is to improve an agent's system prompt based on its recent performance data.
 
 ## Agent: ${agent}
