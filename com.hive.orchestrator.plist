@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.hive.orchestrator</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/npx</string>
+        <string>ts-node</string>
+        <string>/Users/carlos/code/hive/orchestrator.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/carlos/code/hive</string>
+
+    <!-- Run at midnight every day -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>0</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>DATABASE_URL</key>
+        <string>YOUR_NEON_CONNECTION_STRING</string>
+        <key>HIVE_API_URL</key>
+        <string>https://hive-dashboard.vercel.app/api</string>
+    </dict>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/Users/carlos/code/hive/logs/orchestrator.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/carlos/code/hive/logs/orchestrator.stderr.log</string>
+
+    <!-- Keep alive on crash -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Don't run if Mac was asleep — catch up on next wake -->
+    <key>StartInterval</key>
+    <integer>86400</integer>
+</dict>
+</plist>

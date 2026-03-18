@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+:root {
+  --hive-bg: #08080d;
+  --hive-surface: #0e0e15;
+  --hive-surface-2: #14141e;
+  --hive-border: #1e1e2e;
+  --hive-text: #e0e0e8;
+  --hive-muted: #6b6b7b;
+  --hive-dim: #3a3a48;
+  --hive-amber: #e8b84d;
+  --hive-green: #3cd296;
+  --hive-red: #e85a50;
+  --hive-blue: #5ba8e8;
+  --hive-purple: #a88cdb;
+  --hive-mono: "JetBrains Mono", monospace;
+  --hive-sans: "DM Sans", system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--hive-sans);
+  background: var(--hive-bg);
+  color: var(--hive-text);
+  margin: 0;
+}
+
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+.animate-in { animation: fadeIn 0.3s ease both; }

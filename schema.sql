@@ -1,0 +1,218 @@
+-- ============================================================================
+-- HIVE — Venture Orchestrator Schema
+-- Run against Neon Postgres. This is the single source of truth.
+-- ============================================================================
+
+-- Companies: each venture Hive manages
+CREATE TABLE companies (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name          TEXT NOT NULL,
+  slug          TEXT UNIQUE NOT NULL,
+  description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'idea' CHECK (status IN (
+                  'idea',        -- proposed by Idea Scout, not yet approved
+                  'approved',    -- you approved it, provisioning pending
+                  'provisioning',-- infra being created (repo, db, deploy)
+                  'mvp',         -- live on vercel.app subdomain, no revenue
+                  'active',      -- generating revenue, Vercel Pro
+                  'paused',      -- temporarily halted (your decision or auto)
+                  'killed'       -- torn down by Kill Switch
+                )),
+  vercel_project_id   TEXT,       -- set after provisioning
+  vercel_url          TEXT,       -- company-slug.vercel.app or custom domain
+  github_repo         TEXT,       -- owner/repo
+  neon_project_id     TEXT,       -- company's own Neon project
+  stripe_account_id   TEXT,       -- Stripe Connect connected account
+  domain              TEXT,       -- custom domain (null = vercel subdomain)
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  killed_at     TIMESTAMPTZ,
+  kill_reason   TEXT
+);
+
+-- Agent cycles: one row per nightly orchestrator run per company
+CREATE TABLE cycles (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id    TEXT NOT NULL REFERENCES companies(id),
+  cycle_number  INTEGER NOT NULL,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at   TIMESTAMPTZ,
+  status        TEXT NOT NULL DEFAULT 'running' CHECK (status IN (
+                  'running', 'completed', 'failed', 'partial'
+                )),
+  ceo_plan      JSONB,          -- what the CEO agent decided to prioritize
+  ceo_review    JSONB,          -- CEO's end-of-cycle assessment
+  UNIQUE(company_id, cycle_number)
+);
+
+-- Agent actions: individual tasks within a cycle
+CREATE TABLE agent_actions (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  cycle_id      TEXT NOT NULL REFERENCES cycles(id),
+  company_id    TEXT NOT NULL REFERENCES companies(id),
+  agent         TEXT NOT NULL CHECK (agent IN (
+                  'ceo', 'engineer', 'growth', 'ops', 'venture_brain',
+                  'idea_scout', 'kill_switch', 'retro_analyst', 'prompt_evolver',
+                  'health_monitor', 'auto_healer', 'provisioner'
+                )),
+  action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
+  description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+                  'pending', 'running', 'success', 'failed', 'skipped', 'escalated'
+                )),
+  input         JSONB,           -- what was fed to the agent
+  output        JSONB,           -- what it produced
+  error         TEXT,            -- if failed
+  retry_count   INTEGER DEFAULT 0,
+  reflection    TEXT,            -- self-reflection on failure (Reflexion pattern)
+  started_at    TIMESTAMPTZ,
+  finished_at   TIMESTAMPTZ,
+  tokens_used   INTEGER          -- track consumption
+);
+
+-- Approval gates: items waiting for your decision
+CREATE TABLE approvals (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id    TEXT REFERENCES companies(id), -- null for portfolio-level decisions
+  gate_type     TEXT NOT NULL CHECK (gate_type IN (
+                  'new_company',     -- Idea Scout proposes a new venture
+                  'growth_strategy', -- Growth agent proposes spend/campaign
+                  'spend_approval',  -- any agent wants to spend > threshold
+                  'kill_company',    -- Kill Switch recommends shutdown
+                  'prompt_upgrade',  -- Prompt Evolver proposes a prompt change
+                  'escalation'       -- Health Monitor couldn't auto-fix
+                )),
+  title         TEXT NOT NULL,
+  description   TEXT NOT NULL,
+  context       JSONB,           -- all data needed to make the decision
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+                  'pending', 'approved', 'rejected', 'expired'
+                )),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at    TIMESTAMPTZ,
+  decision_note TEXT              -- your comment when approving/rejecting
+);
+
+-- Metrics: daily KPIs per company (populated by Ops agent)
+CREATE TABLE metrics (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id    TEXT NOT NULL REFERENCES companies(id),
+  date          DATE NOT NULL,
+  revenue       NUMERIC(12,2) DEFAULT 0,      -- from Stripe
+  mrr           NUMERIC(12,2) DEFAULT 0,
+  customers     INTEGER DEFAULT 0,
+  page_views    INTEGER DEFAULT 0,             -- from Vercel Analytics
+  signups       INTEGER DEFAULT 0,
+  churn_rate    NUMERIC(5,4) DEFAULT 0,
+  cac           NUMERIC(10,2) DEFAULT 0,       -- cost of acquisition
+  ad_spend      NUMERIC(10,2) DEFAULT 0,
+  emails_sent   INTEGER DEFAULT 0,
+  social_posts  INTEGER DEFAULT 0,
+  social_engagement INTEGER DEFAULT 0,         -- likes + replies + shares
+  UNIQUE(company_id, date)
+);
+
+-- Playbook: cross-company learnings (the shared knowledge base)
+CREATE TABLE playbook (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  source_company_id TEXT REFERENCES companies(id),
+  domain        TEXT NOT NULL,   -- 'email_marketing', 'seo', 'pricing', 'onboarding', etc.
+  insight       TEXT NOT NULL,
+  evidence      JSONB,           -- metrics that support this insight
+  confidence    NUMERIC(3,2) DEFAULT 0.5 CHECK (confidence BETWEEN 0 AND 1),
+  applied_count INTEGER DEFAULT 0, -- how many times other agents used this
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  superseded_by TEXT REFERENCES playbook(id) -- if a newer insight replaces this
+);
+
+-- Agent prompts: versioned system prompts (for Prompt Evolver)
+CREATE TABLE agent_prompts (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  agent         TEXT NOT NULL,
+  version       INTEGER NOT NULL,
+  prompt_text   TEXT NOT NULL,
+  is_active     BOOLEAN DEFAULT false,
+  performance_score NUMERIC(5,4), -- aggregated success rate
+  sample_size   INTEGER DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  promoted_at   TIMESTAMPTZ,      -- when it became active
+  UNIQUE(agent, version)
+);
+
+-- Infrastructure registry: tracks what's provisioned per company
+CREATE TABLE infra (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id    TEXT NOT NULL REFERENCES companies(id),
+  service       TEXT NOT NULL,   -- 'vercel', 'neon', 'github', 'stripe', 'resend', 'domain'
+  resource_id   TEXT,            -- external ID from the service
+  config        JSONB,           -- connection strings, API endpoints, etc.
+  status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+                  'provisioning', 'active', 'failed', 'torn_down'
+                )),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  torn_down_at  TIMESTAMPTZ
+);
+
+-- Social accounts: tracks connected social media per company
+CREATE TABLE social_accounts (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id    TEXT NOT NULL REFERENCES companies(id),
+  platform      TEXT NOT NULL CHECK (platform IN (
+                  'x', 'linkedin', 'instagram', 'tiktok', 'youtube'
+                )),
+  account_handle TEXT,
+  auth_token    TEXT,             -- encrypted OAuth token
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+                  'pending',      -- approval gate: you need to create this
+                  'active',       -- authenticated and posting
+                  'expired',      -- token expired, needs re-auth
+                  'disabled'
+                )),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Directives: commands from Carlos via dashboard or GitHub Issues
+CREATE TABLE directives (
+  id                  TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id          TEXT REFERENCES companies(id),
+  agent               TEXT,            -- target agent (null = CEO decides)
+  text                TEXT NOT NULL,
+  github_issue_number INTEGER,
+  github_issue_url    TEXT,
+  status              TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'in_progress', 'done', 'rejected')),
+  resolution          TEXT,            -- what was done about it
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at         TIMESTAMPTZ
+);
+
+-- Import registry: tracks existing/acquired projects onboarded into Hive
+CREATE TABLE imports (
+  id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id      TEXT REFERENCES companies(id),
+  source_type     TEXT NOT NULL CHECK (source_type IN (
+                    'github_repo',    -- existing repo on your GitHub
+                    'external_repo',  -- repo you forked/acquired
+                    'vercel_project', -- existing Vercel deployment
+                    'manual'          -- manually registered
+                  )),
+  source_url      TEXT,              -- repo URL or Vercel project URL
+  scan_status     TEXT NOT NULL DEFAULT 'pending' CHECK (scan_status IN (
+                    'pending', 'scanning', 'scanned', 'failed'
+                  )),
+  scan_report     JSONB,             -- analysis results from the onboarding scan
+  onboard_status  TEXT NOT NULL DEFAULT 'pending' CHECK (onboard_status IN (
+                    'pending', 'in_progress', 'complete', 'failed'
+                  )),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Indexes for dashboard performance
+CREATE INDEX idx_cycles_company ON cycles(company_id, cycle_number DESC);
+CREATE INDEX idx_actions_cycle ON agent_actions(cycle_id);
+CREATE INDEX idx_actions_company ON agent_actions(company_id, started_at DESC);
+CREATE INDEX idx_approvals_pending ON approvals(status) WHERE status = 'pending';
+CREATE INDEX idx_metrics_company_date ON metrics(company_id, date DESC);
+CREATE INDEX idx_playbook_domain ON playbook(domain);
+CREATE INDEX idx_infra_company ON infra(company_id);
+CREATE INDEX idx_directives_open ON directives(status) WHERE status = 'open';
+CREATE INDEX idx_imports_company ON imports(company_id);
