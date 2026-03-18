@@ -745,8 +745,9 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
       console.log(`  ▸ Provisioning ${company.name}...`);
       await sql`UPDATE companies SET status = 'provisioning', updated_at = now() WHERE id = ${company.id}`;
 
-      await dispatch({
-        prompt: `You are the Provisioner agent. Set up infrastructure for a new Hive company.
+      try {
+        await dispatch({
+          prompt: `You are the Provisioner agent. Set up infrastructure for a new Hive company.
 
 Company: ${company.name} (${company.slug})
 Description: ${company.description}
@@ -763,8 +764,30 @@ Execute these steps using the APIs available to you:
 9. Update company status to 'mvp' and set vercel_url
 
 Report what was created and any issues encountered.`,
-        cwd: `/Users/carlos/code/hive`,
-      });
+          cwd: `/Users/carlos/code/hive`,
+          timeoutMs: 10 * 60 * 1000, // 10 min for provisioning
+        });
+
+        // Verify provisioning succeeded by checking if status changed to mvp
+        const [check] = await sql`SELECT status FROM companies WHERE id = ${company.id}`;
+        if (check?.status === "provisioning") {
+          // Agent didn't update status — mark as mvp anyway and log the gap
+          await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${company.id}`;
+          console.log(`  ⚠ Provisioner didn't update status — forced to mvp`);
+        }
+        console.log(`  ✓ ${company.name} provisioned`);
+      } catch (provErr: any) {
+        console.log(`  ✗ Provisioning failed: ${provErr.message}`);
+        // Reset to approved so it retries next cycle
+        await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${company.id}`;
+        // Log failure
+        try {
+          await sql`
+            INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
+            VALUES (${company.id}, 'provisioner', 'provision_company', ${`Failed: ${provErr.message}`}, 'failed', ${provErr.message}, now(), now())
+          `;
+        } catch {}
+      }
     }
   }
 
@@ -866,18 +889,22 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
   }
 
   // === VENTURE BRAIN: Portfolio-level analysis ===
-  console.log("\n🧠 Venture Brain — portfolio analysis");
+  // Only runs when there are 2+ active companies to compare
+  const activeForBrain = results.filter(r => r.status === "complete");
+  if (activeForBrain.length >= 2) {
+    console.log("\n🧠 Venture Brain — portfolio analysis");
 
-  const allMetrics = await sql`
-    SELECT c.name, c.slug, c.status, m.* 
-    FROM metrics m 
-    JOIN companies c ON c.id = m.company_id 
-    WHERE m.date >= CURRENT_DATE - INTERVAL '7 days'
-    ORDER BY c.slug, m.date DESC
-  `;
+    const allMetrics = await sql`
+      SELECT c.name, c.slug, c.status, m.* 
+      FROM metrics m 
+      JOIN companies c ON c.id = m.company_id 
+      WHERE m.date >= CURRENT_DATE - INTERVAL '7 days'
+      ORDER BY c.slug, m.date DESC
+    `;
 
-  await dispatch({
-    prompt: `You are the Venture Brain. Analyze the portfolio:
+    try {
+      await dispatch({
+        prompt: `You are the Venture Brain. Analyze the portfolio:
 
 ${JSON.stringify(allMetrics, null, 2)}
 
@@ -888,7 +915,152 @@ Tasks:
 4. If any company should be killed, write to the approvals table via the API.
 
 Output a brief portfolio summary.`,
-  });
+      });
+    } catch (vbErr: any) {
+      console.log(`  ⚠ Venture Brain error: ${vbErr.message}`);
+    }
+  } else {
+    console.log(`\n🧠 Venture Brain — skipped (need 2+ active companies, have ${activeForBrain.length})`);
+  }
+
+  // === PROMPT EVOLVER: Weekly prompt improvement ===
+  // Runs on Wednesdays (offset from Sunday Idea Scout to spread load)
+  const isWednesday = new Date().getDay() === 3;
+  const hasEnoughData = results.filter(r => r.status === "complete").length > 0;
+
+  if (isWednesday && hasEnoughData && !SINGLE_COMPANY && !SCOUT_ONLY) {
+    console.log("\n🧬 Prompt Evolver — analyzing agent performance");
+
+    const agents = ["ceo", "engineer", "growth", "ops"];
+
+    for (const agent of agents) {
+      try {
+        // Get performance data for this agent over last 14 days
+        const recentActions = await sql`
+          SELECT status, error, reflection, description, finished_at
+          FROM agent_actions 
+          WHERE agent = ${agent} 
+            AND started_at > now() - interval '14 days'
+          ORDER BY finished_at DESC
+          LIMIT 50
+        `;
+
+        if (recentActions.length < 5) {
+          console.log(`  ⓘ ${agent}: not enough data (${recentActions.length} actions) — skipping`);
+          continue;
+        }
+
+        const total = recentActions.length;
+        const successes = recentActions.filter((a: any) => a.status === "success").length;
+        const failures = recentActions.filter((a: any) => a.status === "failed").length;
+        const successRate = successes / total;
+
+        // Check when we last evolved this agent's prompt
+        const [latestVersion] = await sql`
+          SELECT version, created_at FROM agent_prompts 
+          WHERE agent = ${agent} 
+          ORDER BY version DESC LIMIT 1
+        `;
+        const daysSinceLastEvolve = latestVersion
+          ? Math.floor((Date.now() - new Date(latestVersion.created_at).getTime()) / 86400000)
+          : 999;
+        const nextVersion = (latestVersion?.version || 0) + 1;
+
+        // Evolve if: success rate < 70%, or hasn't been evolved in 30+ days
+        const shouldEvolve = successRate < 0.7 || daysSinceLastEvolve >= 30;
+
+        if (!shouldEvolve) {
+          console.log(`  ✓ ${agent}: ${Math.round(successRate * 100)}% success rate (${total} actions) — no evolution needed`);
+          continue;
+        }
+
+        console.log(`  ├─ ${agent}: ${Math.round(successRate * 100)}% success, ${failures} failures — generating variant...`);
+
+        // Get current prompt
+        const currentPrompt = await getActivePrompt(agent);
+
+        // Gather failure patterns
+        const failureDetails = recentActions
+          .filter((a: any) => a.status === "failed" || a.status === "escalated")
+          .slice(0, 10)
+          .map((a: any) => `- ${a.description.slice(0, 100)}${a.error ? ` | Error: ${a.error.slice(0, 80)}` : ""}${a.reflection ? ` | Reflection: ${a.reflection.slice(0, 80)}` : ""}`)
+          .join("\n");
+
+        const evolverOutput = await dispatch({
+          prompt: `You are the Prompt Evolver. Your job is to improve an agent's system prompt based on its recent performance data.
+
+## Agent: ${agent}
+## Performance (last 14 days): ${successes}/${total} success (${Math.round(successRate * 100)}%), ${failures} failures
+
+## Recent failures:
+${failureDetails || "No specific failures logged"}
+
+## Current prompt:
+${currentPrompt.slice(0, 3000)}
+
+## Your task:
+1. Analyze the failure patterns — what's causing the agent to fail?
+2. Identify 2-3 specific improvements to the prompt that would prevent these failures
+3. Write an IMPROVED version of the full prompt
+
+## Rules:
+- Keep the same output JSON schema — downstream parsers depend on it
+- Keep the same role and responsibilities — don't change what the agent does
+- Focus on: clearer instructions, better edge case handling, stronger guardrails
+- The improvement must be specific and traceable to the failure data
+- Do NOT add generic filler — every change must address an observed problem
+
+## Output format (JSON):
+{
+  "analysis": {
+    "failure_patterns": ["pattern1", "pattern2"],
+    "proposed_changes": ["change1", "change2"]
+  },
+  "improved_prompt": "The full improved prompt text here"
+}`,
+          timeoutMs: 10 * 60 * 1000,
+        });
+
+        // Parse and store the new prompt version
+        try {
+          const jsonMatch = evolverOutput.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const result = JSON.parse(jsonMatch[0]);
+            if (result.improved_prompt) {
+              // Store as new version (not yet active)
+              await sql`
+                INSERT INTO agent_prompts (agent, version, prompt_text, performance_score, sample_size)
+                VALUES (${agent}, ${nextVersion}, ${result.improved_prompt}, ${successRate}, ${total})
+              `;
+
+              // Create approval gate
+              await sql`
+                INSERT INTO approvals (gate_type, title, description, context)
+                VALUES (
+                  'prompt_upgrade',
+                  ${`Upgrade ${agent} prompt to v${nextVersion}`},
+                  ${`Current performance: ${Math.round(successRate * 100)}% success over ${total} actions.\n\n` +
+                    `**Failure patterns:**\n${(result.analysis?.failure_patterns || []).map((p: string) => `- ${p}`).join("\n")}\n\n` +
+                    `**Proposed changes:**\n${(result.analysis?.proposed_changes || []).map((c: string) => `- ${c}`).join("\n")}\n\n` +
+                    `Review the new prompt in the agent_prompts table (version ${nextVersion}).`},
+                  ${JSON.stringify({ agent, version: nextVersion, previous_score: successRate, sample_size: total })}
+                )
+              `;
+
+              console.log(`  ✓ ${agent} v${nextVersion} proposed — awaiting approval`);
+            }
+          }
+        } catch {
+          console.log(`  ⚠ Failed to parse evolver output for ${agent}`);
+        }
+      } catch (evolveErr: any) {
+        console.log(`  ⚠ ${agent} evolution failed: ${evolveErr.message}`);
+      }
+    }
+  } else if (!SINGLE_COMPANY && !SCOUT_ONLY) {
+    const reason = !isWednesday ? "not Wednesday" : "no completed cycles to analyze";
+    console.log(`\n🧬 Prompt Evolver — skipped (${reason})`);
+  }
 
   // === DAILY DIGEST EMAIL ===
   console.log("\n📧 Sending daily digest...");
@@ -908,7 +1080,7 @@ Output a brief portfolio summary.`,
         FROM metrics m
         JOIN companies c ON c.id = m.company_id
         WHERE c.status IN ('mvp', 'active')
-          AND m.date >= CURRENT_DATE
+          AND m.date >= CURRENT_DATE - 1
       `;
 
       const totalMrr = Number(portfolioMetrics[0]?.total_mrr || 0);

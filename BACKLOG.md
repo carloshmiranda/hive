@@ -23,14 +23,7 @@
 
 ## Planned
 
-### 🟢 P2 — Prompt Evolver shadow testing
-Schema supports versioned prompts but the shadow testing pipeline isn't built. Need: generate variant prompts, run them against the same inputs as production, compare outputs, and propose upgrades through approval gates.
-
-### 🟢 P2 — Social media posting integration
-Start with X API (free tier, 1,500 posts/mo) + LinkedIn API. Growth agent generates content, Late.dev or direct API handles posting. Social accounts are manual creation — add approval gate when a company validates.
-
-### 🟢 P2 — Resend email lib wrapper
-`src/lib/resend.ts` exists with `sendEmail()` and `renderDigestHtml()` for use within the Next.js app (API routes). The orchestrator uses its own inline implementation. Need: transactional email helpers (welcome, receipt) for company boilerplates to use.
+<!-- All P2 items completed — next priority is P3 Future Vision -->
 
 ---
 
@@ -112,3 +105,12 @@ CEO review step now parses playbook_entry from output JSON and writes to the pla
 
 ### ✅ 2026-03-18 — Company detail page
 `/company/[slug]` — full deep-dive per company with: directive input, pending approvals with approve/reject, latest metrics grid, expandable cycle history with CEO plan/review and score, agent activity feed. 30s auto-refresh. Dashboard company names and activity feed slugs link to detail pages.
+
+### ✅ 2026-03-18 — Prompt Evolver
+Runs weekly on Wednesdays. For each agent (ceo, engineer, growth, ops): calculates 14-day success rate from agent_actions, evolves prompt if <70% success or 30+ days since last evolution. Dispatches Claude to analyze failure patterns and generate improved prompt. Stores new version in agent_prompts (inactive), creates approval gate. On approval, new version activates and old deactivates.
+
+### ✅ 2026-03-18 — Social media posting integration
+`src/lib/social.ts` with X API v2 OAuth 1.0a posting via `postToSocial()`. Social accounts tracked in `social_accounts` table with encrypted auth tokens. `proposeSocialAccount()` creates pending accounts + approval gates for manual setup. `/api/social` route for listing accounts and posting. Growth agent can propose account creation when a company gets its first customer.
+
+### ✅ 2026-03-18 — Resend transactional email templates
+`src/lib/resend.ts` extended with `renderWelcomeEmail()`, `renderReceiptEmail()`, `renderPasswordResetEmail()`. Clean light-themed templates for company boilerplates. All use `emailShell()` wrapper with configurable accent color.

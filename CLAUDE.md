@@ -135,20 +135,49 @@ FOR EACH company WHERE status IN ('mvp', 'active'):
   3. Engineer: Execute code tasks from plan → commit to GitHub → deploy
   4. Growth: Execute marketing tasks from plan → send emails, schedule posts
   5. Ops: Verify metrics (webhooks pre-collected most data) → fill gaps → check health
-  6. CEO: Review cycle results → write ceo_review → score agents → close directives
+  6. CEO: Review cycle results → write ceo_review → score cycle 1-10 → close directives
+     - Playbook extraction: if review contains playbook_entry, writes to playbook table
+     - Kill flag: if review sets kill_flag=true, auto-creates kill_company approval gate
+     - Graceful: if review JSON can't be parsed, cycle still completes normally
 
 AFTER all companies:
-  7. Venture Brain: Portfolio analysis, Kill Switch evaluation
-  8. Send daily digest email via Resend
+  7. Venture Brain: Portfolio analysis, Kill Switch evaluation (requires 2+ active companies)
+  8. Prompt Evolver (Wednesdays only): For each agent, calculate 14-day success rate.
+     If <70% success or 30+ days since last evolution → dispatch Claude to analyze failures
+     and generate improved prompt → store as new version → create approval gate.
+     On approval, new version activates. On rejection, version stays inactive.
+  9. Send daily digest email via Resend (inline HTML, direct API call)
+     Includes: portfolio MRR/customers, per-company cycle status, pending approvals, errors
 
-WEEKLY (e.g. Sunday night):
-  9. Retro Analyst:
-     - Read MISTAKES.md for patterns → propose prevention rules
-     - Read playbook for cross-company insights → synthesize
-     - Read BACKLOG.md → propose self-assigned P2 items via GitHub Issues
-  10. Prompt Evolver: Generate prompt variants, run shadow tests, propose upgrades
-  11. Self-improvement: Pick one BACKLOG P2 item → implement on branch → create PR → approval gate
+WEEKLY (Sunday night):
+  10. Idea Scout runs (see FIRST above)
+
+WEEKLY (Wednesday night):
+  11. Prompt Evolver runs (see step 8 above)
 ```
+
+## Social Media
+
+Social accounts are tracked in the `social_accounts` table per company. Account creation is ALWAYS manual (no platform allows programmatic signup). The flow:
+
+1. Growth agent decides a company needs social presence → calls `proposeSocialAccount(companyId, "x")`
+2. This creates a `pending` row in social_accounts + an approval gate
+3. Carlos approves → manually creates the account (2-5 min) → adds OAuth credentials to the DB
+4. Growth agent can now post via `postToSocial("x", text, companyId)`
+
+Supported platforms: X (Twitter) via OAuth 1.0a. LinkedIn, Instagram, TikTok are stubs for future.
+X free tier: 1,500 posts/month. No social accounts until a company has its first paying customer.
+
+## Email (Resend)
+
+Two contexts:
+- **Orchestrator digest**: Inlined in orchestrator.ts. Direct Resend API call. Cannot import from `src/`.
+- **Company transactional emails**: Use `src/lib/resend.ts` which provides `sendEmail()` + templates:
+  - `renderWelcomeEmail()` — new customer onboarding
+  - `renderReceiptEmail()` — payment confirmation
+  - `renderPasswordResetEmail()` — self-service password reset
+
+Resend free tier: 3,000 emails/month. Sufficient for first 5+ companies.
 
 ## Provisioning a New Company
 

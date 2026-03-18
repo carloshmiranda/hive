@@ -15,7 +15,10 @@ type Action = {
   id: string; agent: string; action_type: string; description: string; status: string;
   error: string | null; reflection: string | null; tokens_used: number; finished_at: string;
 };
-type Metric = { name: string; value: string; recorded_at: string };
+type Metric = {
+  date: string; revenue: number; mrr: number; customers: number;
+  page_views: number; signups: number; churn_rate: number;
+};
 type Approval = {
   id: string; gate_type: string; title: string; description: string; status: string; created_at: string;
 };
@@ -178,15 +181,28 @@ export default function CompanyDetailPage() {
       {latestMetrics.length > 0 && (
         <div style={{ marginBottom: 24 }}>
           <h3 style={{ fontSize: 14, color: "#f0f0ec", margin: "0 0 12px", fontWeight: 500 }}>Latest metrics</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
-            {latestMetrics.map((m, i) => (
-              <div key={i} style={{ padding: "10px 12px", background: "#111", borderRadius: 6, border: "1px solid #222" }}>
-                <div style={{ fontSize: 18, fontWeight: 500, color: "#f0f0ec" }}>{m.value}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{m.name}</div>
-                <div style={{ fontSize: 10, color: "#555" }}>{timeAgo(m.recorded_at)}</div>
+          {(() => {
+            const latest = latestMetrics[0];
+            const metricItems = [
+              { label: "MRR", value: `€${latest.mrr}`, highlight: latest.mrr > 0 },
+              { label: "Revenue", value: `€${latest.revenue}`, highlight: latest.revenue > 0 },
+              { label: "Customers", value: latest.customers, highlight: latest.customers > 0 },
+              { label: "Page views", value: latest.page_views, highlight: false },
+              { label: "Signups", value: latest.signups, highlight: latest.signups > 0 },
+              { label: "Churn", value: `${(latest.churn_rate * 100).toFixed(1)}%`, highlight: false },
+            ];
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
+                {metricItems.map((m, i) => (
+                  <div key={i} style={{ padding: "10px 12px", background: "#111", borderRadius: 6, border: "1px solid #222" }}>
+                    <div style={{ fontSize: 18, fontWeight: 500, color: m.highlight ? "#5DCAA5" : "#f0f0ec" }}>{m.value}</div>
+                    <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{m.label}</div>
+                    <div style={{ fontSize: 10, color: "#555" }}>{latest.date}</div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })()}
         </div>
       )}
 
