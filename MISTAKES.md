@@ -77,3 +77,10 @@
 **Fix applied:** Inlined the digest email HTML and Resend API call directly in `orchestrator.ts` using its own Neon connection and `getSettingValueDirect()`. The `src/lib/resend.ts` file remains for use within the Next.js app (API routes) where path aliases work fine.
 **Prevention:** The orchestrator must be fully self-contained. It can share DATA with the Next.js app (via Neon), but it cannot share CODE. Never `require()` anything from `src/` in `orchestrator.ts`. If both need the same logic, duplicate it or extract to a standalone module with no path aliases.
 **Affects:** orchestrator, digest email
+
+### 2026-03-18 Metrics query assumed key-value schema
+**What happened:** Digest email query used `m.name = 'mrr'` and `m.value::numeric` — a key-value pattern. The actual metrics table has `mrr` and `customers` as direct columns.
+**Root cause:** Query was written assuming a generic metrics store. The actual schema (schema.sql) has typed columns per metric.
+**Fix applied:** Changed to `SUM(m.mrr)` and `SUM(m.customers)` with `m.date >= CURRENT_DATE`.
+**Prevention:** Always check schema.sql before writing queries against Hive tables. The schema is the source of truth.
+**Affects:** orchestrator digest
