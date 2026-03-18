@@ -70,3 +70,24 @@
 **Fix applied:** Replaced pre-loaded research context with a research methodology (Phase 1-4: discovery → competition → validation → scoring). Agent now uses web search via Claude Code CLI to do 10-15 searches per run. Added 25 max turns, 15 min timeout, and research trail logging (searches_performed, niches_considered) for audit.
 **Prevention:** Agent prompts should contain METHODOLOGY, not ANSWERS. If the human knows the answer, the agent doesn't need to exist. The prompt should teach the agent HOW to find answers, not WHAT the answers are. The only pre-loaded data should be dynamic state (portfolio, killed companies, playbook).
 **Affects:** idea_scout, all future agents
+
+### 2026-03-18 orchestrator.ts uses require() but runs as ESM
+**What happened:** Digest email failed with "require is not defined". Also affected child_process and crypto imports.
+**Root cause:** Node detected ESM (import statements at top), but three places still used `require()` inline: child_process spawn, crypto, and the resend module.
+**Fix applied:** Added `spawn` and `createDecipheriv` to top-level imports. Replaced resend `require()` with direct `fetch()` to Resend API (can't import Next.js modules from orchestrator anyway).
+**Prevention:** Never use `require()` in orchestrator.ts. All imports must be ESM `import` at the top. For Next.js modules that can't be imported (path aliases like `@/lib/*`), reimplement the logic inline.
+**Affects:** hive
+
+### 2026-03-18 Settings decryption format mismatch in orchestrator
+**What happened:** `getSettingValueDirect()` tried to parse encrypted values as a single hex blob. Failed silently (returned null).
+**Root cause:** `crypto.ts` stores encrypted values as `iv_hex:tag_hex:encrypted_hex` (colon-separated), but the orchestrator tried `Buffer.from(value, "hex")` on the whole string.
+**Fix applied:** Split on `:` first, then parse each part separately.
+**Prevention:** When reimplementing crypto logic outside the Next.js app, always verify the format matches `src/lib/crypto.ts`. Add a comment referencing the canonical implementation.
+**Affects:** hive
+
+### 2026-03-18 Settings table column name mismatch
+**What happened:** Orchestrator queried `is_encrypted` column, but the actual column is `is_secret`.
+**Root cause:** Column was renamed during development but the orchestrator's direct SQL query wasn't updated.
+**Fix applied:** Changed to `is_secret` in orchestrator.ts.
+**Prevention:** The settings table schema is in `src/app/api/settings/route.ts` (CREATE TABLE IF NOT EXISTS). Any direct SQL against settings must match that schema, not assume column names.
+**Affects:** hive
