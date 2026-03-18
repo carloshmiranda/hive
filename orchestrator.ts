@@ -283,6 +283,7 @@ async function executeAgent(opts: {
   prompt: string;
   context: string;
   cwd?: string;
+  allowedTools?: string[];
 }): Promise<{ success: boolean; output: string }> {
   let lastReflection = "";
 
@@ -296,6 +297,7 @@ async function executeAgent(opts: {
         prompt: fullPrompt,
         cwd: opts.cwd,
         maxTurns: 10,
+        allowedTools: opts.allowedTools,
       });
 
       await logAction({
@@ -389,6 +391,7 @@ async function runNightlyCycle() {
     const liveCompanies = allCompanies.filter(c => ["mvp", "active"].includes(c.status));
 
     const ideaScoutOutput = await dispatch({
+      allowedTools: ["WebSearch", "WebFetch"],
       prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
 
 YOUR JOB: Research the market using web search and propose ONE business idea that Carlos should build next.
@@ -488,13 +491,23 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
 
     // Parse the output and create the company + approval gate
     try {
+      // Log raw output length for debugging
+      console.log(`  ⓘ Scout output: ${ideaScoutOutput.length} chars`);
+
       // Extract JSON from the output (Claude may wrap it in markdown)
       const jsonMatch = ideaScoutOutput.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
+      if (!jsonMatch) {
+        console.log(`  ⚠ No JSON found in Idea Scout output`);
+        console.log(`  ⓘ Raw output (first 500 chars): ${ideaScoutOutput.slice(0, 500)}`);
+      } else {
         const idea = JSON.parse(jsonMatch[0]);
         const proposal = idea.proposal;
 
-        if (proposal?.name && proposal?.slug) {
+        if (!proposal?.name || !proposal?.slug) {
+          console.log(`  ⚠ Parsed JSON but missing proposal.name or proposal.slug`);
+          console.log(`  ⓘ Keys found: ${Object.keys(idea).join(", ")}`);
+          if (proposal) console.log(`  ⓘ Proposal keys: ${Object.keys(proposal).join(", ")}`);
+        } else {
           // Create the company in 'idea' status
           const [newCompany] = await sql`
             INSERT INTO companies (name, slug, description, status)
@@ -659,6 +672,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 Focus on: new competitors since last analysis, pricing changes, feature launches, market share shifts.`;
 
       const researchOutput = await dispatch({
+        allowedTools: ["WebSearch", "WebFetch"],
         prompt: researchPrompt + `\n\nProduce ${reportsToGenerate} for this company.
 
 COMPANY: ${company.name}
@@ -741,7 +755,7 @@ After each JSON block, write a 1-2 sentence summary.`,
       cycleId,
       prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.`,
       context,
-      cwd: `/Users/carlos/code/${company.slug}`, // local repo path
+      cwd: `/Users/carlos.miranda/Documents/Github/${company.slug}`, // local repo path
     });
 
     // Step 3: Growth executes (inbound: content, SEO, social)
@@ -784,6 +798,7 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
             : "No lead list yet. Build the initial lead list using web search. Find 10-20 potential customers matching the target audience.") +
           "\n\nOutput your results as JSON. Use the lead_list and outreach_log report type formats from your instructions.",
         context: outreachContext,
+        allowedTools: ["WebSearch", "WebFetch"],
       });
 
       // Parse and store outreach results

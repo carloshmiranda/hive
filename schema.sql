@@ -48,12 +48,13 @@ CREATE TABLE cycles (
 -- Agent actions: individual tasks within a cycle
 CREATE TABLE agent_actions (
   id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  cycle_id      TEXT NOT NULL REFERENCES cycles(id),
-  company_id    TEXT NOT NULL REFERENCES companies(id),
+  cycle_id      TEXT REFERENCES cycles(id),           -- nullable: Idea Scout runs outside cycles
+  company_id    TEXT REFERENCES companies(id),        -- nullable: failed scout has no company
   agent         TEXT NOT NULL CHECK (agent IN (
                   'ceo', 'engineer', 'growth', 'ops', 'venture_brain',
                   'idea_scout', 'kill_switch', 'retro_analyst', 'prompt_evolver',
-                  'health_monitor', 'auto_healer', 'provisioner'
+                  'health_monitor', 'auto_healer', 'provisioner',
+                  'research_analyst', 'outreach'
                 )),
   action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
   description   TEXT,
