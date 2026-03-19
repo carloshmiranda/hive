@@ -1,11 +1,12 @@
 import { getDb, json } from "@/lib/db";
+import { NextRequest } from "next/server";
 
 // This endpoint is the "catch me up" URL for any Claude session.
-// Paste it into a new Chat: "Read https://hive-phi.vercel.app/api/briefing and catch up"
-// Claude Code can curl it at session start.
+// JSON: curl https://hive-phi.vercel.app/api/briefing
+// HTML: https://hive-phi.vercel.app/api/briefing?format=html (for Claude Chat web_fetch)
 // Returns: current state, recent decisions, open questions, blockers, recent context log.
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const sql = getDb();
 
   // Portfolio state
@@ -138,6 +139,59 @@ export async function GET() {
       from_manual: "POST to /api/context with source:'carlos'. Or edit BRIEFING.md directly.",
     },
   };
+
+  // HTML mode for Claude Chat (web_fetch works better with HTML than raw JSON)
+  const wantsHtml = req.nextUrl.searchParams.get("format") === "html"
+    || req.headers.get("accept")?.includes("text/html");
+
+  if (wantsHtml) {
+    const state = briefing.current_state;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Hive Briefing</title></head><body>
+<h1>Hive Briefing</h1>
+<p><em>Updated: ${briefing._updated}</em></p>
+<p>${briefing._readme}</p>
+
+<h2>Current State</h2>
+<p><strong>Phase:</strong> ${state.phase}</p>
+<p><strong>URL:</strong> ${state.production_url}</p>
+
+<h3>Active Companies</h3>
+<ul>${state.active_companies.map((c: any) => `<li><strong>${c.name}</strong> (${c.slug}) — ${c.status}</li>`).join("") || "<li>None</li>"}</ul>
+
+<h3>Pipeline</h3>
+<ul>${state.pipeline_companies.map((c: any) => `<li>${c.name} (${c.slug}) — ${c.status}</li>`).join("") || "<li>Empty</li>"}</ul>
+
+<h3>Pending Approvals</h3>
+<ul>${state.pending_approvals.map((a: any) => `<li>[${a.type}] ${a.title}${a.company ? ` (${a.company})` : ""}</li>`).join("") || "<li>None</li>"}</ul>
+
+<h3>Settings</h3>
+<p><strong>Configured (${state.configured_settings.length}):</strong> ${state.configured_settings.join(", ")}</p>
+<p><strong>Missing:</strong> ${state.missing_settings.join(", ") || "None"}</p>
+
+<h2>Health</h2>
+<p><strong>Recent errors:</strong> ${briefing.health.recent_errors}</p>
+${briefing.health.errors.length > 0 ? `<ul>${briefing.health.errors.map((e: any) => `<li>[${e.agent}] ${e.company || "hive"}: ${e.error}</li>`).join("")}</ul>` : ""}
+
+<h2>Recent Context</h2>
+${briefing.recent_context.length > 0 ? `<ul>${briefing.recent_context.map((c: any) => `<li>[${c.source}/${c.category}] ${c.summary} <em>(${c.date})</em></li>`).join("")}</ul>` : "<p>No context entries yet.</p>"}
+
+<h2>Performance</h2>
+${briefing.performance.cycle_scores.length > 0 ? `<ul>${briefing.performance.cycle_scores.map((s: any) => `<li>${s.company} cycle ${s.cycle}: score ${s.score ?? "N/A"}/10</li>`).join("")}</ul>` : "<p>No scored cycles yet.</p>"}
+
+<h2>Knowledge (${briefing.knowledge.playbook_entries} entries)</h2>
+<ul>${briefing.knowledge.top_learnings.map((p: any) => `<li><strong>[${p.domain}]</strong> ${p.insight} <em>(from ${p.from || "unknown"}, confidence: ${p.confidence})</em></li>`).join("") || "<li>No playbook entries yet</li>"}</ul>
+
+<h2>Key Files</h2>
+<ul>${Object.entries(briefing.key_files).map(([k, v]) => `<li><strong>${k}:</strong> ${v}</li>`).join("")}</ul>
+
+<h2>How to Update Context</h2>
+<ul>${Object.entries(briefing.how_to_update_context).map(([k, v]) => `<li><strong>${k}:</strong> ${v}</li>`).join("")}</ul>
+</body></html>`;
+
+    return new Response(html, {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
 
   return json(briefing);
 }
