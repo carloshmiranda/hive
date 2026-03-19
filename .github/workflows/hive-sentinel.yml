@@ -8,6 +8,7 @@ on:
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
 jobs:
   sentinel:
@@ -209,6 +210,27 @@ jobs:
           if [ "$HIGH_FAIL" = "true" ]; then
             dispatch "evolve_trigger" '{"source":"sentinel","reason":"high_failure_rate"}'
             DISPATCHED=$((DISPATCHED + 1))
+          fi
+
+          # 8. Deploy drift: Hive main SHA vs Vercel production SHA
+          if [ -n "$VERCEL_TOKEN" ]; then
+            MAIN_SHA=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/carloshmiranda/hive/commits/main" \
+              | jq -r '.sha // empty')
+
+            DEPLOY_SHA=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v6/deployments?projectId=prj_n9JaPbWmRv0SKoHgkdXYOEGQtjRv&teamId=team_Z4AsGtjfy6pAjCOtvJqzMT8d&target=production&limit=1" \
+              | jq -r '.deployments[0].meta.githubCommitSha // empty')
+
+            if [ -n "$MAIN_SHA" ] && [ -n "$DEPLOY_SHA" ] && [ "$MAIN_SHA" != "$DEPLOY_SHA" ]; then
+              echo "DRIFT DETECTED: main=${MAIN_SHA:0:12} deployed=${DEPLOY_SHA:0:12}"
+              dispatch "deploy_drift" "{\"source\":\"sentinel\",\"main_sha\":\"${MAIN_SHA:0:12}\",\"deploy_sha\":\"${DEPLOY_SHA:0:12}\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            else
+              echo "No deploy drift (main=${MAIN_SHA:0:12} deployed=${DEPLOY_SHA:0:12})"
+            fi
+          else
+            echo "Skipping deploy drift check: VERCEL_TOKEN not set"
           fi
 
           echo ""

@@ -33,6 +33,23 @@ export async function POST(req: Request) {
       const repoName = body.repository?.name;
       if (!repoName) break;
 
+      // Self-monitoring: track pushes to the hive repo
+      if (repoName === "hive") {
+        const ref = body.ref;
+        const headSha = body.head_commit?.id;
+        if (ref === "refs/heads/main" && headSha) {
+          await sql`
+            INSERT INTO context_log (source, category, summary, detail, tags)
+            VALUES ('code', 'milestone',
+              ${('hive:main pushed — ' + (body.head_commit?.message || '').slice(0, 80))},
+              ${JSON.stringify({ sha: headSha, pusher: body.pusher?.name, commits: body.commits?.length })},
+              ${['deploy_tracking', 'hive_push']}
+            )
+          `;
+        }
+        break;
+      }
+
       const [company] = await sql`SELECT id FROM companies WHERE slug = ${repoName}`;
       if (!company) break;
 
@@ -51,6 +68,22 @@ export async function POST(req: Request) {
       const repoName = body.repository?.name;
       const state = body.deployment_status?.state; // success, failure, error, pending
       if (!repoName || !state) break;
+
+      // Self-monitoring: track hive deploy failures
+      if (repoName === "hive") {
+        if (state === "failure" || state === "error") {
+          const desc = body.deployment_status?.description || "Hive deploy failed";
+          await sql`
+            INSERT INTO context_log (source, category, summary, detail, tags)
+            VALUES ('code', 'blocker',
+              ${('hive:deploy failed — ' + desc.slice(0, 80))},
+              ${JSON.stringify({ state, description: desc, sha: body.deployment?.sha })},
+              ${['deploy_tracking', 'hive_deploy_failure']}
+            )
+          `;
+        }
+        break;
+      }
 
       const [company] = await sql`SELECT id FROM companies WHERE slug = ${repoName}`;
       if (!company) break;

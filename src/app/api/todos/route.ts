@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { getSettingValue } from "@/lib/settings";
 
 // Dynamic todo detection — queries system state and returns actionable items.
 // Each todo has: id (deterministic from source), severity, title, detail, action (url or null), dismissable
@@ -242,6 +243,47 @@ export async function GET() {
         dismissable: true,
       });
     }
+  }
+
+  // Deploy drift: is the latest main SHA deployed on Vercel?
+  try {
+    const vercelToken = await getSettingValue("vercel_token");
+    const githubToken = await getSettingValue("github_token");
+
+    if (vercelToken && githubToken) {
+      const [ghRes, vRes] = await Promise.all([
+        fetch("https://api.github.com/repos/carloshmiranda/hive/commits/main", {
+          headers: { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" },
+        }).then(r => r.json()),
+        fetch("https://api.vercel.com/v6/deployments?projectId=prj_n9JaPbWmRv0SKoHgkdXYOEGQtjRv&teamId=team_Z4AsGtjfy6pAjCOtvJqzMT8d&target=production&limit=1", {
+          headers: { Authorization: `Bearer ${vercelToken}` },
+        }).then(r => r.json()),
+      ]);
+
+      const mainSha = ghRes.sha;
+      const deploySha = vRes.deployments?.[0]?.meta?.githubCommitSha;
+
+      if (mainSha && deploySha && mainSha !== deploySha) {
+        const mainShort = mainSha.slice(0, 7);
+        const deployShort = deploySha.slice(0, 7);
+        const id = `health:deploy_drift:${mainShort}`;
+        if (!dismissedIds.has(id)) {
+          todos.push({
+            id,
+            severity: "warning",
+            category: "health",
+            title: `Deploy drift: main (${mainShort}) ≠ production (${deployShort})`,
+            detail: "The latest commit on main has not been deployed to Vercel. Run 'vercel deploy --prod' or push a new commit to trigger a deploy.",
+            action_url: "https://vercel.com/eidolons-projects-e72c0917/hive",
+            action_label: "Open Vercel",
+            company_slug: null,
+            dismissable: true,
+          });
+        }
+      }
+    }
+  } catch {
+    // Don't let drift check failure break the todos endpoint
   }
 
   // Sort: blockers first, then warnings, then info
