@@ -116,9 +116,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          RESULT=$(cat "${{ steps.agent.outputs.execution_file }}" | jq -r '[.[] | select(.role == "assistant")] | last | if (.content | type) == "array" then [.content[] | select(.type == "text") | .text] | join("\n") else (.content // "") end' 2>/dev/null || echo "{}")
+          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          echo "--- Debug: execution file = $EXEC_FILE ---"
+          echo "--- Debug: file size = $(wc -c < "$EXEC_FILE" 2>/dev/null || echo 'NOT FOUND') ---"
+          echo "--- Debug: top-level type = $(jq 'type' "$EXEC_FILE" 2>/dev/null || echo 'PARSE ERROR') ---"
+          echo "--- Debug: first element keys = $(jq '.[0] | keys' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
+          echo "--- Debug: roles = $(jq '[.[].role] | unique' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
+          echo "--- Debug: last assistant content type = $(jq '[.[] | select(.role == "assistant")] | last | .content | type' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
+          echo "--- Debug: last assistant content sample = $(jq '[.[] | select(.role == "assistant")] | last | .content | tostring | .[0:500]' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
+          RESULT=$(cat "$EXEC_FILE" | jq -r '[.[] | select(.role == "assistant")] | last | if (.content | type) == "array" then [.content[] | select(.type == "text") | .text] | join("\n") else (.content // "") end' 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
-          echo "--- Chain dispatch: parsing agent output ---"
+          echo "--- Chain dispatch result (last 20 lines) ---"
           echo "$RESULT" | tail -20
 
           dispatch() {
