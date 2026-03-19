@@ -1174,7 +1174,6 @@ After each JSON block, write a 1-2 sentence summary.`,
     // Step 2: Engineer executes
     console.log("  ├─ Engineer executing...");
     const engPrompt = await getActivePrompt("engineer", companyCtx);
-    // Pre-clone repo if not present (Gemini agents can't use git)
     const companyCwd = `/Users/carlos.miranda/Documents/Github/${company.slug}`;
     let companyRepoExists = existsSync(companyCwd);
     if (!companyRepoExists) {
@@ -1695,12 +1694,12 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
 ## Metrics (last 7 days):
 ${JSON.stringify(allMetrics, null, 2)}
 
-## Recent cycles (last 14 days):
+## Cycle scores (last 14 days):
 ${cycleScores.map((s: any) => {
-          let score = "N/A";
-          try { const r = typeof s.ceo_review === "string" ? JSON.parse(s.ceo_review) : s.ceo_review; score = String(r?.review?.score || r?.score || "N/A"); } catch {}
-          return `${s.slug}: cycle ${s.cycle_number} → ${score}/10`;
-        }).join("\n") || "No completed cycles yet"}
+  let score = "?";
+  try { const r = JSON.parse(s.ceo_review || "{}"); score = r.score ?? r.cycle_score ?? "?"; } catch {}
+  return `${s.slug}: cycle ${s.cycle_number} → ${score}/10`;
+}).join("\n") || "No scored cycles yet"}
 
 ## Recent playbook entries:
 ${recentPlaybook.map((p: any) => `[${p.domain}] ${p.insight} (from ${p.source_company || "unknown"}, confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
@@ -1971,23 +1970,152 @@ ${currentPrompt.slice(0, 3000)}
 
   const totalDuration = Math.round((Date.now() - startTime) / 1000);
 
-  // === LOG CONTEXT ENTRY ===
-  // Write a summary of this run to context_log for cross-tool visibility
-  if (!DRY_RUN) {
+  // === STEP 9: OPERATIONAL REFLECTION ===
+  // The orchestrator reflects on its own run, updates BRIEFING.md, checks ROADMAP.md milestones,
+  // and self-diagnoses recurring issues. This is what makes Hive self-aware.
+  if (!DRY_RUN && !SCOUT_ONLY) {
+    console.log("\n📝 Operational Reflection — updating platform context");
     try {
+      // Gather run data for the reflection
       const completedCount = results.filter(r => r.status === "complete").length;
-      const failedCompanies = results.filter(r => r.status === "failed").map(r => r.company);
-      const summary = [
-        `Nightly cycle: ${completedCount}/${results.length} companies processed in ${totalDuration}s`,
-        failedCompanies.length > 0 ? `Failed: ${failedCompanies.join(", ")}` : null,
-        failedCount > 0 ? `Self-healing addressed ${failedCount} error(s)` : null,
-      ].filter(Boolean).join(". ");
+      const failedCompanies = results.filter(r => r.status === "failed");
+      
+      const allCompaniesNow = await sql`SELECT name, slug, status, description FROM companies`;
+      const activeNow = allCompaniesNow.filter((c: any) => ["mvp", "active"].includes(c.status));
+      const pipelineNow = allCompaniesNow.filter((c: any) => ["idea", "approved", "provisioning", "mvp", "active"].includes(c.status));
 
-      await sql`
-        INSERT INTO context_log (source, category, summary, tags)
-        VALUES ('orch', 'milestone', ${summary}, ${`{nightly,cycle}`})
+      const pendingApprovals = await sql`
+        SELECT a.gate_type, a.title, c.slug as company_slug
+        FROM approvals a LEFT JOIN companies c ON c.id = a.company_id
+        WHERE a.status = 'pending'
       `;
-    } catch { /* non-critical */ }
+
+      // Get recent errors for self-diagnosis
+      const recurringErrors = await sql`
+        SELECT agent, error, COUNT(*) as cnt, 
+               array_agg(DISTINCT c.slug) as affected_companies
+        FROM agent_actions aa
+        LEFT JOIN companies c ON c.id = aa.company_id
+        WHERE aa.status = 'failed' AND aa.started_at > now() - interval '7 days'
+        GROUP BY agent, error
+        HAVING COUNT(*) >= 2
+        ORDER BY cnt DESC LIMIT 5
+      `;
+
+      // Get latest cycle scores
+      const latestScores = await sql`
+        SELECT DISTINCT ON (c.slug) c.slug, cy.ceo_review, cy.cycle_number
+        FROM cycles cy JOIN companies c ON c.id = cy.company_id
+        WHERE cy.ceo_review IS NOT NULL
+        ORDER BY c.slug, cy.started_at DESC
+      `;
+
+      // Check which settings are configured
+      const settings = await sql`SELECT key FROM settings`;
+      const configuredKeys = settings.map((s: any) => s.key);
+      const missingCritical = ["resend_api_key", "digest_email", "sending_domain", "gemini_api_key", "groq_api_key"]
+        .filter(k => !configuredKeys.includes(k));
+
+      // Get playbook count
+      const [playbookCount] = await sql`SELECT COUNT(*) as cnt FROM playbook WHERE superseded_by IS NULL`;
+
+      // Build the reflection context
+      const reflectionData = {
+        run: {
+          date: new Date().toISOString().split("T")[0],
+          duration: `${Math.floor(totalDuration / 60)}m ${totalDuration % 60}s`,
+          companies_processed: `${completedCount}/${results.length}`,
+          failures: failedCompanies.map((f: any) => f.company),
+        },
+        portfolio: {
+          active: activeNow.map((c: any) => `${c.name} (${c.slug}) — ${c.status}`),
+          pipeline_total: pipelineNow.length,
+          pending_approvals: pendingApprovals.map((a: any) => `[${a.gate_type}] ${a.title}`),
+        },
+        health: {
+          recurring_errors: recurringErrors.map((e: any) => ({
+            agent: e.agent,
+            error: (e.error || "").slice(0, 100),
+            count: Number(e.cnt),
+            companies: e.affected_companies,
+          })),
+          missing_settings: missingCritical,
+        },
+        scores: latestScores.map((s: any) => {
+          let score = "?";
+          try { const r = JSON.parse(s.ceo_review || "{}"); score = r.score ?? r.cycle_score ?? "?"; } catch {}
+          return `${s.slug}: ${score}/10 (cycle ${s.cycle_number})`;
+        }),
+        playbook_entries: Number(playbookCount.cnt),
+      };
+
+      await dispatch({
+        agent: "venture_brain", // uses Claude — this is strategic reflection
+        prompt: `You are the Hive Operational Reflector. After each nightly run, you update Hive's institutional memory.
+
+## Tonight's run data:
+${JSON.stringify(reflectionData, null, 2)}
+
+## Your tasks (execute ALL of them):
+
+### 1. Update BRIEFING.md "Current State" section
+Rewrite the "## Current State" section in BRIEFING.md with tonight's actual data:
+- Phase (based on ROADMAP.md — which phase are we in?)
+- Production URL (https://hive-phi.vercel.app)
+- Active companies list with status
+- Pipeline count
+- Blockers (recurring errors, missing settings, any company stuck for 3+ cycles)
+- What was resolved tonight
+
+### 2. Append to BRIEFING.md "Recent Context"
+Add a new entry at the top of the "## Recent Context" section:
+\`\`\`
+### ${new Date().toISOString().split("T")[0]} [orch] Nightly run summary
+[Write 2-3 sentences: what happened, what worked, what's concerning]
+\`\`\`
+
+### 3. Check ROADMAP.md milestones
+Read ROADMAP.md. For each unchecked milestone, check if the condition is now met:
+- "First nightly cycle completes successfully" → if completedCount > 0 and failures = 0, check it
+- "Configure API keys" → if gemini + groq + resend are all configured, check it
+- "First company deployed to production" → if any company has status 'active', check it
+- "Cross-company playbook has 20+ entries" → if playbook count >= 20, check it
+- etc.
+Change \`- [ ]\` to \`- [x]\` for any newly completed milestones.
+
+### 4. Self-diagnose recurring issues
+If any error appears 3+ times in the last 7 days:
+- Write it to BRIEFING.md as a blocker
+- If it's a code bug you can fix, add it to BACKLOG.md as P0
+- If it reveals a pattern, write to MISTAKES.md
+
+### 5. Update BRIEFING.md "What's Next"
+Based on tonight's data + ROADMAP.md phase, rewrite "What's Next" with the actual next priorities.
+Don't copy from a Chat session — derive this from the data you see.
+
+### 6. Commit
+\`\`\`bash
+git add BRIEFING.md ROADMAP.md MISTAKES.md BACKLOG.md
+git commit -m "orch: nightly reflection — ${new Date().toISOString().split("T")[0]}"
+\`\`\`
+Only commit files that actually changed.
+
+## Rules:
+- Be factual. Write what happened, not what should have happened.
+- If CEO scores are all N/A, flag it as a problem to investigate (don't ignore it).
+- If the same error keeps recurring, escalate it — don't just log it again.
+- Keep BRIEFING.md entries concise. Trim the Recent Context section to last 10 entries.
+- Don't touch CLAUDE.md or DECISIONS.md — those change only during architecture sessions.`,
+        cwd: process.cwd(), // Hive repo
+        maxTurns: 15,
+        timeoutMs: 5 * 60 * 1000,
+      });
+
+      console.log("  ✓ Reflection complete — BRIEFING.md + ROADMAP.md updated");
+    } catch (reflectErr: any) {
+      console.log(`  ⚠ Reflection failed: ${reflectErr.message}`);
+      // Non-critical — the run still succeeded, we just didn't update context
+    }
   }
 
   console.log(`\n🐝 Nightly cycle complete in ${totalDuration}s`);

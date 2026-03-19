@@ -28,40 +28,42 @@ Hive context flows through 4 tools. Each writes to the shared knowledge layer:
 │  (brainstorm) │    │  (implement)  │    │  (nightly)    │    │  (manual)    │
 └──────┬───────┘    └──────┬───────┘    └──────┬───────┘    └──────┬───────┘
        │                   │                   │                   │
+       │ update prompts    │ direct edits      │ Step 9 reflection │ direct edits
        ▼                   ▼                   ▼                   ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        Shared Knowledge Layer                          │
+│                   Git Repo (single source of truth)                     │
 │                                                                        │
-│  Files (in repo):  BRIEFING.md · ROADMAP.md · CLAUDE.md · MEMORY.md   │
-│                    MISTAKES.md · BACKLOG.md · DECISIONS.md             │
+│  BRIEFING.md — current state, recent context, what's next              │
+│  ROADMAP.md  — strategic phases, milestone checkboxes                  │
+│  CLAUDE.md   — architecture, rules, flows                              │
+│  MEMORY.md   — deployment details, gotchas                             │
+│  MISTAKES.md — production learnings                                    │
+│  BACKLOG.md  — task-level improvements                                 │
+│  DECISIONS.md — architectural decision records                         │
 │                                                                        │
-│  Neon DB:          context_log · playbook · agent_actions · cycles     │
-│                                                                        │
-│  Dashboard:        /context page (reads context_log)                   │
+│  Neon DB: playbook · agent_actions · cycles · metrics (operational)    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### How each tool updates context:
 
-**Claude Chat → Code bridge:**
-Chat sessions produce a "Briefing Update" block at the end of brainstorming. Carlos pastes this into BRIEFING.md (or the Chat session generates an update prompt that Claude Code applies). Chat also produces decisions → DECISIONS.md, learnings → MISTAKES.md.
+**Claude Chat → Claude Code bridge:**
+Chat sessions produce update prompts at the end of brainstorming. Carlos passes them to Claude Code CLI which applies them to the MD files and commits. Chat captures the "why" (architectural reasoning, research, alternatives rejected).
 
 **Claude Code → Repo:**
-Code sessions update BRIEFING.md "Current State" + "Recent Context" after finishing features. Also writes to MEMORY.md, MISTAKES.md, BACKLOG.md as needed. Commits all updates.
+Code sessions update BRIEFING.md, MEMORY.md, MISTAKES.md, BACKLOG.md, DECISIONS.md as needed. Always commits changes. Reads BRIEFING.md first to understand current state.
 
-**Orchestrator → Neon DB:**
-Writes to `context_log` table after each nightly cycle (summary, errors, milestones). Also writes to `agent_actions`, `playbook`, `cycles`. Dashboard shows all of this.
+**Orchestrator → Repo (autonomous, every nightly run):**
+Step 9 "Operational Reflection" runs at the end of every nightly cycle:
+- Rewrites BRIEFING.md "Current State" with actual data from Neon
+- Appends `[orch]` entry to "Recent Context" summarising the run
+- Checks ROADMAP.md milestones and ticks off completed ones
+- Self-diagnoses recurring errors → writes to BACKLOG.md / MISTAKES.md
+- Rewrites "What's Next" from data, not from Chat brainstorming
+- Commits all changes to git
 
 **Carlos → Manual:**
-Can edit any file directly, or use the dashboard command bar (`hive: <text>`) to create directives. Can also POST to `/api/context` with source="carlos".
-
-### Context log categories:
-- `decision` — architectural or strategic choice (link to ADR if applicable)
-- `learning` — something discovered in production (link to MISTAKES.md if applicable)
-- `brainstorm` — idea or exploration (may become a decision later)
-- `blocker` — something preventing progress
-- `milestone` — something achieved
-- `question` — open question needing resolution
+Can edit any file directly or use the dashboard command bar for directives.
 
 ## Self-Improvement Rules
 
@@ -208,6 +210,16 @@ STEP 7: Prompt Evolver (Wednesdays only)
 
 STEP 8: Daily digest email
   - Portfolio MRR/customers, per-company cycle status, pending approvals, errors
+
+STEP 9: Operational Reflection (self-awareness)
+  - Orchestrator reflects on its own run using Claude
+  - Rewrites BRIEFING.md "Current State" with actual Neon data
+  - Appends [orch] entry to BRIEFING.md "Recent Context"
+  - Checks ROADMAP.md milestones — ticks off newly completed ones
+  - Self-diagnoses: recurring errors (3x+) → writes blockers + BACKLOG P0 items
+  - Rewrites BRIEFING.md "What's Next" from data, not from Chat brainstorming
+  - Commits changes to git
+  - This is what makes Hive self-aware — it updates its own operational context
 ```
 
 ## Cross-Company Learning Architecture
