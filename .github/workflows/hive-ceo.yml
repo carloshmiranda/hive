@@ -122,12 +122,15 @@ jobs:
           REPO="${{ github.repository }}"
           echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
 
-          # Extract JSON object from text (may be in a code block or inline)
-          RESULT_JSON=$(echo "$RESULT" | grep -oP '\{[^{}]*"needs_feature"[^{}]*\}' | head -1)
+          # Extract JSON object from text (may be multiline, in a code block)
+          # Collapse to single line, then extract the JSON containing our signal keys
+          ONELINE=$(echo "$RESULT" | tr '\n' ' ')
+          RESULT_JSON=$(echo "$ONELINE" | sed -n 's/.*\({[^}]*"company"[^}]*}\).*/\1/p' | head -1)
           if [ -z "$RESULT_JSON" ]; then
-            RESULT_JSON=$(echo "$RESULT" | grep -oP '\{[^{}]*"needs_research"[^{}]*\}' | head -1)
+            # Fallback: try to extract company from "company": "slug" pattern
+            COMPANY=$(echo "$ONELINE" | sed -n 's/.*"company"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
           fi
-          echo "Extracted JSON: $RESULT_JSON"
+          echo "Extracted JSON: ${RESULT_JSON:-none} | Company: ${COMPANY:-from-json}"
 
           dispatch() {
             curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
@@ -137,8 +140,11 @@ jobs:
             echo "  Dispatched: $1"
           }
 
-          # Extract company slug from the JSON
-          COMPANY=$(echo "$RESULT_JSON" | jq -r '.company // ""' 2>/dev/null || echo "")
+          # Extract company slug from the JSON (if not already set by fallback)
+          if [ -z "$COMPANY" ]; then
+            COMPANY=$(echo "$RESULT_JSON" | jq -r '.company // ""' 2>/dev/null || echo "")
+          fi
+          echo "Company: $COMPANY"
 
           # Chain to Scout if research needed
           echo "$RESULT" | grep -q "needs_research.*true" && \
