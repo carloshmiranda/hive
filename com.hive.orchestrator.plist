@@ -45,15 +45,7 @@
     <key>StandardErrorPath</key>
     <string>/Users/carlos.miranda/Documents/Github/hive/logs/orchestrator.stderr.log</string>
 
-    <!-- Keep alive on crash -->
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-
-    <!-- Don't run if Mac was asleep — catch up on next wake -->
-    <key>StartInterval</key>
-    <integer>86400</integer>
+    <!-- No KeepAlive — run once at midnight, don't retry on failure.
+         Errors are logged and the self-healing cycle handles them next run. -->
 </dict>
 </plist>
