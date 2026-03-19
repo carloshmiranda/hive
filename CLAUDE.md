@@ -163,6 +163,61 @@ STEP 8: Daily digest email
   - Portfolio MRR/customers, per-company cycle status, pending approvals, errors
 ```
 
+## Cross-Company Learning Architecture
+
+Hive's competitive advantage: knowledge flows across all companies via the shared Neon database.
+
+### Multi-repo with shared intelligence
+
+Each company has its own GitHub repo, CI/CD, and Vercel project (isolation for deploys, kills, imports).
+Knowledge sharing happens through the Neon database, not code imports:
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  VerdeDesk   │    │   Flolio    │    │  Future Co   │
+│  (own repo)  │    │  (own repo) │    │  (own repo)  │
+└──────┬───────┘    └──────┬──────┘    └──────┬───────┘
+       │                   │                   │
+       └───────────┬───────┘───────────────────┘
+                   │
+          ┌────────▼────────┐
+          │   Hive Neon DB   │
+          │  ┌─────────────┐ │
+          │  │  playbook    │ │  ← learnings from all companies
+          │  │  agent_acts  │ │  ← error history + fix patterns
+          │  │  metrics     │ │  ← performance data
+          │  │  cycles      │ │  ← CEO scores
+          │  └─────────────┘ │
+          └────────┬─────────┘
+                   │
+          ┌────────▼────────┐
+          │   Orchestrator   │  ← reads all, dispatches to each
+          │  (orchestrator.ts)│
+          └──────────────────┘
+```
+
+### Three cross-company mechanisms
+
+**1. Playbook injection at provisioning**
+When a new company is created, the Provisioner queries the playbook table for all entries with confidence ≥ 0.6 and appends them to the new company's CLAUDE.md under "Inherited Playbook." Also injects common error patterns under "Known Pitfalls." New companies start with the accumulated wisdom of the entire portfolio.
+
+**2. Cross-company error correlation in self-healing**
+When the Healer encounters a company-specific error, it first queries `agent_actions` for successful fixes of similar errors in OTHER companies (ILIKE match on error text, last 60 days). If a match exists, the fix context is injected into the Engineer's prompt: "This was already fixed in [other company] — apply the same approach." After fixing, the Engineer writes a playbook entry so future companies inherit the knowledge automatically.
+
+**3. Venture Brain cross-pollination**
+The Venture Brain reads recent playbook entries during portfolio analysis. If it identifies a learning from company A that would benefit company B (e.g., a pricing pattern, a growth tactic, an engineering shortcut), it creates a directive for company B: "From Venture Brain: apply [insight] from [source_company]." The CEO agent picks up that directive in the next nightly cycle.
+
+### Data flows
+
+| Source | Mechanism | Destination |
+|--------|-----------|-------------|
+| CEO review → playbook entry | DB write | All future companies (via Provisioner) |
+| Pattern extraction on import | DB write | All future companies |
+| Healer fix → playbook entry | DB write | All future companies |
+| Venture Brain directive | DB write | Specific company CEO |
+| Error in company A | DB query by Healer | Fix context for company B |
+| Cycle scores | DB query by Venture Brain | Portfolio-level decisions |
+
 ## Model Routing (Multi-Provider Dispatch)
 
 Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude (Max 5x subscription, unlimited via CLI). Worker tasks get free-tier LLMs. Fallback chain: primary → alternate → Claude as last resort.

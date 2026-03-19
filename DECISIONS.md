@@ -112,3 +112,13 @@
 - All Gemini: can't do tool use (no git, no deploy, no web search)
 - Ollama local: latency too high for nightly batch, no web access
 **Consequences:** Claude quota reserved for ~6 brain tasks per company cycle (CEO plan, CEO review, Research, Engineer, Healer, Evolver) plus portfolio-level tasks. Growth, Outreach, and Ops run on free tiers at ~7,000+ requests/day capacity. If Gemini/Groq keys aren't configured, everything falls back to Claude (works for 1-2 companies, breaks at 3+).
+
+### ADR-010: Multi-repo with shared intelligence (not monorepo)
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** With 3 companies (Hive, VerdeDesk, Flolio) and more coming, we needed to decide: one repo for everything, or separate repos per company with Hive as coordinator? Research showed monorepos benefit AI agents for single-product cross-stack work, but Hive's companies are independent products with separate customers, deploys, and lifecycles. Polsia (closest comparable, 1,100+ companies, $1M ARR) uses separate repos per company with provisioned infrastructure.
+**Decision:** Keep multi-repo. Each company gets its own GitHub repo, Vercel project, and CI/CD pipeline. Hive orchestrator coordinates via the shared Neon database. Cross-company learning happens through: (1) playbook injection at provisioning, (2) cross-company error correlation in the Healer, (3) Venture Brain cross-pollination directives.
+**Alternatives considered:**
+- Monorepo: better boilerplate sharing, but makes company kills messy, tangles CI/CD, and gives the Engineer agent confusing cross-company context via cwd
+- Hybrid (Hive monorepo + company repos): no clear benefit — Hive is already the coordination layer
+**Consequences:** Company isolation is clean (delete repo = delete company). Imports require no git history migration. The playbook table becomes the critical knowledge store — if it degrades, cross-company learning stops. Each new company starts with accumulated portfolio knowledge via CLAUDE.md injection.

@@ -113,6 +113,7 @@ async function dispatchClaude(opts: DispatchOptions): Promise<string> {
   if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
   if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
   const timeout = opts.timeoutMs || 5 * 60 * 1000;
+
   const spawnOpts: any = { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] };
   if (opts.cwd) spawnOpts.cwd = opts.cwd;
 
@@ -181,7 +182,7 @@ async function getSettingValueDirect(key: string): Promise<string | null> {
   if (!row) return null;
   if (!row.is_secret) return row.value;
 
-  // Decrypt AES-256-GCM (format: iv_hex:tag_hex:encrypted_hex)
+  // Decrypt AES-256-GCM (colon-separated format: iv_hex:tag_hex:encrypted_hex)
   const encKey = process.env.ENCRYPTION_KEY;
   if (!encKey) return null;
   try {
@@ -484,19 +485,14 @@ async function runNightlyCycle() {
 
     // Verify orchestrator can reach Claude CLI
     if (!DRY_RUN) {
-      try {
-        const cliOk = await new Promise<boolean>((resolve) => {
-          const proc = spawn("claude", ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
-          const timer = setTimeout(() => { proc.kill(); resolve(false); }, 10000);
-          proc.on("close", (code) => { clearTimeout(timer); resolve(code === 0); });
-          proc.on("error", () => { clearTimeout(timer); resolve(false); });
-        });
-        if (!cliOk) { console.log("  ✗ Claude CLI not reachable — aborting"); return; }
-        console.log("  ✓ Claude CLI reachable");
-      } catch {
-        console.log("  ✗ Claude CLI not reachable — aborting");
-        return;
-      }
+      const cliOk = await new Promise<boolean>((resolve) => {
+        const proc = spawn("claude", ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
+        const timer = setTimeout(() => { proc.kill(); resolve(false); }, 10000);
+        proc.on("close", (code) => { clearTimeout(timer); resolve(code === 0); });
+        proc.on("error", () => { clearTimeout(timer); resolve(false); });
+      });
+      if (!cliOk) { console.log("  ✗ Claude CLI not reachable — aborting"); return; }
+      console.log("  ✓ Claude CLI reachable");
     }
   } catch (healthErr: any) {
     console.log(`  ✗ Pre-flight failed: ${healthErr.message}`);
@@ -532,7 +528,6 @@ async function runNightlyCycle() {
 
     const ideaScoutOutput = await dispatch({
       agent: "idea_scout",
-      allowedTools: ["WebSearch", "WebFetch"],
       prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
 
 YOUR JOB: Research the market using web search and propose THREE business ideas that Carlos should consider building next. He will pick one (or none).
@@ -646,6 +641,7 @@ IMPORTANT: The "proposals" array MUST contain exactly 3 items.
 At least 1 must have "market": "Portugal".
 At least 1 must have "market": "Global".
 Order them by your confidence score, highest first.`,
+      allowedTools: ["WebSearch", "WebFetch"],
       maxTurns: 30, // more turns for broader research
       timeoutMs: 20 * 60 * 1000, // 20 min — researching 3 ideas takes longer
     });
@@ -778,6 +774,35 @@ Order them by your confidence score, highest first.`,
       console.log(`  ▸ Provisioning ${company.name}...`);
       await sql`UPDATE companies SET status = 'provisioning', updated_at = now() WHERE id = ${company.id}`;
 
+      // Gather cross-company learnings to inject into the new company's CLAUDE.md
+      const playbookEntries = await sql`
+        SELECT domain, insight, source_company, confidence 
+        FROM playbook WHERE superseded_by IS NULL AND confidence >= 0.6
+        ORDER BY confidence DESC LIMIT 30
+      `;
+      const playbookSection = playbookEntries.length > 0
+        ? `\n## Inherited Playbook (from Hive portfolio)\n\nThese learnings were extracted from other Hive companies. Apply them where relevant.\n\n${
+            playbookEntries.map((p: any) => 
+              `- **[${p.domain}]** ${p.insight}${p.source_company ? ` _(from ${p.source_company})_` : ""} — confidence: ${p.confidence}`
+            ).join("\n")
+          }\n`
+        : "";
+
+      // Gather common error patterns to warn about
+      const commonErrors = await sql`
+        SELECT agent, error, COUNT(*) as cnt
+        FROM agent_actions
+        WHERE status = 'failed' AND started_at > now() - interval '30 days'
+        GROUP BY agent, error
+        HAVING COUNT(*) >= 2
+        ORDER BY cnt DESC LIMIT 10
+      `;
+      const pitfallsSection = commonErrors.length > 0
+        ? `\n## Known Pitfalls (from Hive history)\n\nThese errors have occurred in other companies. Avoid them.\n\n${
+            commonErrors.map((e: any) => `- **[${e.agent}]** ${(e.error || "").slice(0, 150)} _(${e.cnt}x)_`).join("\n")
+          }\n`
+        : "";
+
       try {
         await dispatch({
           prompt: `You are the Provisioner agent. Set up infrastructure for a new Hive company.
@@ -789,12 +814,15 @@ Execute these steps using the APIs available to you:
 1. Create GitHub repo: carlos-miranda/${company.slug} (use GitHub API)
 2. Push the boilerplate template from templates/boilerplate/ (replace {{SLUG}}, {{COMPANY_NAME}}, {{DESCRIPTION}} placeholders)
 3. Generate a CLAUDE.md from templates/company-claude.md with the company details filled in
-4. Create Neon project: hive-${company.slug} (use Neon API)
-5. Create Vercel project linked to the GitHub repo (use Vercel API)
-6. Set environment variables in Vercel: DATABASE_URL, STRIPE_SECRET_KEY, NEXT_PUBLIC_URL
-7. Create a Stripe product + price tagged with hive_company: ${company.slug}
-8. Record all resource IDs in the infra table via the Hive API
-9. Update company status to 'mvp' and set vercel_url
+4. **IMPORTANT:** Append these sections to the generated CLAUDE.md:
+${playbookSection || "   (No playbook entries yet — skip this step)"}
+${pitfallsSection || "   (No known pitfalls yet — skip this step)"}
+5. Create Neon project: hive-${company.slug} (use Neon API)
+6. Create Vercel project linked to the GitHub repo (use Vercel API)
+7. Set environment variables in Vercel: DATABASE_URL, STRIPE_SECRET_KEY, NEXT_PUBLIC_URL
+8. Create a Stripe product + price tagged with hive_company: ${company.slug}
+9. Record all resource IDs in the infra table via the Hive API
+10. Update company status to 'mvp' and set vercel_url
 
 Report what was created and any issues encountered.`,
           cwd: `/Users/carlos.miranda/Documents/Github/hive`,
@@ -884,110 +912,78 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
         cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
       });
 
-      // Phase 3: Knowledge assimilation — absorb operational wisdom from MD files + Claude memory
+      // Phase 3: Knowledge Assimilation
       console.log(`  ├─ Assimilating knowledge from ${imp.name}...`);
       try {
-        const knowledgeSources: string[] = [];
-        const repoDir = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
-        const knowledgeFiles = ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md", "README.md"];
-        for (const fname of knowledgeFiles) {
-          const fpath = join(repoDir, fname);
+        const companyDir = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
+        const claudeMemDir = join(process.env.HOME || "", `.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`);
+
+        // Read company's MD files for institutional knowledge
+        const mdFiles: string[] = [];
+        for (const fname of ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md"]) {
+          const fpath = join(companyDir, fname);
           if (existsSync(fpath)) {
-            const content = readFileSync(fpath, "utf-8").slice(0, 5000);
-            knowledgeSources.push(`=== REPO FILE: ${fname} ===\n${content}\n=== END ===`);
+            const content = readFileSync(fpath, "utf-8");
+            if (content.trim()) mdFiles.push(`=== ${fname} ===\n${content.slice(0, 3000)}`);
           }
         }
-        const memoryPaths = [
-          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`,
-          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github/memory`,
-        ];
-        for (const memDir of memoryPaths) {
-          if (existsSync(memDir)) {
-            try {
-              const { readdirSync } = await import("fs");
-              const files = readdirSync(memDir).filter((f: string) => f.endsWith(".md") && f !== "MEMORY.md");
-              for (const f of files) {
-                const content = readFileSync(join(memDir, f), "utf-8").slice(0, 3000);
-                knowledgeSources.push(`=== CLAUDE MEMORY: ${memDir}/${f} ===\n${content}\n=== END ===`);
-              }
-            } catch { /* skip unreadable dirs */ }
-          }
+
+        // Read Claude memory files if they exist
+        if (existsSync(claudeMemDir)) {
+          try {
+            const { readdirSync } = await import("fs");
+            for (const f of readdirSync(claudeMemDir).filter(f => f.endsWith(".md") && f !== "MEMORY.md")) {
+              const content = readFileSync(join(claudeMemDir, f), "utf-8");
+              if (content.trim()) mdFiles.push(`=== memory/${f} ===\n${content.slice(0, 1500)}`);
+            }
+          } catch {}
         }
-        if (knowledgeSources.length > 0) {
+
+        if (mdFiles.length > 0) {
+          // Read Hive's current knowledge for comparison
           const hiveDir = `/Users/carlos.miranda/Documents/Github/hive`;
-          const hiveMistakes = existsSync(join(hiveDir, "MISTAKES.md")) ? readFileSync(join(hiveDir, "MISTAKES.md"), "utf-8") : "";
-          const hiveDecisions = existsSync(join(hiveDir, "DECISIONS.md")) ? readFileSync(join(hiveDir, "DECISIONS.md"), "utf-8") : "";
-          const hiveBacklog = existsSync(join(hiveDir, "BACKLOG.md")) ? readFileSync(join(hiveDir, "BACKLOG.md"), "utf-8") : "";
-          const assimilationOutput = await dispatch({
+          const hiveMistakes = existsSync(join(hiveDir, "MISTAKES.md")) ? readFileSync(join(hiveDir, "MISTAKES.md"), "utf-8").slice(0, 2000) : "";
+          const hivePlaybook = await getPlaybook();
+
+          await dispatch({
             agent: "ceo",
-            prompt: `You are the Knowledge Assimilation agent. An existing project (${imp.name}) has been imported into Hive.
-Extract operational wisdom from the imported project's knowledge files and compare against what Hive already knows. Only propose INCREMENTAL additions.
+            prompt: `You are assimilating knowledge from an imported company into Hive's institutional memory.
 
-## Imported project knowledge:
-${knowledgeSources.join("\n\n")}
+## Source: ${imp.name} (${imp.slug})
+${mdFiles.join("\n\n")}
 
-## Hive's current MISTAKES.md (excerpt):
-${hiveMistakes.slice(0, 3000)}
+## Hive's current knowledge:
+### MISTAKES.md (last 2000 chars):
+${hiveMistakes}
 
-## Hive's current DECISIONS.md (excerpt):
-${hiveDecisions.slice(0, 3000)}
+### Playbook entries (top 20):
+${hivePlaybook.map((p: any) => `- [${p.domain}] ${p.insight}`).join("\n") || "Empty"}
 
-## Hive's current BACKLOG.md (excerpt):
-${hiveBacklog.slice(0, 2000)}
+## Your task:
+Compare the imported company's knowledge against Hive's existing knowledge.
+For each NEW learning (not already captured):
+1. If it's a reusable pattern → write to playbook via POST /api/playbook
+2. If it's a mistake/gotcha → note it for MISTAKES.md
+3. If it's an architectural decision → note it for DECISIONS.md
 
-Output JSON only:
-{
-  "mistakes_to_add": [{ "title": "...", "what_happened": "...", "root_cause": "...", "prevention": "...", "affects": "hive|companies|both" }],
-  "backlog_items": [{ "priority": "P1|P2|P3", "title": "...", "description": "..." }],
-  "playbook_entries": [{ "domain": "...", "insight": "...", "confidence": 0.5-1.0 }],
-  "decisions_to_review": [{ "related_adr": "ADR-NNN or new", "insight": "...", "action": "confirm|revisit|new_adr" }]
-}`,
+Do NOT duplicate what Hive already knows. Only add genuinely new insights.
+Output a brief summary of what was assimilated.`,
             timeoutMs: 5 * 60 * 1000,
           });
-          try {
-            const jsonMatch = assimilationOutput.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const knowledge = JSON.parse(jsonMatch[0]);
-              let incrementCount = 0;
-              if (knowledge.mistakes_to_add?.length > 0) {
-                const mistakesPath = join(hiveDir, "MISTAKES.md");
-                let existing = readFileSync(mistakesPath, "utf-8");
-                const today = new Date().toISOString().split("T")[0];
-                for (const m of knowledge.mistakes_to_add) {
-                  existing += `\n\n### ${today} ${m.title} (from ${imp.slug} import)\n**What happened:** ${m.what_happened}\n**Root cause:** ${m.root_cause}\n**Prevention:** ${m.prevention}\n**Affects:** ${m.affects}`;
-                  incrementCount++;
-                }
-                const { writeFileSync } = await import("fs");
-                writeFileSync(mistakesPath, existing);
-                console.log(`    📝 +${knowledge.mistakes_to_add.length} MISTAKES.md entries`);
-              }
-              if (knowledge.playbook_entries?.length > 0) {
-                for (const p of knowledge.playbook_entries) {
-                  await sql`INSERT INTO playbook (domain, insight, confidence, source_company_id, evidence) VALUES (${p.domain}, ${p.insight}, ${p.confidence || 0.7}, ${imp.company_id}, ${JSON.stringify({ source: "knowledge_assimilation", from_project: imp.slug })})`;
-                  incrementCount++;
-                }
-                console.log(`    📖 +${knowledge.playbook_entries.length} playbook entries`);
-              }
-              if (knowledge.decisions_to_review?.length > 0) {
-                for (const d of knowledge.decisions_to_review) {
-                  if (d.action === "revisit" || d.action === "new_adr") {
-                    await sql`INSERT INTO directives (text, status) VALUES (${`hive: Review ${d.related_adr} — ${d.insight} (from ${imp.slug})`}, 'open')`;
-                  }
-                }
-                console.log(`    🔍 ${knowledge.decisions_to_review.length} decisions flagged`);
-              }
-              console.log(`    ✓ ${incrementCount} knowledge items assimilated`);
-            }
-          } catch (parseErr: any) { console.log(`    ⚠ Parse failed: ${parseErr.message}`); }
-        } else {
-          console.log(`    ⓘ No knowledge files found`);
+          console.log(`    ✓ Knowledge assimilated from ${mdFiles.length} files`);
         }
-      } catch (assimErr: any) { console.log(`    ⚠ Assimilation failed: ${assimErr.message}`); }
+      } catch (kaErr: any) {
+        console.log(`    ⚠ Knowledge assimilation failed: ${kaErr.message.slice(0, 80)}`);
+      }
 
+      // Update import status and company to mvp
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
-      // Transition company to mvp so it enters the nightly cycle
-      await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id} AND status IN ('importing', 'idea', 'approved')`;
-      console.log(`  ✓ ${imp.name} onboarded with patterns extracted → status: mvp`);
+      const [impCompany] = await sql`SELECT status FROM companies WHERE id = ${imp.company_id}`;
+      if (impCompany?.status === "approved" || impCompany?.status === "provisioning") {
+        await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id}`;
+        console.log(`    ✓ ${imp.name} status → mvp`);
+      }
+      console.log(`  ✓ ${imp.name} onboarded with patterns extracted + knowledge assimilated`);
     }
   }
 
@@ -1066,7 +1062,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
     // Cycle 0: Full research (market + competitive + SEO) on first run
     // Every 7 cycles: Refresh competitive analysis only (market shifts)
     // On directive: "refresh research" triggers full re-run
-    const isFirstCycle = researchReports.length === 0; // No reports yet — run full Cycle 0 research
+    const isFirstCycle = researchReports.length === 0;
     const isRefreshCycle = cycleNumber > 1 && cycleNumber % 7 === 0;
     const hasRefreshDirective = directives.some(d => d.text.toLowerCase().includes("refresh research"));
     const needsResearch = isFirstCycle || isRefreshCycle || hasRefreshDirective;
@@ -1136,7 +1132,7 @@ After each JSON block, write a 1-2 sentence summary.`,
             const jsonMatch = match[1].match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const content = JSON.parse(jsonMatch[0]);
-              // Extract summary (text after the JSON block, skip markdown fencing)
+              // Extract summary (text after the JSON block)
               const afterJson = match[1].slice(match[1].lastIndexOf("}") + 1).trim();
               const summaryLines = afterJson.split("\n").filter(l => {
                 const t = l.trim();
@@ -1186,38 +1182,30 @@ After each JSON block, write a 1-2 sentence summary.`,
     // Step 2: Engineer executes
     console.log("  ├─ Engineer executing...");
     const engPrompt = await getActivePrompt("engineer", companyCtx);
+    // Pre-clone repo if not present (Gemini agents can't use git)
     const companyCwd = `/Users/carlos.miranda/Documents/Github/${company.slug}`;
     let companyRepoExists = existsSync(companyCwd);
-
-    // Pre-clone repo if not present (Gemini agents can't run git)
     if (!companyRepoExists) {
       console.log(`    ⚠ Repo not cloned — cloning...`);
       try {
         const githubOwner = await getSettingValueDirect("github_owner") || "carloshmiranda";
         await new Promise<void>((resolve, reject) => {
-          const proc = spawn("git", ["clone", `https://github.com/${githubOwner}/${company.slug}.git`, companyCwd], {
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-          let stderr = "";
-          proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+          const proc = spawn("git", ["clone", `https://github.com/${githubOwner}/${company.slug}.git`, companyCwd], { stdio: ["ignore", "pipe", "pipe"] });
           const timer = setTimeout(() => { proc.kill(); reject(new Error("Clone timed out")); }, 60000);
-          proc.on("close", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`git clone failed: ${stderr.slice(0, 200)}`)); });
+          proc.on("close", (code) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(`git clone exited ${code}`)); });
           proc.on("error", (err) => { clearTimeout(timer); reject(err); });
         });
         companyRepoExists = existsSync(companyCwd);
         if (companyRepoExists) console.log(`    ✓ Cloned ${company.slug}`);
-      } catch (cloneErr: any) {
-        console.log(`    ⚠ Clone failed: ${cloneErr.message.slice(0, 80)}`);
-      }
+      } catch (cloneErr: any) { console.log(`    ⚠ Clone failed: ${cloneErr.message.slice(0, 80)}`); }
     }
-
     const engResult = await executeAgent({
       agent: "engineer",
       companyId: company.id,
       cycleId,
       prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.`,
       context,
-      cwd: companyRepoExists ? companyCwd : `/Users/carlos.miranda/Documents/Github`,
+      cwd: companyRepoExists ? companyCwd : undefined,
     });
 
     // Step 3: Growth executes (inbound: content, SEO, social)
@@ -1372,26 +1360,22 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
       context,
     });
 
-    // Step 5: CEO reviews — pass cycle results as context so it doesn't need API access
+    // Step 5: CEO reviews (pass cycle results directly — non-interactive mode can't fetch APIs)
     console.log("  └─ CEO reviewing cycle...");
     const cycleResults = `
 TONIGHT'S CYCLE RESULTS (for your review):
-
 ENGINEER (${engResult.success ? "success" : "failed"}):
 ${engResult.output.slice(0, 500)}
-
 GROWTH (${growthResult.success ? "success" : "failed"}):
 ${growthResult.output.slice(0, 500)}
-
 OPS (${opsResult.success ? "success" : "failed"}):
-${opsResult.output.slice(0, 500)}
-`.trim();
+${opsResult.output.slice(0, 500)}`.trim();
 
     const ceoReview = await executeAgent({
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + `\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.\n\n${cycleResults}`,
+      prompt: ceoPrompt + `\n\n${cycleResults}\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.`,
       context,
     });
 
@@ -1596,12 +1580,58 @@ Output JSON:
       }
     }
 
-    // For company-specific errors, dispatch fixes to the company's repo
+    // For company-specific errors, check if the same error was already solved in another company
     for (const pattern of companyErrors.slice(0, 3)) { // max 3 company fixes per night
       const companySlug = pattern.companies[0];
       if (!companySlug) continue;
 
+      // === CROSS-COMPANY ERROR CORRELATION ===
+      // Search for successful fixes of similar errors in other companies
+      const normalizedError = pattern.error.slice(0, 150);
+      const similarFixes = await sql`
+        SELECT aa.output, aa.description, c.slug as fixed_in,
+               aa.finished_at
+        FROM agent_actions aa
+        JOIN companies c ON c.id = aa.company_id
+        WHERE aa.action_type IN ('self_heal', 'execute_task')
+          AND aa.status = 'success'
+          AND aa.description ILIKE ${"%" + normalizedError.slice(0, 50) + "%"}
+          AND c.slug != ${companySlug}
+          AND aa.started_at > now() - interval '60 days'
+        ORDER BY aa.finished_at DESC
+        LIMIT 3
+      `;
+
+      // Also check playbook for relevant entries
+      const relevantPlaybook = await sql`
+        SELECT domain, insight, source_company, confidence
+        FROM playbook 
+        WHERE superseded_by IS NULL 
+          AND domain = ${pattern.agent === "engineer" ? "engineering" : pattern.agent}
+          AND confidence >= 0.5
+        ORDER BY confidence DESC
+        LIMIT 5
+      `;
+
+      const crossCompanyContext = similarFixes.length > 0
+        ? `\n## Cross-company intelligence — similar errors were ALREADY FIXED elsewhere:\n${
+            similarFixes.map((f: any) => 
+              `- **Fixed in ${f.fixed_in}** (${f.finished_at?.toISOString?.() || "recently"}): ${(f.description || "").slice(0, 200)}`
+            ).join("\n")
+          }\nLook at how these were fixed and apply the same approach if applicable.\n`
+        : "";
+
+      const playbookContext = relevantPlaybook.length > 0
+        ? `\n## Relevant playbook entries:\n${
+            relevantPlaybook.map((p: any) => `- [${p.domain}] ${p.insight} (from ${p.source_company || "unknown"}, confidence: ${p.confidence})`).join("\n")
+          }\n`
+        : "";
+
       console.log(`  ├─ Fixing ${companySlug}: ${pattern.error.slice(0, 60)}...`);
+      if (similarFixes.length > 0) {
+        console.log(`    💡 Found ${similarFixes.length} similar fix(es) from other companies`);
+      }
+
       try {
         await dispatch({
           prompt: `You are the Engineer fixing a bug for ${companySlug}.
@@ -1609,9 +1639,18 @@ Output JSON:
 Error: ${pattern.error}
 Agent: ${pattern.agent}
 Occurrences: ${pattern.count}
-
+${crossCompanyContext}${playbookContext}
 Read the error, find the file, fix the bug, run \`npm run build\`, and commit if it passes.
-Keep the fix minimal — address only this error. Commit message: "fix: [description]"`,
+Keep the fix minimal — address only this error. Commit message: "fix: [description]"
+
+AFTER fixing: If the fix reveals a reusable pattern (e.g., a common config mistake, a library gotcha),
+write it to the Hive playbook via the API:
+curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/json" -d '{
+  "domain": "engineering",
+  "insight": "[what you learned]",
+  "source_company": "${companySlug}",
+  "confidence": 0.7
+}'`,
           cwd: `/Users/carlos.miranda/Documents/Github/${companySlug}`,
           maxTurns: 15,
           timeoutMs: 8 * 60 * 1000,
@@ -1639,20 +1678,47 @@ Keep the fix minimal — address only this error. Commit message: "fix: [descrip
       ORDER BY c.slug, m.date DESC
     `;
 
+    // Gather recent playbook entries for cross-pollination analysis
+    const recentPlaybook = await sql`
+      SELECT domain, insight, source_company, confidence, created_at
+      FROM playbook WHERE superseded_by IS NULL
+      ORDER BY created_at DESC LIMIT 20
+    `;
+
+    // Gather recent cycle scores for trend analysis
+    const cycleScores = await sql`
+      SELECT c.slug, cy.cycle_number, cy.score, cy.started_at
+      FROM cycles cy
+      JOIN companies c ON c.id = cy.company_id
+      WHERE cy.started_at > now() - interval '14 days' AND cy.score IS NOT NULL
+      ORDER BY c.slug, cy.started_at DESC
+    `;
+
     try {
       await dispatch({
         agent: "venture_brain",
         prompt: `You are the Venture Brain. Analyze the portfolio:
 
+## Metrics (last 7 days):
 ${JSON.stringify(allMetrics, null, 2)}
 
-Tasks:
-1. Compare companies: which is performing best, which is stalling?
-2. Kill Switch check: any company that should be shut down? (criteria: no revenue after 60 days, CAC > 3x LTV for 30 days, no signups for 30 days)
-3. Capital allocation: should we shift resources between companies?
-4. If any company should be killed, write to the approvals table via the API.
+## Cycle scores (last 14 days):
+${cycleScores.map((s: any) => `${s.slug}: cycle ${s.cycle_number} → ${s.score}/10`).join("\n") || "No scored cycles yet"}
 
-Output a brief portfolio summary.`,
+## Recent playbook entries:
+${recentPlaybook.map((p: any) => `[${p.domain}] ${p.insight} (from ${p.source_company || "unknown"}, confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
+
+Tasks:
+1. **Compare companies**: which is performing best, which is stalling? Look at score trends, not just latest score.
+2. **Kill Switch check**: any company that should be shut down? (criteria: no revenue after 60 days, CAC > 3x LTV for 30 days, no signups for 30 days)
+3. **Capital allocation**: should we shift resources between companies?
+4. **Cross-pollination**: Are there playbook entries from one company that should be applied to another? 
+   For example: if company A discovered a pricing pattern that works, should company B adopt it?
+   Write specific directives for companies that should adopt learnings from siblings.
+   Use: POST /api/directives with { company_id: "<id>", text: "From Venture Brain: apply [insight] from [source_company]" }
+5. If any company should be killed, write to the approvals table via the API.
+
+Output a brief portfolio summary including any cross-pollination directives you created.`,
       });
     } catch (vbErr: any) {
       console.log(`  ⚠ Venture Brain error: ${vbErr.message}`);
