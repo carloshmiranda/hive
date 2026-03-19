@@ -30,9 +30,10 @@ jobs:
 
       - name: Run Evolver agent
         id: agent
-        uses: anthropics/claude-code-base-action@v1
+        uses: anthropics/claude-code-base-action@v0.0.63
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--max-turns 15"
           prompt: |
             You are the Evolver agent of Hive. You analyze agent performance and improve prompts.
 
@@ -54,7 +55,6 @@ jobs:
             - Never auto-activate a new prompt. Always create an approval gate.
             - Include before/after diff in the approval description.
             - Log everything to agent_actions.
-          max_turns: 15
 
       # Evolver is a terminal node — no chain dispatch needed.
       # Prompt upgrades go through approval gates, not agent chains.

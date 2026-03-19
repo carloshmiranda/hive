@@ -63,9 +63,10 @@ jobs:
 
       - name: Run Scout agent
         id: agent
-        uses: anthropics/claude-code-base-action@v1
+        uses: anthropics/claude-code-base-action@v0.0.63
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--max-turns 30"
           prompt: |
             You are the Scout agent of Hive. You find new business ideas AND do market research.
 
@@ -89,7 +90,6 @@ jobs:
             4. Output JSON: { "company": "slug", "research_delivered": true, "leads_found": bool }
 
             MANDATORY: 3 proposals must include 1 PT, 1 Global, 1 best-pick. Write everything to Neon.
-          max_turns: 30
 
       - name: Chain dispatch
         if: always() && steps.agent.outputs.conclusion == 'success'
