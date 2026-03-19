@@ -824,10 +824,37 @@ ${playbookSection || "   (No playbook entries yet — skip this step)"}
 ${pitfallsSection || "   (No known pitfalls yet — skip this step)"}
 5. Create Neon project: hive-${company.slug} (use Neon API)
 6. Create Vercel project linked to the GitHub repo (use Vercel API)
-7. Set environment variables in Vercel: DATABASE_URL, STRIPE_SECRET_KEY, NEXT_PUBLIC_URL
+7. Set environment variables in Vercel: DATABASE_URL, STRIPE_SECRET_KEY, NEXT_PUBLIC_URL, NEXT_PUBLIC_LAUNCH_MODE=waitlist, LAUNCH_MODE=waitlist
 8. Create a Stripe product + price tagged with hive_company: ${company.slug}
-9. Record all resource IDs in the infra table via the Hive API
-10. Update company status to 'mvp' and set vercel_url
+9. Seed default email sequences in the company's DB:
+   - waitlist_welcome (step 1): subject "You're #{{POSITION}} on the {{COMPANY_NAME}} waitlist", body with position confirmation + referral link
+   - onboarding_d1 (step 1, delay 0h): subject "Welcome to {{COMPANY_NAME}}", body with getting started guide
+   - onboarding_d3 (step 1, delay 72h): subject "3 tips to get more from {{COMPANY_NAME}}", body with product tips
+   - onboarding_d7 (step 1, delay 168h): subject "How's it going with {{COMPANY_NAME}}?", body with value reminder + feedback ask
+10. Record all resource IDs in the infra table via the Hive API
+11. Update company status to 'mvp' and set vercel_url
+12. Write the capability inventory to the companies table:
+    UPDATE companies SET capabilities = '{
+      "database": {"exists": true, "provider": "neon", "connection_verified": true},
+      "hosting": {"exists": true, "provider": "vercel", "url": "https://${company.slug}.vercel.app"},
+      "repo": {"exists": true, "provider": "github", "url": "https://github.com/carlos-miranda/${company.slug}", "framework": "nextjs"},
+      "stripe": {"exists": true, "configured": false, "has_products": false, "has_customers": false},
+      "auth": {"exists": true, "provider": "custom"},
+      "email_provider": {"exists": true, "provider": "resend", "configured": false},
+      "email_sequences": {"exists": true, "count": 4},
+      "email_log": {"exists": true},
+      "resend_webhook": {"exists": true},
+      "waitlist": {"exists": true, "has_entries": false, "total": 0, "makes_sense": true},
+      "referral_mechanics": {"exists": true, "makes_sense": true},
+      "gsc_integration": {"exists": false, "configured": false},
+      "visibility_metrics": {"exists": true},
+      "indexnow": {"exists": false, "configured": false},
+      "llms_txt": {"exists": true},
+      "sitemap": {"exists": true},
+      "json_ld": {"exists": true},
+      "launch_mode": {"value": "waitlist"}
+    }'::jsonb, last_assessed_at = NOW()
+    WHERE slug = '${company.slug}'
 
 Report what was created and any issues encountered.`,
           cwd: `/Users/carlos.miranda/Documents/Github/hive`,
@@ -1527,12 +1554,50 @@ After each JSON block, write a 1-2 sentence summary.`,
       ? "LAUNCH — focus on conversion, get first paying customer"
       : "OPTIMIZE — metrics-driven management";
 
+    // Load waitlist data if available
+    const [waitlistStats] = await sql`
+      SELECT
+        COALESCE(MAX(waitlist_total), 0) as total,
+        COALESCE(SUM(waitlist_signups), 0) as recent_signups
+      FROM metrics
+      WHERE company_id = ${company.id} AND date >= CURRENT_DATE - INTERVAL '7 days'
+    `;
+    const waitlistLine = Number(waitlistStats.total) > 0
+      ? `  Waitlist: ${waitlistStats.total} total, ${waitlistStats.recent_signups} signups last 7 days`
+      : "";
+
+    // Load capabilities for agent context (inlined — orchestrator can't import from src/lib/)
+    const capKeys = Object.keys(company.capabilities || {});
+    const capSummary = capKeys.length > 0
+      ? `\nCAPABILITIES: ${capKeys.filter(k => (company.capabilities as any)[k]?.exists).join(", ") || "none assessed"}`
+      : "\nCAPABILITIES: Not assessed yet — treat all optional features as unavailable.";
+
+    // Load approved evolver proposals for this company
+    let evolverProposalsContext = "";
+    try {
+      const approvedProposals = await sql`
+        SELECT title, diagnosis, proposed_fix, gap_type, severity
+        FROM evolver_proposals
+        WHERE status = 'approved'
+          AND (${company.slug} = ANY(affected_companies) OR cross_company = true)
+        ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
+        LIMIT 5
+      `;
+      if (approvedProposals.length > 0) {
+        evolverProposalsContext = `\nAPPROVED EVOLVER PROPOSALS (implement these):\n` +
+          approvedProposals.map((p: any) =>
+            `- [${p.severity}/${p.gap_type}] ${p.title}: ${p.proposed_fix?.change || p.diagnosis}`
+          ).join("\n");
+      }
+    } catch { /* evolver_proposals table may not exist yet */ }
+
     const lifecycleContext = `
 LIFECYCLE:
   Cycle number: ${cycleNumber}
   Has revenue: ${Number(hasRevenue.total) > 0}
   Has customers: ${Number(hasCustomers.total) > 0}
   Mode: ${modeHint}
+${waitlistLine ? waitlistLine + "\n" : ""}${capSummary}${evolverProposalsContext}
 ${proposal?.context ? `\nORIGINAL PROPOSAL:\n${JSON.stringify(proposal.context.proposal || proposal.context, null, 2)}` : ""}
 `;
 
@@ -1794,6 +1859,54 @@ CYCLE RESULTS:
       // Non-critical: if we can't parse the review, just continue
     }
 
+    // Merge capability updates from any agent output this cycle
+    for (const output of [engResult.output, growthResult.output, opsResult.output]) {
+      try {
+        const jsonMatch = output.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.capabilities_updated && typeof parsed.capabilities_updated === "object") {
+            const currentCaps = company.capabilities || {};
+            const merged = { ...currentCaps, ...parsed.capabilities_updated };
+            await sql`
+              UPDATE companies SET capabilities = ${JSON.stringify(merged)}::jsonb, last_assessed_at = NOW()
+              WHERE id = ${company.id}
+            `;
+            console.log(`    📋 Capabilities updated from agent output`);
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+
+    // Track playbook references from agent outputs
+    for (const output of [ceoPlan.output, ceoReview.output, engResult.output, growthResult.output]) {
+      try {
+        const jsonMatch = output.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed.playbook_references)) {
+            for (const ref of parsed.playbook_references) {
+              if (ref.playbook_id) {
+                await sql`
+                  UPDATE playbook SET last_referenced_at = NOW(), reference_count = reference_count + 1
+                  WHERE id = ${ref.playbook_id}
+                `;
+              }
+            }
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+
+    // Mark implemented evolver proposals
+    try {
+      await sql`
+        UPDATE evolver_proposals SET status = 'implemented', implemented_at = NOW()
+        WHERE status = 'approved'
+          AND (${company.slug} = ANY(affected_companies) OR cross_company = true)
+      `;
+    } catch { /* non-critical */ }
+
     await updateCycle(cycleId, { status: "completed", ceo_plan: ceoPlan.output, ceo_review: ceoReview.output });
 
     const duration = Math.round((Date.now() - companyStart) / 1000);
@@ -2029,6 +2142,61 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
     }
   } else if (!SCOUT_ONLY) {
     console.log(`\n🔧 Self-healing — ${recentErrors.length === 0 ? "no recent errors" : `skipped (${failedCount} failures this run, ${recentErrors.length} in 48h)`}`);
+  }
+
+  // === EVOLVER TRIGGER: Check if gap detection should run ===
+  // Conditions: error rate >30%, escalation clusters ≥3, stuck companies >14 days, 24h debounce
+  if (!SCOUT_ONLY && !DRY_RUN && !SINGLE_COMPANY) {
+    try {
+      const [evolverLastRun] = await sql`
+        SELECT finished_at FROM agent_actions
+        WHERE agent = 'evolver' AND action_type = 'gap_analysis' AND status = 'success'
+        ORDER BY finished_at DESC LIMIT 1
+      `;
+      const hoursSinceLastRun = evolverLastRun?.finished_at
+        ? (Date.now() - new Date(evolverLastRun.finished_at).getTime()) / 3600000
+        : 999;
+
+      if (hoursSinceLastRun > 24) {
+        const [errorStats] = await sql`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'failed') as failed,
+            COUNT(*) FILTER (WHERE status = 'escalated') as escalated,
+            COUNT(*) as total
+          FROM agent_actions WHERE started_at > now() - interval '48 hours'
+        `;
+        const errorRate = Number(errorStats.total) > 0 ? Number(errorStats.failed) / Number(errorStats.total) : 0;
+        const escalationCount = Number(errorStats.escalated);
+
+        const stuckCompanies = await sql`
+          SELECT c.slug FROM companies c
+          WHERE c.status IN ('mvp', 'active')
+          AND NOT EXISTS (
+            SELECT 1 FROM cycles WHERE company_id = c.id AND started_at > now() - interval '14 days'
+          )
+        `;
+
+        const shouldTrigger = errorRate > 0.3 || escalationCount >= 3 || stuckCompanies.length > 0;
+
+        if (shouldTrigger) {
+          console.log(`\n🧬 Evolver trigger detected — error rate: ${Math.round(errorRate * 100)}%, escalations: ${escalationCount}, stuck: ${stuckCompanies.length}`);
+          // Dispatch via GitHub Actions
+          const ghPat = await getSettingValueDirect("github_token");
+          if (ghPat) {
+            try {
+              await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+                method: "POST",
+                headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+                body: JSON.stringify({ event_type: "evolve_trigger", client_payload: { focus: "all" } }),
+              });
+              console.log("  ✓ Evolver workflow dispatched");
+            } catch (dispatchErr: any) {
+              console.log(`  ⚠ Evolver dispatch failed: ${dispatchErr.message}`);
+            }
+          }
+        }
+      }
+    } catch { /* non-critical */ }
   }
 
   // === VENTURE BRAIN: Portfolio-level analysis ===

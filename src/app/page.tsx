@@ -22,7 +22,8 @@ type Approval = {
 type PlaybookEntry = { id: string; domain: string; insight: string; confidence: number; applied_count: number; source_company: string | null };
 type Portfolio = {
   live_companies: number; total_companies: number; total_mrr: number;
-  total_revenue: number; total_customers: number; pending_approvals: number;
+  total_revenue: number; total_customers: number; total_waitlist: number;
+  pending_approvals: number;
   tokens_today: number; last_cycle_at: string | null;
 };
 type Todo = {
@@ -39,6 +40,12 @@ type Todo = {
 type Cycle = {
   id: string; cycle_number: number; status: string; ceo_plan: any; ceo_review: any;
   started_at: string; finished_at: string | null; company_id: string;
+};
+type EvolverProposal = {
+  id: string; gap_type: string; severity: string; title: string; diagnosis: string;
+  signal_source: string; signal_data: any; proposed_fix: any;
+  affected_companies: string[]; cross_company: boolean; status: string;
+  playbook_entry_id: string | null; created_at: string; notes: string | null;
 };
 
 // === HELPERS ===
@@ -150,6 +157,7 @@ export default function DashboardPage() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [playbook, setPlaybook] = useState<PlaybookEntry[]>([]);
   const [cycles, setCycles] = useState<Cycle[]>([]);
+  const [evolverProposals, setEvolverProposals] = useState<EvolverProposal[]>([]);
   const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence">("overview");
   const [activityFilter, setActivityFilter] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -170,6 +178,7 @@ export default function DashboardPage() {
     setApprovals(data.approvals);
     setPlaybook(data.playbook);
     setCycles(data.cycles);
+    setEvolverProposals(data.evolverProposals || []);
     setLoading(false);
     setLastRefresh(new Date());
 
@@ -230,11 +239,20 @@ export default function DashboardPage() {
     setTodos(prev => prev.filter(t => t.id !== todoId));
   };
 
+  const handleProposalDecision = async (id: string, decision: "approved" | "rejected" | "deferred") => {
+    const res = await fetch("/api/evolver", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, decision }),
+    });
+    if (res.ok) fetchAll();
+  };
+
   // Derived data
   const blockerCount = todos.filter(t => t.severity === "blocker").length;
   const ideas = approvals.filter(a => a.gate_type === "new_company");
   const otherApprovals = approvals.filter(a => a.gate_type !== "new_company");
-  const inboxCount = approvals.length + blockerCount;
+  const inboxCount = approvals.length + evolverProposals.length + blockerCount;
   const portfolioCompanies = companies.filter(c => ["mvp", "active", "provisioning", "approved"].includes(c.status));
   const liveCompanies = companies.filter(c => ["active", "mvp"].includes(c.status));
 
@@ -425,7 +443,7 @@ export default function DashboardPage() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
               {[
                 { label: "Portfolio MRR", value: fmtCurrency(portfolio.total_mrr) },
-                { label: "Total customers", value: String(portfolio.total_customers) },
+                { label: "Total customers", value: String(portfolio.total_customers), sub: portfolio.total_waitlist > 0 ? `${portfolio.total_waitlist} waitlist` : undefined },
                 { label: "Active companies", value: String(portfolio.live_companies), sub: `${portfolio.total_companies} total` },
                 { label: "Last cycle", value: portfolio.last_cycle_at ? timeAgo(portfolio.last_cycle_at) : "—", sub: "Runs on events" },
               ].map((m, i) => (
@@ -505,8 +523,8 @@ export default function DashboardPage() {
                             <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "var(--hive-mono)", color: (m?.mrr || 0) > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(m?.mrr || 0)}</div>
                           </div>
                           <div>
-                            <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em" }}>Customers</div>
-                            <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{m?.customers || 0}</div>
+                            <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em" }}>{(m?.customers || 0) > 0 ? "Customers" : (m?.waitlist_total || 0) > 0 ? "Waitlist" : "Customers"}</div>
+                            <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{(m?.customers || 0) > 0 ? m.customers : (m?.waitlist_total || 0) > 0 ? m.waitlist_total : 0}</div>
                           </div>
                           <div>
                             <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em" }}>Views</div>
@@ -583,7 +601,7 @@ export default function DashboardPage() {
       {/* ==================== INBOX TAB ==================== */}
       {activeTab === "inbox" && (
         <div className="animate-in">
-          {approvals.length === 0 ? (
+          {approvals.length === 0 && evolverProposals.length === 0 ? (
             <div style={{ padding: 64, textAlign: "center" }}>
               <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
               <div style={{ fontSize: 15, fontWeight: 500, color: "var(--hive-text)", marginBottom: 6 }}>Inbox clear</div>
@@ -639,6 +657,82 @@ export default function DashboardPage() {
                               borderRadius: 6, cursor: "pointer",
                               border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-tertiary)",
                             }}>Pass</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Evolver proposals */}
+              {evolverProposals.length > 0 && (
+                <div style={{ marginBottom: 32 }}>
+                  <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
+                    letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Evolver proposals</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {evolverProposals.map(p => {
+                      const severityColors: Record<string, { color: string; bg: string; border: string }> = {
+                        critical: { color: "var(--hive-red)", bg: "var(--hive-red-bg)", border: "var(--hive-red-border)" },
+                        high: { color: "var(--hive-amber)", bg: "var(--hive-amber-bg)", border: "var(--hive-amber-border)" },
+                        medium: { color: "var(--hive-blue)", bg: "var(--hive-blue-bg)", border: "var(--hive-blue-border)" },
+                        low: { color: "var(--hive-text-tertiary)", bg: "rgba(108,108,120,0.08)", border: "rgba(108,108,120,0.18)" },
+                      };
+                      const sc = severityColors[p.severity] || severityColors.medium;
+                      const gapLabels: Record<string, string> = { outcome: "Outcome gap", capability: "Capability gap", knowledge: "Knowledge gap", process: "Process gap" };
+                      return (
+                        <div key={p.id} style={{
+                          padding: 20, borderRadius: 10,
+                          background: "var(--hive-purple-bg)", border: "1px solid var(--hive-purple-border)",
+                        }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                            <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              padding: "2px 8px", borderRadius: 4, color: "var(--hive-purple)", background: "var(--hive-purple-bg)", border: "1px solid var(--hive-purple-border)" }}>
+                              {gapLabels[p.gap_type] || p.gap_type}
+                            </span>
+                            <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              padding: "2px 8px", borderRadius: 4, color: sc.color, background: sc.bg, border: `1px solid ${sc.border}` }}>
+                              {p.severity}
+                            </span>
+                            {p.cross_company && (
+                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                                padding: "2px 8px", borderRadius: 4, color: "var(--hive-text-tertiary)", background: "rgba(108,108,120,0.08)", border: "1px solid rgba(108,108,120,0.18)" }}>
+                                cross-company
+                              </span>
+                            )}
+                            <span style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", marginLeft: "auto" }}>{timeAgo(p.created_at)}</span>
+                          </div>
+                          <div style={{ fontSize: 14, fontWeight: 500, color: "var(--hive-text)", marginBottom: 4 }}>{p.title}</div>
+                          <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6, marginBottom: 10 }}>{p.diagnosis}</div>
+                          {p.proposed_fix && (
+                            <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", marginBottom: 14, padding: "8px 12px", borderRadius: 6, background: "rgba(108,108,120,0.06)" }}>
+                              <strong style={{ color: "var(--hive-text-secondary)" }}>Fix:</strong> {p.proposed_fix.change}
+                              {p.proposed_fix.expected_impact && (
+                                <span style={{ marginLeft: 8, color: "var(--hive-text-dim)" }}>({p.proposed_fix.expected_impact})</span>
+                              )}
+                            </div>
+                          )}
+                          {p.affected_companies?.length > 0 && (
+                            <div style={{ fontSize: 12, color: "var(--hive-text-dim)", marginBottom: 14 }}>
+                              Affects: {p.affected_companies.join(", ")}
+                            </div>
+                          )}
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button onClick={() => handleProposalDecision(p.id, "approved")} style={{
+                              padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              borderRadius: 6, cursor: "pointer",
+                              border: "1px solid var(--hive-green-border)", background: "var(--hive-green-bg)", color: "var(--hive-green)",
+                            }}>Approve</button>
+                            <button onClick={() => handleProposalDecision(p.id, "deferred")} style={{
+                              padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              borderRadius: 6, cursor: "pointer",
+                              border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-tertiary)",
+                            }}>Defer</button>
+                            <button onClick={() => handleProposalDecision(p.id, "rejected")} style={{
+                              padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              borderRadius: 6, cursor: "pointer",
+                              border: "1px solid var(--hive-red-border)", background: "var(--hive-red-bg)", color: "var(--hive-red)",
+                            }}>Reject</button>
                           </div>
                         </div>
                       );

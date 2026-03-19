@@ -245,6 +245,34 @@ export async function GET() {
     }
   }
 
+  // Pending evolver proposals with critical/high severity
+  try {
+    const criticalProposals = await sql`
+      SELECT id, title, severity, gap_type, created_at
+      FROM evolver_proposals
+      WHERE status = 'pending' AND severity IN ('critical', 'high')
+      ORDER BY CASE severity WHEN 'critical' THEN 0 ELSE 1 END, created_at ASC
+      LIMIT 5
+    `;
+
+    for (const p of criticalProposals) {
+      const id = `evolver:${p.id}`;
+      if (!dismissedIds.has(id)) {
+        todos.push({
+          id,
+          severity: p.severity === "critical" ? "blocker" : "warning",
+          category: "agent",
+          title: `Evolver: ${p.title}`,
+          detail: `${p.gap_type} gap detected. Review in the Inbox tab.`,
+          action_url: null,
+          action_label: null,
+          company_slug: null,
+          dismissable: false,
+        });
+      }
+    }
+  } catch { /* evolver_proposals table may not exist yet */ }
+
   // Deploy drift: is the latest main SHA deployed on Vercel?
   try {
     const vercelToken = await getSettingValue("vercel_token");

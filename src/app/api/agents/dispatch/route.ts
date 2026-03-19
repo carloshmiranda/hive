@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { capabilitiesSummary } from "@/lib/capabilities";
 
 // Agents that can run on Vercel serverless (Gemini/Groq HTTP calls only)
 const WORKER_AGENTS = ["growth", "outreach", "ops"] as const;
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
   try {
     // 1. Load company
     const [company] = await sql`
-      SELECT id, name, slug, status, description 
+      SELECT id, name, slug, status, description, capabilities, company_type, imported
       FROM companies WHERE slug = ${company_slug} AND status IN ('mvp', 'active')
     `;
     if (!company) return err(`Company ${company_slug} not found or not active`);
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
     const ceoPlan = latestCycle?.ceo_plan || "No CEO plan yet — use your best judgment.";
 
     const metrics = await sql`
-      SELECT date, revenue, mrr, customers, page_views, signups, churn_rate FROM metrics
+      SELECT date, revenue, mrr, customers, page_views, signups, churn_rate, waitlist_signups, waitlist_total FROM metrics
       WHERE company_id = ${company.id} AND date >= CURRENT_DATE - INTERVAL '7 days'
       ORDER BY date DESC LIMIT 20
     `;
@@ -110,7 +111,7 @@ DESCRIPTION: ${company.description || "N/A"}
 CEO PLAN: ${typeof ceoPlan === "string" ? ceoPlan : JSON.stringify(ceoPlan)}
 
 METRICS (last 7 days):
-${metrics.length > 0 ? metrics.map((m: any) => `${m.date}: MRR=${m.mrr || 0}, customers=${m.customers || 0}, pageviews=${m.page_views || 0}, signups=${m.signups || 0}`).join("\n") : "No metrics yet"}
+${metrics.length > 0 ? metrics.map((m: any) => `${m.date}: MRR=${m.mrr || 0}, customers=${m.customers || 0}, pageviews=${m.page_views || 0}, signups=${m.signups || 0}, waitlist=${m.waitlist_total || 0}(+${m.waitlist_signups || 0})`).join("\n") : "No metrics yet"}
 
 RESEARCH REPORTS:
 ${researchReports.map((r: any) => `[${r.report_type}] ${r.summary || "See content"}`).join("\n") || "None yet"}
@@ -118,7 +119,9 @@ ${researchReports.map((r: any) => `[${r.report_type}] ${r.summary || "See conten
 PLAYBOOK (cross-company learnings):
 ${playbook.map((p: any) => `[${p.domain}] ${p.insight} (confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
 
-TRIGGER: ${trigger || "scheduled"}`;
+TRIGGER: ${trigger || "scheduled"}
+
+${capabilitiesSummary(company.capabilities)}`;
 
     // 4. Add agent-specific context
     let fullPrompt = agentPrompt + "\n\n" + contextBlock;

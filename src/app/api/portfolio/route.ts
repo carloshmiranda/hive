@@ -19,7 +19,8 @@ export async function GET() {
     SELECT
       COALESCE(SUM(m.mrr), 0) as total_mrr,
       COALESCE(SUM(m.revenue), 0) as total_revenue,
-      COALESCE(SUM(m.customers), 0) as total_customers
+      COALESCE(SUM(m.customers), 0) as total_customers,
+      COALESCE(SUM(m.waitlist_total), 0) as total_waitlist
     FROM (
       SELECT DISTINCT ON (company_id) * FROM metrics ORDER BY company_id, date DESC
     ) m
@@ -45,6 +46,7 @@ export async function GET() {
     total_mrr: Number(revenue.total_mrr),
     total_revenue: Number(revenue.total_revenue),
     total_customers: Number(revenue.total_customers),
+    total_waitlist: Number(revenue.total_waitlist),
     pending_approvals: Number(pendingCount.count),
     tokens_today: Number(todayTokens.total),
     last_cycle_at: lastCycle?.started_at || null,

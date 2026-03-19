@@ -6,6 +6,8 @@ import Link from "next/link";
 type Company = {
   id: string; name: string; slug: string; description: string; status: string;
   vercel_url: string | null; created_at: string; killed_at: string | null; kill_reason: string | null;
+  capabilities: Record<string, any> | null; company_type: string | null; imported: boolean;
+  last_assessed_at: string | null;
 };
 type Cycle = {
   id: string; cycle_number: number; status: string; ceo_plan: any; ceo_review: any;
@@ -214,6 +216,80 @@ export default function CompanyDetailPage() {
                     <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
                     <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginTop: 2 }}>{m.label}</div>
                     <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>{latest.date}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Capabilities */}
+      {company && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: 0, fontWeight: 500 }}>Capabilities</h3>
+            {company.last_assessed_at && (
+              <span style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                assessed {timeAgo(company.last_assessed_at)}
+              </span>
+            )}
+            <button
+              onClick={async () => {
+                const res = await fetch(`/api/companies/${company?.id || slug}/assess`, { method: "POST" });
+                if (res.ok) fetchData();
+              }}
+              style={{ marginLeft: "auto", padding: "4px 12px", fontSize: 11, fontFamily: "var(--hive-mono)",
+                background: "var(--hive-surface)", border: "1px solid var(--hive-border)", borderRadius: 6,
+                color: "var(--hive-text-secondary)", cursor: "pointer" }}>
+              Re-assess
+            </button>
+          </div>
+          {(() => {
+            const caps = company.capabilities || {};
+            const capGroups: Record<string, string[]> = {
+              "Infra": ["database", "hosting", "repo"],
+              "Payment": ["stripe", "auth"],
+              "Email": ["email_provider", "email_sequences", "email_log", "resend_webhook"],
+              "Growth": ["waitlist", "referral_mechanics", "gsc_integration", "visibility_metrics"],
+              "SEO": ["indexnow", "llms_txt", "sitemap", "json_ld"],
+            };
+            if (Object.keys(caps).length === 0) {
+              return (
+                <div style={{ padding: 16, background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)",
+                  fontSize: 13, color: "var(--hive-text-tertiary)" }}>
+                  No capabilities assessed yet. Click &quot;Re-assess&quot; to scan.
+                </div>
+              );
+            }
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
+                {Object.entries(capGroups).map(([group, keys]) => (
+                  <div key={group} style={{ padding: "10px 12px", background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+                    <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", marginBottom: 6 }}>{group}</div>
+                    {keys.map(key => {
+                      const cap = caps[key] as Record<string, any> | undefined;
+                      const exists = cap?.exists === true;
+                      const configured = cap?.configured;
+                      const makesSense = cap?.makes_sense;
+                      const dotColor = makesSense === false ? "var(--hive-text-dim)" :
+                                      exists && configured === true ? "var(--hive-green)" :
+                                      exists && configured === false ? "var(--hive-amber)" :
+                                      exists ? "var(--hive-green)" : "var(--hive-text-dim)";
+                      return (
+                        <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}
+                          title={makesSense === false ? `N/A: ${cap?.reason || "not applicable"}` :
+                                configured === false ? "Exists but not configured" :
+                                exists ? "Active" : "Not present"}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: dotColor, flexShrink: 0,
+                            textDecoration: makesSense === false ? "line-through" : "none" }} />
+                          <span style={{ fontSize: 12, color: makesSense === false ? "var(--hive-text-dim)" : "var(--hive-text-secondary)",
+                            textDecoration: makesSense === false ? "line-through" : "none" }}>
+                            {key.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 ))}
               </div>

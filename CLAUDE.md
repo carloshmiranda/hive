@@ -527,9 +527,9 @@ hive/
 │       ├── package.json
 │       ├── tsconfig.json
 │       ├── next.config.mjs
-│       ├── schema.sql
+│       ├── schema.sql       ← customers + waitlist + email_sequences + email_log
 │       ├── .env.example
-│       └── src/app/        ← landing page, checkout, success, webhook
+│       └── src/app/        ← landing page (LAUNCH_MODE), checkout, success, webhooks (Stripe + Resend), waitlist API
 ├── prompts/                ← agent system prompts (TBD, using defaults)
 └── com.hive.orchestrator.plist  ← macOS LaunchAgent
 ```

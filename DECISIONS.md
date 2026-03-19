@@ -184,3 +184,50 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Google Analytics only: no keyword-level data (GA4 hides search queries)
 - Skip LLM tracking entirely: miss the growing AI answer engine channel
 **Consequences:** Growth decisions are data-driven. Content targets proven opportunities (striking distance, low CTR) instead of guessing. LLM visibility tracked from day one. All free APIs — €0 additional cost. GSC requires service account setup per company property. LLM citation checks add ~25s to Growth dispatch (10 keywords × 2s rate limit + overhead).
+
+### ADR-016: Waitlist-first launch with Growth-owned email lifecycle
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** New companies launched directly to checkout with no audience. First cycles had zero traffic and zero chance of conversion. Meanwhile, the Growth agent had no email infrastructure — transactional emails existed but no lifecycle sequences (welcome drips, waitlist updates, win-back).
+**Decision:** Every new company starts in waitlist mode (LAUNCH_MODE=waitlist). Landing page collects emails with referral mechanics (unique codes, position tracking, source attribution). Growth agent owns ALL email sequences via the `email_sequences` table — structured data with subject, body, delay, A/B variants, and open/click/bounce counters fed by Resend webhooks. CEO monitors waitlist growth in build mode and transitions to early_access when demand is validated (50+ signups). Provisioner seeds default email sequences (waitlist_welcome, onboarding_d1/d3/d7) at company creation. Hive metrics table extended with waitlist_signups, waitlist_total, email_opens, email_clicks, email_bounces.
+**Alternatives considered:**
+- Skip waitlist, launch directly: no audience, no demand signal, cold start problem
+- External waitlist tool (Waitlist.me, LaunchDarkly): adds dependency, costs money, data not in our DB
+- Marketing agent owns email: Growth already does content and SEO — email is part of the same funnel, not a separate concern
+**Consequences:** Companies launch with built-in audience building. Growth has a feedback loop on email quality (open/click rates). CEO can make data-driven launch timing decisions based on waitlist size. Referral mechanics create organic growth before the product even ships. Email sequences are A/B testable from day one. Resend free tier (100/day) is sufficient for early waitlists.
+
+### ADR-018: Company Capability Inventory for infrastructure-aware agent behavior
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** Hive agents assumed every company was scaffolded from the latest boilerplate. This broke for three scenarios: (1) boilerplate drift — companies provisioned before new features were added, (2) imported companies that weren't built by Hive, (3) partial boilerplate where Engineer customised and removed things. Agents would reference tables that didn't exist, Evolver would propose fixes for infrastructure that was absent, and Growth would try to write email sequences to non-existent tables.
+**Decision:** Add a `capabilities` JSONB column to the companies table storing a structured inventory of what infrastructure, integrations, and features actually exist. Populated on provisioning (full inventory), on import (minimal, needs assessment), and updated by Ops during health checks. Every agent checks capabilities before acting on optional infrastructure. A compatibility matrix prevents proposing features that don't make sense for a given company type/stage (e.g., waitlist for a company with existing customers, referral mechanics for B2B SaaS). A new `/api/companies/[id]/assess` endpoint inspects the company's database schema, Vercel env vars, and repo files to build the inventory automatically.
+**Key design choices:**
+- Missing keys treated as `{ exists: false }` — no agent errors on unknown capabilities
+- Agents skip unsupported features gracefully, reporting `missing_capabilities` in output
+- Assessment is idempotent and safe to re-run
+- `company_type` column enables compatibility matrix decisions
+- `imported` flag distinguishes Hive-provisioned vs brought-in companies
+- Ops flags stale inventories (>14 days) for re-assessment
+**Alternatives considered:**
+- Hardcode assumptions per company: doesn't scale, breaks on boilerplate updates
+- Feature flags in env vars: scattered, no visibility, no compatibility logic
+- Skip the problem: agents crash on missing tables, poor experience for imported companies
+**Consequences:** Agents never reference infrastructure that doesn't exist. Imported companies are first-class citizens. Boilerplate drift is handled gracefully — old companies get new features only when assessed and approved. The capability inventory becomes the single source of truth for what a company can do.
+
+### ADR-017: Evolver as Reflector-Curator with structured gap detection
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** The Evolver agent was a vague "prompt improver" that ran weekly and only looked at agent success rates to propose prompt changes. This missed the bigger picture: outcome gaps (metrics declining), capability gaps (infrastructure missing), and knowledge gaps (playbook holes). The old approach was too narrow — better prompts don't fix missing API keys or empty playbooks.
+**Decision:** Rewrite Evolver as a three-layer gap detection system. Layer 1 (outcome): agent success rates + cycle score trends. Layer 2 (capability): escalation clusters, repeated failures, missing infrastructure from capability inventories. Layer 3 (knowledge): playbook coverage gaps, unreferenced entries, missing domains. Proposals are structured (gap_type, severity, diagnosis, proposed_fix) and stored in `evolver_proposals` table. They appear in the dashboard Inbox with approve/reject/defer. Prompt evolution is now a subset — one proposal type among many. Triggers: weekly schedule + event-driven (error rate >30%, escalation clusters ≥3, stuck companies >14 days) with 24h debounce. Playbook reference tracking added (last_referenced_at, reference_count) to measure knowledge utilization.
+**Key design choices:**
+- Proposals are never auto-implemented — all go through Inbox approval
+- Max 5 proposals per run (quality over quantity)
+- Deduplication: check existing pending/deferred proposals before creating new ones
+- Cross-company flag for proposals that benefit multiple companies
+- Approved proposals injected into agent context in next cycle
+- Proposals auto-marked as implemented after the affected company's next cycle
+**Alternatives considered:**
+- Keep prompt-only evolution: too narrow, misses infrastructure and knowledge gaps
+- Auto-implement fixes: too risky, Carlos should review structural changes
+- Separate agents for each gap type: over-engineered, one agent with three layers is simpler
+**Consequences:** Evolver becomes the system's self-awareness layer. It detects problems across all three dimensions and proposes specific, evidence-backed fixes. Playbook utilization becomes measurable. The Inbox becomes the single review surface for all improvement proposals.

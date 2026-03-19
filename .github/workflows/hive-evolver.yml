@@ -1,16 +1,19 @@
 name: Hive Evolver
 
 on:
+  schedule:
+    - cron: '0 3 * * 3'  # Wednesdays at 3am UTC
+
   repository_dispatch:
     types:
       - evolve_trigger
 
   workflow_dispatch:
     inputs:
-      agent:
-        description: 'Specific agent to evolve (leave empty for all underperformers)'
+      focus:
+        description: 'Focus area: all, outcome, capability, knowledge (default: all)'
         required: false
-        default: ''
+        default: 'all'
 
 permissions:
   contents: write
@@ -23,7 +26,7 @@ env:
 jobs:
   evolver:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -34,28 +37,85 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--model claude-opus-4-20250514 --max-turns 15"
+          claude_args: "--model claude-opus-4-20250514 --max-turns 20"
           prompt: |
-            You are the Evolver agent of Hive. You analyze agent performance and improve prompts.
+            You are the Evolver agent of Hive. Read prompts/evolver.md for your full role description.
 
-            TARGET_AGENT: ${{ github.event.inputs.agent || github.event.client_payload.target_agent || 'all' }}
+            FOCUS: ${{ github.event.inputs.focus || github.event.client_payload.focus || 'all' }}
+            TRIGGER: ${{ github.event_name }} (${{ github.event.action || 'scheduled' }})
 
-            Read BRIEFING.md for context.
+            Read BRIEFING.md for current state context.
 
-            1. Query Neon for agent_actions from the last 14 days
-            2. Calculate success rate per agent: success / (success + failed)
-            3. For agents with < 70% success rate OR > 30 days since last prompt update:
-               a. Analyze failure patterns (common errors, missed outputs)
-               b. Read current active prompt from agent_prompts table
-               c. Generate an improved prompt addressing the failure patterns
-               d. Store new version in agent_prompts (is_active = false)
-               e. Create an approval gate (gate_type: 'prompt_upgrade')
-            4. Output JSON: { "agents_analyzed": N, "prompts_proposed": N, "details": [...] }
+            Connect to the Neon database using DATABASE_URL and perform your three-layer gap detection:
+
+            1. OUTCOME GAPS — Query agent_actions (last 14 days):
+               ```sql
+               SELECT agent,
+                 COUNT(*) FILTER (WHERE status = 'success') as successes,
+                 COUNT(*) FILTER (WHERE status = 'failed') as failures,
+                 COUNT(*) as total
+               FROM agent_actions
+               WHERE started_at > now() - interval '14 days'
+               GROUP BY agent
+               ```
+               Also query cycle scores:
+               ```sql
+               SELECT c.company_id, co.slug, c.cycle_number, c.ceo_review->>'score' as score
+               FROM cycles c JOIN companies co ON co.id = c.company_id
+               WHERE c.started_at > now() - interval '30 days'
+               ORDER BY c.company_id, c.cycle_number DESC
+               ```
+
+            2. CAPABILITY GAPS — Query escalations and repeated failures:
+               ```sql
+               SELECT agent, error, COUNT(*) as occurrences
+               FROM agent_actions
+               WHERE status = 'failed' AND started_at > now() - interval '14 days'
+               GROUP BY agent, error
+               HAVING COUNT(*) >= 3
+               ```
+               Also check company capabilities:
+               ```sql
+               SELECT slug, capabilities, company_type FROM companies WHERE status IN ('mvp', 'active')
+               ```
+
+            3. KNOWLEDGE GAPS — Query playbook coverage:
+               ```sql
+               SELECT domain, COUNT(*) as entries, AVG(confidence) as avg_confidence,
+                 SUM(CASE WHEN reference_count = 0 AND created_at < now() - interval '14 days' THEN 1 ELSE 0 END) as unreferenced
+               FROM playbook WHERE superseded_by IS NULL
+               GROUP BY domain
+               ```
+
+            4. CHECK FOR DUPLICATES — Before creating proposals:
+               ```sql
+               SELECT id, title, status FROM evolver_proposals WHERE status IN ('pending', 'deferred')
+               ```
+
+            5. WRITE PROPOSALS to evolver_proposals table (max 5):
+               ```sql
+               INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, signal_data, proposed_fix, affected_companies, cross_company)
+               VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::text[], $9)
+               ```
+
+            6. UPDATE PLAYBOOK REFERENCES — For any playbook entries you consulted:
+               ```sql
+               UPDATE playbook SET last_referenced_at = NOW(), reference_count = reference_count + 1 WHERE id = $1
+               ```
+
+            7. LOG your analysis to agent_actions:
+               ```sql
+               INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
+               VALUES ('evolver', 'gap_analysis', $1, 'success', $2::jsonb, $3, NOW())
+               ```
+
+            8. Output your full JSON analysis (see prompts/evolver.md for format).
 
             RULES:
-            - Never auto-activate a new prompt. Always create an approval gate.
-            - Include before/after diff in the approval description.
-            - Log everything to agent_actions.
+            - Never auto-implement. Every proposal goes through approval.
+            - Include concrete evidence in signal_data.
+            - Max 5 proposals per run. Quality over quantity.
+            - Check for existing pending/deferred proposals to avoid duplicates.
+            - If prompt evolution is needed, store new version in agent_prompts (is_active = false).
 
       # Evolver is a terminal node — no chain dispatch needed.
-      # Prompt upgrades go through approval gates, not agent chains.

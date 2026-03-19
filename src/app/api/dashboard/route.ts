@@ -20,7 +20,7 @@ export async function GET(req: Request) {
 }
 
 async function mainDashboard(sql: ReturnType<typeof getDb>) {
-  const [counts, revenue, pendingCount, todayTokens, lastCycle, companies, actions, approvals, playbook, cycles] =
+  const [counts, revenue, pendingCount, todayTokens, lastCycle, companies, actions, approvals, playbook, cycles, evolverProposals] =
     await Promise.all([
       sql`
         SELECT
@@ -85,6 +85,15 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
         FROM cycles c JOIN companies co ON co.id = c.company_id
         ORDER BY c.started_at DESC LIMIT 20
       `,
+      // Evolver proposals (pending)
+      sql`
+        SELECT * FROM evolver_proposals
+        WHERE status = 'pending'
+        ORDER BY
+          CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
+          created_at DESC
+        LIMIT 20
+      `.catch(() => []),
     ]);
 
   return json({
@@ -104,6 +113,7 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
     approvals,
     playbook,
     cycles,
+    evolverProposals,
   });
 }
 

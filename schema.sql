@@ -24,6 +24,10 @@ CREATE TABLE companies (
   neon_project_id     TEXT,       -- company's own Neon project
   stripe_account_id   TEXT,       -- Stripe Connect connected account
   domain              TEXT,       -- custom domain (null = vercel subdomain)
+  capabilities  JSONB DEFAULT '{}',              -- structured capability inventory
+  company_type  TEXT DEFAULT 'b2c_saas',         -- for compatibility matrix
+  imported      BOOLEAN DEFAULT false,           -- true for non-Hive-provisioned companies
+  last_assessed_at TIMESTAMPTZ,                  -- when capabilities were last verified
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   killed_at     TIMESTAMPTZ,
@@ -112,6 +116,11 @@ CREATE TABLE metrics (
   emails_sent   INTEGER DEFAULT 0,
   social_posts  INTEGER DEFAULT 0,
   social_engagement INTEGER DEFAULT 0,         -- likes + replies + shares
+  waitlist_signups  INTEGER DEFAULT 0,          -- new waitlist signups today
+  waitlist_total    INTEGER DEFAULT 0,          -- total waitlist size
+  email_opens       INTEGER DEFAULT 0,
+  email_clicks      INTEGER DEFAULT 0,
+  email_bounces     INTEGER DEFAULT 0,
   UNIQUE(company_id, date)
 );
 
@@ -125,7 +134,9 @@ CREATE TABLE playbook (
   confidence    NUMERIC(3,2) DEFAULT 0.5 CHECK (confidence BETWEEN 0 AND 1),
   applied_count INTEGER DEFAULT 0, -- how many times other agents used this
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  superseded_by TEXT REFERENCES playbook(id) -- if a newer insight replaces this
+  superseded_by TEXT REFERENCES playbook(id), -- if a newer insight replaces this
+  last_referenced_at TIMESTAMPTZ,
+  reference_count INTEGER DEFAULT 0
 );
 
 -- Agent prompts: versioned system prompts (for Prompt Evolver)
@@ -287,6 +298,29 @@ CREATE TABLE IF NOT EXISTS dismissed_todos (
   todo_id     TEXT PRIMARY KEY,
   dismissed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Evolver proposals: structured gap detection results that appear in the Inbox
+CREATE TABLE IF NOT EXISTS evolver_proposals (
+  id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  gap_type        TEXT NOT NULL CHECK (gap_type IN ('outcome', 'capability', 'knowledge', 'process')),
+  severity        TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+  title           TEXT NOT NULL,
+  diagnosis       TEXT NOT NULL,
+  signal_source   TEXT NOT NULL,
+  signal_data     JSONB DEFAULT '{}',
+  proposed_fix    JSONB NOT NULL,
+  affected_companies TEXT[] DEFAULT '{}',
+  cross_company   BOOLEAN DEFAULT false,
+  status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'implemented', 'deferred')),
+  playbook_entry_id TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reviewed_at     TIMESTAMPTZ,
+  implemented_at  TIMESTAMPTZ,
+  notes           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_evolver_proposals_status ON evolver_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_evolver_proposals_gap_type ON evolver_proposals(gap_type);
 
 -- Context log: tracks decisions, learnings, and context from all tools
 -- Sources: 'chat' (Claude Chat), 'code' (Claude Code), 'orch' (orchestrator), 'carlos' (manual)

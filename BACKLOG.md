@@ -36,6 +36,15 @@ Audit all cycle triggers and remove calendar-based cadences. Evolver should run 
 
 ## Future Vision
 
+### 🟢 P2 — Automatic boilerplate migration for existing companies
+When the boilerplate gains a new feature (new table, new route), detect which existing companies are missing it and auto-generate migration PRs. Gated by compatibility matrix — only propose migrations for features that make sense for the company. Requires capability inventory (ADR-018).
+
+### 🟢 P2 — Stack detection for imported companies
+Extend the assessment endpoint to detect non-Next.js stacks: check for remix.config, astro.config, nuxt.config, etc. Detect non-Neon databases (Supabase, PlanetScale) from DATABASE_URL patterns. Detect non-Resend email providers from env var names.
+
+### 🟢 P3 — Capability diff alerting
+When an assessment shows a capability regression (something that existed now doesn't), create an automatic escalation. Catches cases where a deploy accidentally removed a webhook route or a migration dropped a table.
+
 ### ⚪ P3 — Cloud migration
 Move the intelligence layer from Mac to cloud. Swap `dispatch()` from `claude -p` to Claude Agent SDK `query()`. Run on GitHub Actions or a VPS. The abstraction layer is already designed for this.
 
@@ -145,3 +154,9 @@ Google Search Console API client (`src/lib/gsc.ts`) with JWT service account aut
 
 ### ✅ 2026-03-19 — llms.txt and structured data in boilerplate
 `public/llms.txt`, `public/robots.txt` (AI crawler allows), `src/app/sitemap.ts`, JSON-LD Organization + WebSite structured data in layout.tsx. All template-variable driven for auto-provisioning.
+
+### ✅ 2026-03-19 — Company capability inventory (ADR-018)
+`capabilities` JSONB on companies table. Assessment endpoint scans DB tables, Vercel env vars, repo files. All agents capability-aware — skip missing features, report gaps. Compatibility matrix gates proposals. Dashboard shows capabilities grid with re-assess button. Migration 007.
+
+### ✅ 2026-03-19 — Waitlist system + email lifecycle framework (ADR-016)
+Waitlist-first launch: boilerplate schema (waitlist + email_sequences + email_log), API with referral mechanics, Resend webhook for email tracking, LAUNCH_MODE-driven landing page (waitlist/early_access/live). Growth owns all email sequences with A/B testing and open/click tracking. CEO monitors waitlist in build mode. Provisioner seeds default sequences. Hive metrics extended (migration 006).
