@@ -91,3 +91,10 @@
 **Fix applied:** Middleware now excludes: `api/webhooks`, `api/cron`, `api/health`. GitHub webhook got HMAC-SHA256 signature verification as its own auth layer.
 **Prevention:** Every time a new public endpoint is added, check the middleware matcher. Webhooks and crons ALWAYS need their own auth mechanism (signature verification, bearer token) — they can never rely on session auth.
 **Affects:** webhooks, cron, health endpoint
+
+### 2026-03-19 Pre-flight CLI check used require() in ESM
+**What happened:** First automated midnight run. Pre-flight passed DB check but "Claude CLI not reachable" — run aborted. Additionally, `KeepAlive` in the plist caused launchd to restart the crashed process 3+ times, filling stderr with repeated TS compile errors from a stale cached version.
+**Root cause:** Pre-flight used `require("child_process")` which fails in ESM context (the rest of orchestrator.ts uses ESM imports). The KeepAlive with `SuccessfulExit=false` made launchd retry every crash immediately.
+**Fix applied:** Replaced `require()` with spawn-based async CLI check. Removed KeepAlive from plist — orchestrator runs once at midnight, errors are self-healed next cycle.
+**Prevention:** Never use `require()` in orchestrator.ts — it runs as ESM. All Node built-ins must use `import` or dynamic `await import()`. For launchd, prefer `StartCalendarInterval` alone — don't combine with KeepAlive unless the process is meant to be a daemon.
+**Affects:** orchestrator, launchd
