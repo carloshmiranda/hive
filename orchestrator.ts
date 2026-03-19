@@ -50,6 +50,20 @@ interface DispatchOptions {
   agent?: string;            // used for auto-routing
 }
 
+// Import report — generated after each project import for Carlos's awareness
+interface ImportReport {
+  company: string;
+  slug: string;
+  phases_completed: string[];
+  content_absorbed: { guides: number; tools: number; pages: number; total_content_items: number };
+  queue_items_absorbed: { directives_created: number; approvals_created: number; items: Array<{ file: string; type: string; title: string; priority: string }> };
+  legacy_agents_found: Array<{ name: string; file: string; session_count: number }>;
+  playbook_entries_created: number;
+  manual_actions_required: Array<{ title: string; detail: string; priority: string; source: string }>;
+  recommendations: string[];
+  warnings: string[];
+}
+
 // Agent → Provider mapping
 const AGENT_PROVIDER: Record<string, Provider> = {
   // Brain tier — Claude (strategic decisions, tool use, web search, code execution)
@@ -114,10 +128,9 @@ async function dispatchClaude(opts: DispatchOptions): Promise<string> {
   if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
   const timeout = opts.timeoutMs || 5 * 60 * 1000;
 
-  const spawnOpts: any = { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] };
-  if (opts.cwd) spawnOpts.cwd = opts.cwd;
-
   return new Promise((resolve, reject) => {
+    const spawnOpts: any = { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] };
+    if (opts.cwd) spawnOpts.cwd = opts.cwd;
     const proc = spawn("claude", args, spawnOpts);
     let stdout = "", stderr = "", killed = false;
     proc.stdout.on("data", (c: Buffer) => { stdout += c.toString(); });
@@ -399,8 +412,8 @@ INSTRUCTIONS FOR THIS RETRY:
       const output = await dispatch({
         prompt: fullPrompt,
         cwd: opts.cwd,
-        agent: opts.agent, // routes to correct provider (claude/gemini/groq)
         allowedTools: opts.allowedTools,
+        agent: opts.agent, // routes to correct provider (claude/gemini/groq)
         maxTurns: attempt === 1 ? 10 : 15,
         timeoutMs: attempt === 1 ? 5 * 60 * 1000 : 8 * 60 * 1000,
       });
@@ -637,11 +650,12 @@ IMPORTANT: The "proposals" array MUST contain exactly 3 items.
 At least 1 must have "market": "Portugal".
 At least 1 must have "market": "Global".
 Order them by your confidence score, highest first.`,
+      allowedTools: ["WebSearch", "WebFetch"],
       maxTurns: 30, // more turns for broader research
       timeoutMs: 20 * 60 * 1000, // 20 min — researching 3 ideas takes longer
-      allowedTools: ["WebSearch", "WebFetch"],
     });
 
+    // Debug logging for Idea Scout output
     console.log(`    Output length: ${ideaScoutOutput.length}`);
     console.log(`    Raw preview: ${ideaScoutOutput.slice(0, 300)}`);
 
@@ -774,7 +788,8 @@ Order them by your confidence score, highest first.`,
       // Gather cross-company learnings to inject into the new company's CLAUDE.md
       const playbookEntries = await sql`
         SELECT p.domain, p.insight, c.slug as source_company, p.confidence
-        FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id WHERE p.superseded_by IS NULL AND p.confidence >= 0.6
+        FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id
+        WHERE p.superseded_by IS NULL AND p.confidence >= 0.6
         ORDER BY p.confidence DESC LIMIT 30
       `;
       const playbookSection = playbookEntries.length > 0
@@ -854,9 +869,24 @@ Report what was created and any issues encountered.`,
       await sql`UPDATE imports SET onboard_status = 'in_progress' WHERE id = ${imp.id}`;
 
       const scanReport = imp.scan_report || {};
+      const companyCwd = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
+      const importReport: ImportReport = {
+        company: imp.name,
+        slug: imp.slug,
+        phases_completed: [],
+        content_absorbed: { guides: 0, tools: 0, pages: 0, total_content_items: 0 },
+        queue_items_absorbed: { directives_created: 0, approvals_created: 0, items: [] },
+        legacy_agents_found: [],
+        playbook_entries_created: 0,
+        manual_actions_required: [],
+        recommendations: [],
+        warnings: [],
+      };
 
-      await dispatch({
-        prompt: `You are the Onboarding agent. An existing project is being imported into Hive.
+      // === Phase 1: Infrastructure hookup ===
+      try {
+        await dispatch({
+          prompt: `You are the Onboarding agent. An existing project is being imported into Hive.
 
 Project: ${imp.name} (${imp.slug})
 Git URL: ${imp.git_url}
@@ -868,49 +898,444 @@ Tasks:
 3. Update the company record with: vercel_url, description, any detected metrics
 4. Set up any missing Hive integrations (Stripe tags, webhooks, etc.)
 5. Report what you found and what you set up.`,
-        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
-      });
+          cwd: companyCwd,
+        });
+        importReport.phases_completed.push("infrastructure");
+        console.log(`  ├─ ✓ Phase 1: Infrastructure hookup`);
+      } catch (e: any) {
+        console.log(`  ├─ ⚠ Phase 1 failed: ${e.message.slice(0, 80)}`);
+        importReport.warnings.push(`Phase 1 (infrastructure) failed: ${e.message.slice(0, 200)}`);
+      }
 
-      // Phase 2: Pattern extraction
-      console.log(`  ├─ Extracting patterns from ${imp.name}...`);
-      await dispatch({
-        prompt: `You are the Pattern Extraction agent. Analyze this imported codebase to find reusable learnings.
+      // === Phase 2: Pattern extraction (via Claude) ===
+      try {
+        console.log(`  ├─ Extracting patterns from ${imp.name}...`);
+        await dispatch({
+          prompt: `You are the Pattern Extraction agent. Analyze this imported codebase to find reusable learnings.
 
 Project: ${imp.name} (${imp.slug})
 Scan Report: ${JSON.stringify(scanReport, null, 2)}
 
 Read the actual code and extract patterns that would benefit other Hive companies.
-Look for:
-
-1. CHECKOUT/PRICING: How does this project handle payments? What's the pricing model?
-   Write playbook entries under domain "pricing" or "payments".
-
-2. EMAIL/COMMS: Are there email templates, drip sequences, notification patterns?
-   Write playbook entries under domain "email_marketing".
-
-3. ONBOARDING: How does the product onboard new users? What's the activation flow?
-   Write playbook entries under domain "onboarding".
-
-4. SEO/GROWTH: Meta tags, sitemap, social cards, content strategy, analytics setup?
-   Write playbook entries under domain "seo" or "growth".
-
-5. TECH PATTERNS: Auth setup, API design, cron jobs, deployment config, error handling?
-   Write playbook entries under domain "engineering".
+Look for: checkout/pricing patterns, email templates, onboarding flows, SEO structure, tech patterns.
 
 For each pattern, write to the playbook table via the Hive API:
-POST /api/playbook with { domain, insight, source_company, confidence }
+POST ${HIVE_API}/playbook with { domain, insight, source_company_id: "${imp.company_id}", confidence }
 
-Confidence guide:
-- 0.8-1.0: proven pattern with measurable results
-- 0.5-0.7 : reasonable pattern, untested at scale
+Confidence: 0.8-1.0 = proven with results, 0.5-0.7 = reasonable but untested.`,
+          cwd: companyCwd,
+        });
+        importReport.phases_completed.push("pattern_extraction");
+        console.log(`  ├─ ✓ Phase 2: Pattern extraction`);
+      } catch (e: any) {
+        console.log(`  ├─ ⚠ Phase 2 failed: ${e.message.slice(0, 80)}`);
+        importReport.warnings.push(`Phase 2 (pattern extraction) failed: ${e.message.slice(0, 200)}`);
+      }
 
-If you find patterns that should update the Hive boilerplate, create a directive via:
-POST /api/directives with { text: "hive: [suggestion]" }`,
-        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
-      });
+      // === Phase 3: Knowledge assimilation (MD files + Claude memory) ===
+      try {
+        console.log(`  ├─ Assimilating institutional knowledge...`);
+        const mdFiles: string[] = [];
+        const claudeMemDir = join(process.env.HOME || "", `.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`);
 
+        for (const fname of ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md", "PROGRESS.md"]) {
+          const fpath = join(companyCwd, fname);
+          if (existsSync(fpath)) {
+            const content = readFileSync(fpath, "utf-8");
+            if (content.trim()) mdFiles.push(`=== ${fname} ===\n${content.slice(0, 3000)}`);
+          }
+        }
+
+        if (existsSync(claudeMemDir)) {
+          try {
+            const { readdirSync } = await import("fs");
+            for (const f of readdirSync(claudeMemDir).filter(f => f.endsWith(".md"))) {
+              const content = readFileSync(join(claudeMemDir, f), "utf-8");
+              if (content.trim()) mdFiles.push(`=== claude-memory/${f} ===\n${content.slice(0, 1500)}`);
+            }
+          } catch {}
+        }
+
+        if (mdFiles.length > 0) {
+          const hivePlaybook = await getPlaybook();
+          await dispatch({
+            agent: "ceo",
+            prompt: `You are assimilating knowledge from an imported company into Hive.
+
+## Source: ${imp.name} (${imp.slug})
+${mdFiles.join("\n\n")}
+
+## Hive's current playbook (top 20):
+${hivePlaybook.map((p: any) => `- [${p.domain}] ${p.insight}`).join("\n") || "Empty"}
+
+Compare the imported company's knowledge against Hive's existing knowledge.
+For each NEW learning (not already captured), write to playbook via API.
+Do NOT duplicate what Hive already knows. Only add genuinely new insights.
+Output a brief summary of what was assimilated.`,
+            timeoutMs: 5 * 60 * 1000,
+          });
+          console.log(`    ✓ Assimilated from ${mdFiles.length} knowledge files`);
+        }
+        importReport.phases_completed.push("knowledge_assimilation");
+      } catch (e: any) {
+        console.log(`  ├─ ⚠ Phase 3 failed: ${e.message.slice(0, 80)}`);
+        importReport.warnings.push(`Phase 3 (knowledge assimilation) failed: ${e.message.slice(0, 200)}`);
+      }
+
+      // === Phase 4: Legacy agent absorption (direct file parsing, no Claude needed) ===
+      console.log(`  ├─ Absorbing legacy agent state...`);
+      try {
+        const { readdirSync } = await import("fs");
+
+        // 4a: Absorb agent queue items → Hive directives + approval gates
+        const queueDir = join(companyCwd, ".github", "agent-queue");
+        if (existsSync(queueDir)) {
+          const queueFiles = readdirSync(queueDir).filter(f => f.endsWith(".json"));
+          console.log(`    📋 Found ${queueFiles.length} legacy queue items`);
+
+          for (const file of queueFiles) {
+            try {
+              const raw = readFileSync(join(queueDir, file), "utf-8");
+              const item = JSON.parse(raw);
+
+              // Determine if this is a Carlos action or an agent task
+              const isCarlosAction = item.needs_carlos === true || 
+                item.type === "needs_carlos" ||
+                item.assigned_to === "carlos" ||
+                file.startsWith("carlos-");
+              const title = item.title || item.detail || item.description || file.replace(".json", "").replace(/-/g, " ");
+              const detail = item.detail || item.description || item.context || JSON.stringify(item, null, 2);
+              const priority = item.priority || "medium";
+
+              if (isCarlosAction) {
+                // Manual tasks → approval gates so they show in the dashboard
+                await sql`
+                  INSERT INTO approvals (company_id, gate_type, title, description, context)
+                  VALUES (
+                    ${imp.company_id}, 'escalation',
+                    ${`[Import] ${title}`},
+                    ${`**From legacy agent queue (${file}):**\n\n${typeof detail === "string" ? detail : JSON.stringify(detail, null, 2)}\n\n**Priority:** ${priority}\n**Source:** Legacy agent system, absorbed during Hive import`},
+                    ${JSON.stringify({ source: "legacy_import", file, priority, original: item })}
+                  )
+                `;
+                importReport.queue_items_absorbed.approvals_created++;
+                importReport.queue_items_absorbed.items.push({ file, type: "approval", title, priority });
+                importReport.manual_actions_required.push({
+                  title,
+                  detail: typeof detail === "string" ? detail.slice(0, 300) : title,
+                  priority,
+                  source: file,
+                });
+              } else {
+                // Agent tasks → directives (CEO picks them up next cycle)
+                await sql`
+                  INSERT INTO directives (company_id, text, status)
+                  VALUES (
+                    ${imp.company_id},
+                    ${`[legacy-import] ${title}: ${typeof detail === "string" ? detail.slice(0, 500) : JSON.stringify(detail).slice(0, 500)}`},
+                    'open'
+                  )
+                `;
+                importReport.queue_items_absorbed.directives_created++;
+                importReport.queue_items_absorbed.items.push({ file, type: "directive", title, priority });
+              }
+            } catch (parseErr: any) {
+              console.log(`      ⚠ Failed to parse ${file}: ${parseErr.message.slice(0, 60)}`);
+              importReport.warnings.push(`Failed to parse queue item ${file}: ${parseErr.message.slice(0, 100)}`);
+            }
+          }
+          console.log(`    ✓ Absorbed: ${importReport.queue_items_absorbed.directives_created} directives, ${importReport.queue_items_absorbed.approvals_created} approval gates`);
+        } else {
+          console.log(`    ⓘ No .github/agent-queue/ found`);
+        }
+
+        // 4b: Absorb agent memory files → playbook entries + research_reports
+        const memoryDir = join(companyCwd, ".github", "agent-memory");
+        if (existsSync(memoryDir)) {
+          const memFiles = readdirSync(memoryDir).filter(f => f.endsWith(".json"));
+          console.log(`    🧠 Found ${memFiles.length} legacy agent memory files`);
+
+          for (const file of memFiles) {
+            try {
+              const raw = readFileSync(join(memoryDir, file), "utf-8");
+              const mem = JSON.parse(raw);
+              const agentName = file.replace("-agent.json", "").replace(".json", "");
+              importReport.legacy_agents_found.push({ name: agentName, file, session_count: mem.session_count || 0 });
+
+              // Extract content inventory if present (SEO agent tracks this)
+              if (mem.content_library || mem.guides || mem.content_items || mem.pages) {
+                const guides = mem.content_library?.guides || mem.guides || [];
+                const tools = mem.content_library?.tools || mem.tools || [];
+                const pages = mem.pages || [];
+                importReport.content_absorbed.guides = guides.length || 0;
+                importReport.content_absorbed.tools = tools.length || 0;
+                importReport.content_absorbed.pages = pages.length || 0;
+                importReport.content_absorbed.total_content_items = (guides.length || 0) + (tools.length || 0) + (pages.length || 0);
+
+                // Store as content_inventory research report
+                await sql`
+                  INSERT INTO research_reports (company_id, report_type, content, summary)
+                  VALUES (${imp.company_id}, 'market_research', 
+                    ${JSON.stringify({ 
+                      source: "legacy_import", 
+                      content_library: mem.content_library || { guides, tools, pages },
+                      seo_state: mem.seo_state || mem.indexing || null,
+                      backlinks: mem.backlinks || mem.backlink_prs || null,
+                    })},
+                    ${`Imported from legacy ${agentName}: ${guides.length} guides, ${tools.length} tools, ${pages.length} pages`}
+                  )
+                  ON CONFLICT (company_id, report_type) DO UPDATE SET
+                    content = research_reports.content || ${JSON.stringify({ legacy_import: { guides: guides.length, tools: tools.length, pages: pages.length } })},
+                    summary = ${`Updated: ${guides.length} guides, ${tools.length} tools from legacy import`},
+                    updated_at = now()
+                `;
+              }
+
+              // Extract keyword/SEO data if present
+              if (mem.keywords || mem.seo_keywords || mem.keyword_tracking) {
+                const keywords = mem.keywords || mem.seo_keywords || mem.keyword_tracking || [];
+                await sql`
+                  INSERT INTO research_reports (company_id, report_type, content, summary)
+                  VALUES (${imp.company_id}, 'seo_keywords',
+                    ${JSON.stringify({ source: "legacy_import", keywords, imported_from: agentName })},
+                    ${`${Array.isArray(keywords) ? keywords.length : Object.keys(keywords).length} keywords from legacy ${agentName}`}
+                  )
+                  ON CONFLICT (company_id, report_type) DO UPDATE SET
+                    content = ${JSON.stringify({ source: "legacy_import", keywords, imported_from: agentName })},
+                    updated_at = now()
+                `;
+              }
+
+              // Extract competitive intelligence if present
+              if (mem.competitors || mem.competitive_landscape) {
+                await sql`
+                  INSERT INTO research_reports (company_id, report_type, content, summary)
+                  VALUES (${imp.company_id}, 'competitive_analysis',
+                    ${JSON.stringify({ source: "legacy_import", ...(mem.competitors || mem.competitive_landscape) })},
+                    ${`Competitive data from legacy ${agentName}`}
+                  )
+                  ON CONFLICT (company_id, report_type) DO UPDATE SET
+                    content = ${JSON.stringify({ source: "legacy_import", ...(mem.competitors || mem.competitive_landscape) })},
+                    updated_at = now()
+                `;
+              }
+
+              // Extract lead/outreach data if present
+              if (mem.leads || mem.outreach || mem.lead_list) {
+                await sql`
+                  INSERT INTO research_reports (company_id, report_type, content, summary)
+                  VALUES (${imp.company_id}, 'lead_list',
+                    ${JSON.stringify({ source: "legacy_import", leads: mem.leads || mem.lead_list || [], outreach: mem.outreach || null })},
+                    ${`Lead data from legacy ${agentName}`}
+                  )
+                  ON CONFLICT (company_id, report_type) DO UPDATE SET
+                    content = ${JSON.stringify({ source: "legacy_import", leads: mem.leads || mem.lead_list || [] })},
+                    updated_at = now()
+                `;
+              }
+
+              // Write a playbook entry for each legacy agent's accumulated learnings
+              if (mem.learnings || mem.discoveries || mem.insights) {
+                const learnings = mem.learnings || mem.discoveries || mem.insights;
+                const entries = Array.isArray(learnings) ? learnings : [learnings];
+                for (const learning of entries.slice(0, 10)) {
+                  const insight = typeof learning === "string" ? learning : (learning.insight || learning.description || JSON.stringify(learning));
+                  if (insight && insight.length > 10) {
+                    await sql`
+                      INSERT INTO playbook (source_company_id, domain, insight, confidence, evidence)
+                      VALUES (${imp.company_id}, ${agentName === "seo" ? "seo" : agentName === "growth" ? "growth" : "general"},
+                        ${`[${imp.slug}] ${insight.slice(0, 500)}`}, 0.7,
+                        ${JSON.stringify({ source: "legacy_import", agent: agentName })})
+                    `;
+                    importReport.playbook_entries_created++;
+                  }
+                }
+              }
+
+            } catch (parseErr: any) {
+              console.log(`      ⚠ Failed to parse ${file}: ${parseErr.message.slice(0, 60)}`);
+            }
+          }
+          console.log(`    ✓ Legacy agents absorbed: ${importReport.legacy_agents_found.map(a => `${a.name}(${a.session_count} sessions)`).join(", ")}`);
+        } else {
+          console.log(`    ⓘ No .github/agent-memory/ found`);
+        }
+
+        // 4c: Detect content state from live site (count pages, check for common issues)
+        const vercelUrl = scanReport.vercel_url || (await sql`SELECT vercel_url FROM companies WHERE id = ${imp.company_id}`)[0]?.vercel_url;
+        if (vercelUrl) {
+          // Check if GSC is configured (common blocker)
+          importReport.manual_actions_required.push({
+            title: `Verify Google Search Console for ${imp.name}`,
+            detail: `Go to search.google.com/search-console → Add Property → URL prefix → ${vercelUrl}. Without GSC, all SEO content is invisible to Google.`,
+            priority: "high",
+            source: "import_analysis",
+          });
+          // Check if sitemap exists
+          importReport.recommendations.push(`Verify sitemap.xml is accessible at ${vercelUrl}/sitemap.xml`);
+        }
+
+        // 4d: Add recommendation to kill legacy agents
+        if (importReport.legacy_agents_found.length > 0) {
+          importReport.manual_actions_required.push({
+            title: `Unload legacy LaunchAgents for ${imp.name}`,
+            detail: `Legacy agents (${importReport.legacy_agents_found.map(a => a.name).join(", ")}) are still running via launchd. ` +
+              `Hive's worker dispatch now handles Growth, Outreach, and Ops. Unload them:\n` +
+              importReport.legacy_agents_found.map(a => 
+                `  launchctl unload ~/Library/LaunchAgents/com.founder.${a.name}.plist`
+              ).join("\n") +
+              `\n\nKeep the plist files as backup — just unload so they stop running.`,
+            priority: "medium",
+            source: "import_analysis",
+          });
+        }
+
+        importReport.phases_completed.push("legacy_absorption");
+      } catch (e: any) {
+        console.log(`  ├─ ⚠ Phase 4 failed: ${e.message.slice(0, 80)}`);
+        importReport.warnings.push(`Phase 4 (legacy absorption) failed: ${e.message.slice(0, 200)}`);
+      }
+
+      // === Phase 5: Generate Import Report ===
+      console.log(`  ├─ Generating import report...`);
+      try {
+        // Build the report description
+        const reportLines: string[] = [];
+        reportLines.push(`# Import Report: ${imp.name} (${imp.slug})`);
+        reportLines.push(`**Imported:** ${new Date().toISOString().split("T")[0]}`);
+        reportLines.push(`**Phases completed:** ${importReport.phases_completed.join(" → ")}`);
+        reportLines.push("");
+
+        if (importReport.content_absorbed.total_content_items > 0) {
+          reportLines.push(`## Content absorbed`);
+          reportLines.push(`- ${importReport.content_absorbed.guides} SEO guides`);
+          reportLines.push(`- ${importReport.content_absorbed.tools} interactive tools`);
+          reportLines.push(`- ${importReport.content_absorbed.pages} total pages`);
+          reportLines.push("");
+        }
+
+        if (importReport.legacy_agents_found.length > 0) {
+          reportLines.push(`## Legacy agents found`);
+          for (const agent of importReport.legacy_agents_found) {
+            reportLines.push(`- **${agent.name}** — ${agent.session_count} sessions (${agent.file})`);
+          }
+          reportLines.push("");
+        }
+
+        if (importReport.queue_items_absorbed.items.length > 0) {
+          reportLines.push(`## Queue items absorbed (${importReport.queue_items_absorbed.items.length} total)`);
+          reportLines.push(`- ${importReport.queue_items_absorbed.directives_created} → Hive directives (agent will pick up)`);
+          reportLines.push(`- ${importReport.queue_items_absorbed.approvals_created} → approval gates (needs your action)`);
+          for (const item of importReport.queue_items_absorbed.items) {
+            reportLines.push(`  - [${item.type}] ${item.title} _(${item.priority})_`);
+          }
+          reportLines.push("");
+        }
+
+        if (importReport.playbook_entries_created > 0) {
+          reportLines.push(`## Playbook entries: ${importReport.playbook_entries_created} new learnings added`);
+          reportLines.push("");
+        }
+
+        if (importReport.manual_actions_required.length > 0) {
+          reportLines.push(`## ⚠ Manual actions required`);
+          for (const action of importReport.manual_actions_required) {
+            reportLines.push(`### ${action.priority === "high" ? "🔴" : "🟡"} ${action.title}`);
+            reportLines.push(action.detail);
+            reportLines.push("");
+          }
+        }
+
+        if (importReport.recommendations.length > 0) {
+          reportLines.push(`## Recommendations`);
+          for (const rec of importReport.recommendations) {
+            reportLines.push(`- ${rec}`);
+          }
+          reportLines.push("");
+        }
+
+        if (importReport.warnings.length > 0) {
+          reportLines.push(`## Warnings during import`);
+          for (const w of importReport.warnings) {
+            reportLines.push(`- ⚠ ${w}`);
+          }
+          reportLines.push("");
+        }
+
+        reportLines.push(`---`);
+        reportLines.push(`*Hive will run its first cycle on ${imp.name} during the next nightly loop. The CEO agent will incorporate the absorbed directives and research data automatically.*`);
+
+        const reportText = reportLines.join("\n");
+
+        // Create a high-visibility approval gate with the full import report
+        await sql`
+          INSERT INTO approvals (company_id, gate_type, title, description, context)
+          VALUES (
+            ${imp.company_id}, 'new_company',
+            ${`📋 Import Report: ${imp.name} — ${importReport.manual_actions_required.length} action(s) needed`},
+            ${reportText},
+            ${JSON.stringify(importReport)}
+          )
+        `;
+
+        // Also log the import action
+        await sql`
+          INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+          VALUES (${imp.company_id}, 'orchestrator', 'import_complete',
+            ${`Imported ${imp.name}: ${importReport.phases_completed.length} phases, ${importReport.queue_items_absorbed.items.length} queue items, ${importReport.manual_actions_required.length} manual actions`},
+            'success', ${JSON.stringify(importReport)}, now(), now())
+        `;
+
+        // Send digest-style email if configured
+        const resendKey = await getSettingValueDirect("resend_api_key");
+        const digestTo = await getSettingValueDirect("digest_email");
+        if (resendKey && digestTo) {
+          const sendingDomain = await getSettingValueDirect("sending_domain");
+          const digestFrom = sendingDomain ? `Hive <digest@${sendingDomain}>` : "Hive <onboarding@resend.dev>";
+          try {
+            await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                from: digestFrom,
+                to: digestTo,
+                subject: `🐝 Hive Import: ${imp.name} — ${importReport.manual_actions_required.length} action(s) needed`,
+                html: `<div style="max-width:600px;margin:0 auto;padding:24px;font-family:system-ui;color:#333;background:#fafafa">
+                  <h1 style="color:#e8b84d;font-size:20px">Import Report: ${imp.name}</h1>
+                  <p><strong>${importReport.phases_completed.length}</strong> phases completed • 
+                     <strong>${importReport.queue_items_absorbed.items.length}</strong> queue items absorbed • 
+                     <strong>${importReport.playbook_entries_created}</strong> playbook entries</p>
+                  ${importReport.content_absorbed.total_content_items > 0 ? 
+                    `<p>📚 Content: ${importReport.content_absorbed.guides} guides, ${importReport.content_absorbed.tools} tools, ${importReport.content_absorbed.pages} pages</p>` : ""}
+                  ${importReport.manual_actions_required.length > 0 ? 
+                    `<h2 style="color:#e85050;font-size:16px">⚠ ${importReport.manual_actions_required.length} manual action(s) required</h2>
+                     <ul>${importReport.manual_actions_required.map(a => 
+                       `<li><strong>${a.title}</strong><br><span style="color:#666;font-size:13px">${a.detail.slice(0, 200)}</span></li>`
+                     ).join("")}</ul>` : ""}
+                  ${importReport.legacy_agents_found.length > 0 ?
+                    `<p style="color:#666;font-size:13px">Legacy agents found: ${importReport.legacy_agents_found.map(a => `${a.name} (${a.session_count} sessions)`).join(", ")}. Remember to unload their LaunchAgents.</p>` : ""}
+                  <p style="margin-top:24px"><a href="${process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app"}/company/${imp.slug}" style="color:#e8b84d">Open in Hive dashboard →</a></p>
+                </div>`,
+              }),
+            });
+            console.log(`    ✉ Import report emailed to ${digestTo}`);
+          } catch { /* non-critical */ }
+        }
+
+        importReport.phases_completed.push("report_generated");
+        console.log(`  ├─ ✓ Phase 5: Import report generated (${importReport.manual_actions_required.length} manual actions)`);
+      } catch (e: any) {
+        console.log(`  ├─ ⚠ Phase 5 failed: ${e.message.slice(0, 80)}`);
+      }
+
+      // Finalize
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
-      console.log(`  ✓ ${imp.name} onboarded with patterns extracted`);
+      const [impCompany] = await sql`SELECT status FROM companies WHERE id = ${imp.company_id}`;
+      if (impCompany?.status === "approved" || impCompany?.status === "provisioning") {
+        await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id}`;
+        console.log(`    ✓ ${imp.name} status → mvp`);
+      }
+      console.log(`  ✓ ${imp.name} import complete — ${importReport.phases_completed.join(" → ")}`);
     }
   }
 
@@ -1034,9 +1459,9 @@ Use web search extensively.
 ${reportMarkers}
 
 After each JSON block, write a 1-2 sentence summary.`,
+        allowedTools: ["WebSearch", "WebFetch"],
         maxTurns: isFirstCycle ? 30 : 15,
         timeoutMs: isFirstCycle ? 15 * 60 * 1000 : 10 * 60 * 1000,
-        allowedTools: ["WebSearch", "WebFetch"],
       });
 
       // Parse and store each research report
@@ -1054,7 +1479,7 @@ After each JSON block, write a 1-2 sentence summary.`,
             const jsonMatch = match[1].match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const content = JSON.parse(jsonMatch[0]);
-              // Extract summary (text after the JSON block)
+              // Extract summary (text after the JSON block), stripping markdown fencing
               const afterJson = match[1].slice(match[1].lastIndexOf("}") + 1).trim();
               const summaryLines = afterJson.split("\n").filter(l => {
                 const t = l.trim();
@@ -1283,16 +1708,16 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
 
     // Step 5: CEO reviews
     console.log("  └─ CEO reviewing cycle...");
-    const cycleResultsContext = `
-CYCLE RESULTS (tonight):
-- Engineer: ${engResult.success ? "SUCCESS" : "FAILED"} — ${engResult.output.slice(0, 300)}
-- Growth: ${growthResult.success ? "SUCCESS" : "FAILED"} — ${growthResult.output.slice(0, 300)}
-- Ops: ${opsResult.success ? "SUCCESS" : "FAILED"} — ${opsResult.output.slice(0, 300)}`;
     const ceoReview = await executeAgent({
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + "\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies." + cycleResultsContext,
+      prompt: ceoPrompt + `\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.
+
+CYCLE RESULTS:
+- Engineer: ${engResult.success ? "SUCCESS" : "FAILED"} — ${engResult.output.slice(0, 300)}
+- Growth: ${growthResult.success ? "SUCCESS" : "FAILED"} — ${growthResult.output.slice(0, 300)}
+- Ops: ${opsResult.success ? "SUCCESS" : "FAILED"} — ${opsResult.output.slice(0, 300)}`,
       context,
     });
 
@@ -1598,7 +2023,8 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
     // Gather recent playbook entries for cross-pollination analysis
     const recentPlaybook = await sql`
       SELECT p.domain, p.insight, c.slug as source_company, p.confidence, p.created_at
-      FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id WHERE p.superseded_by IS NULL
+      FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id
+      WHERE p.superseded_by IS NULL
       ORDER BY p.created_at DESC LIMIT 20
     `;
 
@@ -1622,7 +2048,7 @@ ${JSON.stringify(allMetrics, null, 2)}
 ## Cycle scores (last 14 days):
 ${cycleScores.map((s: any) => {
   let score = "?";
-  try { const r = JSON.parse(s.ceo_review || "{}"); score = r.score ?? r.cycle_score ?? "?"; } catch {}
+  try { const r = typeof s.ceo_review === "string" ? JSON.parse(s.ceo_review) : s.ceo_review; score = r?.review?.score ?? r?.score ?? "?"; } catch {}
   return `${s.slug}: cycle ${s.cycle_number} → ${score}/10`;
 }).join("\n") || "No scored cycles yet"}
 
@@ -1968,7 +2394,7 @@ ${currentPrompt.slice(0, 3000)}
         },
         scores: latestScores.map((s: any) => {
           let score = "?";
-          try { const r = JSON.parse(s.ceo_review || "{}"); score = r.score ?? r.cycle_score ?? "?"; } catch {}
+          try { const r = typeof s.ceo_review === "string" ? JSON.parse(s.ceo_review) : s.ceo_review; score = r?.review?.score ?? r?.score ?? "?"; } catch {}
           return `${s.slug}: ${score}/10 (cycle ${s.cycle_number})`;
         }),
         playbook_entries: Number(playbookCount.cnt),
