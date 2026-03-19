@@ -9,7 +9,7 @@
 - **Phase:** First company imported. Onboarding pending (blocked on Claude CLI install).
 - **Architecture:** 7 agents, event-driven, zero crons (except sentinel every 4h). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
-- **Active companies:** 1 (VerdeDesk — status: mvp, scan complete, onboarding pending)
+- **Active companies:** 1 (VerdeDesk — status: mvp, onboarded, 0 cycles)
 - **Companies to import:** Flolio (growth phase, import later)
 
 ### Agent Architecture (7 agents)
@@ -31,12 +31,14 @@
 - **Data conditions**: Sentinel queries Neon every 4h → dispatches agents whose work conditions are met
 
 - **Blocked on:**
-  - `claude.ai/install.sh` returning 403 — all brain agent GitHub Actions workflows fail to install Claude CLI. Global Anthropic infrastructure issue. No workaround.
   - Resend domain verification (need a real domain — Flolio's domain could work)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-19 [code] VerdeDesk onboarding complete — business knowledge extracted
+VerdeDesk fully onboarded: onboard_status set to complete, infra registered (GitHub + Vercel), 3 research reports written (market_research with 30K+ TAM, competitive_analysis with 6 competitors, seo_keywords with 12 long-tail keywords). Extracted 12 playbook entries from VerdeDesk's existing MISTAKES.md, SELF_IMPROVEMENT.md, and autonomy-learnings.md covering: landing page patterns (problem-led copy, email-only forms), SEO strategy (static prerendered guides, free tool lead magnets), pricing (10-18x cheaper than alternatives), distribution learnings (Reddit fails with low-karma, content authenticity rules), Vercel gotchas (Standard Protection 401, deploy limits), and autonomous operation principles. Total playbook now has 18 entries across 10 domains. VerdeDesk has 0 cycles — CEO will enter BUILD mode on first run, using the research data to spec features with acceptance criteria.
 
 ### 2026-03-19 [code] CEO lifecycle modes for new companies
 CEO agent now has three modes based on company maturity: Build (cycles 0-2, spec features from Scout research with acceptance criteria), Launch (cycles 3-5, conversion optimization with hypotheses), Optimize (cycles 6+, current metrics-driven management). Build mode requires every feature decision to cite which research report informed it. Max 2 engineering tasks per cycle, always includes Growth task. First cycle must deliver core value proposition end-to-end. Lifecycle data (cycle count, revenue, customers, original proposal) injected into CEO context in both orchestrator.ts and GitHub Actions workflow.
@@ -103,10 +105,10 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Unblock Claude CLI install** — wait for Anthropic to fix claude.ai/install.sh 403, then retry VerdeDesk onboarding + Scout
-2. **VerdeDesk onboarding** — CEO agent processes the approved gate, Engineer scaffolds integrations, pattern extraction → playbook
-3. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
-4. **Run Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
+1. **Run CEO for VerdeDesk** — trigger CEO workflow, will enter BUILD mode (cycle 0), spec features from research data
+2. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
+3. **Run Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
+4. **Add VERCEL_TOKEN to GitHub secrets** — needed for sentinel deploy drift detection
 
 ## Open Questions
 
