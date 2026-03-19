@@ -145,7 +145,15 @@ jobs:
             const failRate = failureStats.total > 0 ? failureStats.failed / failureStats.total : 0;
             results.high_failure_rate = failRate > 0.2 && failureStats.total >= 5;
 
-            // 8. Agents hitting max_turns (wasting quota without completing work)
+            // 8. Companies stuck in 'approved' status (not provisioned)
+            const stuckApproved = await sql\`
+              SELECT slug FROM companies
+              WHERE status = 'approved'
+              AND updated_at < NOW() - INTERVAL '1 hour'
+            \`;
+            results.stuck_approved = stuckApproved.map(r => r.slug);
+
+            // 9. Agents hitting max_turns (wasting quota without completing work)
             const maxTurnsHits = await sql\`
               SELECT agent, COUNT(*) as cnt
               FROM agent_actions
@@ -245,7 +253,17 @@ jobs:
             DISPATCHED=$((DISPATCHED + 1))
           fi
 
-          # 8. Max turns exhaustion → log warning + trigger Evolver
+          # 8. Companies stuck in 'approved' → dispatch provisioning via Engineer
+          STUCK_APPROVED=$(echo "$RESULTS" | jq -r '.stuck_approved | length')
+          if [ "$STUCK_APPROVED" -gt 0 ]; then
+            for SLUG in $(echo "$RESULTS" | jq -r '.stuck_approved[]'); do
+              echo "Company $SLUG stuck in approved status — dispatching provisioning"
+              dispatch "new_company" "{\"source\":\"sentinel\",\"company\":\"$SLUG\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 9. Max turns exhaustion → log warning + trigger Evolver
           MAX_TURNS_AGENTS=$(echo "$RESULTS" | jq -r '.max_turns_exhaustion | length')
           if [ "$MAX_TURNS_AGENTS" -gt 0 ]; then
             echo "WARNING: Agents hitting max_turns repeatedly:"

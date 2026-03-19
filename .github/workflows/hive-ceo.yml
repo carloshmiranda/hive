@@ -101,13 +101,13 @@ jobs:
             3. Based on the trigger:
                - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
                - cycle_complete: Score the cycle 1-10 using mode-specific criteria from prompts/ceo.md
-               - gate_approved: Route the approval to the right agent
+               - gate_approved: Route the approval. If gate_type is 'new_company', output needs_provisioning: true so Engineer can scaffold the repo, Vercel project, Neon DB, and Stripe product. Include the company slug.
                - ceo_review: Do portfolio analysis across all companies
                - issue/directive: Decompose into tasks, assign to agents
                - PR opened: Review for strategic alignment
                - manual: Execute the specified task
             4. Write your plan to the cycles table using the output format matching your lifecycle mode
-            5. Output JSON with: { "actions": [...], "needs_research": bool, "needs_feature": bool, "company": "slug" }
+            5. Output JSON with: { "actions": [...], "needs_research": bool, "needs_feature": bool, "needs_provisioning": bool, "company": "slug" }
 
             IMPORTANT: Write ALL decisions to the database. Update BRIEFING.md if state changed.
 
@@ -171,6 +171,10 @@ jobs:
             COMPANY=$(echo "$RESULT_JSON" | jq -r '.company // ""' 2>/dev/null || echo "")
           fi
           echo "Company: $COMPANY"
+
+          # Chain to Engineer for provisioning (gate_approved with new_company)
+          echo "$RESULT" | grep -q "needs_provisioning.*true" && \
+            dispatch "new_company" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
 
           # Chain to Scout if research needed
           echo "$RESULT" | grep -q "needs_research.*true" && \
