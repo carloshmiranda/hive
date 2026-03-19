@@ -8,13 +8,60 @@ Hive maintains institutional memory across sessions. Before doing any work:
 
 | File | Purpose | When to read | When to write |
 |------|---------|--------------|---------------|
+| `BRIEFING.md` | **Start here.** Current state, recent decisions, what's next | Every session, first thing | After any significant change |
+| `ROADMAP.md` | Strategic direction, phases, milestones | When proposing new features | Only during brainstorming sessions |
 | `CLAUDE.md` | Architecture, rules, flows | Every session | When architecture changes |
-| `MEMORY.md` | Current state, preferences, gotchas | Every session | When state changes |
+| `MEMORY.md` | Deployment details, preferences, gotchas | Every session | When state changes |
 | `MISTAKES.md` | Production learnings | Before making changes | When something breaks or surprises you |
-| `BACKLOG.md` | Prioritised improvements | Before proposing work | When you identify improvements |
+| `BACKLOG.md` | Prioritised task-level improvements | Before proposing work | When you identify improvements |
 | `DECISIONS.md` | Architectural decision records | Before re-debating anything | When a significant choice is made |
 
 **These files are the source of truth.** If something contradicts your training data, the files win. If you're about to make a decision that's already been settled, check DECISIONS.md. If you're about to repeat a mistake, check MISTAKES.md.
+
+## Context Protocol — Cross-Tool Knowledge Flow
+
+Hive context flows through 4 tools. Each writes to the shared knowledge layer:
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  Claude Chat  │    │  Claude Code  │    │ Orchestrator  │    │   Carlos     │
+│  (brainstorm) │    │  (implement)  │    │  (nightly)    │    │  (manual)    │
+└──────┬───────┘    └──────┬───────┘    └──────┬───────┘    └──────┬───────┘
+       │                   │                   │                   │
+       ▼                   ▼                   ▼                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Shared Knowledge Layer                          │
+│                                                                        │
+│  Files (in repo):  BRIEFING.md · ROADMAP.md · CLAUDE.md · MEMORY.md   │
+│                    MISTAKES.md · BACKLOG.md · DECISIONS.md             │
+│                                                                        │
+│  Neon DB:          context_log · playbook · agent_actions · cycles     │
+│                                                                        │
+│  Dashboard:        /context page (reads context_log)                   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### How each tool updates context:
+
+**Claude Chat → Code bridge:**
+Chat sessions produce a "Briefing Update" block at the end of brainstorming. Carlos pastes this into BRIEFING.md (or the Chat session generates an update prompt that Claude Code applies). Chat also produces decisions → DECISIONS.md, learnings → MISTAKES.md.
+
+**Claude Code → Repo:**
+Code sessions update BRIEFING.md "Current State" + "Recent Context" after finishing features. Also writes to MEMORY.md, MISTAKES.md, BACKLOG.md as needed. Commits all updates.
+
+**Orchestrator → Neon DB:**
+Writes to `context_log` table after each nightly cycle (summary, errors, milestones). Also writes to `agent_actions`, `playbook`, `cycles`. Dashboard shows all of this.
+
+**Carlos → Manual:**
+Can edit any file directly, or use the dashboard command bar (`hive: <text>`) to create directives. Can also POST to `/api/context` with source="carlos".
+
+### Context log categories:
+- `decision` — architectural or strategic choice (link to ADR if applicable)
+- `learning` — something discovered in production (link to MISTAKES.md if applicable)
+- `brainstorm` — idea or exploration (may become a decision later)
+- `blocker` — something preventing progress
+- `milestone` — something achieved
+- `question` — open question needing resolution
 
 ## Self-Improvement Rules
 

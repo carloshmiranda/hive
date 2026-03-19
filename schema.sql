@@ -237,3 +237,21 @@ CREATE TABLE research_reports (
 );
 
 CREATE INDEX idx_research_company ON research_reports(company_id);
+
+-- Context log: tracks decisions, learnings, and context from all tools
+-- Sources: 'chat' (Claude Chat), 'code' (Claude Code), 'orch' (orchestrator), 'carlos' (manual)
+CREATE TABLE context_log (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  source        TEXT NOT NULL CHECK (source IN ('chat', 'code', 'orch', 'carlos')),
+  category      TEXT NOT NULL CHECK (category IN ('decision', 'learning', 'brainstorm', 'blocker', 'milestone', 'question')),
+  summary       TEXT NOT NULL,                     -- one-line summary
+  detail        TEXT,                              -- full context, reasoning, alternatives considered
+  related_adr   TEXT,                              -- e.g. "ADR-010" if this is a decision
+  related_file  TEXT,                              -- e.g. "orchestrator.ts" if this changes a file
+  tags          TEXT[] DEFAULT '{}',               -- free-form tags for filtering
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_context_source ON context_log(source);
+CREATE INDEX idx_context_category ON context_log(category);
+CREATE INDEX idx_context_created ON context_log(created_at DESC);

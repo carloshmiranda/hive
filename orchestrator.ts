@@ -918,7 +918,6 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
         const companyDir = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
         const claudeMemDir = join(process.env.HOME || "", `.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`);
 
-        // Read company's MD files for institutional knowledge
         const mdFiles: string[] = [];
         for (const fname of ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md"]) {
           const fpath = join(companyDir, fname);
@@ -928,7 +927,6 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
           }
         }
 
-        // Read Claude memory files if they exist
         if (existsSync(claudeMemDir)) {
           try {
             const { readdirSync } = await import("fs");
@@ -940,7 +938,6 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
         }
 
         if (mdFiles.length > 0) {
-          // Read Hive's current knowledge for comparison
           const hiveDir = `/Users/carlos.miranda/Documents/Github/hive`;
           const hiveMistakes = existsSync(join(hiveDir, "MISTAKES.md")) ? readFileSync(join(hiveDir, "MISTAKES.md"), "utf-8").slice(0, 2000) : "";
           const hivePlaybook = await getPlaybook();
@@ -976,7 +973,6 @@ Output a brief summary of what was assimilated.`,
         console.log(`    ⚠ Knowledge assimilation failed: ${kaErr.message.slice(0, 80)}`);
       }
 
-      // Update import status and company to mvp
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
       const [impCompany] = await sql`SELECT status FROM companies WHERE id = ${imp.company_id}`;
       if (impCompany?.status === "approved" || impCompany?.status === "provisioning") {
@@ -1973,6 +1969,26 @@ ${currentPrompt.slice(0, 3000)}
   }
 
   const totalDuration = Math.round((Date.now() - startTime) / 1000);
+
+  // === LOG CONTEXT ENTRY ===
+  // Write a summary of this run to context_log for cross-tool visibility
+  if (!DRY_RUN) {
+    try {
+      const completedCount = results.filter(r => r.status === "complete").length;
+      const failedCompanies = results.filter(r => r.status === "failed").map(r => r.company);
+      const summary = [
+        `Nightly cycle: ${completedCount}/${results.length} companies processed in ${totalDuration}s`,
+        failedCompanies.length > 0 ? `Failed: ${failedCompanies.join(", ")}` : null,
+        failedCount > 0 ? `Self-healing addressed ${failedCount} error(s)` : null,
+      ].filter(Boolean).join(". ");
+
+      await sql`
+        INSERT INTO context_log (source, category, summary, tags)
+        VALUES ('orch', 'milestone', ${summary}, ${`{nightly,cycle}`})
+      `;
+    } catch { /* non-critical */ }
+  }
+
   console.log(`\n🐝 Nightly cycle complete in ${totalDuration}s`);
   console.log(`${"─".repeat(50)}\n`);
 }
