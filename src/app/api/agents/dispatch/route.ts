@@ -20,8 +20,8 @@ const DEFAULT_PROMPTS: Record<WorkerAgent, string> = {
   ops: "Verify health. Check deploy status, collect metrics from Stripe/Vercel/Neon, detect anomalies. Output JSON: { metrics_collected: N, health_status: 'ok'|'degraded', issues_found: [...], needs_engineer: bool }",
 };
 
-// Max duration: Gemini calls take 10-30s, well within 300s Fluid Compute limit
-export const maxDuration = 120;
+// Max duration: Gemini calls take 10-30s, 60s is Hobby-tier safe
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   // Auth: CRON_SECRET bearer token (same as Vercel crons)

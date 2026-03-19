@@ -65,32 +65,31 @@ export default function CompanyDetailPage() {
   const [sending, setSending] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const cRes = await fetch("/api/companies");
-    if (!cRes.ok) return;
-    const allCompanies = (await cRes.json()).data;
-    const comp = allCompanies.find((c: Company) => c.slug === slug);
-    if (!comp) { setLoading(false); return; }
-    setCompany(comp);
-
-    const [cyRes, acRes, meRes, apRes, reRes] = await Promise.all([
-      fetch(`/api/cycles?company_id=${comp.id}&limit=20`),
-      fetch(`/api/actions?company_id=${comp.id}&limit=50`),
-      fetch(`/api/metrics?company_id=${comp.id}`),
-      fetch(`/api/approvals?company_id=${comp.id}&status=all`),
-      fetch(`/api/research?company_id=${comp.id}`),
-    ]);
-    if (cyRes.ok) setCycles((await cyRes.json()).data || []);
-    if (acRes.ok) setActions((await acRes.json()).data || []);
-    if (meRes.ok) setMetrics((await meRes.json()).data || []);
-    if (apRes.ok) setApprovals((await apRes.json()).data || []);
-    if (reRes.ok) setResearch((await reRes.json()).data || []);
+    const res = await fetch(`/api/dashboard?slug=${slug}`);
+    if (!res.ok) { setLoading(false); return; }
+    const { data } = await res.json();
+    if (!data.company) { setLoading(false); return; }
+    setCompany(data.company);
+    setCycles(data.cycles || []);
+    setActions(data.actions || []);
+    setMetrics(data.metrics || []);
+    setApprovals(data.approvals || []);
+    setResearch(data.research || []);
     setLoading(false);
   }, [slug]);
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30_000);
-    return () => clearInterval(interval);
+    let interval = setInterval(fetchData, 120_000);
+    const onVisibility = () => {
+      clearInterval(interval);
+      if (document.visibilityState === "visible") {
+        fetchData();
+        interval = setInterval(fetchData, 120_000);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisibility); };
   }, [fetchData]);
 
   const sendDirective = async () => {

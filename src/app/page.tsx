@@ -148,25 +148,31 @@ export default function DashboardPage() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchAll = useCallback(async () => {
-    const [pRes, cRes, aRes, apRes, plRes, cyRes] = await Promise.all([
-      fetch("/api/portfolio"), fetch("/api/companies"),
-      fetch("/api/actions?limit=50"), fetch("/api/approvals?status=pending"),
-      fetch("/api/playbook"), fetch("/api/cycles?limit=50"),
-    ]);
-    if (pRes.ok) setPortfolio((await pRes.json()).data);
-    if (cRes.ok) setCompanies((await cRes.json()).data);
-    if (aRes.ok) setActions((await aRes.json()).data);
-    if (apRes.ok) setApprovals((await apRes.json()).data);
-    if (plRes.ok) setPlaybook((await plRes.json()).data);
-    if (cyRes.ok) setCycles((await cyRes.json()).data || []);
+    const res = await fetch("/api/dashboard");
+    if (!res.ok) return;
+    const { data } = await res.json();
+    setPortfolio(data.portfolio);
+    setCompanies(data.companies);
+    setActions(data.actions);
+    setApprovals(data.approvals);
+    setPlaybook(data.playbook);
+    setCycles(data.cycles);
     setLoading(false);
     setLastRefresh(new Date());
   }, []);
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 30_000);
-    return () => clearInterval(interval);
+    let interval = setInterval(fetchAll, 120_000);
+    const onVisibility = () => {
+      clearInterval(interval);
+      if (document.visibilityState === "visible") {
+        fetchAll();
+        interval = setInterval(fetchAll, 120_000);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisibility); };
   }, [fetchAll]);
 
   const handleApproval = async (id: string, decision: "approved" | "rejected") => {
@@ -254,7 +260,7 @@ export default function DashboardPage() {
           <Link href="/settings" style={{ fontSize: 13, color: "var(--hive-text-secondary)", fontFamily: "var(--hive-sans)", textDecoration: "none" }}>Settings</Link>
           {lastRefresh && (
             <span onClick={() => fetchAll()} style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", cursor: "pointer" }}
-              title="Click to refresh. Auto-refreshes every 30s.">
+              title="Click to refresh. Auto-refreshes every 2m (pauses when tab hidden).">
               ↻ {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
           )}
