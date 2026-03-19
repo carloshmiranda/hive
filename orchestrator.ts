@@ -1504,12 +1504,44 @@ After each JSON block, write a 1-2 sentence summary.`,
 
     // Step 1: CEO plans (incorporating directives)
     console.log("  ├─ CEO planning...");
+
+    // Add lifecycle context for CEO mode detection
+    const [hasRevenue] = await sql`
+      SELECT COALESCE(SUM(revenue), 0) as total FROM metrics WHERE company_id = ${company.id}
+    `;
+    const [hasCustomers] = await sql`
+      SELECT COALESCE(SUM(customers), 0) as total FROM metrics WHERE company_id = ${company.id}
+    `;
+    const [proposal] = await sql`
+      SELECT context FROM approvals
+      WHERE company_id = ${company.id} AND gate_type = 'new_company' AND status = 'approved'
+      ORDER BY decided_at DESC LIMIT 1
+    `;
+
+    const ceoMode = cycleNumber <= 2 || Number(hasCustomers.total) === 0
+      ? (cycleNumber <= 2 ? "BUILD" : "LAUNCH")
+      : "OPTIMIZE";
+    const modeHint = ceoMode === "BUILD"
+      ? "BUILD — spec features from research, no metrics to manage yet"
+      : ceoMode === "LAUNCH"
+      ? "LAUNCH — focus on conversion, get first paying customer"
+      : "OPTIMIZE — metrics-driven management";
+
+    const lifecycleContext = `
+LIFECYCLE:
+  Cycle number: ${cycleNumber}
+  Has revenue: ${Number(hasRevenue.total) > 0}
+  Has customers: ${Number(hasCustomers.total) > 0}
+  Mode: ${modeHint}
+${proposal?.context ? `\nORIGINAL PROPOSAL:\n${JSON.stringify(proposal.context.proposal || proposal.context, null, 2)}` : ""}
+`;
+
     const ceoPrompt = await getActivePrompt("ceo", companyCtx);
     const ceoPlan = await executeAgent({
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + "\n\nWrite tonight's plan." + 
+      prompt: ceoPrompt + "\n\n" + lifecycleContext + "\n\nWrite tonight's plan." +
         (directives.length > 0 ? `\n\nIMPORTANT: Carlos has given ${directives.length} directive(s). These take priority. Incorporate them into your plan and note which directive IDs you're addressing.` : ""),
       context,
     });

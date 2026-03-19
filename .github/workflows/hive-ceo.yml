@@ -87,19 +87,27 @@ jobs:
             TRIGGER: ${{ steps.context.outputs.trigger }}
             PAYLOAD: ${{ steps.context.outputs.payload }}
 
-            Read BRIEFING.md and CLAUDE.md for full context. Then:
+            Read BRIEFING.md, CLAUDE.md, and prompts/ceo.md for full context. Then:
 
             1. Query Neon (DATABASE_URL is set) for: active companies, pending approvals, recent metrics, open directives
-            2. Based on the trigger:
+            2. Determine lifecycle mode for each company you're acting on:
+               - Count cycles for the company
+               - Check if revenue > 0 and customers > 0
+               - If cycles <= 2 OR no customers: you are in BUILD mode — read research reports and spec features with acceptance criteria
+               - If cycles 3-5 AND no paying customers: you are in LAUNCH mode — focus on conversion with hypotheses
+               - If cycles 6+ AND has customers: you are in OPTIMIZE mode — manage by metrics
+               - Load the original Scout proposal from the approvals table (gate_type='new_company', status='approved')
+               - Load ALL research reports for this company (market_research, competitive_analysis, seo_keywords)
+            3. Based on the trigger:
                - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
-               - cycle_complete: Score the cycle 1-10, extract playbook entries, check kill flags
+               - cycle_complete: Score the cycle 1-10 using mode-specific criteria from prompts/ceo.md
                - gate_approved: Route the approval to the right agent
                - ceo_review: Do portfolio analysis across all companies
                - issue/directive: Decompose into tasks, assign to agents
                - PR opened: Review for strategic alignment
                - manual: Execute the specified task
-            3. Write your plan to the cycles table
-            4. Output JSON with: { "actions": [...], "needs_research": bool, "needs_feature": bool, "company": "slug" }
+            4. Write your plan to the cycles table using the output format matching your lifecycle mode
+            5. Output JSON with: { "actions": [...], "needs_research": bool, "needs_feature": bool, "company": "slug" }
 
             IMPORTANT: Write ALL decisions to the database. Update BRIEFING.md if state changed.
 

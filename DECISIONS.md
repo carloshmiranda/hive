@@ -163,6 +163,17 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Gemini 2.5 Pro for workers: only 100 RPD free tier, too restrictive even for low volume
 **Consequences:** Better plan quality from CEO, better research from Scout, better prompts from Evolver. Slightly slower runs for those 3 agents (Opus latency). Growth/Outreach content quality improves. Engineer stays fast. Free tier quota impact: Flash at 250 RPD is sufficient for 5+ companies at a few calls/day each.
 
+### ADR-015: CEO lifecycle modes instead of a separate product specifier agent
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** After a company is approved, the CEO had no metrics to work with but its prompt was optimized for metrics-driven management. The first 2-3 cycles produced vague plans. Meanwhile, Scout's competitive analysis and market research contained exactly the data needed to spec features — but nobody translated research into feature specs.
+**Decision:** Give the CEO three lifecycle modes: Build (cycles 0-2), Launch (cycles 3-5), Optimize (cycles 6+). Mode is detected from cycle count and revenue data, not configured manually. Build mode reads Scout research and outputs user stories with acceptance criteria, citing which research report informed each decision. No new agent — the CEO handles all modes (consistent with ADR-012 agent consolidation).
+**Alternatives considered:**
+- New "Product Manager" agent: adds an 8th agent, burns extra Claude calls, overlaps with CEO scope
+- Static feature list in the Scout proposal: too rigid, doesn't adapt as research updates
+- Engineer self-specs: Engineer is an executor, not a strategist — conflating roles
+**Consequences:** First cycles produce specific, research-backed feature specs instead of vague plans. Engineer gets clear acceptance criteria from cycle 1. Growth gets content tasks alongside engineering from the start. The transition from build→launch→optimize happens automatically based on data, not manual intervention.
+
 ### ADR-014: Growth intelligence layer — data-driven content decisions
 **Date:** 2026-03-19
 **Status:** Accepted
