@@ -92,6 +92,20 @@
 **Prevention:** Every time a new public endpoint is added, check the middleware matcher. Webhooks and crons ALWAYS need their own auth mechanism (signature verification, bearer token) — they can never rely on session auth.
 **Affects:** webhooks, cron, health endpoint
 
+### 2026-03-19 claude CLI has no --cwd flag
+**What happened:** Engineer agent failed all 3 attempts with `error: unknown option '--cwd'`. Every company cycle lost the Engineer entirely.
+**Root cause:** The `dispatchClaude()` function passed `--cwd` as a CLI argument, but `claude` CLI has no such flag. The correct way to set working directory is via `spawn()`'s `cwd` option in the spawn options object.
+**Fix applied:** Removed `--cwd` from args. Set `cwd` in `spawn()` options: `spawn("claude", args, { cwd: opts.cwd, ... })`.
+**Prevention:** Always verify CLI flags with `claude --help` before using them. The Claude CLI uses `--add-dir` for additional directories, but working directory is set via the process, not a flag.
+**Affects:** orchestrator, all agents with cwd (Engineer, Provisioner, Onboarding, Healer)
+
+### 2026-03-19 Research Analyst Cycle 0 only triggered on cycleNumber === 1
+**What happened:** VerdeDesk had 0 research reports but was on Cycle 4. Research Analyst never ran because the condition required `cycleNumber === 1 && researchReports.length === 0`.
+**Root cause:** Dry runs and failed cycles incremented the cycle number, but no research was ever produced. The condition was too strict.
+**Fix applied:** Changed to `researchReports.length === 0` — triggers full research whenever there are no reports, regardless of cycle number.
+**Prevention:** Trigger conditions for "first time" actions should check for the absence of the output (no reports), not the sequence number (cycle 1).
+**Affects:** orchestrator, research_analyst
+
 ### 2026-03-19 Vercel CLI and GitHub webhook deploys fail for non-Next.js projects (from VerdeDesk import)
 **What happened:** VerdeDesk (React + Vite) could not be deployed via `vercel --prod` CLI or GitHub webhook → production. Both produced instant ERROR (0ms, no build logs). Only the Vercel REST API with `gitSource` produced READY production deploys.
 **Root cause:** Projects with `rootDirectory` set (VerdeDesk uses `MVP/`) and non-Next.js frameworks (Vite) have deploy quirks that the CLI and webhook pathways don't handle reliably. GitHub webhooks worked for preview but not production.
