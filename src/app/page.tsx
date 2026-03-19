@@ -25,6 +25,17 @@ type Portfolio = {
   total_revenue: number; total_customers: number; pending_approvals: number;
   tokens_today: number; last_cycle_at: string | null;
 };
+type Todo = {
+  id: string;
+  severity: "blocker" | "warning" | "info";
+  category: "setup" | "manual_action" | "health" | "agent";
+  title: string;
+  detail: string;
+  action_url: string | null;
+  action_label: string | null;
+  company_slug: string | null;
+  dismissable: boolean;
+};
 type Cycle = {
   id: string; cycle_number: number; status: string; ceo_plan: any; ceo_review: any;
   started_at: string; finished_at: string | null; company_id: string;
@@ -146,6 +157,8 @@ export default function DashboardPage() {
   const [cmdSending, setCmdSending] = useState(false);
   const [cmdFeedback, setCmdFeedback] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [showAllTodos, setShowAllTodos] = useState(false);
 
   const fetchAll = useCallback(async () => {
     const res = await fetch("/api/dashboard");
@@ -159,6 +172,12 @@ export default function DashboardPage() {
     setCycles(data.cycles);
     setLoading(false);
     setLastRefresh(new Date());
+
+    // Fetch todos separately (not in consolidated endpoint)
+    try {
+      const todoRes = await fetch("/api/todos");
+      if (todoRes.ok) setTodos((await todoRes.json()).data || []);
+    } catch { /* non-critical */ }
   }, []);
 
   useEffect(() => {
@@ -202,10 +221,20 @@ export default function DashboardPage() {
     }
   };
 
+  const dismissTodo = async (todoId: string) => {
+    await fetch("/api/todos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ todo_id: todoId }),
+    });
+    setTodos(prev => prev.filter(t => t.id !== todoId));
+  };
+
   // Derived data
+  const blockerCount = todos.filter(t => t.severity === "blocker").length;
   const ideas = approvals.filter(a => a.gate_type === "new_company");
   const otherApprovals = approvals.filter(a => a.gate_type !== "new_company");
-  const inboxCount = approvals.length;
+  const inboxCount = approvals.length + blockerCount;
   const portfolioCompanies = companies.filter(c => ["mvp", "active", "provisioning", "approved"].includes(c.status));
   const liveCompanies = companies.filter(c => ["active", "mvp"].includes(c.status));
 
@@ -280,6 +309,83 @@ export default function DashboardPage() {
       {/* ==================== OVERVIEW TAB ==================== */}
       {activeTab === "overview" && (
         <div className="animate-in">
+          {/* Needs your attention */}
+          {todos.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
+                  letterSpacing: "0.06em", textTransform: "uppercase" }}>Needs your attention</div>
+                <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                  padding: "1px 6px", borderRadius: 8, minWidth: 18, textAlign: "center",
+                  background: blockerCount > 0 ? "var(--hive-red-bg)" : "var(--hive-amber-bg)",
+                  color: blockerCount > 0 ? "var(--hive-red)" : "var(--hive-amber)",
+                  border: `1px solid ${blockerCount > 0 ? "var(--hive-red-border)" : "var(--hive-amber-border)"}` }}>
+                  {todos.length}
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {todos.slice(0, showAllTodos ? todos.length : 5).map(todo => {
+                  const sc = {
+                    blocker: { border: "#f87171", bg: "rgba(248,113,113,0.06)" },
+                    warning: { border: "#f0b944", bg: "rgba(240,185,68,0.06)" },
+                    info: { border: "#60a5fa", bg: "rgba(96,165,250,0.06)" },
+                  }[todo.severity];
+                  const catLabel = {
+                    setup: "Setup", manual_action: "Action needed", health: "Health", agent: "Agent issue",
+                  }[todo.category];
+
+                  return (
+                    <div key={todo.id} style={{
+                      padding: "14px 16px", background: sc.bg, borderLeft: `3px solid ${sc.border}`,
+                      borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 12,
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500, letterSpacing: "0.04em",
+                            padding: "1px 7px", borderRadius: 4, color: sc.border, background: sc.bg,
+                            border: `1px solid ${sc.border}30` }}>{catLabel}</span>
+                          {todo.company_slug && (
+                            <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-tertiary)" }}>{todo.company_slug}</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 500, color: "var(--hive-text)", marginBottom: 2 }}>{todo.title}</div>
+                        <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.5,
+                          overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" } as React.CSSProperties}>
+                          {todo.detail}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                        {todo.action_url && (
+                          <Link href={todo.action_url} style={{ textDecoration: "none" }}>
+                            <button style={{
+                              padding: "6px 12px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              borderRadius: 6, cursor: "pointer", border: `1px solid ${sc.border}40`,
+                              background: sc.bg, color: sc.border, letterSpacing: "0.02em",
+                            }}>{todo.action_label || "View"}</button>
+                          </Link>
+                        )}
+                        {todo.dismissable && (
+                          <button onClick={() => dismissTodo(todo.id)} style={{
+                            width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                            fontSize: 16, fontFamily: "var(--hive-mono)", borderRadius: 6, cursor: "pointer",
+                            border: "1px solid var(--hive-border)", background: "transparent",
+                            color: "var(--hive-text-tertiary)", lineHeight: 1,
+                          }} title="Dismiss">×</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {todos.length > 5 && (
+                  <button onClick={() => setShowAllTodos(!showAllTodos)} style={{
+                    fontSize: 12, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)",
+                    background: "none", border: "none", cursor: "pointer", padding: "6px 0",
+                  }}>{showAllTodos ? "Show less" : `Show ${todos.length - 5} more`}</button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Command bar */}
           <div style={{ marginBottom: 24 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

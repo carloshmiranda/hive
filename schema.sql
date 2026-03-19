@@ -281,6 +281,13 @@ CREATE INDEX idx_visibility_company_date ON visibility_metrics(company_id, date 
 CREATE INDEX idx_visibility_keyword ON visibility_metrics(company_id, keyword);
 CREATE INDEX idx_visibility_source ON visibility_metrics(company_id, source);
 
+-- Dismissed todos: tracks which dashboard todos were dismissed
+-- Dismissals expire after 30 days so recurring issues resurface
+CREATE TABLE IF NOT EXISTS dismissed_todos (
+  todo_id     TEXT PRIMARY KEY,
+  dismissed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Context log: tracks decisions, learnings, and context from all tools
 -- Sources: 'chat' (Claude Chat), 'code' (Claude Code), 'orch' (orchestrator), 'carlos' (manual)
 CREATE TABLE context_log (
