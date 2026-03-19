@@ -20,7 +20,7 @@ async function ensureTable() {
 const SECRET_KEYS = new Set([
   "neon_api_key", "vercel_token", "github_token",
   "stripe_secret_key", "resend_api_key", "google_search_console_key",
-  "gemini_api_key", "groq_api_key",
+  "gemini_api_key", "groq_api_key", "bing_webmaster_key",
 ]);
 
 // All valid setting keys
@@ -31,6 +31,7 @@ const VALID_KEYS = [
   "resend_api_key", "resend_domain",
   "google_search_console_key",
   "gemini_api_key", "groq_api_key",
+  "bing_webmaster_key", "indexnow_key",
   "digest_email", "notification_email",
 ];
 

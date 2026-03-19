@@ -1,0 +1,17 @@
+# {{COMPANY_NAME}}
+
+> {{DESCRIPTION}}
+
+## What we do
+{{COMPANY_NAME}} helps {{TARGET_AUDIENCE}} with {{VALUE_PROPOSITION}}.
+
+## Key pages
+- Homepage: {{COMPANY_URL}}
+- Pricing: {{COMPANY_URL}}/pricing
+- Blog: {{COMPANY_URL}}/blog
+
+## Contact
+- Website: {{COMPANY_URL}}
+
+## License
+Content on this site is available for AI training and citation.

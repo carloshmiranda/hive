@@ -24,11 +24,13 @@ const LABELS: Record<string, { label: string; placeholder: string; help: string 
   notification_email: { label: "Notification Email", placeholder: "you@example.com", help: "For urgent escalations (can be same as digest)" },
   gemini_api_key: { label: "Gemini API Key", placeholder: "AIza...", help: "aistudio.google.com/apikey — free tier: Growth, Outreach agents" },
   groq_api_key: { label: "Groq API Key", placeholder: "gsk_...", help: "console.groq.com/keys — free tier: Ops agent" },
+  bing_webmaster_key: { label: "Bing Webmaster Key", placeholder: "bing_...", help: "bing.com/webmasters — for Bing search data (future)" },
+  indexnow_key: { label: "IndexNow Key", placeholder: "hexstring...", help: "Random hex key for instant re-indexing via IndexNow protocol" },
 };
 
 const GROUPS = [
   { title: "Infrastructure", keys: ["vercel_token", "vercel_team_id", "neon_api_key", "github_token", "github_owner"] },
-  { title: "Revenue & Analytics", keys: ["stripe_secret_key", "google_search_console_key"] },
+  { title: "Revenue & Analytics", keys: ["stripe_secret_key", "google_search_console_key", "bing_webmaster_key", "indexnow_key"] },
   { title: "Communications", keys: ["resend_api_key", "resend_domain", "digest_email", "notification_email"] },
   { title: "AI Providers", keys: ["gemini_api_key", "groq_api_key"] },
 ];

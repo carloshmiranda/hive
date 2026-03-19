@@ -162,3 +162,14 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - All agents on Sonnet: CEO and Scout produce mediocre plans/research that cascade into mediocre cycles
 - Gemini 2.5 Pro for workers: only 100 RPD free tier, too restrictive even for low volume
 **Consequences:** Better plan quality from CEO, better research from Scout, better prompts from Evolver. Slightly slower runs for those 3 agents (Opus latency). Growth/Outreach content quality improves. Engineer stays fast. Free tier quota impact: Flash at 250 RPD is sufficient for 5+ companies at a few calls/day each.
+
+### ADR-014: Growth intelligence layer — data-driven content decisions
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** Growth agent created content without knowing what was working. No keyword ranking data, no visibility into AI answer engines, no feedback loop. Content was created from keyword research alone with no performance data.
+**Decision:** Build a growth intelligence layer with three free data sources: (1) Google Search Console API for keyword positions, impressions, CTR — identifies striking distance keywords and low CTR pages. (2) DIY LLM citation tracker using Gemini free tier — checks if the company appears in AI answers for its top keywords, tracks competitors. (3) IndexNow protocol for instant re-indexing on content publish. All data stored in `visibility_metrics` table. Growth agent never runs without fresh visibility data injected into its prompt. Boilerplate updated with llms.txt, structured data, sitemap, and AI-friendly robots.txt.
+**Alternatives considered:**
+- Paid SEO tools (Ahrefs, SEMrush): $100+/mo per tool, overkill for early-stage companies
+- Google Analytics only: no keyword-level data (GA4 hides search queries)
+- Skip LLM tracking entirely: miss the growing AI answer engine channel
+**Consequences:** Growth decisions are data-driven. Content targets proven opportunities (striking distance, low CTR) instead of guessing. LLM visibility tracked from day one. All free APIs — €0 additional cost. GSC requires service account setup per company property. LLM citation checks add ~25s to Growth dispatch (10 keywords × 2s rate limit + overhead).

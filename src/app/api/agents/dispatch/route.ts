@@ -122,6 +122,33 @@ TRIGGER: ${trigger || "scheduled"}`;
       fullPrompt += `\nOUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach yet"}`;
     }
 
+    if (agentName === "growth") {
+      // Collect fresh visibility data (non-blocking — runs GSC + LLM citation checks)
+      try {
+        const visRes = await fetch(`${process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app"}/api/agents/visibility`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ company_slug }),
+        });
+        if (visRes.ok) {
+          const visData = await visRes.json();
+          console.log(`Visibility data collected for ${company_slug}:`, visData.data?.results);
+        }
+      } catch (e) {
+        console.log(`Visibility collection failed (non-blocking): ${e}`);
+      }
+
+      // Inject visibility context into Growth prompt
+      const [visSnapshot] = await sql`
+        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'visibility_snapshot'
+      `;
+      const [llmVis] = await sql`
+        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'llm_visibility'
+      `;
+      if (visSnapshot) fullPrompt += `\n\nVISIBILITY DATA (from GSC):\n${JSON.stringify(visSnapshot.content)}`;
+      if (llmVis) fullPrompt += `\n\nLLM VISIBILITY:\n${JSON.stringify(llmVis.content)}`;
+    }
+
     // 5. Call the LLM
     const { provider, model } = AGENT_MODEL[agentName];
     let output: string;

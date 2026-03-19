@@ -237,7 +237,11 @@ CREATE TABLE research_reports (
                   'competitive_analysis', -- competitors: pricing, features, gaps, positioning
                   'lead_list',            -- potential customers for cold outreach
                   'seo_keywords',         -- keyword research for organic growth
-                  'outreach_log'          -- cold email sends, responses, conversion
+                  'outreach_log',         -- cold email sends, responses, conversion
+                  'visibility_snapshot',  -- aggregated GSC/search visibility data
+                  'llm_visibility',       -- LLM citation tracking results
+                  'content_performance',  -- per-URL content audit metrics
+                  'content_gaps'          -- identified content opportunities
                 )),
   content       JSONB NOT NULL,
   summary       TEXT,
@@ -248,6 +252,34 @@ CREATE TABLE research_reports (
 );
 
 CREATE INDEX idx_research_company ON research_reports(company_id);
+
+-- Visibility metrics: time-series data for SEO and LLM tracking
+CREATE TABLE visibility_metrics (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id    TEXT NOT NULL REFERENCES companies(id),
+  date          DATE NOT NULL,
+  source        TEXT NOT NULL CHECK (source IN (
+                  'gsc',           -- Google Search Console
+                  'bwt',           -- Bing Webmaster Tools
+                  'llm_gemini',    -- Gemini citation check
+                  'vercel'         -- Vercel Analytics referrer data
+                )),
+  keyword       TEXT,              -- the search query or LLM prompt
+  url           TEXT,              -- the page that ranked/was cited
+  impressions   INTEGER DEFAULT 0,
+  clicks        INTEGER DEFAULT 0,
+  position      NUMERIC(6,2),      -- average search position
+  ctr           NUMERIC(5,4),      -- click-through rate
+  cited         BOOLEAN,           -- LLM: was the company cited?
+  mentioned     BOOLEAN,           -- LLM: was the brand mentioned without link?
+  competitors   JSONB,             -- LLM: which competitors were mentioned
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(company_id, date, source, keyword, url)
+);
+
+CREATE INDEX idx_visibility_company_date ON visibility_metrics(company_id, date DESC);
+CREATE INDEX idx_visibility_keyword ON visibility_metrics(company_id, keyword);
+CREATE INDEX idx_visibility_source ON visibility_metrics(company_id, source);
 
 -- Context log: tracks decisions, learnings, and context from all tools
 -- Sources: 'chat' (Claude Chat), 'code' (Claude Code), 'orch' (orchestrator), 'carlos' (manual)
