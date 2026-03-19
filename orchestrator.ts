@@ -181,8 +181,6 @@ async function getSettingValueDirect(key: string): Promise<string | null> {
   const [row] = await sql`SELECT value, is_secret FROM settings WHERE key = ${key}`;
   if (!row) return null;
   if (!row.is_secret) return row.value;
-
-  // Decrypt AES-256-GCM (colon-separated format: iv_hex:tag_hex:encrypted_hex)
   const encKey = process.env.ENCRYPTION_KEY;
   if (!encKey) return null;
   try {
@@ -194,9 +192,7 @@ async function getSettingValueDirect(key: string): Promise<string | null> {
     const decipher = createDecipheriv("aes-256-gcm", Buffer.from(encKey, "hex"), iv);
     decipher.setAuthTag(tag);
     return decipher.update(encrypted, "hex", "utf8") + decipher.final("utf8");
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function getActiveCompanies() {
@@ -403,8 +399,8 @@ INSTRUCTIONS FOR THIS RETRY:
       const output = await dispatch({
         prompt: fullPrompt,
         cwd: opts.cwd,
-        allowedTools: opts.allowedTools,
         agent: opts.agent, // routes to correct provider (claude/gemini/groq)
+        allowedTools: opts.allowedTools,
         maxTurns: attempt === 1 ? 10 : 15,
         timeoutMs: attempt === 1 ? 5 * 60 * 1000 : 8 * 60 * 1000,
       });
@@ -641,10 +637,13 @@ IMPORTANT: The "proposals" array MUST contain exactly 3 items.
 At least 1 must have "market": "Portugal".
 At least 1 must have "market": "Global".
 Order them by your confidence score, highest first.`,
-      allowedTools: ["WebSearch", "WebFetch"],
       maxTurns: 30, // more turns for broader research
       timeoutMs: 20 * 60 * 1000, // 20 min — researching 3 ideas takes longer
+      allowedTools: ["WebSearch", "WebFetch"],
     });
+
+    console.log(`    Output length: ${ideaScoutOutput.length}`);
+    console.log(`    Raw preview: ${ideaScoutOutput.slice(0, 300)}`);
 
     // Parse the output and create approval gate with all 3 proposals
     try {
@@ -744,8 +743,6 @@ Order them by your confidence score, highest first.`,
       }
     } catch (e: any) {
       console.log(`  ⚠ Failed to parse Idea Scout output: ${e.message}`);
-      console.log(`    Output length: ${ideaScoutOutput.length}`);
-      console.log(`    Raw preview: ${ideaScoutOutput.slice(0, 300)}`);
       // Still log the raw output so it's not lost
       await sql`
         INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, output, started_at, finished_at)
@@ -777,8 +774,7 @@ Order them by your confidence score, highest first.`,
       // Gather cross-company learnings to inject into the new company's CLAUDE.md
       const playbookEntries = await sql`
         SELECT p.domain, p.insight, c.slug as source_company, p.confidence
-        FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id
-        WHERE p.superseded_by IS NULL AND p.confidence >= 0.6
+        FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id WHERE p.superseded_by IS NULL AND p.confidence >= 0.6
         ORDER BY p.confidence DESC LIMIT 30
       `;
       const playbookSection = playbookEntries.length > 0
@@ -913,74 +909,8 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
         cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
       });
 
-      // Phase 3: Knowledge Assimilation
-      console.log(`  ├─ Assimilating knowledge from ${imp.name}...`);
-      try {
-        const companyDir = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
-        const claudeMemDir = join(process.env.HOME || "", `.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`);
-
-        const mdFiles: string[] = [];
-        for (const fname of ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md"]) {
-          const fpath = join(companyDir, fname);
-          if (existsSync(fpath)) {
-            const content = readFileSync(fpath, "utf-8");
-            if (content.trim()) mdFiles.push(`=== ${fname} ===\n${content.slice(0, 3000)}`);
-          }
-        }
-
-        if (existsSync(claudeMemDir)) {
-          try {
-            const { readdirSync } = await import("fs");
-            for (const f of readdirSync(claudeMemDir).filter(f => f.endsWith(".md") && f !== "MEMORY.md")) {
-              const content = readFileSync(join(claudeMemDir, f), "utf-8");
-              if (content.trim()) mdFiles.push(`=== memory/${f} ===\n${content.slice(0, 1500)}`);
-            }
-          } catch {}
-        }
-
-        if (mdFiles.length > 0) {
-          const hiveDir = `/Users/carlos.miranda/Documents/Github/hive`;
-          const hiveMistakes = existsSync(join(hiveDir, "MISTAKES.md")) ? readFileSync(join(hiveDir, "MISTAKES.md"), "utf-8").slice(0, 2000) : "";
-          const hivePlaybook = await getPlaybook();
-
-          await dispatch({
-            agent: "ceo",
-            prompt: `You are assimilating knowledge from an imported company into Hive's institutional memory.
-
-## Source: ${imp.name} (${imp.slug})
-${mdFiles.join("\n\n")}
-
-## Hive's current knowledge:
-### MISTAKES.md (last 2000 chars):
-${hiveMistakes}
-
-### Playbook entries (top 20):
-${hivePlaybook.map((p: any) => `- [${p.domain}] ${p.insight}`).join("\n") || "Empty"}
-
-## Your task:
-Compare the imported company's knowledge against Hive's existing knowledge.
-For each NEW learning (not already captured):
-1. If it's a reusable pattern → write to playbook via POST /api/playbook
-2. If it's a mistake/gotcha → note it for MISTAKES.md
-3. If it's an architectural decision → note it for DECISIONS.md
-
-Do NOT duplicate what Hive already knows. Only add genuinely new insights.
-Output a brief summary of what was assimilated.`,
-            timeoutMs: 5 * 60 * 1000,
-          });
-          console.log(`    ✓ Knowledge assimilated from ${mdFiles.length} files`);
-        }
-      } catch (kaErr: any) {
-        console.log(`    ⚠ Knowledge assimilation failed: ${kaErr.message.slice(0, 80)}`);
-      }
-
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
-      const [impCompany] = await sql`SELECT status FROM companies WHERE id = ${imp.company_id}`;
-      if (impCompany?.status === "approved" || impCompany?.status === "provisioning") {
-        await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id}`;
-        console.log(`    ✓ ${imp.name} status → mvp`);
-      }
-      console.log(`  ✓ ${imp.name} onboarded with patterns extracted + knowledge assimilated`);
+      console.log(`  ✓ ${imp.name} onboarded with patterns extracted`);
     }
   }
 
@@ -1093,7 +1023,6 @@ Focus on: new competitors since last analysis, pricing changes, feature launches
 
       const researchOutput = await dispatch({
         agent: "research_analyst",
-        allowedTools: ["WebSearch", "WebFetch"],
         prompt: researchPrompt + `\n\nProduce ${reportsToGenerate} for this company.
 
 COMPANY: ${company.name}
@@ -1107,6 +1036,7 @@ ${reportMarkers}
 After each JSON block, write a 1-2 sentence summary.`,
         maxTurns: isFirstCycle ? 30 : 15,
         timeoutMs: isFirstCycle ? 15 * 60 * 1000 : 10 * 60 * 1000,
+        allowedTools: ["WebSearch", "WebFetch"],
       });
 
       // Parse and store each research report
@@ -1130,7 +1060,7 @@ After each JSON block, write a 1-2 sentence summary.`,
                 const t = l.trim();
                 return t && !t.startsWith("```") && t !== "---";
               });
-              const summary = summaryLines[0]?.trim() || Object.keys(content).slice(0, 3).join(", ") || null;
+              const summary = summaryLines[0]?.trim() || null;
 
               await sql`
                 INSERT INTO research_reports (company_id, report_type, content, summary)
@@ -1173,7 +1103,6 @@ After each JSON block, write a 1-2 sentence summary.`,
 
     // Step 2: Engineer executes
     console.log("  ├─ Engineer executing...");
-    const engPrompt = await getActivePrompt("engineer", companyCtx);
     const companyCwd = `/Users/carlos.miranda/Documents/Github/${company.slug}`;
     let companyRepoExists = existsSync(companyCwd);
     if (!companyRepoExists) {
@@ -1190,13 +1119,14 @@ After each JSON block, write a 1-2 sentence summary.`,
         if (companyRepoExists) console.log(`    ✓ Cloned ${company.slug}`);
       } catch (cloneErr: any) { console.log(`    ⚠ Clone failed: ${cloneErr.message.slice(0, 80)}`); }
     }
+    const engPrompt = await getActivePrompt("engineer", companyCtx);
     const engResult = await executeAgent({
       agent: "engineer",
       companyId: company.id,
       cycleId,
       prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.`,
       context,
-      cwd: companyRepoExists ? companyCwd : undefined,
+      cwd: companyCwd, // local repo path
     });
 
     // Step 3: Growth executes (inbound: content, SEO, social)
@@ -1234,12 +1164,12 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
         agent: "outreach",
         companyId: company.id,
         cycleId,
-        allowedTools: ["WebSearch", "WebFetch"],
         prompt: outreachPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\n` +
           (leadList ? "Review your existing lead list. Draft new cold emails for uncontacted leads. Plan follow-ups for leads that haven't replied. Find new leads if the list is thin (<10 active leads)."
             : "No lead list yet. Build the initial lead list using web search. Find 10-20 potential customers matching the target audience.") +
           "\n\nOutput your results as JSON. Use the lead_list and outreach_log report type formats from your instructions.",
         context: outreachContext,
+        allowedTools: ["WebSearch", "WebFetch"],
       });
 
       // Parse and store outreach results
@@ -1351,22 +1281,18 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
       context,
     });
 
-    // Step 5: CEO reviews (pass cycle results directly — non-interactive mode can't fetch APIs)
+    // Step 5: CEO reviews
     console.log("  └─ CEO reviewing cycle...");
-    const cycleResults = `
-TONIGHT'S CYCLE RESULTS (for your review):
-ENGINEER (${engResult.success ? "success" : "failed"}):
-${engResult.output.slice(0, 500)}
-GROWTH (${growthResult.success ? "success" : "failed"}):
-${growthResult.output.slice(0, 500)}
-OPS (${opsResult.success ? "success" : "failed"}):
-${opsResult.output.slice(0, 500)}`.trim();
-
+    const cycleResultsContext = `
+CYCLE RESULTS (tonight):
+- Engineer: ${engResult.success ? "SUCCESS" : "FAILED"} — ${engResult.output.slice(0, 300)}
+- Growth: ${growthResult.success ? "SUCCESS" : "FAILED"} — ${growthResult.output.slice(0, 300)}
+- Ops: ${opsResult.success ? "SUCCESS" : "FAILED"} — ${opsResult.output.slice(0, 300)}`;
     const ceoReview = await executeAgent({
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + `\n\n${cycleResults}\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.`,
+      prompt: ceoPrompt + "\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies." + cycleResultsContext,
       context,
     });
 
@@ -1671,13 +1597,12 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
 
     // Gather recent playbook entries for cross-pollination analysis
     const recentPlaybook = await sql`
-      SELECT p.domain, p.insight, co.slug as source_company, p.confidence, p.created_at
-      FROM playbook p LEFT JOIN companies co ON co.id = p.source_company_id
-      WHERE p.superseded_by IS NULL
+      SELECT p.domain, p.insight, c.slug as source_company, p.confidence, p.created_at
+      FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id WHERE p.superseded_by IS NULL
       ORDER BY p.created_at DESC LIMIT 20
     `;
 
-    // Gather recent cycle info for trend analysis
+    // Gather recent cycle scores for trend analysis
     const cycleScores = await sql`
       SELECT c.slug, cy.cycle_number, cy.ceo_review, cy.started_at
       FROM cycles cy

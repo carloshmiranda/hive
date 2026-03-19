@@ -46,14 +46,16 @@ CREATE TABLE cycles (
 );
 
 -- Agent actions: individual tasks within a cycle
+-- cycle_id and company_id are nullable for portfolio-level actions (Idea Scout, Healer, etc.)
 CREATE TABLE agent_actions (
   id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  cycle_id      TEXT NOT NULL REFERENCES cycles(id),
-  company_id    TEXT NOT NULL REFERENCES companies(id),
+  cycle_id      TEXT REFERENCES cycles(id),
+  company_id    TEXT REFERENCES companies(id),
   agent         TEXT NOT NULL CHECK (agent IN (
                   'ceo', 'engineer', 'growth', 'ops', 'venture_brain',
                   'idea_scout', 'kill_switch', 'retro_analyst', 'prompt_evolver',
-                  'health_monitor', 'auto_healer', 'provisioner'
+                  'health_monitor', 'auto_healer', 'provisioner',
+                  'outreach', 'research_analyst', 'healer', 'orchestrator'
                 )),
   action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
   description   TEXT,
@@ -75,12 +77,16 @@ CREATE TABLE approvals (
   id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   company_id    TEXT REFERENCES companies(id), -- null for portfolio-level decisions
   gate_type     TEXT NOT NULL CHECK (gate_type IN (
-                  'new_company',     -- Idea Scout proposes a new venture
-                  'growth_strategy', -- Growth agent proposes spend/campaign
-                  'spend_approval',  -- any agent wants to spend > threshold
-                  'kill_company',    -- Kill Switch recommends shutdown
-                  'prompt_upgrade',  -- Prompt Evolver proposes a prompt change
-                  'escalation'       -- Health Monitor couldn't auto-fix
+                  'new_company',         -- Idea Scout proposes a new venture
+                  'growth_strategy',     -- Growth agent proposes spend/campaign
+                  'spend_approval',      -- any agent wants to spend > threshold
+                  'kill_company',        -- Kill Switch recommends shutdown
+                  'prompt_upgrade',      -- Prompt Evolver proposes a prompt change
+                  'escalation',          -- Health Monitor couldn't auto-fix
+                  'outreach_batch',      -- first cold email batch needs approval
+                  'vercel_pro_upgrade',  -- company needs Vercel Pro (has revenue)
+                  'social_account',      -- Growth wants a social media account created
+                  'first_revenue'        -- first paying customer detected
                 )),
   title         TEXT NOT NULL,
   description   TEXT NOT NULL,
@@ -204,6 +210,14 @@ CREATE TABLE imports (
                     'pending', 'in_progress', 'complete', 'failed'
                   )),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Settings: encrypted key-value store for API keys and configuration
+CREATE TABLE IF NOT EXISTS settings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  is_secret   BOOLEAN DEFAULT false,
+  updated_at  TIMESTAMPTZ DEFAULT now()
 );
 
 -- Indexes for dashboard performance

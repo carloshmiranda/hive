@@ -99,3 +99,11 @@
 **Fix:** Email architecture now has two modes. Test mode uses `onboarding@resend.dev` (only reaches Resend account owner — fine for digest). Verified mode requires a real domain with Resend DNS records (DKIM + SPF + MX) added. The `sending_domain` setting controls which mode is active. Cold outreach emails are SKIPPED entirely unless a verified domain exists — this prevents silent failures and spam-folder delivery.
 
 **Rule:** Never hard-code fake email domains. Always check for verified sending infrastructure before attempting to send to external recipients. Internal emails (digest to Carlos) can use test mode; external emails (outreach, transactional) require domain verification.
+
+### 2026-03-19 Schema CHECK constraints fell behind code evolution
+**What happened:** Full codebase review revealed that `agent_actions.agent` CHECK allowed 12 agent names but the code used 16. `approvals.gate_type` CHECK allowed 6 types but the code used 10. `agent_actions.cycle_id` and `company_id` were NOT NULL but multiple code paths insert with NULL. Every orchestrator run would crash on the first Idea Scout, Healer, or Outreach action.
+**Root cause:** Schema was written during the initial build session. As new agents (outreach, research_analyst, healer) and gate types (outreach_batch, vercel_pro_upgrade) were added to the code, nobody updated the CHECK constraints in schema.sql. The mismatch was invisible because the live DB was never tested with a full nightly run — only the dashboard and webhooks ran.
+**Fix applied:** Migration `002_fix_constraints.sql` drops and recreates both CHECK constraints with all values. `cycle_id` and `company_id` made nullable. `settings` table added to schema.sql (was only dynamically created). schema.sql updated for fresh installs.
+**Prevention:** When adding a new agent name or gate type to ANY code path, grep schema.sql for the CHECK constraint and update it in the same commit. Rule: `git diff --name-only | grep -q orchestrator && grep -c "CHECK.*agent" schema.sql` — if the orchestrator changed, verify the schema matches. Consider removing CHECK constraints entirely and relying on application-level validation (more flexible, same safety).
+**Affects:** both (schema + orchestrator + dispatch endpoint)
+

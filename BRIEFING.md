@@ -11,6 +11,8 @@
 - **Active companies:** 0 (Idea Scout ready, run `--scout-only` to generate first batch)
 - **Companies to import:** VerdeDesk (MVP on Vercel), Flolio (growth phase, import later)
 - **Blocked on:** 
+  - **Migration 002** must run against Neon before first orchestrator run (schema constraints)
+  - CRON_SECRET must be set in both Vercel env vars AND GitHub Actions secrets
   - Resend domain verification (need a real domain — Flolio's domain could work)
   - Gemini + Groq API keys (free, need to register)
   - First `--scout-only` run to generate 3 business proposals
@@ -18,6 +20,12 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-19 [chat] Critical schema fixes found during codebase review
+Full 78-file cross-reference found 7 issues that would crash the orchestrator on first real run: agent_actions.cycle_id/company_id were NOT NULL but Idea Scout, Healer, and Provisioner insert with NULL; agent CHECK constraint was missing 4 agent names (outreach, research_analyst, healer, orchestrator); approvals gate_type CHECK was missing 4 types (outreach_batch, vercel_pro_upgrade, social_account, first_revenue); settings table not in schema.sql; middleware didn't exclude /api/agents. Migration 002 fixes all of these. MISTAKES.md entry #13 captures the prevention rule.
+
+### 2026-03-19 [chat] Worker agent dispatch system built
+Vercel serverless endpoint (`/api/agents/dispatch`) + GitHub Actions scheduler (`.github/workflows/worker-agents.yml`). Worker agents (Growth, Outreach, Ops) now run independently of the Mac-based nightly loop. Growth: 3x/day, Ops: 4x/day, Outreach: daily. Each dispatch reads full context from Neon, calls Gemini or Groq, writes results back. €0 additional cost. Needs CRON_SECRET in both Vercel env vars and GitHub Actions secrets.
 
 ### 2026-03-19 [chat] Cross-company learning architecture (ADR-010)
 Decided: multi-repo, not monorepo. Each company keeps its own GitHub repo. Hive coordinates via shared Neon DB. Three mechanisms: (1) Provisioner injects playbook + pitfalls into new company CLAUDE.md, (2) Healer cross-correlates errors across companies before fixing, (3) Venture Brain creates cross-pollination directives. Polsia (comparable system, 1,100+ companies) uses the same pattern.
@@ -39,11 +47,13 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Register Gemini + Groq free API keys** — takes 2 min each, enables multi-provider routing
-2. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
-3. **First `--scout-only` run** — generates 3 business proposals for Carlos to review
-4. **Import VerdeDesk** — via dashboard import dialog, triggers onboarding + pattern extraction
-5. **First full nightly run** — with at least 1 approved company
+1. **Run migration 002** — `psql $DATABASE_URL -f migrations/002_fix_constraints.sql` (fixes schema crashes)
+2. **Set CRON_SECRET** — same value in Vercel env vars + GitHub Actions secrets
+3. **Register Gemini + Groq free API keys** — takes 2 min each, enables worker dispatch
+4. **Test worker dispatch** — `curl POST /api/agents/dispatch` with ops agent on verdedesk
+5. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
+6. **First `--scout-only` run** — generates 3 business proposals for Carlos to review
+7. **Import VerdeDesk** — via dashboard import dialog, triggers onboarding + pattern extraction
 
 ## Open Questions
 
