@@ -112,7 +112,7 @@ jobs:
             IMPORTANT: Write ALL decisions to the database. Update BRIEFING.md if state changed.
 
       - name: Chain dispatch
-        if: always() && steps.agent.outputs.conclusion == 'success'
+        if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |

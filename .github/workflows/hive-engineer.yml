@@ -105,7 +105,7 @@ jobs:
             - If you open a PR, output: { "pr_opened": true, "pr_number": N, "company": "slug" }
 
       - name: Chain dispatch
-        if: always() && steps.agent.outputs.conclusion == 'success'
+        if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |

@@ -100,7 +100,7 @@ jobs:
             MANDATORY: 3 proposals must include 1 PT, 1 Global, 1 best-pick. Write everything to Neon.
 
       - name: Chain dispatch
-        if: always() && steps.agent.outputs.conclusion == 'success'
+        if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
