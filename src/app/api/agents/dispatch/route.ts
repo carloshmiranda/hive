@@ -62,6 +62,18 @@ export async function POST(req: NextRequest) {
       SELECT id, cycle_number, ceo_plan FROM cycles
       WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 1
     `;
+
+    // Growth and Outreach must wait for a CEO plan — without one, they'd run blind
+    if ((agentName === "growth" || agentName === "outreach") && !latestCycle?.ceo_plan) {
+      return json({
+        ok: true,
+        skipped: true,
+        reason: `No CEO plan exists for ${company.slug} yet. Growth/Outreach wait for the CEO to create a cycle first.`,
+        agent: agentName,
+        company: company.slug,
+      });
+    }
+
     const ceoPlan = latestCycle?.ceo_plan || "No CEO plan yet — use your best judgment.";
 
     const metrics = await sql`
