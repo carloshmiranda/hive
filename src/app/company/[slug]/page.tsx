@@ -23,13 +23,23 @@ type Approval = {
   id: string; gate_type: string; title: string; description: string; status: string; created_at: string;
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  idea: "#948264", approved: "#64a0c8", provisioning: "#c8aa50", mvp: "#78b48c",
-  active: "#3cd296", paused: "#b48c64", killed: "#c85a50",
+const STATUS_MAP: Record<string, { label: string; color: string }> = {
+  idea: { label: "IDEA", color: "#9d9da8" },
+  approved: { label: "APPROVED", color: "#60a5fa" },
+  provisioning: { label: "BUILDING", color: "#f0b944" },
+  mvp: { label: "MVP", color: "#34d399" },
+  active: { label: "ACTIVE", color: "#34d399" },
+  paused: { label: "PAUSED", color: "#fb923c" },
+  killed: { label: "KILLED", color: "#f87171" },
 };
-const AGENT_COLORS: Record<string, string> = {
-  ceo: "#e8b84d", engineer: "#5ba8e8", growth: "#6dd490", ops: "#a88cdb",
-  idea_scout: "#70c4e8", orchestrator: "#e8a050",
+const AGENT_MAP: Record<string, { label: string; color: string }> = {
+  ceo: { label: "CEO", color: "#f0b944" },
+  scout: { label: "Scout", color: "#60a5fa" },
+  engineer: { label: "Engineer", color: "#34d399" },
+  growth: { label: "Growth", color: "#a78bfa" },
+  ops: { label: "Ops", color: "#f472b6" },
+  outreach: { label: "Outreach", color: "#fb923c" },
+  evolver: { label: "Evolver", color: "#38bdf8" },
 };
 
 function timeAgo(ts: string) {
@@ -55,7 +65,6 @@ export default function CompanyDetailPage() {
   const [sending, setSending] = useState(false);
 
   const fetchData = useCallback(async () => {
-    // Get company by slug
     const cRes = await fetch("/api/companies");
     if (!cRes.ok) return;
     const allCompanies = (await cRes.json()).data;
@@ -63,7 +72,6 @@ export default function CompanyDetailPage() {
     if (!comp) { setLoading(false); return; }
     setCompany(comp);
 
-    // Fetch all data for this company
     const [cyRes, acRes, meRes, apRes, reRes] = await Promise.all([
       fetch(`/api/cycles?company_id=${comp.id}&limit=20`),
       fetch(`/api/actions?company_id=${comp.id}&limit=50`),
@@ -107,31 +115,31 @@ export default function CompanyDetailPage() {
     fetchData();
   };
 
-  if (loading) return <div style={{ padding: 40, color: "#888" }}>Loading...</div>;
-  if (!company) return <div style={{ padding: 40, color: "#e85050" }}>Company "{slug}" not found</div>;
+  if (loading) return <div style={{ padding: 40, fontFamily: "var(--hive-sans)", color: "var(--hive-text-secondary)", fontSize: 13 }}>Loading...</div>;
+  if (!company) return <div style={{ padding: 40, fontFamily: "var(--hive-sans)", color: "var(--hive-red)", fontSize: 13 }}>Company &quot;{slug}&quot; not found</div>;
 
-  const statusColor = STATUS_COLORS[company.status] || "#888";
+  const status = STATUS_MAP[company.status] || STATUS_MAP.idea;
   const pendingApprovals = approvals.filter(a => a.status === "pending");
   const latestMetrics = metrics.slice(0, 10);
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 16px", fontFamily: "system-ui, -apple-system, sans-serif", color: "#c8c8c0" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 20px", fontFamily: "var(--hive-sans)", color: "var(--hive-text)", background: "var(--hive-bg)", minHeight: "100vh" }}>
 
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <Link href="/" style={{ color: "#888", fontSize: 13, textDecoration: "none" }}>← Dashboard</Link>
+        <Link href="/" style={{ color: "var(--hive-text-secondary)", fontSize: 13, textDecoration: "none" }}>← Dashboard</Link>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 500, color: "#f0f0ec", margin: 0 }}>{company.name}</h1>
-          <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", padding: "2px 8px", borderRadius: 3,
-            color: statusColor, background: statusColor + "1a", border: `1px solid ${statusColor}33` }}>
-            {company.status.toUpperCase()}
+          <h1 style={{ fontSize: 24, fontWeight: 600, color: "var(--hive-text)", margin: 0 }}>{company.name}</h1>
+          <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500, letterSpacing: "0.06em",
+            padding: "2px 8px", borderRadius: 4, color: status.color, background: status.color + "14", border: `1px solid ${status.color}2a` }}>
+            {status.label}
           </span>
         </div>
-        <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>{company.description}</div>
-        <div style={{ fontSize: 12, color: "#666", marginTop: 4, display: "flex", gap: 16 }}>
-          {company.vercel_url && <a href={company.vercel_url} target="_blank" rel="noreferrer" style={{ color: "#e8b84d", textDecoration: "none" }}>{company.vercel_url}</a>}
+        <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginTop: 4 }}>{company.description}</div>
+        <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", marginTop: 6, display: "flex", gap: 16, fontFamily: "var(--hive-mono)" }}>
+          {company.vercel_url && <a href={company.vercel_url} target="_blank" rel="noreferrer" style={{ color: "var(--hive-amber)", textDecoration: "none" }}>{company.vercel_url}</a>}
           <span>Created {timeAgo(company.created_at)}</span>
-          {company.killed_at && <span style={{ color: "#e85050" }}>Killed {timeAgo(company.killed_at)}: {company.kill_reason}</span>}
+          {company.killed_at && <span style={{ color: "var(--hive-red)" }}>Killed {timeAgo(company.killed_at)}: {company.kill_reason}</span>}
         </div>
       </div>
 
@@ -141,12 +149,15 @@ export default function CompanyDetailPage() {
           <input value={directive} onChange={e => setDirective(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") sendDirective(); }}
             placeholder={`Send directive to ${company.name}...`}
-            style={{ flex: 1, padding: "8px 12px", background: "#111", border: "1px solid #333", borderRadius: 6,
-              color: "#f0f0ec", fontSize: 13, outline: "none" }}
+            style={{ flex: 1, padding: "10px 14px", background: "var(--hive-surface)", border: "1px solid var(--hive-border)", borderRadius: 8,
+              color: "var(--hive-text)", fontSize: 13, fontFamily: "var(--hive-mono)", outline: "none", transition: "border-color 0.15s" }}
+            onFocus={e => { e.target.style.borderColor = "var(--hive-amber-border)"; }}
+            onBlur={e => { e.target.style.borderColor = "var(--hive-border)"; }}
           />
           <button onClick={sendDirective} disabled={sending || !directive.trim()}
-            style={{ padding: "8px 16px", background: sending ? "#333" : "#e8b84d20", border: "1px solid #e8b84d33",
-              borderRadius: 6, color: "#e8b84d", fontSize: 13, cursor: "pointer" }}>
+            style={{ padding: "10px 20px", background: "var(--hive-amber-bg)", border: "1px solid var(--hive-amber-border)",
+              borderRadius: 8, color: "var(--hive-amber)", fontSize: 13, fontFamily: "var(--hive-mono)", fontWeight: 500, cursor: "pointer",
+              opacity: directive.trim() ? 1 : 0.4 }}>
             Send
           </button>
         </div>
@@ -154,24 +165,27 @@ export default function CompanyDetailPage() {
 
       {/* Pending approvals */}
       {pendingApprovals.length > 0 && (
-        <div style={{ marginBottom: 24, padding: 16, background: "#e8b84d08", border: "1px solid #e8b84d22", borderRadius: 8 }}>
-          <h3 style={{ fontSize: 14, color: "#e8b84d", margin: "0 0 12px", fontWeight: 500 }}>
+        <div style={{ marginBottom: 24, padding: 20, background: "var(--hive-amber-bg)", border: "1px solid var(--hive-amber-border)", borderRadius: 10 }}>
+          <h3 style={{ fontSize: 14, color: "var(--hive-amber)", margin: "0 0 12px", fontWeight: 500 }}>
             {pendingApprovals.length} pending approval{pendingApprovals.length > 1 ? "s" : ""}
           </h3>
           {pendingApprovals.map(a => (
-            <div key={a.id} style={{ marginBottom: 12, padding: 12, background: "#0a0a09", borderRadius: 6, border: "1px solid #222" }}>
-              <div style={{ fontSize: 13, color: "#f0f0ec", marginBottom: 4 }}>
-                <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 3, background: "#534AB720", color: "#b090d0", marginRight: 8 }}>{a.gate_type}</span>
+            <div key={a.id} style={{ marginBottom: 12, padding: 14, background: "var(--hive-bg)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+              <div style={{ fontSize: 13, color: "var(--hive-text)", marginBottom: 4 }}>
+                <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", padding: "2px 7px", borderRadius: 4,
+                  background: "var(--hive-purple-bg)", color: "var(--hive-purple)", border: "1px solid var(--hive-purple-border)", marginRight: 8 }}>{a.gate_type}</span>
                 {a.title}
               </div>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 8, whiteSpace: "pre-wrap" }}>{a.description.slice(0, 300)}</div>
+              <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginBottom: 10, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{a.description.slice(0, 300)}</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => handleApproval(a.id, "approved")}
-                  style={{ padding: "4px 12px", background: "#1D9E7520", border: "1px solid #1D9E7533", borderRadius: 4, color: "#5DCAA5", fontSize: 12, cursor: "pointer" }}>
+                  style={{ padding: "6px 16px", background: "var(--hive-green-bg)", border: "1px solid var(--hive-green-border)",
+                    borderRadius: 6, color: "var(--hive-green)", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, cursor: "pointer" }}>
                   Approve
                 </button>
                 <button onClick={() => handleApproval(a.id, "rejected")}
-                  style={{ padding: "4px 12px", background: "#E24B4A20", border: "1px solid #E24B4A33", borderRadius: 4, color: "#F09595", fontSize: 12, cursor: "pointer" }}>
+                  style={{ padding: "6px 16px", background: "var(--hive-red-bg)", border: "1px solid var(--hive-red-border)",
+                    borderRadius: 6, color: "var(--hive-red)", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, cursor: "pointer" }}>
                   Reject
                 </button>
               </div>
@@ -183,7 +197,7 @@ export default function CompanyDetailPage() {
       {/* Metrics */}
       {latestMetrics.length > 0 && (
         <div style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 14, color: "#f0f0ec", margin: "0 0 12px", fontWeight: 500 }}>Latest metrics</h3>
+          <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: "0 0 12px", fontWeight: 500 }}>Latest metrics</h3>
           {(() => {
             const latest = latestMetrics[0];
             const metricItems = [
@@ -197,10 +211,10 @@ export default function CompanyDetailPage() {
             return (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
                 {metricItems.map((m, i) => (
-                  <div key={i} style={{ padding: "10px 12px", background: "#111", borderRadius: 6, border: "1px solid #222" }}>
-                    <div style={{ fontSize: 18, fontWeight: 500, color: m.highlight ? "#5DCAA5" : "#f0f0ec" }}>{m.value}</div>
-                    <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{m.label}</div>
-                    <div style={{ fontSize: 10, color: "#555" }}>{latest.date}</div>
+                  <div key={i} style={{ padding: "12px 14px", background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+                    <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
+                    <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginTop: 2 }}>{m.label}</div>
+                    <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>{latest.date}</div>
                   </div>
                 ))}
               </div>
@@ -212,7 +226,7 @@ export default function CompanyDetailPage() {
       {/* Research Reports */}
       {research.length > 0 && (
         <div style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 14, color: "#f0f0ec", margin: "0 0 12px", fontWeight: 500 }}>Research intelligence</h3>
+          <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: "0 0 12px", fontWeight: 500 }}>Research intelligence</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {research.map(r => {
               const icons: Record<string, string> = {
@@ -225,7 +239,6 @@ export default function CompanyDetailPage() {
               };
               const content = typeof r.content === "string" ? JSON.parse(r.content) : r.content;
 
-              // Quick stats per report type
               let stats = "";
               if (r.report_type === "competitive_analysis" && content.direct_competitors) {
                 stats = `${content.direct_competitors.length} competitors mapped`;
@@ -242,17 +255,17 @@ export default function CompanyDetailPage() {
               }
 
               return (
-                <details key={r.id} style={{ background: "#111", borderRadius: 6, border: "1px solid #222" }}>
-                  <summary style={{ padding: "10px 12px", cursor: "pointer", fontSize: 13, color: "#c8c8c0", listStyle: "none", display: "flex", alignItems: "center", gap: 8 }}>
+                <details key={r.id} style={{ background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+                  <summary style={{ padding: "12px 14px", cursor: "pointer", fontSize: 13, color: "var(--hive-text-secondary)", listStyle: "none", display: "flex", alignItems: "center", gap: 8 }}>
                     <span>{icons[r.report_type] || "📄"}</span>
-                    <span style={{ color: "#f0f0ec", fontWeight: 500 }}>{labels[r.report_type] || r.report_type}</span>
-                    {stats && <span style={{ fontSize: 11, color: "#888" }}>— {stats}</span>}
-                    <span style={{ marginLeft: "auto", fontSize: 10, color: "#555" }}>{timeAgo(r.updated_at)}</span>
+                    <span style={{ color: "var(--hive-text)", fontWeight: 500 }}>{labels[r.report_type] || r.report_type}</span>
+                    {stats && <span style={{ fontSize: 12, color: "var(--hive-text-tertiary)" }}>— {stats}</span>}
+                    <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>{timeAgo(r.updated_at)}</span>
                   </summary>
-                  <div style={{ padding: "0 12px 12px" }}>
-                    {r.summary && <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8 }}>{r.summary}</div>}
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 11, color: "#888", maxHeight: 300, overflow: "auto",
-                      padding: 8, background: "#0a0a09", borderRadius: 4 }}>
+                  <div style={{ padding: "0 14px 14px" }}>
+                    {r.summary && <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginBottom: 8 }}>{r.summary}</div>}
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, color: "var(--hive-text-tertiary)", maxHeight: 300, overflow: "auto",
+                      padding: 10, background: "var(--hive-bg)", borderRadius: 6, fontFamily: "var(--hive-mono)" }}>
                       {JSON.stringify(content, null, 2).slice(0, 2000)}
                     </pre>
                   </div>
@@ -265,11 +278,11 @@ export default function CompanyDetailPage() {
 
       {/* Cycles */}
       <div style={{ marginBottom: 24 }}>
-        <h3 style={{ fontSize: 14, color: "#f0f0ec", margin: "0 0 12px", fontWeight: 500 }}>
+        <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: "0 0 12px", fontWeight: 500 }}>
           Cycles ({cycles.length})
         </h3>
         {cycles.length === 0 ? (
-          <div style={{ padding: 16, color: "#666", fontSize: 13, background: "#111", borderRadius: 8, border: "1px solid #222" }}>No cycles yet</div>
+          <div style={{ padding: 20, color: "var(--hive-text-tertiary)", fontSize: 13, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>No cycles yet</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {cycles.map(c => {
@@ -278,33 +291,35 @@ export default function CompanyDetailPage() {
                 const review = typeof c.ceo_review === "string" ? JSON.parse(c.ceo_review) : c.ceo_review;
                 score = review?.review?.score || review?.score || null;
               } catch {}
-              const scoreColor = score !== null ? (score >= 7 ? "#5DCAA5" : score >= 4 ? "#e8b84d" : "#e85050") : "#666";
+              const scoreColor = score !== null ? (score >= 7 ? "var(--hive-green)" : score >= 4 ? "var(--hive-amber)" : "var(--hive-red)") : "var(--hive-text-tertiary)";
 
               return (
-                <details key={c.id} style={{ background: "#111", borderRadius: 6, border: "1px solid #222" }}>
-                  <summary style={{ padding: "10px 12px", cursor: "pointer", fontSize: 13, color: "#c8c8c0", listStyle: "none" }}>
-                    <span style={{ color: "#f0f0ec", fontWeight: 500 }}>Cycle {c.cycle_number}</span>
-                    <span style={{ marginLeft: 8, fontSize: 11, color: c.status === "completed" ? "#5DCAA5" : c.status === "failed" ? "#e85050" : "#888" }}>
+                <details key={c.id} style={{ background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+                  <summary style={{ padding: "12px 14px", cursor: "pointer", fontSize: 13, color: "var(--hive-text-secondary)", listStyle: "none" }}>
+                    <span style={{ color: "var(--hive-text)", fontWeight: 500 }}>Cycle {c.cycle_number}</span>
+                    <span style={{ marginLeft: 8, fontSize: 12, color: c.status === "completed" ? "var(--hive-green)" : c.status === "failed" ? "var(--hive-red)" : "var(--hive-text-tertiary)" }}>
                       {c.status}
                     </span>
                     {score !== null && (
-                      <span style={{ marginLeft: 8, fontSize: 11, color: scoreColor, fontWeight: 500 }}>{score}/10</span>
+                      <span style={{ marginLeft: 8, fontSize: 12, fontFamily: "var(--hive-mono)", color: scoreColor, fontWeight: 500 }}>{score}/10</span>
                     )}
-                    <span style={{ float: "right", fontSize: 11, color: "#666" }}>{timeAgo(c.started_at)}</span>
+                    <span style={{ float: "right", fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>{timeAgo(c.started_at)}</span>
                   </summary>
-                  <div style={{ padding: "0 12px 12px", fontSize: 12, color: "#999" }}>
+                  <div style={{ padding: "0 14px 14px", fontSize: 13, color: "var(--hive-text-secondary)" }}>
                     {c.ceo_plan && (
-                      <div style={{ marginBottom: 8 }}>
-                        <div style={{ color: "#e8b84d", fontSize: 11, marginBottom: 4 }}>CEO Plan:</div>
-                        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 11, color: "#aaa", maxHeight: 200, overflow: "auto" }}>
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ color: "var(--hive-amber)", fontSize: 12, fontFamily: "var(--hive-mono)", marginBottom: 4 }}>CEO Plan:</div>
+                        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, color: "var(--hive-text-secondary)", maxHeight: 200, overflow: "auto",
+                          fontFamily: "var(--hive-mono)" }}>
                           {typeof c.ceo_plan === "string" ? c.ceo_plan.slice(0, 500) : JSON.stringify(c.ceo_plan, null, 2).slice(0, 500)}
                         </pre>
                       </div>
                     )}
                     {c.ceo_review && (
                       <div>
-                        <div style={{ color: "#a88cdb", fontSize: 11, marginBottom: 4 }}>CEO Review:</div>
-                        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 11, color: "#aaa", maxHeight: 200, overflow: "auto" }}>
+                        <div style={{ color: "var(--hive-purple)", fontSize: 12, fontFamily: "var(--hive-mono)", marginBottom: 4 }}>CEO Review:</div>
+                        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, color: "var(--hive-text-secondary)", maxHeight: 200, overflow: "auto",
+                          fontFamily: "var(--hive-mono)" }}>
                           {typeof c.ceo_review === "string" ? c.ceo_review.slice(0, 500) : JSON.stringify(c.ceo_review, null, 2).slice(0, 500)}
                         </pre>
                       </div>
@@ -319,32 +334,37 @@ export default function CompanyDetailPage() {
 
       {/* Agent actions */}
       <div>
-        <h3 style={{ fontSize: 14, color: "#f0f0ec", margin: "0 0 12px", fontWeight: 500 }}>
+        <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: "0 0 12px", fontWeight: 500 }}>
           Agent activity ({actions.length})
         </h3>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {actions.slice(0, 30).map(a => {
-            const color = AGENT_COLORS[a.agent] || "#888";
+            const agent = AGENT_MAP[a.agent] || { label: a.agent.slice(0, 3).toUpperCase(), color: "#9d9da8" };
+            const isFail = a.status === "failed";
             return (
-              <div key={a.id} style={{ padding: "8px 12px", background: "#111", borderRadius: 6, border: "1px solid #222",
-                fontSize: 12, display: "flex", alignItems: "flex-start", gap: 8 }}>
-                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", padding: "2px 6px", borderRadius: 3,
-                  color, background: color + "18", border: `1px solid ${color}33`, flexShrink: 0, marginTop: 1 }}>
-                  {a.agent.slice(0, 3).toUpperCase()}
+              <div key={a.id} style={{
+                padding: "10px 14px", background: isFail ? "var(--hive-red-bg)" : "var(--hive-surface)", borderRadius: 8,
+                border: `1px solid ${isFail ? "var(--hive-red-border)" : "var(--hive-border)"}`,
+                fontSize: 13, display: "flex", alignItems: "flex-start", gap: 10,
+              }}>
+                <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500, letterSpacing: "0.06em",
+                  padding: "2px 7px", borderRadius: 4, color: agent.color, background: agent.color + "14",
+                  border: `1px solid ${agent.color}2a`, flexShrink: 0, marginTop: 1 }}>
+                  {agent.label}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ color: "#c8c8c0" }}>{a.description.slice(0, 200)}</div>
-                  {a.error && <div style={{ color: "#e85050", fontSize: 11, marginTop: 2 }}>{a.error.slice(0, 150)}</div>}
-                  {a.reflection && <div style={{ color: "#b090d0", fontSize: 11, marginTop: 2, fontStyle: "italic" }}>{a.reflection.slice(0, 150)}</div>}
+                  <div style={{ color: isFail ? "var(--hive-red)" : "var(--hive-text-secondary)", lineHeight: 1.5 }}>{a.description.slice(0, 200)}</div>
+                  {a.error && <div style={{ color: "var(--hive-red)", fontSize: 12, marginTop: 4, fontFamily: "var(--hive-mono)" }}>{a.error.slice(0, 150)}</div>}
+                  {a.reflection && <div style={{ color: "var(--hive-purple)", fontSize: 12, marginTop: 4, fontStyle: "italic" }}>{a.reflection.slice(0, 150)}</div>}
                 </div>
-                <span style={{ fontSize: 10, color: "#555", flexShrink: 0 }}>
+                <span style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", flexShrink: 0 }}>
                   {a.status === "failed" ? "✗" : a.status === "escalated" ? "!" : "✓"} {a.finished_at ? timeAgo(a.finished_at) : ""}
                 </span>
               </div>
             );
           })}
           {actions.length === 0 && (
-            <div style={{ padding: 16, color: "#666", fontSize: 13, background: "#111", borderRadius: 8, border: "1px solid #222" }}>No activity yet</div>
+            <div style={{ padding: 20, color: "var(--hive-text-tertiary)", fontSize: 13, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>No activity yet</div>
           )}
         </div>
       </div>

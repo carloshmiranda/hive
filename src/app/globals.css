@@ -1,20 +1,34 @@
 @import "tailwindcss";
 
 :root {
-  --hive-bg: #08080d;
-  --hive-surface: #0e0e15;
-  --hive-surface-2: #14141e;
-  --hive-border: #1e1e2e;
-  --hive-text: #e0e0e8;
-  --hive-muted: #6b6b7b;
-  --hive-dim: #3a3a48;
-  --hive-amber: #e8b84d;
-  --hive-green: #3cd296;
-  --hive-red: #e85a50;
-  --hive-blue: #5ba8e8;
-  --hive-purple: #a88cdb;
-  --hive-mono: "JetBrains Mono", monospace;
-  --hive-sans: "DM Sans", system-ui, sans-serif;
+  --hive-bg: #0c0c0f;
+  --hive-surface: #131318;
+  --hive-surface-hover: #1a1a21;
+  --hive-surface-raised: #18181f;
+  --hive-border: #25252e;
+  --hive-border-subtle: #1e1e26;
+  --hive-text: #e8e8ed;
+  --hive-text-secondary: #9d9da8;
+  --hive-text-tertiary: #6c6c78;
+  --hive-text-dim: #4a4a55;
+  --hive-amber: #f0b944;
+  --hive-amber-muted: #c49a30;
+  --hive-amber-bg: rgba(240,185,68,0.08);
+  --hive-amber-border: rgba(240,185,68,0.18);
+  --hive-green: #34d399;
+  --hive-green-bg: rgba(52,211,153,0.08);
+  --hive-green-border: rgba(52,211,153,0.18);
+  --hive-red: #f87171;
+  --hive-red-bg: rgba(248,113,113,0.06);
+  --hive-red-border: rgba(248,113,113,0.15);
+  --hive-blue: #60a5fa;
+  --hive-blue-bg: rgba(96,165,250,0.08);
+  --hive-blue-border: rgba(96,165,250,0.18);
+  --hive-purple: #a78bfa;
+  --hive-purple-bg: rgba(167,139,250,0.08);
+  --hive-purple-border: rgba(167,139,250,0.18);
+  --hive-mono: 'IBM Plex Mono', monospace;
+  --hive-sans: 'Outfit', sans-serif;
 }
 
 body {
