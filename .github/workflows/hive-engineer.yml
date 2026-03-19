@@ -109,8 +109,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          RESULT=$(cat "${{ steps.agent.outputs.execution_file }}" | jq -r '[.[] | select(.role == "assistant")] | last | .content // ""' 2>/dev/null || echo "{}")
+          RESULT=$(cat "${{ steps.agent.outputs.execution_file }}" | jq -r '[.[] | select(.role == "assistant")] | last | if (.content | type) == "array" then [.content[] | select(.type == "text") | .text] | join("\n") else (.content // "") end' 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
+          echo "--- Chain dispatch: parsing agent output ---"
+          echo "$RESULT" | tail -20
 
           dispatch() {
             curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
