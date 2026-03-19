@@ -27,6 +27,19 @@
 
 ---
 
+## Planned
+
+### 🟢 P2 — Engineer agent must verify deploy status after push (from VerdeDesk)
+VerdeDesk taught us that agents push code and move on without checking if the Vercel deploy succeeded. Add a mandatory post-deploy verification step to the Engineer prompt: after `git push`, call `GET /v6/deployments?projectId=X&limit=1`, confirm `readyState === "READY"`. If ERROR, read build logs and fix before moving on. This should also be added to `src/lib/vercel.ts` as a `checkDeployStatus()` helper.
+
+### 🟢 P2 — Vercel REST API deploy path for non-Next.js companies (from VerdeDesk)
+VerdeDesk discovered that `vercel --prod` CLI and GitHub webhooks fail for projects with `rootDirectory` set or non-Next.js frameworks. Add a `deployViaApi()` function to `src/lib/vercel.ts` that uses `POST /v13/deployments` with `gitSource`. The Engineer agent should detect the framework and use the API path when CLI deploy fails or when the company uses Vite/Astro/SvelteKit.
+
+### 🟢 P2 — Staged validation gates for new companies (from VerdeDesk)
+VerdeDesk uses a validation stage: deploy MVP → collect waitlist signups → only proceed to full build after hitting a threshold (50 signups). This is a smart pattern for reducing wasted effort. The CEO agent should be able to set validation gates (e.g. "10 waitlist signups", "first paying customer") that pause feature development until the gate is met. This could be a new `validation_gates` table or a field on the `companies` table.
+
+---
+
 ## Future Vision
 
 ### ⚪ P3 — Cloud migration

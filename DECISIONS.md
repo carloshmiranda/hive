@@ -112,3 +112,14 @@
 - All Gemini: can't do tool use (no git, no deploy, no web search)
 - Ollama local: latency too high for nightly batch, no web access
 **Consequences:** Claude quota reserved for ~6 brain tasks per company cycle (CEO plan, CEO review, Research, Engineer, Healer, Evolver) plus portfolio-level tasks. Growth, Outreach, and Ops run on free tiers at ~7,000+ requests/day capacity. If Gemini/Groq keys aren't configured, everything falls back to Claude (works for 1-2 companies, breaks at 3+).
+
+### ADR-010: Import flow includes knowledge assimilation (Phase 3)
+**Date:** 2026-03-19
+**Status:** Accepted (extends ADR-007)
+**Context:** VerdeDesk import revealed that pattern extraction (Phase 2) only reads code. Operational wisdom documented in MD files (CLAUDE.md, MISTAKES.md, DECISIONS.md) and Claude memory files was lost. VerdeDesk had critical learnings about Vercel deploy reliability, deploy verification, and validation staging — none transferred to Hive.
+**Decision:** Import onboarding now has 3 phases. Phase 3 (Knowledge Assimilation) reads all MD files from the imported repo + Claude memory directories, compares against Hive's current knowledge files, and incrementally adds new learnings to MISTAKES.md, BACKLOG.md, playbook, and DECISIONS.md review directives. Only genuinely new and useful knowledge is added — no duplicates.
+**Alternatives considered:**
+- Manual review of imported project docs: doesn't scale, relies on Carlos remembering to check
+- Only extract code patterns: what was happening before — misses the hardest-won learnings (things that broke in production)
+- Copy all MD files wholesale: creates noise, duplicates existing knowledge, includes project-specific details
+**Consequences:** Every import now transfers institutional memory, not just code patterns. Deployment gotchas, architecture insights, and operational preferences accumulate automatically. The playbook, MISTAKES.md, and BACKLOG.md grow richer with every import. Slight increase in onboarding time (one additional Claude dispatch) but the knowledge ROI is high.

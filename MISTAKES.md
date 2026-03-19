@@ -91,3 +91,17 @@
 **Fix applied:** Middleware now excludes: `api/webhooks`, `api/cron`, `api/health`. GitHub webhook got HMAC-SHA256 signature verification as its own auth layer.
 **Prevention:** Every time a new public endpoint is added, check the middleware matcher. Webhooks and crons ALWAYS need their own auth mechanism (signature verification, bearer token) — they can never rely on session auth.
 **Affects:** webhooks, cron, health endpoint
+
+### 2026-03-19 Vercel CLI and GitHub webhook deploys fail for non-Next.js projects (from VerdeDesk import)
+**What happened:** VerdeDesk (React + Vite) could not be deployed via `vercel --prod` CLI or GitHub webhook → production. Both produced instant ERROR (0ms, no build logs). Only the Vercel REST API with `gitSource` produced READY production deploys.
+**Root cause:** Projects with `rootDirectory` set (VerdeDesk uses `MVP/`) and non-Next.js frameworks (Vite) have deploy quirks that the CLI and webhook pathways don't handle reliably. GitHub webhooks worked for preview but not production.
+**Fix applied:** VerdeDesk uses direct REST API calls: `POST /v13/deployments` with `gitSource.type: "github"`, `gitSource.repoId`, `gitSource.ref: "main"`, `target: "production"`.
+**Prevention:** When the Engineer agent deploys non-Next.js companies or companies with `rootDirectory` set, use the Vercel REST API (`/v13/deployments` with `gitSource`) instead of CLI. Always verify deploy readyState after triggering — don't assume success. The `vercel.ts` lib should have a `deployViaApi()` path alongside the existing flow.
+**Affects:** companies (especially non-Next.js stacks)
+
+### 2026-03-19 Deploy-and-forget — agents must verify deploy status (from VerdeDesk import)
+**What happened:** The VerdeDesk autonomous agent shipped code and moved on without checking if Vercel deploys actually succeeded. Multiple deploys were ERROR status but the agent kept iterating on features that weren't live.
+**Root cause:** No post-deploy verification step. The agent treated "push to GitHub" as equivalent to "deployed successfully."
+**Fix applied:** VerdeDesk added explicit deploy status checks after each push.
+**Prevention:** Every Engineer agent cycle that pushes code MUST verify the deploy landed. After `git push`, check Vercel deployment status via API (`GET /v6/deployments?projectId=X&limit=1`) and confirm `readyState === "READY"`. If ERROR, the agent should read build logs and fix before moving on. This should be in the Engineer prompt as a mandatory post-deploy step.
+**Affects:** both
