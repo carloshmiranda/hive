@@ -34,10 +34,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (decision === "approved") {
     switch (approval.gate_type) {
       case "new_company":
-        // Move company from 'idea' to 'approved' — provisioner picks it up
+        // Move company from 'idea' to 'approved' — but don't downgrade imports already at 'mvp'
         if (approval.company_id) {
-          await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${approval.company_id}`;
+          await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${approval.company_id} AND status = 'idea'`;
         }
+        // Dispatch CEO to route the approval
+        await dispatchEvent("gate_approved", { gate_type: "new_company", company_id: approval.company_id });
         break;
 
       case "kill_company":
@@ -119,4 +121,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   return json(approval);
+}
+
+async function dispatchEvent(eventType: string, payload: Record<string, any>) {
+  try {
+    const ghPat = process.env.GH_PAT;
+    const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
+    if (!ghPat) return;
+    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `token ${ghPat}`,
+        Accept: "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ event_type: eventType, client_payload: payload }),
+    });
+  } catch { /* non-critical */ }
 }
