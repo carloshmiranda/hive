@@ -145,6 +145,39 @@ jobs:
             const failRate = failureStats.total > 0 ? failureStats.failed / failureStats.total : 0;
             results.high_failure_rate = failRate > 0.2 && failureStats.total >= 5;
 
+            // 8. Agents hitting max_turns (wasting quota without completing work)
+            const maxTurnsHits = await sql\`
+              SELECT agent, COUNT(*) as cnt
+              FROM agent_actions
+              WHERE status = 'failed'
+              AND error ILIKE '%max_turns%'
+              AND finished_at > NOW() - INTERVAL '48 hours'
+              GROUP BY agent
+              HAVING COUNT(*) >= 2
+            \`;
+            results.max_turns_exhaustion = maxTurnsHits.map(r => ({ agent: r.agent, count: parseInt(r.cnt) }));
+
+            // 9. Chain dispatch gaps (agent succeeded but no downstream agent ran within 30min)
+            const chainGaps = await sql\`
+              SELECT aa.agent as source_agent, aa.company_id,
+                c.slug, aa.finished_at,
+                aa.output::text as output_text
+              FROM agent_actions aa
+              JOIN companies c ON c.id = aa.company_id
+              WHERE aa.status = 'success'
+              AND aa.agent = 'ceo'
+              AND aa.output::text ILIKE '%needs_feature%true%'
+              AND aa.finished_at > NOW() - INTERVAL '48 hours'
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_actions aa2
+                WHERE aa2.agent = 'engineer'
+                AND aa2.company_id = aa.company_id
+                AND aa2.started_at > aa.finished_at
+                AND aa2.started_at < aa.finished_at + INTERVAL '30 minutes'
+              )
+            \`;
+            results.chain_gaps = chainGaps.map(r => ({ company: r.slug, source: r.source_agent }));
+
             console.log(JSON.stringify(results));
             await sql.end();
           }
@@ -212,7 +245,29 @@ jobs:
             DISPATCHED=$((DISPATCHED + 1))
           fi
 
-          # 8. Deploy drift: Hive main SHA vs Vercel production SHA
+          # 8. Max turns exhaustion → log warning + trigger Evolver
+          MAX_TURNS_AGENTS=$(echo "$RESULTS" | jq -r '.max_turns_exhaustion | length')
+          if [ "$MAX_TURNS_AGENTS" -gt 0 ]; then
+            echo "WARNING: Agents hitting max_turns repeatedly:"
+            echo "$RESULTS" | jq -r '.max_turns_exhaustion[] | "  \(.agent): \(.count) times in 48h"'
+            dispatch "evolve_trigger" "{\"source\":\"sentinel\",\"reason\":\"max_turns_exhaustion\",\"agents\":$(echo "$RESULTS" | jq -c '.max_turns_exhaustion')}"
+            DISPATCHED=$((DISPATCHED + 1))
+          fi
+
+          # 9. Chain dispatch gaps → re-dispatch the missed downstream agent
+          CHAIN_GAPS=$(echo "$RESULTS" | jq -r '.chain_gaps | length')
+          if [ "$CHAIN_GAPS" -gt 0 ]; then
+            echo "WARNING: Chain dispatch gaps detected:"
+            for i in $(seq 0 $((CHAIN_GAPS - 1))); do
+              SLUG=$(echo "$RESULTS" | jq -r ".chain_gaps[$i].company")
+              SOURCE=$(echo "$RESULTS" | jq -r ".chain_gaps[$i].source")
+              echo "  $SOURCE → engineer missed for $SLUG — re-dispatching"
+              dispatch "feature_request" "{\"source\":\"sentinel_recovery\",\"company\":\"$SLUG\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 10. Deploy drift: Hive main SHA vs Vercel production SHA
           if [ -n "$VERCEL_TOKEN" ]; then
             MAIN_SHA=$(curl -s -H "Authorization: token $GH_TOKEN" \
               "https://api.github.com/repos/carloshmiranda/hive/commits/main" \

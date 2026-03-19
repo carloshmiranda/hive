@@ -104,6 +104,35 @@ jobs:
             - Write to agent_actions table: what you did, status, any errors
             - If you open a PR, output: { "pr_opened": true, "pr_number": N, "company": "slug" }
 
+      - name: Log failure to DB
+        if: always() && steps.agent.outcome == 'failure'
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+          TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+          COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+          COMPANY=$(echo '${{ steps.context.outputs.payload }}' | jq -r '.company // ""' 2>/dev/null || echo "")
+
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function log() {
+            const companyId = '${COMPANY}' ? (await sql\`SELECT id FROM companies WHERE slug = ${COMPANY} LIMIT 1\`)[0]?.id : null;
+            await sql\`
+              INSERT INTO agent_actions (agent, action_type, status, error, output, started_at, finished_at, company_id)
+              VALUES ('engineer', 'feature_request', 'failed',
+                \${'error_' + '${SUBTYPE}' + ': exhausted after ${TURNS} turns (\$${COST} USD)'},
+                \${JSON.stringify({subtype: '${SUBTYPE}', turns: parseInt('${TURNS}'), cost: parseFloat('${COST}')})}::jsonb,
+                NOW() - INTERVAL '${TURNS} minutes', NOW(),
+                \${companyId})
+            \`;
+            await sql.end();
+          }
+          log().catch(e => console.error('DB log failed:', e.message));
+          "
+          echo "Logged failure: $SUBTYPE ($TURNS turns, \$$COST)"
+
       - name: Chain dispatch
         if: always() && steps.agent.outcome == 'success'
         env:
