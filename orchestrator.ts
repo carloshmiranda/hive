@@ -110,13 +110,15 @@ async function dispatch(opts: DispatchOptions): Promise<string> {
 // === CLAUDE (CLI with tool use) ===
 async function dispatchClaude(opts: DispatchOptions): Promise<string> {
   const args = ["-p", opts.prompt, "--output-format", "text"];
-  if (opts.cwd) args.push("--cwd", opts.cwd);
   if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
   if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
   const timeout = opts.timeoutMs || 5 * 60 * 1000;
+  // Set working directory via spawn cwd option (not --cwd flag which doesn't exist)
+  const spawnOpts: any = { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] };
+  if (opts.cwd) spawnOpts.cwd = opts.cwd;
 
   return new Promise((resolve, reject) => {
-    const proc = spawn("claude", args, { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn("claude", args, spawnOpts);
     let stdout = "", stderr = "", killed = false;
     proc.stdout.on("data", (c: Buffer) => { stdout += c.toString(); });
     proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
@@ -767,7 +769,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
     // Cycle 0: Full research (market + competitive + SEO) on first run
     // Every 7 cycles: Refresh competitive analysis only (market shifts)
     // On directive: "refresh research" triggers full re-run
-    const isFirstCycle = cycleNumber === 1 && researchReports.length === 0;
+    const isFirstCycle = researchReports.length === 0; // No reports yet — run full Cycle 0 research
     const isRefreshCycle = cycleNumber > 1 && cycleNumber % 7 === 0;
     const hasRefreshDirective = directives.some(d => d.text.toLowerCase().includes("refresh research"));
     const needsResearch = isFirstCycle || isRefreshCycle || hasRefreshDirective;
@@ -883,13 +885,19 @@ After each JSON block, write a 1-2 sentence summary.`,
     // Step 2: Engineer executes
     console.log("  ├─ Engineer executing...");
     const engPrompt = await getActivePrompt("engineer", companyCtx);
+    const companyCwd = `/Users/carlos.miranda/Documents/Github/${company.slug}`;
+    const companyRepoExists = existsSync(companyCwd);
+    if (!companyRepoExists) {
+      console.log(`    ⚠ Repo not cloned locally (${companyCwd}) — Engineer will clone first`);
+    }
     await executeAgent({
       agent: "engineer",
       companyId: company.id,
       cycleId,
-      prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.`,
+      prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.` +
+        (!companyRepoExists ? `\n\nNOTE: The repo is not cloned locally. First clone it: git clone https://github.com/carlos-miranda/${company.slug}.git /Users/carlos.miranda/Documents/Github/${company.slug}` : ""),
       context,
-      cwd: `/Users/carlos.miranda/Documents/Github/${company.slug}`, // local repo path
+      cwd: companyRepoExists ? companyCwd : `/Users/carlos.miranda/Documents/Github`, // fallback to parent dir if not cloned
     });
 
     // Step 3: Growth executes (inbound: content, SEO, social)
