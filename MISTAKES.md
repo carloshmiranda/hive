@@ -92,30 +92,10 @@
 **Prevention:** Every time a new public endpoint is added, check the middleware matcher. Webhooks and crons ALWAYS need their own auth mechanism (signature verification, bearer token) — they can never rely on session auth.
 **Affects:** webhooks, cron, health endpoint
 
-### 2026-03-19 claude CLI has no --cwd flag
-**What happened:** Engineer agent failed all 3 attempts with `error: unknown option '--cwd'`. Every company cycle lost the Engineer entirely.
-**Root cause:** The `dispatchClaude()` function passed `--cwd` as a CLI argument, but `claude` CLI has no such flag. The correct way to set working directory is via `spawn()`'s `cwd` option in the spawn options object.
-**Fix applied:** Removed `--cwd` from args. Set `cwd` in `spawn()` options: `spawn("claude", args, { cwd: opts.cwd, ... })`.
-**Prevention:** Always verify CLI flags with `claude --help` before using them. The Claude CLI uses `--add-dir` for additional directories, but working directory is set via the process, not a flag.
-**Affects:** orchestrator, all agents with cwd (Engineer, Provisioner, Onboarding, Healer)
+## 12. Vercel subdomains cannot be verified for email sending
 
-### 2026-03-19 Research Analyst Cycle 0 only triggered on cycleNumber === 1
-**What happened:** VerdeDesk had 0 research reports but was on Cycle 4. Research Analyst never ran because the condition required `cycleNumber === 1 && researchReports.length === 0`.
-**Root cause:** Dry runs and failed cycles incremented the cycle number, but no research was ever produced. The condition was too strict.
-**Fix applied:** Changed to `researchReports.length === 0` — triggers full research whenever there are no reports, regardless of cycle number.
-**Prevention:** Trigger conditions for "first time" actions should check for the absence of the output (no reports), not the sequence number (cycle 1).
-**Affects:** orchestrator, research_analyst
+**What happened:** Orchestrator tried sending from `outreach@company.hive.local` — a fake domain that Resend immediately rejects. Vercel-provided subdomains (`hive-phi.vercel.app`) can't have DNS records added since the parent domain (`vercel.app`) is owned by Vercel.
 
-### 2026-03-19 Vercel CLI and GitHub webhook deploys fail for non-Next.js projects (from VerdeDesk import)
-**What happened:** VerdeDesk (React + Vite) could not be deployed via `vercel --prod` CLI or GitHub webhook → production. Both produced instant ERROR (0ms, no build logs). Only the Vercel REST API with `gitSource` produced READY production deploys.
-**Root cause:** Projects with `rootDirectory` set (VerdeDesk uses `MVP/`) and non-Next.js frameworks (Vite) have deploy quirks that the CLI and webhook pathways don't handle reliably. GitHub webhooks worked for preview but not production.
-**Fix applied:** VerdeDesk uses direct REST API calls: `POST /v13/deployments` with `gitSource.type: "github"`, `gitSource.repoId`, `gitSource.ref: "main"`, `target: "production"`.
-**Prevention:** When the Engineer agent deploys non-Next.js companies or companies with `rootDirectory` set, use the Vercel REST API (`/v13/deployments` with `gitSource`) instead of CLI. Always verify deploy readyState after triggering — don't assume success. The `vercel.ts` lib should have a `deployViaApi()` path alongside the existing flow.
-**Affects:** companies (especially non-Next.js stacks)
+**Fix:** Email architecture now has two modes. Test mode uses `onboarding@resend.dev` (only reaches Resend account owner — fine for digest). Verified mode requires a real domain with Resend DNS records (DKIM + SPF + MX) added. The `sending_domain` setting controls which mode is active. Cold outreach emails are SKIPPED entirely unless a verified domain exists — this prevents silent failures and spam-folder delivery.
 
-### 2026-03-19 Deploy-and-forget — agents must verify deploy status (from VerdeDesk import)
-**What happened:** The VerdeDesk autonomous agent shipped code and moved on without checking if Vercel deploys actually succeeded. Multiple deploys were ERROR status but the agent kept iterating on features that weren't live.
-**Root cause:** No post-deploy verification step. The agent treated "push to GitHub" as equivalent to "deployed successfully."
-**Fix applied:** VerdeDesk added explicit deploy status checks after each push.
-**Prevention:** Every Engineer agent cycle that pushes code MUST verify the deploy landed. After `git push`, check Vercel deployment status via API (`GET /v6/deployments?projectId=X&limit=1`) and confirm `readyState === "READY"`. If ERROR, the agent should read build logs and fix before moving on. This should be in the Engineer prompt as a mandatory post-deploy step.
-**Affects:** both
+**Rule:** Never hard-code fake email domains. Always check for verified sending infrastructure before attempting to send to external recipients. Internal emails (digest to Carlos) can use test mode; external emails (outreach, transactional) require domain verification.

@@ -27,10 +27,10 @@ const SECRET_KEYS = new Set([
 const VALID_KEYS = [
   "neon_api_key", "vercel_token", "vercel_team_id",
   "github_token", "github_owner",
-  "gemini_api_key", "groq_api_key",
   "stripe_secret_key",
   "resend_api_key", "resend_domain",
   "google_search_console_key",
+  "gemini_api_key", "groq_api_key",
   "digest_email", "notification_email",
 ];
 

@@ -82,20 +82,6 @@ Read the codebase for reusable learnings. Extract and write to the playbook:
 
 If patterns are better than the current boilerplate, create a directive suggesting the boilerplate be updated. This way every import makes the whole system smarter.
 
-### Phase 3: Knowledge assimilation
-Read the imported project's institutional memory — not just code, but documented wisdom:
-- **Repo MD files**: CLAUDE.md, MISTAKES.md, DECISIONS.md, BACKLOG.md, MEMORY.md, README.md
-- **Claude memory files**: `~/.claude/projects/-Users-carlos-miranda-Documents-Github-{slug}/memory/` and parent dir memory
-
-Compare against Hive's current knowledge files. Only add what's NEW and USEFUL:
-- Deployment gotchas and failure modes → append to MISTAKES.md
-- Architecture insights that confirm or challenge existing ADRs → DECISIONS.md review directives
-- Improvement ideas → append to BACKLOG.md
-- Operational learnings → playbook entries in DB
-- User preferences and feedback → playbook entries
-
-This ensures that every import transfers not just code patterns but the operational wisdom that took real debugging sessions to learn.
-
 ## Your Operating Rules
 
 ### 1. Sequential execution
@@ -106,7 +92,7 @@ Never store state in files or memory. Read from and write to Neon via the Hive A
 
 ### 3. Four human gates
 These require Carlos's approval before execution:
-- **new_company**: Idea Scout proposes a venture → write to `approvals` table → STOP
+- **new_company**: Idea Scout proposes 3 ventures → each gets its own approval gate → Carlos picks which to launch
 - **growth_strategy**: Growth agent proposes campaign/spend → write to `approvals` table → STOP
 - **spend_approval**: Any spend > €20 → write to `approvals` table → STOP
 - **kill_company**: Kill Switch recommends shutdown → write to `approvals` table → STOP
@@ -127,51 +113,54 @@ Your own system prompts (per agent role) are stored in `agent_prompts` table. Th
 ## Nightly Loop (run by orchestrator.ts)
 
 ```
-FIRST: Idea Scout (conditions: weekly Sunday OR portfolio < 5 active AND no pending idea proposals)
-  - Uses web search to research current market pain points autonomously
-  - Phase 1: Portuguese market discovery (3-5 searches for regulatory changes, underserved niches)
-  - Phase 2: Competition analysis (2-3 searches per niche — pricing, reviews, gaps)
-  - Phase 3: Demand validation (search volume proxies, forum complaints, government data)
-  - Phase 4: Score and pick the winner
-  - At least 1 of 3 niches MUST target a Portuguese-specific challenge
-  - Creates company in 'idea' status + approval gate with full research trail
-  - Research trail (searches performed, niches evaluated) logged for audit
-  - 25 max turns, 15 min timeout (web research is slow)
-  - Skipped if: already at capacity, pending idea exists, or --company flag used
+PRE-FLIGHT: Health check (DB, Claude CLI, recent errors)
+
+STEP 1: Idea Scout (condition: pipeline < 3 companies AND active < 5)
+  Pipeline = companies in idea + approved + provisioning + mvp + active status
+  - Researches market via web search, generates exactly 3 proposals
+  - MANDATORY mix: 1 Portuguese 🇵🇹, 1 Global 🌍, 1 best-pick
+  - 5 research phases: PT discovery → Global discovery → Competition → Validation → Rank
+  - Creates 3 companies (status: 'idea'), each with own approval gate
+  - Carlos approves which to build, rejects the rest (rejected → auto-killed)
+  - 30 max turns, 20 min timeout
+  - Skipped if pipeline already has 3+ companies, or --company flag used
   - Force with: --scout or --scout-only
 
-THEN: Provision approved companies
-  Onboard scanned imports (with pattern extraction)
+STEP 2: Provision approved companies (status: 'approved' → 'mvp')
+  - GitHub repo, Neon DB, Vercel project, Stripe product, env vars
 
-FOR EACH company WHERE status IN ('mvp', 'active'):
-  0. Research Analyst (Cycle 0: full market/competitive/SEO, every 7 cycles: competitive refresh, on directive: full refresh)
-     - Uses web search to produce market_research, competitive_analysis, seo_keywords reports
-     - Stored in research_reports table, fed to CEO + Growth + Outreach as context
-  1. Read open directives from Carlos (dashboard/GitHub Issues)
-  2. CEO: Read metrics + playbook + research + directives → write plan to cycles table
-  3. Engineer: Execute code tasks from plan → commit to GitHub → deploy
-  4. Growth (inbound): SEO blog posts from keywords report, social media, content calendar, landing page optimization
-  5. Outreach (outbound): Build lead list from research, draft cold emails, send via Resend (first batch needs approval gate, then auto-sends max 10/day), community engagement
-  6. Ops: Verify metrics (webhooks pre-collected most data) → fill gaps → check health
-  7. CEO: Review cycle results → write ceo_review → score cycle 1-10 → close directives
-     - Playbook extraction: if review contains playbook_entry, writes to playbook table
-     - Kill flag: if review sets kill_flag=true, auto-creates kill_company approval gate
-     - Graceful: if review JSON can't be parsed, cycle still completes normally
+STEP 3: Onboard imported projects (prioritized over regular cycles)
+  - Clone/analyze → setup integrations → extract patterns → write playbook
 
-AFTER all companies:
-  7. Venture Brain: Portfolio analysis, Kill Switch evaluation (requires 2+ active companies)
-  8. Prompt Evolver (Wednesdays only): For each agent, calculate 14-day success rate.
-     If <70% success or 30+ days since last evolution → dispatch Claude to analyze failures
-     and generate improved prompt → store as new version → create approval gate.
-     On approval, new version activates. On rejection, version stays inactive.
-  9. Send daily digest email via Resend (inline HTML, direct API call)
-     Includes: portfolio MRR/customers, per-company cycle status, pending approvals, errors
+STEP 4: Company cycles — priority order:
+  - New companies first (0 cycles — need initial momentum)
+  - Struggling companies next (lowest CEO score from last cycle)
+  - Oldest as tiebreaker
+  
+  FOR EACH company WHERE status IN ('mvp', 'active'):
+    0. Research Analyst (Cycle 0: full market/competitive/SEO, every 7 cycles: competitive refresh, on directive: full refresh)
+       - Uses web search to produce market_research, competitive_analysis, seo_keywords reports
+       - Stored in research_reports table, fed to CEO + Growth + Outreach as context
+    1. Read open directives from Carlos (dashboard/GitHub Issues)
+    2. CEO: Read metrics + playbook + research + directives → write plan to cycles table
+    3. Engineer: Execute code tasks from plan → commit to GitHub → deploy
+    4. Growth (inbound): SEO blog posts from keywords report, social media, content calendar
+    5. Outreach (outbound): Build lead list, draft cold emails, send via Resend (first batch needs approval, then auto max 10/day)
+    6. Ops: Verify metrics → fill gaps → check health
+    7. CEO: Review cycle → score 1-10 → extract playbook entries → kill flag if needed
 
-WEEKLY (Sunday night):
-  10. Idea Scout runs (see FIRST above)
+STEP 5: Self-healing (Healer agent)
+  - Classifies systemic vs company-specific errors from last 48h
+  - Dispatches code fixes (max 3 company fixes per night)
 
-WEEKLY (Wednesday night):
-  11. Prompt Evolver runs (see step 8 above)
+STEP 6: Venture Brain (requires 2+ active companies)
+  - Portfolio analysis, resource allocation, kill switch evaluation
+
+STEP 7: Prompt Evolver (Wednesdays only)
+  - Agents with <70% success rate or 30+ days stale → generate improved prompt → approval gate
+
+STEP 8: Daily digest email
+  - Portfolio MRR/customers, per-company cycle status, pending approvals, errors
 ```
 
 ## Model Routing (Multi-Provider Dispatch)
@@ -261,14 +250,46 @@ X free tier: 1,500 posts/month. No social accounts until a company has its first
 
 ## Email (Resend)
 
-Two contexts:
-- **Orchestrator digest**: Inlined in orchestrator.ts. Direct Resend API call. Cannot import from `src/`.
-- **Company transactional emails**: Use `src/lib/resend.ts` which provides `sendEmail()` + templates:
+### Sending modes
+
+Hive email works in two modes based on the `sending_domain` setting:
+
+| Mode | `sending_domain` | Digest | Outreach | Transactional |
+|------|-------------------|--------|----------|---------------|
+| **Test** | not set | `onboarding@resend.dev` (only reaches Resend account owner) | SKIPPED (logged) | `onboarding@resend.dev` |
+| **Verified** | e.g. `mail.hivehq.io` | `digest@mail.hivehq.io` | `CompanyName <outreach@mail.hivehq.io>` | `CompanyName <hello@mail.hivehq.io>` |
+
+**Critical:** `hive-phi.vercel.app` is Vercel-owned — you CANNOT add DKIM/SPF DNS records to it. You MUST own a domain to send verified email.
+
+### Domain verification setup (one-time, ~10 min)
+
+1. **Buy a cheap domain** (~€2-10/yr): e.g. `hivehq.io`, `usehive.co`, `gethive.email` from Namecheap, Cloudflare Registrar, or Porkbun
+2. **Add domain to Vercel:** Dashboard → Domains → Add → enter your domain → set nameservers to Vercel's (`ns1.vercel-dns.com`, `ns2.vercel-dns.com`)
+3. **Add a sending subdomain to Resend:** Resend dashboard → Domains → Add Domain → enter `mail.yourdomain.com` → select EU region
+4. **Add Resend DNS records:** Resend shows 3 records (DKIM CNAME, SPF TXT, MX). Add them via:
+   - Vercel Dashboard: Settings → Domains → your domain → DNS Records
+   - Or Vercel CLI: `vercel dns add yourdomain.com [subdomain] [type] [value]`
+5. **Verify in Resend:** Click "Verify DNS Records" — wait for green status
+6. **Set in Hive settings:** Go to `/settings`, add `sending_domain` = `mail.yourdomain.com`
+
+### Two code contexts
+
+- **Orchestrator digest + outreach**: Inlined in orchestrator.ts. Direct Resend API calls. Cannot import from `src/`. Reads `sending_domain` from settings to build from addresses.
+- **Company transactional emails**: Use `src/lib/resend.ts` which provides `sendEmail()`, `buildFromAddress()`, `canSendOutreach()` + templates:
   - `renderWelcomeEmail()` — new customer onboarding
   - `renderReceiptEmail()` — payment confirmation
   - `renderPasswordResetEmail()` — self-service password reset
 
-Resend free tier: 3,000 emails/month. Sufficient for first 5+ companies.
+### Required settings
+- `resend_api_key` — from Resend dashboard (free tier: 100 emails/day, 3,000/month)
+- `digest_email` — Carlos's email to receive nightly digests
+- `sending_domain` — verified Resend subdomain (e.g. `mail.hivehq.io`). Without this, outreach emails are skipped.
+
+### Deliverability best practice
+- Use a subdomain (e.g. `mail.yourdomain.com`) not the root domain for sending
+- Keep outreach and transactional on the same subdomain initially (split later at scale)
+- Warm up gradually: first 2 weeks, send max 10 emails/day
+- Resend free tier: 100/day, 3,000/month — sufficient for first 5+ companies
 
 ## Provisioning a New Company
 
@@ -280,7 +301,7 @@ When an approval with gate_type='new_company' is approved:
 4. Create Vercel project linked to GitHub repo (Hobby initially)
 5. Set env vars in Vercel (NEON connection string, Stripe keys, etc.)
 6. Create Stripe Product + Price with `metadata.hive_company = slug` (single account, no Connect)
-7. Configure Resend from address: `{slug}@{resend_domain}`
+7. Email sending uses the shared `sending_domain` setting — no per-company email setup needed
 8. Write all resource IDs to `infra` table
 9. Update company status to 'mvp'
 10. First CEO cycle runs on next nightly loop

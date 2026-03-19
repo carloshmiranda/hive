@@ -113,7 +113,6 @@ async function dispatchClaude(opts: DispatchOptions): Promise<string> {
   if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
   if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
   const timeout = opts.timeoutMs || 5 * 60 * 1000;
-  // Set working directory via spawn cwd option (not --cwd flag which doesn't exist)
   const spawnOpts: any = { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] };
   if (opts.cwd) spawnOpts.cwd = opts.cwd;
 
@@ -515,15 +514,14 @@ async function runNightlyCycle() {
   }> = [];
 
   // === IDEA SCOUT: Generate new business ideas ===
-  // Runs weekly (Sunday) or when portfolio has fewer than MAX_ACTIVE_COMPANIES
+  // Runs when portfolio has fewer than 3 active/pending companies
+  const MIN_PIPELINE_SIZE = 3; // target: always have 3 companies in pipeline (idea/approved/active)
   const MAX_ACTIVE_COMPANIES = 5;
-  const isWeekly = new Date().getDay() === 0; // Sunday
   const allCompanies = await sql`SELECT id, slug, name, status, description FROM companies`;
+  const pipelineCount = allCompanies.filter(c => ["idea", "approved", "provisioning", "mvp", "active"].includes(c.status)).length;
   const activeCount = allCompanies.filter(c => ["mvp", "active", "provisioning", "approved"].includes(c.status)).length;
-  const pendingIdeas = await sql`SELECT count(*) as cnt FROM approvals WHERE gate_type = 'new_company' AND status = 'pending'`;
-  const hasPendingIdea = Number(pendingIdeas[0].cnt) > 0;
 
-  const shouldScout = FORCE_SCOUT || SCOUT_ONLY || ((isWeekly || activeCount < MAX_ACTIVE_COMPANIES) && !hasPendingIdea && !SINGLE_COMPANY);
+  const shouldScout = FORCE_SCOUT || SCOUT_ONLY || (pipelineCount < MIN_PIPELINE_SIZE && activeCount < MAX_ACTIVE_COMPANIES && !SINGLE_COMPANY);
 
   if (shouldScout) {
     console.log("\n💡 Idea Scout — searching for opportunities");
@@ -537,7 +535,7 @@ async function runNightlyCycle() {
       allowedTools: ["WebSearch", "WebFetch"],
       prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
 
-YOUR JOB: Research the market using web search and propose ONE business idea that Carlos should build next.
+YOUR JOB: Research the market using web search and propose THREE business ideas that Carlos should consider building next. He will pick one (or none).
 
 ## Carlos's profile
 - 15+ years IT experience (identity/access management, device management, SaaS operations, onboarding automation)
@@ -563,7 +561,11 @@ ${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.
 - Prefer niches where Carlos's IT/SaaS background is an advantage
 - Prefer markets with validated demand (people already searching for solutions)
 - Target: €500-€5,000 MRR within 3 months if the idea works
-- MANDATORY: At least 1 of the 3 niches MUST solve a challenge specific to the Portuguese market
+
+## MANDATORY MIX: You MUST propose exactly 3 ideas with this market distribution:
+1. **Portuguese market** — solve a challenge specific to Portugal (regulatory, cultural, language, local infrastructure gap)
+2. **Global/English market** — broad SaaS play, English-first
+3. **Your best pick** — whichever market you think has the strongest opportunity based on your research
 
 ## RESEARCH METHODOLOGY (you must follow this):
 
@@ -580,24 +582,32 @@ Look for: regulatory changes creating new compliance burdens, underserved demogr
 markets where existing tools are foreign/generic and don't understand Portuguese specifics,
 pain points people complain about on forums and social media.
 
-### Phase 2: Competition analysis (2-3 searches per niche)
+### Phase 2: Global market discovery (3-5 searches)
+Search for trending SaaS niches, underserved developer/business tools, emerging needs:
+- "micro SaaS ideas trending ${new Date().getFullYear()}"
+- "SaaS tool gaps developer tools ${new Date().getFullYear()}"
+- "underserved B2B niches small business"
+- Look at Product Hunt, Indie Hackers, Hacker News for signals
+
+### Phase 3: Competition analysis (2-3 searches per niche)
 For each niche you identify, search for existing solutions:
-- "[niche] software Portugal"
+- "[niche] software" (add "Portugal" for Portuguese ideas)
 - "[niche] SaaS tool"
 - Search competitor names you find, check their pricing, reviews, feature gaps
 You want niches where competitors are: too expensive, too generic (not PT-localised), 
 enterprise-only, or simply don't exist yet.
 
-### Phase 3: Demand validation (1-2 searches per niche)
+### Phase 4: Demand validation (1-2 searches per niche)
 Search for evidence people actually want this:
 - Search volume proxies: "how to [solve problem]" queries
 - Forum complaints, Reddit threads, social media frustration
 - Government data on market size (number of landlords, freelancers, SMEs, etc.)
 - News articles about the problem growing
 
-### Phase 4: Pick the winner and build the proposal
+### Phase 5: Rank and build 3 proposals
 Score each niche on: demand strength, competition gap, timing (regulatory tailwind?), 
 MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
+Pick the top 3 respecting the mandatory mix above.
 
 ## Output format (JSON only, no markdown wrapping):
 {
@@ -614,84 +624,125 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
       }
     ]
   },
-  "proposal": {
-    "name": "Product Name",
-    "slug": "product-slug",
-    "description": "One-line pitch",
-    "target_audience": "Who this is for",
-    "problem": "What pain point it solves",
-    "solution": "How it solves it",
-    "monetisation": "Pricing model and target",
-    "mvp_scope": "What the first version includes (bullet points)",
-    "competitive_advantage": "Why this wins against alternatives",
-    "estimated_tam": "Total addressable market estimate with source",
-    "confidence": 0.0-1.0
-  }
-}`,
-      maxTurns: 25,
-      timeoutMs: 15 * 60 * 1000, // 15 min — research agent does many web searches
+  "proposals": [
+    {
+      "name": "Product Name",
+      "slug": "product-slug",
+      "description": "One-line pitch",
+      "market": "Portugal" or "Global",
+      "target_audience": "Who this is for",
+      "problem": "What pain point it solves",
+      "solution": "How it solves it",
+      "monetisation": "Pricing model and target",
+      "mvp_scope": "What the first version includes (bullet points)",
+      "competitive_advantage": "Why this wins against alternatives",
+      "estimated_tam": "Total addressable market estimate with source",
+      "confidence": 0.0-1.0
+    }
+  ]
+}
+
+IMPORTANT: The "proposals" array MUST contain exactly 3 items.
+At least 1 must have "market": "Portugal".
+At least 1 must have "market": "Global".
+Order them by your confidence score, highest first.`,
+      maxTurns: 30, // more turns for broader research
+      timeoutMs: 20 * 60 * 1000, // 20 min — researching 3 ideas takes longer
     });
 
-    // Parse the output and create the company + approval gate
+    // Parse the output and create approval gate with all 3 proposals
     try {
       // Extract JSON from the output (Claude may wrap it in markdown)
       const jsonMatch = ideaScoutOutput.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const idea = JSON.parse(jsonMatch[0]);
-        const proposal = idea.proposal;
+        const proposals = idea.proposals || (idea.proposal ? [idea.proposal] : []);
 
-        if (proposal?.name && proposal?.slug) {
-          // Create the company in 'idea' status
-          const [newCompany] = await sql`
-            INSERT INTO companies (name, slug, description, status)
-            VALUES (${proposal.name}, ${proposal.slug}, ${proposal.description}, 'idea')
-            ON CONFLICT (slug) DO NOTHING
-            RETURNING *
-          `;
+        if (proposals.length > 0) {
+          // Create each company in 'idea' status
+          const createdCompanies: Array<{ id: string; name: string; slug: string; idx: number }> = [];
+          for (let i = 0; i < proposals.length; i++) {
+            const p = proposals[i];
+            if (!p?.name || !p?.slug) continue;
+            const [newCompany] = await sql`
+              INSERT INTO companies (name, slug, description, status)
+              VALUES (${p.name}, ${p.slug}, ${p.description}, 'idea')
+              ON CONFLICT (slug) DO NOTHING
+              RETURNING *
+            `;
+            if (newCompany) {
+              createdCompanies.push({ id: newCompany.id, name: p.name, slug: p.slug, idx: i });
+            }
+          }
 
-          if (newCompany) {
-            // Build research summary for the approval gate
+          if (createdCompanies.length > 0) {
+            // Build a single approval gate describing all 3 options
             const researchSummary = idea.research ? [
               idea.research.searches_performed?.length 
                 ? `**Searches performed:** ${idea.research.searches_performed.length} web queries` : "",
               ...(idea.research.niches_considered || []).map((n: any) =>
-                `- **${n.niche}** (${n.market || "unknown market"}): ${n.verdict}`
+                `- **${n.niche}** (${n.market || "unknown"}): ${n.verdict}`
               ),
             ].filter(Boolean).join("\n") : "";
 
-            // Create the approval gate with full context + research trail
-            await sql`
-              INSERT INTO approvals (company_id, gate_type, title, description, context)
-              VALUES (
-                ${newCompany.id},
-                'new_company',
-                ${"Launch " + proposal.name},
-                ${`**${proposal.description}**\n\n` +
-                  `**Problem:** ${proposal.problem}\n` +
-                  `**Solution:** ${proposal.solution}\n` +
-                  `**Target:** ${proposal.target_audience}\n` +
-                  `**Monetisation:** ${proposal.monetisation}\n` +
-                  `**MVP scope:** ${proposal.mvp_scope}\n` +
-                  `**Competitive advantage:** ${proposal.competitive_advantage || "N/A"}\n` +
-                  `**TAM:** ${proposal.estimated_tam}\n` +
-                  `**Confidence:** ${Math.round((proposal.confidence || 0.5) * 100)}%\n\n` +
-                  `---\n### Research trail\n${researchSummary}`},
-                ${JSON.stringify(idea)}
-              )
-            `;
+            const proposalDescriptions = proposals.map((p: any, i: number) => {
+              const num = i + 1;
+              const marketTag = p.market === "Portugal" ? "🇵🇹 PT" : "🌍 Global";
+              return `### Option ${num}: ${p.name} [${marketTag}]\n` +
+                `**${p.description}**\n` +
+                `- **Problem:** ${p.problem}\n` +
+                `- **Solution:** ${p.solution}\n` +
+                `- **Target:** ${p.target_audience}\n` +
+                `- **Monetisation:** ${p.monetisation}\n` +
+                `- **MVP scope:** ${p.mvp_scope}\n` +
+                `- **Competitive advantage:** ${p.competitive_advantage || "N/A"}\n` +
+                `- **TAM:** ${p.estimated_tam}\n` +
+                `- **Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%`;
+            }).join("\n\n---\n\n");
 
-            console.log(`  ✓ Proposed: ${proposal.name} (${proposal.slug}) — awaiting approval`);
+            // Create ONE approval per proposal (so Carlos can approve individually)
+            for (const cc of createdCompanies) {
+              const p = proposals[cc.idx];
+              const num = cc.idx + 1;
+              const marketTag = p.market === "Portugal" ? "🇵🇹 PT" : "🌍 Global";
+              await sql`
+                INSERT INTO approvals (company_id, gate_type, title, description, context)
+                VALUES (
+                  ${cc.id},
+                  'new_company',
+                  ${"Option " + num + ": Launch " + p.name + " [" + marketTag + "]"},
+                  ${`**${p.description}**\n\n` +
+                    `**Market:** ${p.market || "Global"}\n` +
+                    `**Problem:** ${p.problem}\n` +
+                    `**Solution:** ${p.solution}\n` +
+                    `**Target:** ${p.target_audience}\n` +
+                    `**Monetisation:** ${p.monetisation}\n` +
+                    `**MVP scope:** ${p.mvp_scope}\n` +
+                    `**Competitive advantage:** ${p.competitive_advantage || "N/A"}\n` +
+                    `**TAM:** ${p.estimated_tam}\n` +
+                    `**Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%\n\n` +
+                    `---\n### Research trail\n${researchSummary}`},
+                  ${JSON.stringify({ proposal: p, all_proposals: proposals, research: idea.research })}
+                )
+              `;
+            }
+
+            console.log(`  ✓ Proposed ${createdCompanies.length} ideas — awaiting approval:`);
+            createdCompanies.forEach(cc => {
+              const p = proposals[cc.idx];
+              console.log(`    ${cc.idx + 1}. ${p.name} (${p.slug}) [${p.market || "Global"}] — ${Math.round((p.confidence || 0.5) * 100)}%`);
+            });
             if (idea.research?.searches_performed?.length) {
               console.log(`    Research: ${idea.research.searches_performed.length} web searches, ${(idea.research.niches_considered || []).length} niches evaluated`);
             }
 
-            // Log the action with full research output
+            // Log the action
             await sql`
               INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
-              VALUES (${newCompany.id}, 'idea_scout', 'generate_idea', ${`Proposed: ${proposal.name} — ${proposal.description} (${(idea.research?.searches_performed || []).length} searches, confidence: ${proposal.confidence})`}, 'success', ${JSON.stringify(idea)}, now(), now())
+              VALUES (${null}, 'idea_scout', 'generate_ideas', ${`Proposed ${proposals.length} ideas: ${proposals.map((p: any) => `${p.name} [${p.market}]`).join(", ")} (${(idea.research?.searches_performed || []).length} searches)`}, 'success', ${JSON.stringify(idea)}, now(), now())
             `;
           } else {
-            console.log(`  ⓘ Slug "${proposal.slug}" already exists — skipping`);
+            console.log(`  ⓘ All proposed slugs already exist — skipping`);
           }
         }
       }
@@ -702,13 +753,13 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
       // Still log the raw output so it's not lost
       await sql`
         INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, output, started_at, finished_at)
-        VALUES (${null}, 'idea_scout', 'generate_idea', 'Failed to parse idea proposal', 'failed', ${e.message}, ${JSON.stringify({ raw: ideaScoutOutput })}, now(), now())
+        VALUES (${null}, 'idea_scout', 'generate_ideas', 'Failed to parse idea proposals', 'failed', ${e.message}, ${JSON.stringify({ raw: ideaScoutOutput })}, now(), now())
       `;
     }
   } else if (!SINGLE_COMPANY) {
-    const reason = hasPendingIdea ? "pending idea awaiting approval" : 
+    const reason = pipelineCount >= MIN_PIPELINE_SIZE ? `pipeline full (${pipelineCount} companies in idea/active states)` : 
                    activeCount >= MAX_ACTIVE_COMPANIES ? `at capacity (${activeCount}/${MAX_ACTIVE_COMPANIES})` :
-                   "not weekly scout day";
+                   "unknown";
     console.log(`\n💡 Idea Scout — skipped (${reason})`);
   }
 
@@ -719,14 +770,260 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
     return;
   }
 
-  const companies = await getActiveCompanies();
-  console.log(`\n📋 ${companies.length} active companies to process\n`);
+  // === PROVISION APPROVED COMPANIES (before cycles — get them into the pipeline ASAP) ===
+  const approvedCompanies = await sql`SELECT * FROM companies WHERE status = 'approved'`;
+  if (approvedCompanies.length > 0) {
+    console.log(`\n🔧 Provisioning ${approvedCompanies.length} approved companies`);
+    for (const company of approvedCompanies) {
+      console.log(`  ▸ Provisioning ${company.name}...`);
+      await sql`UPDATE companies SET status = 'provisioning', updated_at = now() WHERE id = ${company.id}`;
+
+      try {
+        await dispatch({
+          prompt: `You are the Provisioner agent. Set up infrastructure for a new Hive company.
+
+Company: ${company.name} (${company.slug})
+Description: ${company.description}
+
+Execute these steps using the APIs available to you:
+1. Create GitHub repo: carlos-miranda/${company.slug} (use GitHub API)
+2. Push the boilerplate template from templates/boilerplate/ (replace {{SLUG}}, {{COMPANY_NAME}}, {{DESCRIPTION}} placeholders)
+3. Generate a CLAUDE.md from templates/company-claude.md with the company details filled in
+4. Create Neon project: hive-${company.slug} (use Neon API)
+5. Create Vercel project linked to the GitHub repo (use Vercel API)
+6. Set environment variables in Vercel: DATABASE_URL, STRIPE_SECRET_KEY, NEXT_PUBLIC_URL
+7. Create a Stripe product + price tagged with hive_company: ${company.slug}
+8. Record all resource IDs in the infra table via the Hive API
+9. Update company status to 'mvp' and set vercel_url
+
+Report what was created and any issues encountered.`,
+          cwd: `/Users/carlos.miranda/Documents/Github/hive`,
+          timeoutMs: 10 * 60 * 1000,
+        });
+
+        const [check] = await sql`SELECT status FROM companies WHERE id = ${company.id}`;
+        if (check?.status === "provisioning") {
+          await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${company.id}`;
+          console.log(`  ⚠ Provisioner didn't update status — forced to mvp`);
+        }
+        console.log(`  ✓ ${company.name} provisioned`);
+      } catch (provErr: any) {
+        console.log(`  ✗ Provisioning failed: ${provErr.message}`);
+        await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${company.id}`;
+        try {
+          await sql`
+            INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
+            VALUES (${company.id}, 'provisioner', 'provision_company', ${`Failed: ${provErr.message}`}, 'failed', ${provErr.message}, now(), now())
+          `;
+        } catch {}
+      }
+    }
+  }
+
+  // === ONBOARD IMPORTED PROJECTS (before cycles — prioritized over regular processing) ===
+  const pendingImports = await getPendingImports();
+  if (pendingImports.length > 0) {
+    console.log(`\n📥 Onboarding ${pendingImports.length} imported projects`);
+    for (const imp of pendingImports) {
+      console.log(`  ▸ Onboarding ${imp.name}...`);
+      await sql`UPDATE imports SET onboard_status = 'in_progress' WHERE id = ${imp.id}`;
+
+      const scanReport = imp.scan_report || {};
+
+      await dispatch({
+        prompt: `You are the Onboarding agent. An existing project is being imported into Hive.
+
+Project: ${imp.name} (${imp.slug})
+Git URL: ${imp.git_url}
+Scan Report: ${JSON.stringify(scanReport, null, 2)}
+
+Tasks:
+1. Clone or pull the latest from the git repo
+2. Analyze the tech stack, deployment config, and current state
+3. Update the company record with: vercel_url, description, any detected metrics
+4. Set up any missing Hive integrations (Stripe tags, webhooks, etc.)
+5. Report what you found and what you set up.`,
+        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
+      });
+
+      // Phase 2: Pattern extraction
+      console.log(`  ├─ Extracting patterns from ${imp.name}...`);
+      await dispatch({
+        prompt: `You are the Pattern Extraction agent. Analyze this imported codebase to find reusable learnings.
+
+Project: ${imp.name} (${imp.slug})
+Scan Report: ${JSON.stringify(scanReport, null, 2)}
+
+Read the actual code and extract patterns that would benefit other Hive companies.
+Look for:
+
+1. CHECKOUT/PRICING: How does this project handle payments? What's the pricing model?
+   Write playbook entries under domain "pricing" or "payments".
+
+2. EMAIL/COMMS: Are there email templates, drip sequences, notification patterns?
+   Write playbook entries under domain "email_marketing".
+
+3. ONBOARDING: How does the product onboard new users? What's the activation flow?
+   Write playbook entries under domain "onboarding".
+
+4. SEO/GROWTH: Meta tags, sitemap, social cards, content strategy, analytics setup?
+   Write playbook entries under domain "seo" or "growth".
+
+5. TECH PATTERNS: Auth setup, API design, cron jobs, deployment config, error handling?
+   Write playbook entries under domain "engineering".
+
+For each pattern, write to the playbook table via the Hive API:
+POST /api/playbook with { domain, insight, source_company, confidence }
+
+Confidence guide:
+- 0.8-1.0: proven pattern with measurable results
+- 0.5-0.7 : reasonable pattern, untested at scale
+
+If you find patterns that should update the Hive boilerplate, create a directive via:
+POST /api/directives with { text: "hive: [suggestion]" }`,
+        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
+      });
+
+      // Phase 3: Knowledge assimilation — absorb operational wisdom from MD files + Claude memory
+      console.log(`  ├─ Assimilating knowledge from ${imp.name}...`);
+      try {
+        const knowledgeSources: string[] = [];
+        const repoDir = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
+        const knowledgeFiles = ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md", "README.md"];
+        for (const fname of knowledgeFiles) {
+          const fpath = join(repoDir, fname);
+          if (existsSync(fpath)) {
+            const content = readFileSync(fpath, "utf-8").slice(0, 5000);
+            knowledgeSources.push(`=== REPO FILE: ${fname} ===\n${content}\n=== END ===`);
+          }
+        }
+        const memoryPaths = [
+          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`,
+          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github/memory`,
+        ];
+        for (const memDir of memoryPaths) {
+          if (existsSync(memDir)) {
+            try {
+              const { readdirSync } = await import("fs");
+              const files = readdirSync(memDir).filter((f: string) => f.endsWith(".md") && f !== "MEMORY.md");
+              for (const f of files) {
+                const content = readFileSync(join(memDir, f), "utf-8").slice(0, 3000);
+                knowledgeSources.push(`=== CLAUDE MEMORY: ${memDir}/${f} ===\n${content}\n=== END ===`);
+              }
+            } catch { /* skip unreadable dirs */ }
+          }
+        }
+        if (knowledgeSources.length > 0) {
+          const hiveDir = `/Users/carlos.miranda/Documents/Github/hive`;
+          const hiveMistakes = existsSync(join(hiveDir, "MISTAKES.md")) ? readFileSync(join(hiveDir, "MISTAKES.md"), "utf-8") : "";
+          const hiveDecisions = existsSync(join(hiveDir, "DECISIONS.md")) ? readFileSync(join(hiveDir, "DECISIONS.md"), "utf-8") : "";
+          const hiveBacklog = existsSync(join(hiveDir, "BACKLOG.md")) ? readFileSync(join(hiveDir, "BACKLOG.md"), "utf-8") : "";
+          const assimilationOutput = await dispatch({
+            agent: "ceo",
+            prompt: `You are the Knowledge Assimilation agent. An existing project (${imp.name}) has been imported into Hive.
+Extract operational wisdom from the imported project's knowledge files and compare against what Hive already knows. Only propose INCREMENTAL additions.
+
+## Imported project knowledge:
+${knowledgeSources.join("\n\n")}
+
+## Hive's current MISTAKES.md (excerpt):
+${hiveMistakes.slice(0, 3000)}
+
+## Hive's current DECISIONS.md (excerpt):
+${hiveDecisions.slice(0, 3000)}
+
+## Hive's current BACKLOG.md (excerpt):
+${hiveBacklog.slice(0, 2000)}
+
+Output JSON only:
+{
+  "mistakes_to_add": [{ "title": "...", "what_happened": "...", "root_cause": "...", "prevention": "...", "affects": "hive|companies|both" }],
+  "backlog_items": [{ "priority": "P1|P2|P3", "title": "...", "description": "..." }],
+  "playbook_entries": [{ "domain": "...", "insight": "...", "confidence": 0.5-1.0 }],
+  "decisions_to_review": [{ "related_adr": "ADR-NNN or new", "insight": "...", "action": "confirm|revisit|new_adr" }]
+}`,
+            timeoutMs: 5 * 60 * 1000,
+          });
+          try {
+            const jsonMatch = assimilationOutput.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const knowledge = JSON.parse(jsonMatch[0]);
+              let incrementCount = 0;
+              if (knowledge.mistakes_to_add?.length > 0) {
+                const mistakesPath = join(hiveDir, "MISTAKES.md");
+                let existing = readFileSync(mistakesPath, "utf-8");
+                const today = new Date().toISOString().split("T")[0];
+                for (const m of knowledge.mistakes_to_add) {
+                  existing += `\n\n### ${today} ${m.title} (from ${imp.slug} import)\n**What happened:** ${m.what_happened}\n**Root cause:** ${m.root_cause}\n**Prevention:** ${m.prevention}\n**Affects:** ${m.affects}`;
+                  incrementCount++;
+                }
+                const { writeFileSync } = await import("fs");
+                writeFileSync(mistakesPath, existing);
+                console.log(`    📝 +${knowledge.mistakes_to_add.length} MISTAKES.md entries`);
+              }
+              if (knowledge.playbook_entries?.length > 0) {
+                for (const p of knowledge.playbook_entries) {
+                  await sql`INSERT INTO playbook (domain, insight, confidence, source_company_id, evidence) VALUES (${p.domain}, ${p.insight}, ${p.confidence || 0.7}, ${imp.company_id}, ${JSON.stringify({ source: "knowledge_assimilation", from_project: imp.slug })})`;
+                  incrementCount++;
+                }
+                console.log(`    📖 +${knowledge.playbook_entries.length} playbook entries`);
+              }
+              if (knowledge.decisions_to_review?.length > 0) {
+                for (const d of knowledge.decisions_to_review) {
+                  if (d.action === "revisit" || d.action === "new_adr") {
+                    await sql`INSERT INTO directives (text, status) VALUES (${`hive: Review ${d.related_adr} — ${d.insight} (from ${imp.slug})`}, 'open')`;
+                  }
+                }
+                console.log(`    🔍 ${knowledge.decisions_to_review.length} decisions flagged`);
+              }
+              console.log(`    ✓ ${incrementCount} knowledge items assimilated`);
+            }
+          } catch (parseErr: any) { console.log(`    ⚠ Parse failed: ${parseErr.message}`); }
+        } else {
+          console.log(`    ⓘ No knowledge files found`);
+        }
+      } catch (assimErr: any) { console.log(`    ⚠ Assimilation failed: ${assimErr.message}`); }
+
+      await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
+      // Transition company to mvp so it enters the nightly cycle
+      await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id} AND status IN ('importing', 'idea', 'approved')`;
+      console.log(`  ✓ ${imp.name} onboarded with patterns extracted → status: mvp`);
+    }
+  }
+
+  // === COMPANY CYCLES ===
+  // Priority order: lowest-scoring companies first (they need the most help)
+  // New companies (no cycles yet) go first to get their initial momentum
+  const companies = await sql`
+    SELECT c.*, 
+      COALESCE(
+        (SELECT score FROM cycles WHERE company_id = c.id ORDER BY started_at DESC LIMIT 1),
+        0
+      ) as last_score,
+      COALESCE(
+        (SELECT COUNT(*) FROM cycles WHERE company_id = c.id),
+        0
+      ) as cycle_count
+    FROM companies c
+    WHERE c.status IN ('mvp', 'active')
+    ORDER BY 
+      cycle_count ASC,        -- new companies first (0 cycles)
+      last_score ASC,         -- struggling companies next (low score)
+      c.created_at ASC        -- oldest as tiebreaker
+  `;
+  const companiesToProcess = SINGLE_COMPANY ? companies.filter((r: any) => r.slug === SINGLE_COMPANY) : companies;
+  
+  console.log(`\n📋 ${companiesToProcess.length} active companies to process`);
+  if (companiesToProcess.length > 0) {
+    console.log(`  Priority order: ${companiesToProcess.map((c: any) => `${c.slug}(score:${c.last_score || "new"},cycles:${c.cycle_count})`).join(" → ")}`);
+  }
+  console.log("");
 
   const results: Array<{ company: string; status: string; duration: number }> = [];
 
-  for (const company of companies) {
+  for (const company of companiesToProcess) {
     const companyStart = Date.now();
-    console.log(`\n▸ ${company.name} (${company.slug}) — ${company.status}`);
+    console.log(`\n▸ ${company.name} (${company.slug}) — ${company.status} [score: ${company.last_score || "new"}, cycles: ${company.cycle_count}]`);
 
     try {
     const cycleNumber = await getLatestCycleNumber(company.id);
@@ -998,7 +1295,8 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
 
             // Send approved cold emails via Resend
             const resendKey = await getSettingValueDirect("resend_api_key");
-            if (resendKey) {
+            const sendingDomain = await getSettingValueDirect("sending_domain");
+            if (resendKey && sendingDomain) {
               // Only auto-send if we've had outreach approved before
               const [outreachApproved] = await sql`
                 SELECT id FROM approvals 
@@ -1016,7 +1314,7 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
                       method: "POST",
                       headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
                       body: JSON.stringify({
-                        from: `${company.name} <outreach@${company.slug}.hive.local>`,
+                        from: `${company.name} <outreach@${sendingDomain}>`,
                         to: email.to,
                         subject: email.subject,
                         html: email.body.replace(/\n/g, "<br>"),
@@ -1051,6 +1349,8 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
                 `;
                 console.log(`    📋 First outreach batch — approval gate created`);
               }
+            } else if (!sendingDomain) {
+              console.log(`    ⚠ Outreach emails drafted but NOT sent — no verified sending_domain in settings`);
             }
           }
         }
@@ -1171,350 +1471,6 @@ ${opsResult.output.slice(0, 500)}
           VALUES (${company.id}, 'orchestrator', 'cycle_failed', ${`Company cycle failed: ${companyError.message}`}, 'failed', ${companyError.message}, now(), now())
         `;
       } catch { /* don't let logging failure cascade */ }
-    }
-  }
-
-  // === PROVISION APPROVED COMPANIES ===
-  const approvedCompanies = await sql`SELECT * FROM companies WHERE status = 'approved'`;
-  if (approvedCompanies.length > 0) {
-    console.log(`\n🔧 Provisioning ${approvedCompanies.length} approved companies`);
-    for (const company of approvedCompanies) {
-      console.log(`  ▸ Provisioning ${company.name}...`);
-      await sql`UPDATE companies SET status = 'provisioning', updated_at = now() WHERE id = ${company.id}`;
-
-      try {
-        await dispatch({
-          prompt: `You are the Provisioner agent. Set up infrastructure for a new Hive company.
-
-Company: ${company.name} (${company.slug})
-Description: ${company.description}
-
-Execute these steps using the APIs available to you:
-1. Create GitHub repo: carlos-miranda/${company.slug} (use GitHub API)
-2. Push the boilerplate template from templates/boilerplate/ (replace {{SLUG}}, {{COMPANY_NAME}}, {{DESCRIPTION}} placeholders)
-3. Generate a CLAUDE.md from templates/company-claude.md with the company details filled in
-4. Create Neon project: hive-${company.slug} (use Neon API)
-5. Create Vercel project linked to the GitHub repo (use Vercel API)
-6. Set environment variables in Vercel: DATABASE_URL, STRIPE_SECRET_KEY, NEXT_PUBLIC_URL
-7. Create a Stripe product + price tagged with hive_company: ${company.slug}
-8. Record all resource IDs in the infra table via the Hive API
-9. Update company status to 'mvp' and set vercel_url
-
-Report what was created and any issues encountered.`,
-          cwd: `/Users/carlos.miranda/Documents/Github/hive`,
-          timeoutMs: 10 * 60 * 1000, // 10 min for provisioning
-        });
-
-        // Verify provisioning succeeded by checking if status changed to mvp
-        const [check] = await sql`SELECT status FROM companies WHERE id = ${company.id}`;
-        if (check?.status === "provisioning") {
-          // Agent didn't update status — mark as mvp anyway and log the gap
-          await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${company.id}`;
-          console.log(`  ⚠ Provisioner didn't update status — forced to mvp`);
-        }
-        console.log(`  ✓ ${company.name} provisioned`);
-      } catch (provErr: any) {
-        console.log(`  ✗ Provisioning failed: ${provErr.message}`);
-        // Reset to approved so it retries next cycle
-        await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${company.id}`;
-        // Log failure
-        try {
-          await sql`
-            INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
-            VALUES (${company.id}, 'provisioner', 'provision_company', ${`Failed: ${provErr.message}`}, 'failed', ${provErr.message}, now(), now())
-          `;
-        } catch {}
-      }
-    }
-  }
-
-  // === ONBOARD IMPORTED PROJECTS ===
-  const pendingImports = await getPendingImports();
-  if (pendingImports.length > 0) {
-    console.log(`\n📥 Onboarding ${pendingImports.length} imported projects`);
-    for (const imp of pendingImports) {
-      console.log(`  ▸ Onboarding ${imp.name} from ${imp.source_url}...`);
-      await sql`UPDATE imports SET onboard_status = 'in_progress' WHERE id = ${imp.id}`;
-
-      const scanReport = imp.scan_report || {};
-
-      await dispatch({
-        prompt: `You are the Onboarding agent. An existing project is being imported into Hive.
-
-Project: ${imp.name} (${imp.slug})
-Source: ${imp.source_url}
-Scan Report: ${JSON.stringify(scanReport, null, 2)}
-
-This is an EXISTING project, not a new one. Do NOT re-create infrastructure.
-Instead:
-1. Clone the repo locally to /Users/carlos.miranda/Documents/Github/${imp.slug}
-2. If CLAUDE.md doesn't exist, generate one based on the scan report and actual code
-3. If .env.example doesn't exist, create one by scanning the code for env var usage
-4. Verify the project builds (npm install && npm run build)
-5. Check if it's already on Vercel — if not, create a Vercel project linked to the existing repo
-6. Record infrastructure details in the Hive infra table
-7. Update the company record with vercel_url, github_repo, neon_project_id (if applicable)
-8. If there's no Stripe integration and the project needs one, create a product + price
-
-Key difference from new companies: RESPECT the existing codebase. Don't overwrite files.
-Add Hive integration alongside what's already there.`,
-        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
-      });
-
-      // Phase 2: Pattern extraction — learn from the imported codebase
-      console.log(`  ├─ Extracting patterns from ${imp.name}...`);
-      await dispatch({
-        prompt: `You are the Pattern Extraction agent. Analyze this imported codebase to find reusable learnings.
-
-Project: ${imp.name} (${imp.slug})
-Scan Report: ${JSON.stringify(scanReport, null, 2)}
-
-Read the actual code and extract patterns that would benefit other Hive companies.
-Look for:
-
-1. CHECKOUT/PRICING: How does this project handle payments? What's the pricing model?
-   Write playbook entries under domain "pricing" or "payments".
-
-2. EMAIL/COMMS: Are there email templates, drip sequences, notification patterns?
-   Write playbook entries under domain "email_marketing".
-
-3. SEO: Does the project have good meta tags, sitemap, structured data, content strategy?
-   Write playbook entries under domain "seo".
-
-4. LANDING PAGE: What's the hero structure, CTA placement, social proof approach?
-   Write playbook entries under domain "landing_page".
-
-5. ARCHITECTURE: Are there deployment, auth, error handling, or testing patterns
-   that are better than what's in Hive's current boilerplate template?
-   If yes, write a directive suggesting the boilerplate be updated: "hive: update boilerplate template — [description of improvement]"
-
-6. GROWTH: Any referral systems, onboarding flows, retention hooks?
-   Write playbook entries under domain "growth".
-
-For each finding, write to the Hive API:
-POST /api/playbook with { source_company_id, domain, insight, evidence, confidence }
-
-Only write genuinely useful patterns. Confidence should reflect how proven the pattern is:
-- 0.9+ : measurably successful (has metrics, has users)
-- 0.7-0.9 : well-implemented, likely effective
-- 0.5-0.7 : reasonable pattern, untested at scale
-
-If you find patterns that should update the Hive boilerplate, create a directive via:
-POST /api/directives with { text: "hive: [suggestion]" }`,
-        cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
-      });
-
-      // Phase 3: Knowledge assimilation — absorb operational wisdom from MD files + Claude memory
-      console.log(`  ├─ Assimilating knowledge from ${imp.name}...`);
-      try {
-        // Gather knowledge from all sources
-        const knowledgeSources: string[] = [];
-        const repoDir = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
-        const knowledgeFiles = ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md", "README.md"];
-
-        // Source 1: Repo MD files
-        for (const fname of knowledgeFiles) {
-          const fpath = join(repoDir, fname);
-          if (existsSync(fpath)) {
-            const content = readFileSync(fpath, "utf-8").slice(0, 5000);
-            knowledgeSources.push(`=== REPO FILE: ${fname} ===\n${content}\n=== END ===`);
-          }
-        }
-
-        // Source 2: Claude memory files for this project
-        const memoryPaths = [
-          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`,
-          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github/memory`,
-        ];
-        for (const memDir of memoryPaths) {
-          if (existsSync(memDir)) {
-            try {
-              const { readdirSync } = await import("fs");
-              const files = readdirSync(memDir).filter((f: string) => f.endsWith(".md") && f !== "MEMORY.md");
-              for (const f of files) {
-                const content = readFileSync(join(memDir, f), "utf-8").slice(0, 3000);
-                knowledgeSources.push(`=== CLAUDE MEMORY: ${memDir}/${f} ===\n${content}\n=== END ===`);
-              }
-            } catch { /* skip unreadable dirs */ }
-          }
-        }
-
-        if (knowledgeSources.length > 0) {
-          // Read Hive's current knowledge files for comparison
-          const hiveDir = `/Users/carlos.miranda/Documents/Github/hive`;
-          const hiveMistakes = existsSync(join(hiveDir, "MISTAKES.md")) ? readFileSync(join(hiveDir, "MISTAKES.md"), "utf-8") : "";
-          const hiveDecisions = existsSync(join(hiveDir, "DECISIONS.md")) ? readFileSync(join(hiveDir, "DECISIONS.md"), "utf-8") : "";
-          const hiveBacklog = existsSync(join(hiveDir, "BACKLOG.md")) ? readFileSync(join(hiveDir, "BACKLOG.md"), "utf-8") : "";
-
-          const assimilationOutput = await dispatch({
-            agent: "ceo", // strategic reasoning needed
-            prompt: `You are the Knowledge Assimilation agent. An existing project (${imp.name}) has been imported into Hive.
-Your job: extract operational wisdom from the imported project's knowledge files and compare against what Hive already knows. Only propose INCREMENTAL additions — things Hive doesn't already have.
-
-## Imported project knowledge:
-${knowledgeSources.join("\n\n")}
-
-## Hive's current knowledge:
-
-### MISTAKES.md (current):
-${hiveMistakes.slice(0, 4000)}
-
-### DECISIONS.md (current):
-${hiveDecisions.slice(0, 4000)}
-
-### BACKLOG.md (current):
-${hiveBacklog.slice(0, 3000)}
-
-## Your task:
-1. Read ALL the imported knowledge carefully
-2. Compare against what Hive already knows
-3. Extract learnings that are NEW and USEFUL — things that would prevent future mistakes, inform architecture decisions, or suggest improvements
-
-## Categories to check:
-- **Deployment gotchas** → MISTAKES.md (e.g. "Vercel CLI fails for non-Next.js projects")
-- **Architecture patterns** → DECISIONS.md (e.g. "REST API deploys are more reliable than CLI")
-- **Improvement ideas** → BACKLOG.md (e.g. "support multi-framework boilerplates")
-- **Operational learnings** → MISTAKES.md (e.g. "always verify deploys succeeded")
-- **User preferences** → playbook entries (e.g. "act autonomously, don't ask permission")
-
-## Rules:
-- DO NOT duplicate anything already in Hive's files
-- DO NOT include project-specific details (credentials, URLs, IDs) — extract the GENERAL lesson
-- Every entry must be actionable — "this broke" is not useful without "here's how to prevent it"
-- Keep entries concise
-- If the imported project contradicts a Hive decision, note it but don't override — flag as worth revisiting
-
-## Output format (JSON only):
-{
-  "source_project": "${imp.slug}",
-  "knowledge_files_found": number,
-  "mistakes_to_add": [
-    {
-      "title": "Short title",
-      "what_happened": "Brief description",
-      "root_cause": "Why it happened",
-      "prevention": "How to avoid in future",
-      "affects": "hive | companies | both"
-    }
-  ],
-  "decisions_to_review": [
-    {
-      "related_adr": "ADR-NNN or 'new'",
-      "insight": "What the imported project teaches us about this decision",
-      "action": "confirm | revisit | new_adr",
-      "proposed_text": "If new_adr, the full ADR text"
-    }
-  ],
-  "backlog_items": [
-    {
-      "priority": "P1 | P2 | P3",
-      "title": "Short title",
-      "description": "What and why"
-    }
-  ],
-  "playbook_entries": [
-    {
-      "domain": "deployment | operations | growth | ...",
-      "insight": "The reusable learning",
-      "confidence": 0.5-1.0
-    }
-  ]
-}`,
-            timeoutMs: 5 * 60 * 1000,
-          });
-
-          // Parse and apply the knowledge increments
-          try {
-            const jsonMatch = assimilationOutput.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const knowledge = JSON.parse(jsonMatch[0]);
-              let incrementCount = 0;
-
-              // Append to MISTAKES.md
-              if (knowledge.mistakes_to_add?.length > 0) {
-                const mistakesPath = join(hiveDir, "MISTAKES.md");
-                let existing = readFileSync(mistakesPath, "utf-8");
-                const today = new Date().toISOString().split("T")[0];
-                for (const m of knowledge.mistakes_to_add) {
-                  const entry = `\n\n### ${today} ${m.title} (from ${imp.slug} import)\n**What happened:** ${m.what_happened}\n**Root cause:** ${m.root_cause}\n**Prevention:** ${m.prevention}\n**Affects:** ${m.affects}`;
-                  existing += entry;
-                  incrementCount++;
-                }
-                const { writeFileSync } = await import("fs");
-                writeFileSync(mistakesPath, existing);
-                console.log(`    📝 +${knowledge.mistakes_to_add.length} MISTAKES.md entries`);
-              }
-
-              // Append to BACKLOG.md (into Future Vision section)
-              if (knowledge.backlog_items?.length > 0) {
-                const backlogPath = join(hiveDir, "BACKLOG.md");
-                let existing = readFileSync(backlogPath, "utf-8");
-                for (const b of knowledge.backlog_items) {
-                  const entry = `\n\n### ${b.priority === "P1" ? "🟡" : b.priority === "P2" ? "🟢" : "⚪"} ${b.priority} — ${b.title} (from ${imp.slug})\n${b.description}`;
-                  // Insert before "## Done" if it exists, otherwise append
-                  const doneIdx = existing.indexOf("## Done");
-                  if (doneIdx > -1) {
-                    existing = existing.slice(0, doneIdx) + entry + "\n\n" + existing.slice(doneIdx);
-                  } else {
-                    existing += entry;
-                  }
-                  incrementCount++;
-                }
-                const { writeFileSync } = await import("fs");
-                writeFileSync(backlogPath, existing);
-                console.log(`    📋 +${knowledge.backlog_items.length} BACKLOG.md items`);
-              }
-
-              // Write playbook entries to DB
-              if (knowledge.playbook_entries?.length > 0) {
-                for (const p of knowledge.playbook_entries) {
-                  await sql`
-                    INSERT INTO playbook (domain, insight, confidence, source_company_id, evidence)
-                    VALUES (${p.domain}, ${p.insight}, ${p.confidence || 0.7}, ${imp.company_id},
-                      ${JSON.stringify({ source: "knowledge_assimilation", from_project: imp.slug })})
-                  `;
-                  incrementCount++;
-                }
-                console.log(`    📖 +${knowledge.playbook_entries.length} playbook entries`);
-              }
-
-              // Log decisions that need review (as directives for Carlos)
-              if (knowledge.decisions_to_review?.length > 0) {
-                for (const d of knowledge.decisions_to_review) {
-                  if (d.action === "revisit" || d.action === "new_adr") {
-                    await sql`
-                      INSERT INTO directives (text, status)
-                      VALUES (${`hive: Review ${d.related_adr} — ${d.insight} (learned from ${imp.slug} import)`}, 'open')
-                    `;
-                  }
-                }
-                console.log(`    🔍 ${knowledge.decisions_to_review.length} decisions flagged for review`);
-              }
-
-              // Log the assimilation action
-              await sql`
-                INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
-                VALUES (${imp.company_id}, 'ceo', 'knowledge_assimilation',
-                  ${`Assimilated ${incrementCount} knowledge items from ${imp.slug} (${knowledgeSources.length} sources)`},
-                  'success', ${JSON.stringify(knowledge)}, now(), now())
-              `;
-
-              console.log(`    ✓ ${incrementCount} total knowledge items assimilated from ${knowledgeSources.length} sources`);
-            }
-          } catch (parseErr: any) {
-            console.log(`    ⚠ Failed to parse assimilation output: ${parseErr.message}`);
-          }
-        } else {
-          console.log(`    ⓘ No knowledge files found for ${imp.name}`);
-        }
-      } catch (assimErr: any) {
-        console.log(`    ⚠ Knowledge assimilation failed: ${assimErr.message}`);
-      }
-
-      await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
-      // Transition company to mvp so it enters the nightly cycle
-      await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id} AND status IN ('importing', 'idea', 'approved')`;
-      console.log(`  ✓ ${imp.name} onboarded with patterns extracted → status: mvp`);
     }
   }
 
@@ -1705,12 +1661,15 @@ Output a brief portfolio summary.`,
     console.log(`\n🧠 Venture Brain — skipped (need 2+ active companies, have ${activeForBrain.length})`);
   }
 
-  // === PROMPT EVOLVER: Data-driven prompt improvement ===
-  // Triggers when: agent has 10+ actions AND (<70% success OR 30+ days since last evolution)
-  if (!SINGLE_COMPANY && !SCOUT_ONLY && !DRY_RUN) {
+  // === PROMPT EVOLVER: Weekly prompt improvement ===
+  // Runs on Wednesdays (offset from Sunday Idea Scout to spread load)
+  const isWednesday = new Date().getDay() === 3;
+  const hasEnoughData = results.filter(r => r.status === "complete").length > 0;
+
+  if (isWednesday && hasEnoughData && !SINGLE_COMPANY && !SCOUT_ONLY) {
     console.log("\n🧬 Prompt Evolver — analyzing agent performance");
 
-    const agents = ["ceo", "engineer", "growth", "ops", "research_analyst", "outreach"];
+    const agents = ["ceo", "engineer", "growth", "ops"];
 
     for (const agent of agents) {
       try {
@@ -1724,8 +1683,8 @@ Output a brief portfolio summary.`,
           LIMIT 50
         `;
 
-        if (recentActions.length < 10) {
-          console.log(`  ⓘ ${agent}: not enough data (${recentActions.length}/10 actions) — skipping`);
+        if (recentActions.length < 5) {
+          console.log(`  ⓘ ${agent}: not enough data (${recentActions.length} actions) — skipping`);
           continue;
         }
 
@@ -1837,6 +1796,9 @@ ${currentPrompt.slice(0, 3000)}
         console.log(`  ⚠ ${agent} evolution failed: ${evolveErr.message}`);
       }
     }
+  } else if (!SINGLE_COMPANY && !SCOUT_ONLY) {
+    const reason = !isWednesday ? "not Wednesday" : "no completed cycles to analyze";
+    console.log(`\n🧬 Prompt Evolver — skipped (${reason})`);
   }
 
   // === DAILY DIGEST EMAIL ===
@@ -1916,11 +1878,15 @@ ${currentPrompt.slice(0, 3000)}
         </div></body></html>`;
 
       // Send via Resend API
+      const sendingDomain = await getSettingValueDirect("sending_domain");
+      const digestFrom = sendingDomain
+        ? `Hive <digest@${sendingDomain}>`
+        : "Hive <onboarding@resend.dev>"; // test mode — only delivers to Resend account owner
       const emailRes = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          from: "Hive <onboarding@resend.dev>",
+          from: digestFrom,
           to: digestTo,
           subject: `🐝 Hive Digest — ${new Date().toLocaleDateString()}`,
           html: digestHtml,

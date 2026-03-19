@@ -99,5 +99,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
   }
 
+  // Rejection side effects
+  if (decision === "rejected") {
+    switch (approval.gate_type) {
+      case "new_company":
+        // Clean up rejected idea — mark as killed so it doesn't clutter the dashboard
+        if (approval.company_id) {
+          await sql`
+            UPDATE companies SET 
+              status = 'killed', 
+              killed_at = now(), 
+              kill_reason = ${note || "Idea rejected by Carlos"},
+              updated_at = now() 
+            WHERE id = ${approval.company_id} AND status = 'idea'
+          `;
+        }
+        break;
+    }
+  }
+
   return json(approval);
 }

@@ -19,18 +19,18 @@ const LABELS: Record<string, { label: string; placeholder: string; help: string 
   stripe_secret_key: { label: "Stripe Secret Key", placeholder: "sk_live_...", help: "dashboard.stripe.com/apikeys — single account, products tagged per company" },
   resend_api_key: { label: "Resend API Key", placeholder: "re_...", help: "resend.com/api-keys" },
   resend_domain: { label: "Resend Domain", placeholder: "hive.yourdomain.com", help: "Verified sending domain — companies share it with different from addresses" },
-  gemini_api_key: { label: "Gemini API Key", placeholder: "AIza...", help: "aistudio.google.com/apikey — free tier: Growth, Outreach, Engineer agents" },
-  groq_api_key: { label: "Groq API Key", placeholder: "gsk_...", help: "console.groq.com/keys — free tier: Ops agent" },
   google_search_console_key: { label: "Google Search Console", placeholder: "service account JSON key", help: "For SEO tracking. Growth agent reads impressions/clicks per company property." },
   digest_email: { label: "Digest Email", placeholder: "you@example.com", help: "Where Hive sends your daily morning digest" },
   notification_email: { label: "Notification Email", placeholder: "you@example.com", help: "For urgent escalations (can be same as digest)" },
+  gemini_api_key: { label: "Gemini API Key", placeholder: "AIza...", help: "aistudio.google.com/apikey — free tier: Growth, Outreach, Engineer agents" },
+  groq_api_key: { label: "Groq API Key", placeholder: "gsk_...", help: "console.groq.com/keys — free tier: Ops agent" },
 };
 
 const GROUPS = [
   { title: "Infrastructure", keys: ["vercel_token", "vercel_team_id", "neon_api_key", "github_token", "github_owner"] },
-  { title: "AI Providers", keys: ["gemini_api_key", "groq_api_key"] },
   { title: "Revenue & Analytics", keys: ["stripe_secret_key", "google_search_console_key"] },
   { title: "Communications", keys: ["resend_api_key", "resend_domain", "digest_email", "notification_email"] },
+  { title: "AI Providers", keys: ["gemini_api_key", "groq_api_key"] },
 ];
 
 export default function SettingsPage() {

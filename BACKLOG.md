@@ -27,19 +27,6 @@
 
 ---
 
-## Planned
-
-### 🟢 P2 — Engineer agent must verify deploy status after push (from VerdeDesk)
-VerdeDesk taught us that agents push code and move on without checking if the Vercel deploy succeeded. Add a mandatory post-deploy verification step to the Engineer prompt: after `git push`, call `GET /v6/deployments?projectId=X&limit=1`, confirm `readyState === "READY"`. If ERROR, read build logs and fix before moving on. This should also be added to `src/lib/vercel.ts` as a `checkDeployStatus()` helper.
-
-### 🟢 P2 — Vercel REST API deploy path for non-Next.js companies (from VerdeDesk)
-VerdeDesk discovered that `vercel --prod` CLI and GitHub webhooks fail for projects with `rootDirectory` set or non-Next.js frameworks. Add a `deployViaApi()` function to `src/lib/vercel.ts` that uses `POST /v13/deployments` with `gitSource`. The Engineer agent should detect the framework and use the API path when CLI deploy fails or when the company uses Vite/Astro/SvelteKit.
-
-### 🟢 P2 — Staged validation gates for new companies (from VerdeDesk)
-VerdeDesk uses a validation stage: deploy MVP → collect waitlist signups → only proceed to full build after hitting a threshold (50 signups). This is a smart pattern for reducing wasted effort. The CEO agent should be able to set validation gates (e.g. "10 waitlist signups", "first paying customer") that pause feature development until the gate is met. This could be a new `validation_gates` table or a field on the `companies` table.
-
----
-
 ## Future Vision
 
 ### ⚪ P3 — Cloud migration
@@ -139,6 +126,3 @@ Competitive analysis refreshes every 7 cycles. Full research re-runs on "refresh
 
 ### ✅ 2026-03-18 — Self-healing architecture
 Three layers: (1) Action-oriented retries — agents see their error + fix instructions on attempts 2-3, more time/turns per retry. (2) Healer agent — runs after company cycles, classifies systemic vs company-specific errors, dispatches fixes to Hive repo or company repos, max 3 company fixes/night. (3) Pre-flight health check — DB connection, recent errors summary, Claude CLI reachability, abort if broken. Error normalization groups duplicate errors into patterns.
-
-### ✅ 2026-03-19 — Knowledge assimilation on import (Phase 3)
-Onboarding now has 3 phases: (1) Infrastructure hookup, (2) Code pattern extraction → playbook, (3) Knowledge assimilation — reads all MD knowledge files from the imported project + Claude memory files, compares against Hive's MISTAKES.md/DECISIONS.md/BACKLOG.md, and incrementally adds NEW learnings. Deployment gotchas → MISTAKES.md, architecture insights → DECISIONS.md review directives, improvement ideas → BACKLOG.md, operational wisdom → playbook entries. Every import now transfers institutional memory, not just code patterns.
