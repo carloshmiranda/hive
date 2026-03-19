@@ -41,6 +41,15 @@ Hive is an autonomous venture orchestrator that generates business ideas, builds
 - [ ] Healer successfully auto-fixes a cross-company error
 - [ ] Venture Brain successfully creates a cross-pollination directive
 
+### Milestone: Data-driven organic growth
+- [ ] GSC API integrated, keyword positions tracked per cycle
+- [ ] Bing Webmaster Tools integrated
+- [ ] IndexNow fires on every content publish
+- [ ] LLM citation tracker running every 3 cycles
+- [ ] Growth agent never creates content without visibility data
+- [ ] llms.txt and structured data in all company sites
+- [ ] Content performance feedback loop (stale content auto-refreshed)
+
 ### Milestone: Flolio import
 - [ ] Import Flolio (growth phase — more complex than fresh MVP)
 - [ ] Extract pricing, onboarding, and growth patterns

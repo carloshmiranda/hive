@@ -23,7 +23,26 @@
 
 ## Planned
 
-<!-- All P2 items completed — next priority is P3 Future Vision -->
+### 🟡 P1 — GSC + Bing Webmaster integration for Growth agent
+Growth currently creates content without ranking data. Add Google Search Console API client and Bing Webmaster Tools API client. Pull keyword positions, impressions, CTR every cycle. Store in new `visibility_metrics` table. Growth reads this data before deciding what content to create. Requires: `google_search_console_key` (service account) and `bing_webmaster_key` in settings. Both free APIs.
+
+### 🟡 P1 — IndexNow integration for instant re-indexing
+Fire IndexNow protocol on every content publish/deploy. Bing, Yandex, and 4 other engines re-crawl within minutes instead of days. Add `src/lib/indexnow.ts`. Add to deploy workflow and Growth publish step. Free, no API key needed (self-hosted key file). Google does NOT support IndexNow.
+
+### 🟡 P1 — DIY LLM citation tracker
+Build in-house LLM visibility checker using Gemini free tier (already configured). For each company's top 10 keywords, send buyer-intent prompts to Gemini, parse for brand mentions and competitor citations. Store as `llm_visibility` report type. Track share of voice over time. Runs every 3 cycles. €0 cost.
+
+### 🟡 P1 — llms.txt and structured data in boilerplate
+Add `public/llms.txt` (auto-generated at provisioning), FAQ schema component, Organization/WebSite structured data, dynamic sitemap.xml, and explicit GPTBot/ClaudeBot allows in robots.txt to the company boilerplate template.
+
+### 🟢 P2 — Content performance feedback loop
+Automated content audit: flag pages older than 60 days with declining impressions for refresh. Growth updates stale content instead of always creating new. Track per-URL performance in research_reports type `content_performance`. Engineer adds internal cross-links between topically related pages automatically.
+
+### 🟢 P2 — Anomaly detection in Sentinel
+Add statistical anomaly detection to Sentinel's 4-hour checks. Flag any metric moving >2 standard deviations from its 14-day rolling average. CEO plan explicitly addresses flagged anomalies instead of relying on the agent to notice raw number changes.
+
+### 🟢 P2 — Event-driven cadences (remove all calendar assumptions)
+Audit all cycle triggers and remove calendar-based cadences. Evolver should run when success rate drops, not "on Wednesdays." Research refresh should run when competitive landscape changes, not "every 7 cycles." Sentinel conditions should be the only time-based checks, everything else is event-driven or data-staleness-driven.
 
 ---
 
