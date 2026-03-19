@@ -71,15 +71,24 @@ jobs:
             echo "payload={\"task\":\"${TASK}\"}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install Claude Code via npm
-        run: npm install -g @anthropic-ai/claude-code
+      - name: Install Claude Code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          # Create a wrapper that forces Node 20 regardless of action's internal Node 18 setup
+          CLAUDE_REAL=$(which claude)
+          NODE20=$(which node)
+          sudo tee /usr/local/bin/claude-wrapper > /dev/null << WRAPPER
+          #!/bin/bash
+          exec $NODE20 $CLAUDE_REAL "\$@"
+          WRAPPER
+          sudo chmod +x /usr/local/bin/claude-wrapper
 
       - name: Run CEO agent
         id: agent
         uses: anthropics/claude-code-base-action@main
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          path_to_claude_code_executable: claude
+          path_to_claude_code_executable: claude-wrapper
           claude_args: "--model claude-opus-4-20250514 --max-turns 25"
           prompt: |
             You are the CEO agent of Hive, an autonomous venture orchestrator.
