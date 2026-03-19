@@ -48,17 +48,24 @@ jobs:
         run: |
           EVENT="${{ github.event_name }}"
 
+          set_output() {
+            local key="$1" value="$2"
+            echo "${key}<<GHEOF" >> $GITHUB_OUTPUT
+            echo "${value}" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+          }
+
           if [ "$EVENT" = "repository_dispatch" ]; then
             ACTION="${{ github.event.action }}"
             PAYLOAD='${{ toJson(github.event.client_payload) }}'
-            echo "trigger=${ACTION}" >> $GITHUB_OUTPUT
-            echo "payload=${PAYLOAD}" >> $GITHUB_OUTPUT
+            set_output "trigger" "${ACTION}"
+            set_output "payload" "${PAYLOAD}"
           elif [ "$EVENT" = "issues" ]; then
-            echo "trigger=research_issue" >> $GITHUB_OUTPUT
-            echo "payload={\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}" >> $GITHUB_OUTPUT
+            set_output "trigger" "research_issue"
+            set_output "payload" "{\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}"
           else
-            echo "trigger=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
-            echo "payload={\"mode\":\"${{ github.event.inputs.mode }}\",\"company\":\"${{ github.event.inputs.company }}\"}" >> $GITHUB_OUTPUT
+            set_output "trigger" "${{ github.event.inputs.mode }}"
+            set_output "payload" "{\"mode\":\"${{ github.event.inputs.mode }}\",\"company\":\"${{ github.event.inputs.company }}\"}"
           fi
 
       - name: Run Scout agent

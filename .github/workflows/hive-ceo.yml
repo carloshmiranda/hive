@@ -50,20 +50,28 @@ jobs:
           EVENT="${{ github.event_name }}"
           TASK="${{ github.event.inputs.task }}"
 
+          # Helper: write multiline-safe output using heredoc delimiters
+          set_output() {
+            local key="$1" value="$2"
+            echo "${key}<<GHEOF" >> $GITHUB_OUTPUT
+            echo "${value}" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+          }
+
           if [ "$EVENT" = "repository_dispatch" ]; then
             ACTION="${{ github.event.action }}"
             PAYLOAD='${{ toJson(github.event.client_payload) }}'
-            echo "trigger=repository_dispatch:${ACTION}" >> $GITHUB_OUTPUT
-            echo "payload=${PAYLOAD}" >> $GITHUB_OUTPUT
+            set_output "trigger" "repository_dispatch:${ACTION}"
+            set_output "payload" "${PAYLOAD}"
           elif [ "$EVENT" = "issues" ]; then
-            echo "trigger=issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}" >> $GITHUB_OUTPUT
-            echo "payload={\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}" >> $GITHUB_OUTPUT
+            set_output "trigger" "issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}"
+            set_output "payload" "{\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}"
           elif [ "$EVENT" = "pull_request" ]; then
-            echo "trigger=pr:#${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
-            echo "payload={\"pr_number\":${{ github.event.pull_request.number }}}" >> $GITHUB_OUTPUT
+            set_output "trigger" "pr:#${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}"
+            set_output "payload" "{\"pr_number\":${{ github.event.pull_request.number }}}"
           else
-            echo "trigger=manual${TASK:+: $TASK}" >> $GITHUB_OUTPUT
-            echo "payload={\"task\":\"${TASK}\"}" >> $GITHUB_OUTPUT
+            set_output "trigger" "manual${TASK:+: $TASK}"
+            set_output "payload" "{\"task\":\"${TASK}\"}"
           fi
 
       - name: Run CEO agent

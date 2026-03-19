@@ -52,20 +52,27 @@ jobs:
         run: |
           EVENT="${{ github.event_name }}"
 
+          set_output() {
+            local key="$1" value="$2"
+            echo "${key}<<GHEOF" >> $GITHUB_OUTPUT
+            echo "${value}" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+          }
+
           if [ "$EVENT" = "repository_dispatch" ]; then
             ACTION="${{ github.event.action }}"
             PAYLOAD='${{ toJson(github.event.client_payload) }}'
-            echo "trigger=${ACTION}" >> $GITHUB_OUTPUT
-            echo "payload=${PAYLOAD}" >> $GITHUB_OUTPUT
+            set_output "trigger" "${ACTION}"
+            set_output "payload" "${PAYLOAD}"
           elif [ "$EVENT" = "issues" ]; then
-            echo "trigger=issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}" >> $GITHUB_OUTPUT
-            echo "payload={\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\",\"body\":$(echo '${{ github.event.issue.body }}' | jq -Rs .)}" >> $GITHUB_OUTPUT
+            set_output "trigger" "issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}"
+            set_output "payload" "{\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\",\"body\":$(echo '${{ github.event.issue.body }}' | jq -Rs .)}"
           elif [ "$EVENT" = "pull_request_review" ]; then
-            echo "trigger=pr_approved:#${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-            echo "payload={\"pr_number\":${{ github.event.pull_request.number }},\"state\":\"${{ github.event.review.state }}\"}" >> $GITHUB_OUTPUT
+            set_output "trigger" "pr_approved:#${{ github.event.pull_request.number }}"
+            set_output "payload" "{\"pr_number\":${{ github.event.pull_request.number }},\"state\":\"${{ github.event.review.state }}\"}"
           else
-            echo "trigger=manual" >> $GITHUB_OUTPUT
-            echo "payload={\"task\":\"${{ github.event.inputs.task }}\",\"company\":\"${{ github.event.inputs.company }}\"}" >> $GITHUB_OUTPUT
+            set_output "trigger" "manual"
+            set_output "payload" "{\"task\":\"${{ github.event.inputs.task }}\",\"company\":\"${{ github.event.inputs.company }}\"}"
           fi
 
       - name: Run Engineer agent
