@@ -113,3 +113,31 @@
 **Fix applied:** Consolidated to 7 agents (ADR-012). Migration 003 renames all records. "One agent, one verb" rule: CEO plans, Scout discovers, Engineer builds, Ops monitors, Growth creates, Outreach prospects, Evolver improves.
 **Prevention:** Before creating a new agent, ask: "Is this a new capability or a new trigger for an existing agent?" If the output format and tools are the same as an existing agent, it's a trigger, not an agent. Add it as a new event type on the existing workflow.
 **Affects:** both (schema, orchestrator, workflows, dispatch)
+
+### 2026-03-19 Import route crashes on duplicate company slug
+**What happened:** Importing VerdeDesk the second time returned a 500 error. `INSERT INTO companies` hit a UNIQUE constraint on `slug` because the first attempt left a stale row.
+**Root cause:** Import route assumed every import was for a new company. No idempotency — no check for existing slug before inserting.
+**Fix applied:** Import route now does `SELECT` first. If company exists, `UPDATE` its fields (name, description, github_repo) and promote status from idea/approved → mvp. Also clears stale pending import records for the same company.
+**Prevention:** Any user-facing create endpoint must handle re-submission gracefully. Always check for existing records before INSERT. Prefer upsert patterns (SELECT → UPDATE/INSERT) over raw INSERT for entities with natural keys (slug, email, etc.).
+**Affects:** hive (imports route)
+
+### 2026-03-19 Approval decide route didn't fire repository_dispatch
+**What happened:** Approving the VerdeDesk import gate did nothing — no CEO agent was dispatched. The approval status updated in the DB but no downstream work happened.
+**Root cause:** The approval decide route had side effects for updating company status but never called GitHub's `repository_dispatch` API. The CEO workflow listens for `gate_approved` events but nothing was sending them.
+**Fix applied:** Added `dispatchEvent()` helper to the approval decide route. On `new_company` approval, it fires `gate_approved` with the company_id as payload. CEO workflow picks it up.
+**Prevention:** When building event-driven chains, trace the full path: trigger → handler → next trigger. If a handler doesn't emit the next event, the chain is broken. Test the chain end-to-end, not just individual handlers.
+**Affects:** hive (approval flow, agent dispatch)
+
+### 2026-03-19 claude.ai/install.sh returns 403 — blocks all brain agents
+**What happened:** All GitHub Actions brain agent workflows (CEO, Scout, Engineer, Evolver) fail at the Claude CLI install step. `curl -fsSL https://claude.ai/install.sh` returns HTTP 403.
+**Root cause:** Anthropic infrastructure issue. The install endpoint is globally returning 403 — not specific to our repo, token, or workflow. Confirmed by curling directly.
+**Fix applied:** None possible — must wait for Anthropic to fix their CDN/install endpoint.
+**Prevention:** Brain agents depend on a third-party install script with no fallback. Consider: (1) caching the Claude CLI binary in the repo or a release artifact, (2) using a Docker image with CLI pre-installed, (3) pinning a specific CLI version URL that might be more stable. External install scripts are a single point of failure.
+**Affects:** all brain agents (CEO, Scout, Engineer, Evolver)
+
+### 2026-03-19 claude-code-base-action v0.0.63 ignored model parameter
+**What happened:** All brain agents ran on Sonnet despite CLAUDE.md documenting them as "Opus via Max". The model parameter in the workflow YAML was silently ignored.
+**Root cause:** Version v0.0.63 of anthropics/claude-code-base-action had a bug (GitHub issue #255) where the ANTHROPIC_MODEL env var wasn't passed to the CLI. Fixed in later versions.
+**Fix applied:** Upgraded all workflows to @beta. Set explicit model per agent via `claude_args: "--model X"`.
+**Prevention:** When using third-party GitHub Actions, always pin to a recent version and verify that configuration parameters actually take effect. Test with a manual dispatch and check the action logs for which model was used.
+**Affects:** all brain agents (CEO, Scout, Engineer, Evolver)

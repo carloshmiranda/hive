@@ -151,3 +151,14 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Keep all 10: more granular but overlapping scopes cause confusion and wasted calls
 - Consolidate to 5: too aggressive, Growth and Outreach are distinct enough to warrant separation
 **Consequences:** Fewer Claude calls per cycle. Simpler chain dispatch logic. Agent CHECK constraint in schema reduced from 16 to 7 values. The "one agent, one verb" rule makes scope boundaries testable.
+
+### ADR-013: Per-agent model selection
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** All GitHub Actions brain agents were running on Sonnet (claude-code-base-action v0.0.63 default). The action version had a bug where the model parameter was ignored (GitHub issue #255). Worker agents used Gemini 2.5 Flash-Lite, the lowest quality free tier option. Quality of CEO plans and Scout research directly impacts all downstream work.
+**Decision:** Explicit model selection per agent based on work type. Brain agents: CEO/Scout/Evolver on Opus (strategic, infrequent), Engineer on Sonnet (execution, speed matters). Workers: Growth/Outreach upgraded to Gemini 2.5 Flash (content quality), Ops stays on Groq Llama 3.3 70B (speed). Fallback chain: Flash → Flash-Lite → Groq. Action version upgraded from v0.0.63 to @beta.
+**Alternatives considered:**
+- All agents on Opus: burns Max 5x quota too fast, Engineer doesn't benefit from extra reasoning
+- All agents on Sonnet: CEO and Scout produce mediocre plans/research that cascade into mediocre cycles
+- Gemini 2.5 Pro for workers: only 100 RPD free tier, too restrictive even for low volume
+**Consequences:** Better plan quality from CEO, better research from Scout, better prompts from Evolver. Slightly slower runs for those 3 agents (Opus latency). Growth/Outreach content quality improves. Engineer stays fast. Free tier quota impact: Flash at 250 RPD is sufficient for 5+ companies at a few calls/day each.

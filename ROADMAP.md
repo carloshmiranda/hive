@@ -23,7 +23,7 @@ Hive is an autonomous venture orchestrator that generates business ideas, builds
 - [ ] First company deployed to production with landing page
 
 ### Milestone: VerdeDesk imported
-- [ ] Import via dashboard
+- [x] Import via dashboard
 - [ ] Pattern extraction → playbook entries
 - [ ] First CEO cycle on VerdeDesk
 - [ ] Outreach pipeline active
@@ -89,3 +89,4 @@ Decisions that shaped the platform direction (detail in DECISIONS.md):
 | ADR-004 | 2026-03-18 | Sequential nightly processing | Shared Claude quota, can't parallelise |
 | ADR-009 | 2026-03-18 | Multi-provider model routing | Save Claude quota for brain tasks |
 | ADR-010 | 2026-03-19 | Multi-repo with shared intelligence | Clean isolation, Polsia-validated pattern |
+| ADR-013 | 2026-03-19 | Per-agent model selection | Opus for strategic, Sonnet for code, Flash for content |

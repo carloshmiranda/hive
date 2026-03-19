@@ -68,10 +68,10 @@ jobs:
 
       - name: Run CEO agent
         id: agent
-        uses: anthropics/claude-code-base-action@v0.0.63
+        uses: anthropics/claude-code-base-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          max_turns: 25
+          claude_args: "--model claude-opus-4-20250514 --max-turns 25"
           prompt: |
             You are the CEO agent of Hive, an autonomous venture orchestrator.
 

@@ -8,8 +8,8 @@ type WorkerAgent = typeof WORKER_AGENTS[number];
 
 // Agent → LLM provider mapping
 const AGENT_MODEL: Record<WorkerAgent, { provider: "gemini" | "groq"; model: string }> = {
-  growth:   { provider: "gemini", model: "gemini-2.5-flash-lite" },
-  outreach: { provider: "gemini", model: "gemini-2.5-flash-lite" },
+  growth:   { provider: "gemini", model: "gemini-2.5-flash" },
+  outreach: { provider: "gemini", model: "gemini-2.5-flash" },
   ops:      { provider: "groq",  model: "llama-3.3-70b-versatile" },
 };
 
@@ -223,8 +223,11 @@ async function callGemini(prompt: string, model: string): Promise<string> {
 
   if (!res.ok) {
     const body = await res.text();
-    // Fallback to Groq if Gemini fails
-    console.log(`Gemini ${model} failed (${res.status}), falling back to Groq`);
+    console.log(`Gemini ${model} failed (${res.status}): ${body.slice(0, 200)}`);
+    // Fallback chain: Flash → Flash-Lite → Groq
+    if (model === "gemini-2.5-flash") {
+      return callGemini(prompt, "gemini-2.5-flash-lite");
+    }
     return callGroq(prompt, "llama-3.3-70b-versatile");
   }
 

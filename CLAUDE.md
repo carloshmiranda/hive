@@ -285,28 +285,22 @@ Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude
 
 | Agent | Provider | Model | Why |
 |-------|----------|-------|-----|
-| CEO | Claude CLI | Opus (via Max) | Strategic decisions, needs tool use |
-| Idea Scout | Claude CLI | Opus | Web search, complex reasoning |
-| Research Analyst | Claude CLI | Opus | Web search for market research |
-| Venture Brain | Claude CLI | Opus | Portfolio analysis, kill decisions |
-| Healer | Claude CLI | Opus | Code editing, needs cwd/tools |
-| Prompt Evolver | Claude CLI | Opus | Evaluating + rewriting prompts |
-| Engineer | Claude CLI* | Opus | Needs cwd for git/npm/deploy |
-| Growth | Gemini API | Flash-Lite | Content generation, no tool use |
-| Outreach | Gemini API | Flash-Lite | Email drafting, no tool use |
-| Ops | Groq API | Llama 3.3 70B | Quick metric analysis, fastest inference |
-
-*Engineer always routes to Claude because it needs `cwd` (code editing, git, npm). The router auto-forces Claude when `cwd` or `allowedTools` are set.
+| CEO | Claude (GitHub Actions) | Opus | Strategic decisions, plan quality cascades |
+| Scout | Claude (GitHub Actions) | Opus | Research synthesis, idea quality |
+| Engineer | Claude (GitHub Actions) | Sonnet | Code execution, speed > reasoning |
+| Evolver | Claude (GitHub Actions) | Opus | Meta-cognitive prompt improvement |
+| Growth | Gemini API (Vercel serverless) | 2.5 Flash | Content quality for SEO, within free quota |
+| Outreach | Gemini API (Vercel serverless) | 2.5 Flash | Email personalization quality |
+| Ops | Groq API (Vercel serverless) | Llama 3.3 70B | Fast inference for health checks |
 
 ### Fallback chain
-Gemini fails → try Groq → fall back to Claude (logs warning about quota burn)
+Gemini Flash fails → try Flash-Lite → try Groq → fall back to Claude (logs warning about quota burn)
 Groq fails → fall back to Claude
 
 ### Free tier budget (per day)
-- Gemini Flash-Lite: 1,000 RPD (Growth + Outreach)
-- Gemini Flash: 250 RPD (if Engineer were routed here)
-- Groq: ~6,000 RPD (Ops)
-- Claude Max 5x: ~225 messages per 5hr window (CEO, Idea Scout, Brain, Healer, Engineer, Research, Evolver)
+- Gemini 2.5 Flash: 250 RPD, 10 RPM (Growth + Outreach). Fallback: Flash-Lite (1,000 RPD)
+- Groq Llama 3.3 70B: ~6,000 RPD (Ops)
+- Claude Max 5x: ~225 messages per 5hr window (CEO on Opus, Scout on Opus, Evolver on Opus, Engineer on Sonnet)
 
 ### Required settings
 Add these in the Hive dashboard (/settings) to enable free-tier routing:

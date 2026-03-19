@@ -6,11 +6,11 @@
 
 ## Current State
 
-- **Phase:** Event-driven migration complete. Ready for first agent dispatch.
+- **Phase:** First company imported. Onboarding pending (blocked on Claude CLI install).
 - **Architecture:** 7 agents, event-driven, zero crons (except sentinel every 4h). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
-- **Active companies:** 0
-- **Companies to import:** VerdeDesk (MVP on Vercel), Flolio (growth phase, import later)
+- **Active companies:** 1 (VerdeDesk — status: mvp, scan complete, onboarding pending)
+- **Companies to import:** Flolio (growth phase, import later)
 
 ### Agent Architecture (7 agents)
 
@@ -31,12 +31,24 @@
 - **Data conditions**: Sentinel queries Neon every 4h → dispatches agents whose work conditions are met
 
 - **Blocked on:**
+  - `claude.ai/install.sh` returning 403 — all brain agent GitHub Actions workflows fail to install Claude CLI. Global Anthropic infrastructure issue. No workaround.
   - Resend domain verification (need a real domain — Flolio's domain could work)
-  - First Scout run to generate 3 business proposals (trigger via GitHub Actions → Run workflow)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-19 [code] Per-agent model routing (ADR-013)
+Upgraded GitHub Actions from claude-code-base-action v0.0.63 (Sonnet default, model param bug) to @beta with explicit model selection. CEO, Scout, and Evolver now run on Opus for better strategic reasoning. Engineer stays on Sonnet for speed. Growth and Outreach upgraded from Gemini 2.5 Flash-Lite to Flash for better content/email quality. Ops stays on Groq. Fallback chain: Flash → Flash-Lite → Groq. PR opened to test CEO workflow with new Opus model.
+
+### 2026-03-19 [code] VerdeDesk imported + approval dispatch fix
+VerdeDesk imported via Settings page (GitHub scan: Next.js, TypeScript, Tailwind, Vercel). Company created (status: mvp), scan report stored, approval gate created and approved. Fixed 3 bugs during import: (1) duplicate slug crash on re-import — imports route now checks for existing company and updates instead of inserting, (2) approval decide route wasn't firing `repository_dispatch` — added `dispatchEvent()` helper that chains to CEO workflow, (3) `new_company` approval blindly set status to `approved` even for imports already at `mvp` — added `AND status = 'idea'` guard. Onboarding agent hasn't run yet — blocked on claude.ai/install.sh 403.
+
+### 2026-03-19 [code] Dashboard redesign shipped
+Redesigned the Hive dashboard: two-column layout replaced with 4 tabs (Overview, Inbox, Activity, Intelligence). Portfolio companies and Scout proposals are now separate views. Playbook renamed to "Intelligence" with domain grouping and confidence labels (Proven/Strong/Promising/Early) instead of raw percentages. Typography: Outfit + IBM Plex Mono replacing DM Sans + JetBrains Mono. Contrast bumped to pass WCAG AA (secondary text #6b6b7b → #9d9da8). Minimum font size 11px (was 9px). Agent badge config updated for consolidated 7-agent names. Import dialog moved to Settings page. Company detail page also updated with new design system.
+
+### 2026-03-19 [code] Brain workflow fixes
+Fixed all 4 brain agent workflows: `anthropics/claude-code-base-action@v1` tag doesn't exist (changed to `@v0.0.63`), `claude_args` isn't a valid input (replaced with native `max_turns` input).
 
 ### 2026-03-19 [chat] Dashboard redesign
 Redesigned the Hive dashboard: two-column layout replaced with 4 tabs (Overview, Inbox, Activity, Intelligence). Portfolio companies and Scout proposals are now separate views. Playbook renamed to "Intelligence" with domain grouping and confidence labels (Proven/Strong/Promising/Early) instead of raw percentages. Typography: Outfit + IBM Plex Mono replacing DM Sans + JetBrains Mono. Contrast bumped to pass WCAG AA (secondary text #6b6b7b → #9d9da8). Minimum font size 11px (was 9px). Agent badge config updated for consolidated 7-agent names. Import dialog moved to Settings page.
@@ -73,9 +85,10 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Test Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
-2. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
-3. **Import VerdeDesk** — via dashboard import dialog, triggers onboarding + pattern extraction
+1. **Unblock Claude CLI install** — wait for Anthropic to fix claude.ai/install.sh 403, then retry VerdeDesk onboarding + Scout
+2. **VerdeDesk onboarding** — CEO agent processes the approved gate, Engineer scaffolds integrations, pattern extraction → playbook
+3. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
+4. **Run Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
 
 ## Open Questions
 
