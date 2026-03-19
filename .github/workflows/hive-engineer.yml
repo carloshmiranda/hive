@@ -47,6 +47,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Build Engineer context
         id: context
         run: |
@@ -77,8 +82,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           path_to_claude_code_executable: claude
-          model: claude-sonnet-4-20250514
-          max_turns: 25
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 25"
           prompt: |
             You are the Engineer agent of Hive. You write code, fix bugs, and deploy.
 

@@ -43,6 +43,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Build Scout context
         id: context
         run: |
@@ -70,8 +75,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           path_to_claude_code_executable: claude
-          model: claude-opus-4-20250514
-          max_turns: 30
+          claude_args: "--model claude-opus-4-20250514 --max-turns 30"
           prompt: |
             You are the Scout agent of Hive. You find new business ideas AND do market research.
 

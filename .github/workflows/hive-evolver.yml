@@ -28,6 +28,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install Claude Code via npm
         run: npm install -g @anthropic-ai/claude-code
 
@@ -37,8 +42,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           path_to_claude_code_executable: claude
-          model: claude-opus-4-20250514
-          max_turns: 15
+          claude_args: "--model claude-opus-4-20250514 --max-turns 15"
           prompt: |
             You are the Evolver agent of Hive. You analyze agent performance and improve prompts.
 
