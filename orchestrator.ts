@@ -776,9 +776,10 @@ Order them by your confidence score, highest first.`,
 
       // Gather cross-company learnings to inject into the new company's CLAUDE.md
       const playbookEntries = await sql`
-        SELECT domain, insight, source_company, confidence 
-        FROM playbook WHERE superseded_by IS NULL AND confidence >= 0.6
-        ORDER BY confidence DESC LIMIT 30
+        SELECT p.domain, p.insight, c.slug as source_company, p.confidence
+        FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id
+        WHERE p.superseded_by IS NULL AND p.confidence >= 0.6
+        ORDER BY p.confidence DESC LIMIT 30
       `;
       const playbookSection = playbookEntries.length > 0
         ? `\n## Inherited Playbook (from Hive portfolio)\n\nThese learnings were extracted from other Hive companies. Apply them where relevant.\n\n${
@@ -987,27 +988,22 @@ Output a brief summary of what was assimilated.`,
   // Priority order: lowest-scoring companies first (they need the most help)
   // New companies (no cycles yet) go first to get their initial momentum
   const companies = await sql`
-    SELECT c.*, 
-      COALESCE(
-        (SELECT score FROM cycles WHERE company_id = c.id ORDER BY started_at DESC LIMIT 1),
-        0
-      ) as last_score,
+    SELECT c.*,
       COALESCE(
         (SELECT COUNT(*) FROM cycles WHERE company_id = c.id),
         0
       ) as cycle_count
     FROM companies c
     WHERE c.status IN ('mvp', 'active')
-    ORDER BY 
+    ORDER BY
       cycle_count ASC,        -- new companies first (0 cycles)
-      last_score ASC,         -- struggling companies next (low score)
       c.created_at ASC        -- oldest as tiebreaker
   `;
   const companiesToProcess = SINGLE_COMPANY ? companies.filter((r: any) => r.slug === SINGLE_COMPANY) : companies;
   
   console.log(`\n📋 ${companiesToProcess.length} active companies to process`);
   if (companiesToProcess.length > 0) {
-    console.log(`  Priority order: ${companiesToProcess.map((c: any) => `${c.slug}(score:${c.last_score || "new"},cycles:${c.cycle_count})`).join(" → ")}`);
+    console.log(`  Priority order: ${companiesToProcess.map((c: any) => `${c.slug}(cycles:${c.cycle_count})`).join(" → ")}`);
   }
   console.log("");
 
@@ -1015,7 +1011,7 @@ Output a brief summary of what was assimilated.`,
 
   for (const company of companiesToProcess) {
     const companyStart = Date.now();
-    console.log(`\n▸ ${company.name} (${company.slug}) — ${company.status} [score: ${company.last_score || "new"}, cycles: ${company.cycle_count}]`);
+    console.log(`\n▸ ${company.name} (${company.slug}) — ${company.status} [cycles: ${company.cycle_count}]`);
 
     try {
     const cycleNumber = await getLatestCycleNumber(company.id);
@@ -1600,12 +1596,12 @@ Output JSON:
 
       // Also check playbook for relevant entries
       const relevantPlaybook = await sql`
-        SELECT domain, insight, source_company, confidence
-        FROM playbook 
-        WHERE superseded_by IS NULL 
-          AND domain = ${pattern.agent === "engineer" ? "engineering" : pattern.agent}
-          AND confidence >= 0.5
-        ORDER BY confidence DESC
+        SELECT p.domain, p.insight, c.slug as source_company, p.confidence
+        FROM playbook p LEFT JOIN companies c ON c.id = p.source_company_id
+        WHERE p.superseded_by IS NULL
+          AND p.domain = ${pattern.agent === "engineer" ? "engineering" : pattern.agent}
+          AND p.confidence >= 0.5
+        ORDER BY p.confidence DESC
         LIMIT 5
       `;
 
@@ -1676,17 +1672,18 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
 
     // Gather recent playbook entries for cross-pollination analysis
     const recentPlaybook = await sql`
-      SELECT domain, insight, source_company, confidence, created_at
-      FROM playbook WHERE superseded_by IS NULL
-      ORDER BY created_at DESC LIMIT 20
+      SELECT p.domain, p.insight, co.slug as source_company, p.confidence, p.created_at
+      FROM playbook p LEFT JOIN companies co ON co.id = p.source_company_id
+      WHERE p.superseded_by IS NULL
+      ORDER BY p.created_at DESC LIMIT 20
     `;
 
-    // Gather recent cycle scores for trend analysis
+    // Gather recent cycle info for trend analysis
     const cycleScores = await sql`
-      SELECT c.slug, cy.cycle_number, cy.score, cy.started_at
+      SELECT c.slug, cy.cycle_number, cy.ceo_review, cy.started_at
       FROM cycles cy
       JOIN companies c ON c.id = cy.company_id
-      WHERE cy.started_at > now() - interval '14 days' AND cy.score IS NOT NULL
+      WHERE cy.started_at > now() - interval '14 days' AND cy.status = 'completed'
       ORDER BY c.slug, cy.started_at DESC
     `;
 
@@ -1698,8 +1695,12 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
 ## Metrics (last 7 days):
 ${JSON.stringify(allMetrics, null, 2)}
 
-## Cycle scores (last 14 days):
-${cycleScores.map((s: any) => `${s.slug}: cycle ${s.cycle_number} → ${s.score}/10`).join("\n") || "No scored cycles yet"}
+## Recent cycles (last 14 days):
+${cycleScores.map((s: any) => {
+          let score = "N/A";
+          try { const r = typeof s.ceo_review === "string" ? JSON.parse(s.ceo_review) : s.ceo_review; score = String(r?.review?.score || r?.score || "N/A"); } catch {}
+          return `${s.slug}: cycle ${s.cycle_number} → ${score}/10`;
+        }).join("\n") || "No completed cycles yet"}
 
 ## Recent playbook entries:
 ${recentPlaybook.map((p: any) => `[${p.domain}] ${p.insight} (from ${p.source_company || "unknown"}, confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}

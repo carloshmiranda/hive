@@ -36,7 +36,7 @@ export async function GET() {
 
   // Recent errors (last 48h)
   const recentErrors = await sql`
-    SELECT agent, error, description, 
+    SELECT aa.agent, aa.error, aa.description,
            c.slug as company_slug, aa.finished_at
     FROM agent_actions aa
     LEFT JOIN companies c ON c.id = aa.company_id
@@ -45,20 +45,22 @@ export async function GET() {
     ORDER BY aa.finished_at DESC LIMIT 10
   `;
 
-  // Latest cycle scores
+  // Latest cycle scores (cycles table has no score column — extract from ceo_review JSON)
   const cycleScores = await sql`
-    SELECT c.slug, cy.cycle_number, cy.score, cy.started_at
+    SELECT c.slug, cy.cycle_number, cy.ceo_review, cy.started_at
     FROM cycles cy
     JOIN companies c ON c.id = cy.company_id
-    WHERE cy.started_at > now() - interval '7 days' AND cy.score IS NOT NULL
+    WHERE cy.started_at > now() - interval '7 days' AND cy.status = 'completed'
     ORDER BY cy.started_at DESC LIMIT 20
   `;
 
   // Playbook highlights (top confidence)
   const playbook = await sql`
-    SELECT domain, insight, source_company, confidence
-    FROM playbook WHERE superseded_by IS NULL AND confidence >= 0.7
-    ORDER BY confidence DESC LIMIT 10
+    SELECT p.domain, p.insight, c.slug as source_company, p.confidence
+    FROM playbook p
+    LEFT JOIN companies c ON c.id = p.source_company_id
+    WHERE p.superseded_by IS NULL AND p.confidence >= 0.7
+    ORDER BY p.confidence DESC LIMIT 10
   `;
 
   // Settings status (which keys are configured, not the values)
@@ -100,11 +102,14 @@ export async function GET() {
     },
 
     performance: {
-      cycle_scores: cycleScores.map((s: any) => ({
-        company: s.slug,
-        cycle: s.cycle_number,
-        score: s.score,
-      })),
+      cycle_scores: cycleScores.map((s: any) => {
+        let score = null;
+        try {
+          const review = typeof s.ceo_review === "string" ? JSON.parse(s.ceo_review) : s.ceo_review;
+          score = review?.review?.score || review?.score || null;
+        } catch {}
+        return { company: s.slug, cycle: s.cycle_number, score };
+      }),
     },
 
     knowledge: {
