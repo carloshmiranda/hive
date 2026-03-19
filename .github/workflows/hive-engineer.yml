@@ -73,7 +73,8 @@ jobs:
         uses: anthropics/claude-code-base-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 25"
+          model: claude-sonnet-4-20250514
+          max_turns: 25
           prompt: |
             You are the Engineer agent of Hive. You write code, fix bugs, and deploy.
 
