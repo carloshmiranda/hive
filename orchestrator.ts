@@ -1260,6 +1260,213 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
         cwd: `/Users/carlos.miranda/Documents/Github/${imp.slug}`,
       });
 
+      // Phase 3: Knowledge assimilation — absorb operational wisdom from MD files + Claude memory
+      console.log(`  ├─ Assimilating knowledge from ${imp.name}...`);
+      try {
+        // Gather knowledge from all sources
+        const knowledgeSources: string[] = [];
+        const repoDir = `/Users/carlos.miranda/Documents/Github/${imp.slug}`;
+        const knowledgeFiles = ["CLAUDE.md", "MISTAKES.md", "DECISIONS.md", "BACKLOG.md", "MEMORY.md", "README.md"];
+
+        // Source 1: Repo MD files
+        for (const fname of knowledgeFiles) {
+          const fpath = join(repoDir, fname);
+          if (existsSync(fpath)) {
+            const content = readFileSync(fpath, "utf-8").slice(0, 5000);
+            knowledgeSources.push(`=== REPO FILE: ${fname} ===\n${content}\n=== END ===`);
+          }
+        }
+
+        // Source 2: Claude memory files for this project
+        const memoryPaths = [
+          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github-${imp.slug}/memory`,
+          `/Users/carlos.miranda/.claude/projects/-Users-carlos-miranda-Documents-Github/memory`,
+        ];
+        for (const memDir of memoryPaths) {
+          if (existsSync(memDir)) {
+            try {
+              const { readdirSync } = await import("fs");
+              const files = readdirSync(memDir).filter((f: string) => f.endsWith(".md") && f !== "MEMORY.md");
+              for (const f of files) {
+                const content = readFileSync(join(memDir, f), "utf-8").slice(0, 3000);
+                knowledgeSources.push(`=== CLAUDE MEMORY: ${memDir}/${f} ===\n${content}\n=== END ===`);
+              }
+            } catch { /* skip unreadable dirs */ }
+          }
+        }
+
+        if (knowledgeSources.length > 0) {
+          // Read Hive's current knowledge files for comparison
+          const hiveDir = `/Users/carlos.miranda/Documents/Github/hive`;
+          const hiveMistakes = existsSync(join(hiveDir, "MISTAKES.md")) ? readFileSync(join(hiveDir, "MISTAKES.md"), "utf-8") : "";
+          const hiveDecisions = existsSync(join(hiveDir, "DECISIONS.md")) ? readFileSync(join(hiveDir, "DECISIONS.md"), "utf-8") : "";
+          const hiveBacklog = existsSync(join(hiveDir, "BACKLOG.md")) ? readFileSync(join(hiveDir, "BACKLOG.md"), "utf-8") : "";
+
+          const assimilationOutput = await dispatch({
+            agent: "ceo", // strategic reasoning needed
+            prompt: `You are the Knowledge Assimilation agent. An existing project (${imp.name}) has been imported into Hive.
+Your job: extract operational wisdom from the imported project's knowledge files and compare against what Hive already knows. Only propose INCREMENTAL additions — things Hive doesn't already have.
+
+## Imported project knowledge:
+${knowledgeSources.join("\n\n")}
+
+## Hive's current knowledge:
+
+### MISTAKES.md (current):
+${hiveMistakes.slice(0, 4000)}
+
+### DECISIONS.md (current):
+${hiveDecisions.slice(0, 4000)}
+
+### BACKLOG.md (current):
+${hiveBacklog.slice(0, 3000)}
+
+## Your task:
+1. Read ALL the imported knowledge carefully
+2. Compare against what Hive already knows
+3. Extract learnings that are NEW and USEFUL — things that would prevent future mistakes, inform architecture decisions, or suggest improvements
+
+## Categories to check:
+- **Deployment gotchas** → MISTAKES.md (e.g. "Vercel CLI fails for non-Next.js projects")
+- **Architecture patterns** → DECISIONS.md (e.g. "REST API deploys are more reliable than CLI")
+- **Improvement ideas** → BACKLOG.md (e.g. "support multi-framework boilerplates")
+- **Operational learnings** → MISTAKES.md (e.g. "always verify deploys succeeded")
+- **User preferences** → playbook entries (e.g. "act autonomously, don't ask permission")
+
+## Rules:
+- DO NOT duplicate anything already in Hive's files
+- DO NOT include project-specific details (credentials, URLs, IDs) — extract the GENERAL lesson
+- Every entry must be actionable — "this broke" is not useful without "here's how to prevent it"
+- Keep entries concise
+- If the imported project contradicts a Hive decision, note it but don't override — flag as worth revisiting
+
+## Output format (JSON only):
+{
+  "source_project": "${imp.slug}",
+  "knowledge_files_found": number,
+  "mistakes_to_add": [
+    {
+      "title": "Short title",
+      "what_happened": "Brief description",
+      "root_cause": "Why it happened",
+      "prevention": "How to avoid in future",
+      "affects": "hive | companies | both"
+    }
+  ],
+  "decisions_to_review": [
+    {
+      "related_adr": "ADR-NNN or 'new'",
+      "insight": "What the imported project teaches us about this decision",
+      "action": "confirm | revisit | new_adr",
+      "proposed_text": "If new_adr, the full ADR text"
+    }
+  ],
+  "backlog_items": [
+    {
+      "priority": "P1 | P2 | P3",
+      "title": "Short title",
+      "description": "What and why"
+    }
+  ],
+  "playbook_entries": [
+    {
+      "domain": "deployment | operations | growth | ...",
+      "insight": "The reusable learning",
+      "confidence": 0.5-1.0
+    }
+  ]
+}`,
+            timeoutMs: 5 * 60 * 1000,
+          });
+
+          // Parse and apply the knowledge increments
+          try {
+            const jsonMatch = assimilationOutput.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const knowledge = JSON.parse(jsonMatch[0]);
+              let incrementCount = 0;
+
+              // Append to MISTAKES.md
+              if (knowledge.mistakes_to_add?.length > 0) {
+                const mistakesPath = join(hiveDir, "MISTAKES.md");
+                let existing = readFileSync(mistakesPath, "utf-8");
+                const today = new Date().toISOString().split("T")[0];
+                for (const m of knowledge.mistakes_to_add) {
+                  const entry = `\n\n### ${today} ${m.title} (from ${imp.slug} import)\n**What happened:** ${m.what_happened}\n**Root cause:** ${m.root_cause}\n**Prevention:** ${m.prevention}\n**Affects:** ${m.affects}`;
+                  existing += entry;
+                  incrementCount++;
+                }
+                const { writeFileSync } = await import("fs");
+                writeFileSync(mistakesPath, existing);
+                console.log(`    📝 +${knowledge.mistakes_to_add.length} MISTAKES.md entries`);
+              }
+
+              // Append to BACKLOG.md (into Future Vision section)
+              if (knowledge.backlog_items?.length > 0) {
+                const backlogPath = join(hiveDir, "BACKLOG.md");
+                let existing = readFileSync(backlogPath, "utf-8");
+                for (const b of knowledge.backlog_items) {
+                  const entry = `\n\n### ${b.priority === "P1" ? "🟡" : b.priority === "P2" ? "🟢" : "⚪"} ${b.priority} — ${b.title} (from ${imp.slug})\n${b.description}`;
+                  // Insert before "## Done" if it exists, otherwise append
+                  const doneIdx = existing.indexOf("## Done");
+                  if (doneIdx > -1) {
+                    existing = existing.slice(0, doneIdx) + entry + "\n\n" + existing.slice(doneIdx);
+                  } else {
+                    existing += entry;
+                  }
+                  incrementCount++;
+                }
+                const { writeFileSync } = await import("fs");
+                writeFileSync(backlogPath, existing);
+                console.log(`    📋 +${knowledge.backlog_items.length} BACKLOG.md items`);
+              }
+
+              // Write playbook entries to DB
+              if (knowledge.playbook_entries?.length > 0) {
+                for (const p of knowledge.playbook_entries) {
+                  await sql`
+                    INSERT INTO playbook (domain, insight, confidence, source_company_id, evidence)
+                    VALUES (${p.domain}, ${p.insight}, ${p.confidence || 0.7}, ${imp.company_id},
+                      ${JSON.stringify({ source: "knowledge_assimilation", from_project: imp.slug })})
+                  `;
+                  incrementCount++;
+                }
+                console.log(`    📖 +${knowledge.playbook_entries.length} playbook entries`);
+              }
+
+              // Log decisions that need review (as directives for Carlos)
+              if (knowledge.decisions_to_review?.length > 0) {
+                for (const d of knowledge.decisions_to_review) {
+                  if (d.action === "revisit" || d.action === "new_adr") {
+                    await sql`
+                      INSERT INTO directives (text, status)
+                      VALUES (${`hive: Review ${d.related_adr} — ${d.insight} (learned from ${imp.slug} import)`}, 'open')
+                    `;
+                  }
+                }
+                console.log(`    🔍 ${knowledge.decisions_to_review.length} decisions flagged for review`);
+              }
+
+              // Log the assimilation action
+              await sql`
+                INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+                VALUES (${imp.company_id}, 'ceo', 'knowledge_assimilation',
+                  ${`Assimilated ${incrementCount} knowledge items from ${imp.slug} (${knowledgeSources.length} sources)`},
+                  'success', ${JSON.stringify(knowledge)}, now(), now())
+              `;
+
+              console.log(`    ✓ ${incrementCount} total knowledge items assimilated from ${knowledgeSources.length} sources`);
+            }
+          } catch (parseErr: any) {
+            console.log(`    ⚠ Failed to parse assimilation output: ${parseErr.message}`);
+          }
+        } else {
+          console.log(`    ⓘ No knowledge files found for ${imp.name}`);
+        }
+      } catch (assimErr: any) {
+        console.log(`    ⚠ Knowledge assimilation failed: ${assimErr.message}`);
+      }
+
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
       // Transition company to mvp so it enters the nightly cycle
       await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id} AND status IN ('importing', 'idea', 'approved')`;

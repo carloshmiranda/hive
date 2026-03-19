@@ -126,3 +126,6 @@ Competitive analysis refreshes every 7 cycles. Full research re-runs on "refresh
 
 ### ✅ 2026-03-18 — Self-healing architecture
 Three layers: (1) Action-oriented retries — agents see their error + fix instructions on attempts 2-3, more time/turns per retry. (2) Healer agent — runs after company cycles, classifies systemic vs company-specific errors, dispatches fixes to Hive repo or company repos, max 3 company fixes/night. (3) Pre-flight health check — DB connection, recent errors summary, Claude CLI reachability, abort if broken. Error normalization groups duplicate errors into patterns.
+
+### ✅ 2026-03-19 — Knowledge assimilation on import (Phase 3)
+Onboarding now has 3 phases: (1) Infrastructure hookup, (2) Code pattern extraction → playbook, (3) Knowledge assimilation — reads all MD knowledge files from the imported project + Claude memory files, compares against Hive's MISTAKES.md/DECISIONS.md/BACKLOG.md, and incrementally adds NEW learnings. Deployment gotchas → MISTAKES.md, architecture insights → DECISIONS.md review directives, improvement ideas → BACKLOG.md, operational wisdom → playbook entries. Every import now transfers institutional memory, not just code patterns.

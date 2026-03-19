@@ -82,6 +82,20 @@ Read the codebase for reusable learnings. Extract and write to the playbook:
 
 If patterns are better than the current boilerplate, create a directive suggesting the boilerplate be updated. This way every import makes the whole system smarter.
 
+### Phase 3: Knowledge assimilation
+Read the imported project's institutional memory — not just code, but documented wisdom:
+- **Repo MD files**: CLAUDE.md, MISTAKES.md, DECISIONS.md, BACKLOG.md, MEMORY.md, README.md
+- **Claude memory files**: `~/.claude/projects/-Users-carlos-miranda-Documents-Github-{slug}/memory/` and parent dir memory
+
+Compare against Hive's current knowledge files. Only add what's NEW and USEFUL:
+- Deployment gotchas and failure modes → append to MISTAKES.md
+- Architecture insights that confirm or challenge existing ADRs → DECISIONS.md review directives
+- Improvement ideas → append to BACKLOG.md
+- Operational learnings → playbook entries in DB
+- User preferences and feedback → playbook entries
+
+This ensures that every import transfers not just code patterns but the operational wisdom that took real debugging sessions to learn.
+
 ## Your Operating Rules
 
 ### 1. Sequential execution
