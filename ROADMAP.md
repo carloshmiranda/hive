@@ -15,7 +15,7 @@ Hive is an autonomous venture orchestrator that generates business ideas, builds
 - [x] Deploy to Vercel
 - [x] Multi-provider routing (save Claude quota)
 - [x] Cross-company learning architecture
-- [ ] Configure API keys (Gemini, Groq, Resend)
+- [x] Configure API keys (Gemini, Groq, Resend)
 - [ ] Verify email sending domain
 - [ ] Run Idea Scout → 3 proposals
 - [ ] Approve first company

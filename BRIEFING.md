@@ -32,12 +32,14 @@
 
 - **Blocked on:**
   - Resend domain verification (need a real domain — Flolio's domain could work)
-  - Gemini + Groq API keys (free, need to register)
   - First Scout run to generate 3 business proposals (trigger via GitHub Actions → Run workflow)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-19 [carlos] API keys configured + CEO agent tested
+Gemini API key, Groq API key, and GH_PAT all configured. CEO agent tested successfully via GitHub Actions manual dispatch. Worker agents (Growth/Outreach on Gemini, Ops on Groq) are now unblocked. Stripe → repository_dispatch chain is live.
 
 ### 2026-03-19 [code] Event-driven architecture migration (ADR-011 + ADR-012)
 Migrated from Mac launchd nightly loop to fully event-driven GitHub Actions. 10 agents consolidated to 7 (migration 003). Created 4 brain workflows (hive-ceo.yml, hive-scout.yml, hive-engineer.yml, hive-evolver.yml) + sentinel (hive-sentinel.yml). Updated worker-agents.yml to remove all schedule triggers. Added repository_dispatch to Stripe webhook. Ops escalation chains to Engineer. Secrets set: CLAUDE_CODE_OAUTH_TOKEN, GH_PAT, DATABASE_URL. orchestrator.ts now fallback only.
@@ -68,12 +70,9 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Register Gemini + Groq free API keys** — takes 2 min each, enables worker dispatch
-2. **Test CEO agent** — GitHub Actions → "Hive CEO" → Run workflow (manual dispatch)
-3. **Test Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
-4. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
-5. **Import VerdeDesk** — via dashboard import dialog, triggers onboarding + pattern extraction
-6. **Add GH_PAT to Vercel env** — `npx vercel env add GH_PAT production` (for Stripe → repository_dispatch)
+1. **Test Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
+2. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
+3. **Import VerdeDesk** — via dashboard import dialog, triggers onboarding + pattern extraction
 
 ## Open Questions
 
