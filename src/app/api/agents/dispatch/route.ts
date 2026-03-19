@@ -59,13 +59,13 @@ export async function POST(req: NextRequest) {
 
     // 2. Load context: latest CEO plan, metrics, research, playbook
     const [latestCycle] = await sql`
-      SELECT id, cycle_number, plan FROM cycles 
+      SELECT id, cycle_number, ceo_plan FROM cycles
       WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 1
     `;
-    const ceoPlan = latestCycle?.plan || "No CEO plan yet — use your best judgment.";
+    const ceoPlan = latestCycle?.ceo_plan || "No CEO plan yet — use your best judgment.";
 
     const metrics = await sql`
-      SELECT metric, value, date FROM metrics 
+      SELECT date, revenue, mrr, customers, page_views, signups, churn_rate FROM metrics
       WHERE company_id = ${company.id} AND date >= CURRENT_DATE - INTERVAL '7 days'
       ORDER BY date DESC LIMIT 20
     `;
@@ -98,7 +98,7 @@ DESCRIPTION: ${company.description || "N/A"}
 CEO PLAN: ${typeof ceoPlan === "string" ? ceoPlan : JSON.stringify(ceoPlan)}
 
 METRICS (last 7 days):
-${metrics.length > 0 ? metrics.map((m: any) => `${m.date}: ${m.metric} = ${m.value}`).join("\n") : "No metrics yet"}
+${metrics.length > 0 ? metrics.map((m: any) => `${m.date}: MRR=${m.mrr || 0}, customers=${m.customers || 0}, pageviews=${m.page_views || 0}, signups=${m.signups || 0}`).join("\n") : "No metrics yet"}
 
 RESEARCH REPORTS:
 ${researchReports.map((r: any) => `[${r.report_type}] ${r.summary || "See content"}`).join("\n") || "None yet"}
