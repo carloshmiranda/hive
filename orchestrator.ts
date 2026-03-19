@@ -839,9 +839,13 @@ After each JSON block, write a 1-2 sentence summary.`,
             const jsonMatch = match[1].match(/\{[\s\S]*\}/);
             if (jsonMatch) {
               const content = JSON.parse(jsonMatch[0]);
-              // Extract summary (text after the JSON block)
+              // Extract summary (text after the JSON block, skip markdown fencing)
               const afterJson = match[1].slice(match[1].lastIndexOf("}") + 1).trim();
-              const summary = afterJson.split("\n")[0]?.trim() || null;
+              const summaryLines = afterJson.split("\n").filter(l => {
+                const t = l.trim();
+                return t && !t.startsWith("```") && t !== "---";
+              });
+              const summary = summaryLines[0]?.trim() || Object.keys(content).slice(0, 3).join(", ") || null;
 
               await sql`
                 INSERT INTO research_reports (company_id, report_type, content, summary)
@@ -886,24 +890,43 @@ After each JSON block, write a 1-2 sentence summary.`,
     console.log("  ├─ Engineer executing...");
     const engPrompt = await getActivePrompt("engineer", companyCtx);
     const companyCwd = `/Users/carlos.miranda/Documents/Github/${company.slug}`;
-    const companyRepoExists = existsSync(companyCwd);
+    let companyRepoExists = existsSync(companyCwd);
+
+    // Pre-clone repo if not present (Gemini agents can't run git)
     if (!companyRepoExists) {
-      console.log(`    ⚠ Repo not cloned locally (${companyCwd}) — Engineer will clone first`);
+      console.log(`    ⚠ Repo not cloned — cloning...`);
+      try {
+        const githubOwner = await getSettingValueDirect("github_owner") || "carloshmiranda";
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn("git", ["clone", `https://github.com/${githubOwner}/${company.slug}.git`, companyCwd], {
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          let stderr = "";
+          proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+          const timer = setTimeout(() => { proc.kill(); reject(new Error("Clone timed out")); }, 60000);
+          proc.on("close", (code) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`git clone failed: ${stderr.slice(0, 200)}`)); });
+          proc.on("error", (err) => { clearTimeout(timer); reject(err); });
+        });
+        companyRepoExists = existsSync(companyCwd);
+        if (companyRepoExists) console.log(`    ✓ Cloned ${company.slug}`);
+      } catch (cloneErr: any) {
+        console.log(`    ⚠ Clone failed: ${cloneErr.message.slice(0, 80)}`);
+      }
     }
-    await executeAgent({
+
+    const engResult = await executeAgent({
       agent: "engineer",
       companyId: company.id,
       cycleId,
-      prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.` +
-        (!companyRepoExists ? `\n\nNOTE: The repo is not cloned locally. First clone it: git clone https://github.com/carlos-miranda/${company.slug}.git /Users/carlos.miranda/Documents/Github/${company.slug}` : ""),
+      prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.`,
       context,
-      cwd: companyRepoExists ? companyCwd : `/Users/carlos.miranda/Documents/Github`, // fallback to parent dir if not cloned
+      cwd: companyRepoExists ? companyCwd : `/Users/carlos.miranda/Documents/Github`,
     });
 
     // Step 3: Growth executes (inbound: content, SEO, social)
     console.log("  ├─ Growth executing...");
     const growthPrompt = await getActivePrompt("growth", companyCtx);
-    await executeAgent({
+    const growthResult = await executeAgent({
       agent: "growth",
       companyId: company.id,
       cycleId,
@@ -1041,7 +1064,7 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
     // Step 4: Ops collects metrics
     console.log("  ├─ Ops collecting metrics...");
     const opsPrompt = await getActivePrompt("ops", companyCtx);
-    await executeAgent({
+    const opsResult = await executeAgent({
       agent: "ops",
       companyId: company.id,
       cycleId,
@@ -1049,13 +1072,26 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
       context,
     });
 
-    // Step 5: CEO reviews
+    // Step 5: CEO reviews — pass cycle results as context so it doesn't need API access
     console.log("  └─ CEO reviewing cycle...");
+    const cycleResults = `
+TONIGHT'S CYCLE RESULTS (for your review):
+
+ENGINEER (${engResult.success ? "success" : "failed"}):
+${engResult.output.slice(0, 500)}
+
+GROWTH (${growthResult.success ? "success" : "failed"}):
+${growthResult.output.slice(0, 500)}
+
+OPS (${opsResult.success ? "success" : "failed"}):
+${opsResult.output.slice(0, 500)}
+`.trim();
+
     const ceoReview = await executeAgent({
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + "\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.",
+      prompt: ceoPrompt + `\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.\n\n${cycleResults}`,
       context,
     });
 
