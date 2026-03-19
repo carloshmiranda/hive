@@ -122,6 +122,13 @@ jobs:
           REPO="${{ github.repository }}"
           echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
 
+          # Extract JSON object from text (may be in a code block or inline)
+          RESULT_JSON=$(echo "$RESULT" | grep -oP '\{[^{}]*"needs_feature"[^{}]*\}' | head -1)
+          if [ -z "$RESULT_JSON" ]; then
+            RESULT_JSON=$(echo "$RESULT" | grep -oP '\{[^{}]*"needs_research"[^{}]*\}' | head -1)
+          fi
+          echo "Extracted JSON: $RESULT_JSON"
+
           dispatch() {
             curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
               -H "Authorization: token $GH_TOKEN" \
@@ -130,18 +137,21 @@ jobs:
             echo "  Dispatched: $1"
           }
 
+          # Extract company slug from the JSON
+          COMPANY=$(echo "$RESULT_JSON" | jq -r '.company // ""' 2>/dev/null || echo "")
+
           # Chain to Scout if research needed
           echo "$RESULT" | grep -q "needs_research.*true" && \
-            dispatch "research_request" "{\"source\":\"ceo\"}"
+            dispatch "research_request" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
 
           # Chain to Engineer if feature needed
           echo "$RESULT" | grep -q "needs_feature.*true" && \
-            dispatch "feature_request" "{\"source\":\"ceo\",\"company\":\"$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)\"}"
+            dispatch "feature_request" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
 
           # Chain to workers if plan has growth/outreach tasks
           echo "$RESULT" | grep -q "growth" && \
-            dispatch "growth_trigger" "{\"source\":\"ceo\"}"
+            dispatch "growth_trigger" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
           echo "$RESULT" | grep -q "outreach" && \
-            dispatch "outreach_trigger" "{\"source\":\"ceo\"}"
+            dispatch "outreach_trigger" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
 
           echo "Chain dispatch complete"
