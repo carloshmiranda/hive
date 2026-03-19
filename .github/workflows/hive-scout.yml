@@ -61,11 +61,15 @@ jobs:
             echo "payload={\"mode\":\"${{ github.event.inputs.mode }}\",\"company\":\"${{ github.event.inputs.company }}\"}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Install Claude Code via npm
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Run Scout agent
         id: agent
         uses: anthropics/claude-code-base-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          path_to_claude_code_executable: claude
           model: claude-opus-4-20250514
           max_turns: 30
           prompt: |
