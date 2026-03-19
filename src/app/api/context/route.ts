@@ -22,6 +22,15 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  // Require bearer token to prevent unauthorized writes
+  const token = process.env.HIVE_CONTEXT_TOKEN;
+  if (token) {
+    const auth = req.headers.get("authorization");
+    if (auth !== `Bearer ${token}`) {
+      return err("Unauthorized — provide Bearer token in Authorization header", 401);
+    }
+  }
+
   const sql = getDb();
   const body = await req.json();
   const { source, category, summary, detail, related_adr, related_file, tags } = body;
