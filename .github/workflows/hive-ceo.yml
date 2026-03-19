@@ -117,14 +117,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
-          echo "--- Debug: execution file = $EXEC_FILE ---"
-          echo "--- Debug: file size = $(wc -c < "$EXEC_FILE" 2>/dev/null || echo 'NOT FOUND') ---"
-          echo "--- Debug: top-level type = $(jq 'type' "$EXEC_FILE" 2>/dev/null || echo 'PARSE ERROR') ---"
-          echo "--- Debug: first element keys = $(jq '.[0] | keys' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
-          echo "--- Debug: roles = $(jq '[.[].role] | unique' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
-          echo "--- Debug: last assistant content type = $(jq '[.[] | select(.role == "assistant")] | last | .content | type' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
-          echo "--- Debug: last assistant content sample = $(jq '[.[] | select(.role == "assistant")] | last | .content | tostring | .[0:500]' "$EXEC_FILE" 2>/dev/null || echo 'N/A') ---"
-          RESULT=$(cat "$EXEC_FILE" | jq -r '[.[] | select(.role == "assistant")] | last | if (.content | type) == "array" then [.content[] | select(.type == "text") | .text] | join("\n") else (.content // "") end' 2>/dev/null || echo "{}")
+          echo "--- Debug: unique types = $(jq '[.[].type] | unique' "$EXEC_FILE" 2>/dev/null) ---"
+          echo "--- Debug: unique subtypes = $(jq '[.[].subtype] | unique' "$EXEC_FILE" 2>/dev/null) ---"
+          echo "--- Debug: result entry = $(jq '[.[] | select(.type == "result")] | last' "$EXEC_FILE" 2>/dev/null | head -5) ---"
+          echo "--- Debug: assistant entries = $(jq '[.[] | select(.type == "assistant")] | length' "$EXEC_FILE" 2>/dev/null) ---"
+          echo "--- Debug: last assistant sample = $(jq '[.[] | select(.type == "assistant")] | last | keys' "$EXEC_FILE" 2>/dev/null) ---"
+          echo "--- Debug: last assistant message = $(jq -r '[.[] | select(.type == "assistant")] | last | .message // .content // .text // "NO_FIELD" | tostring | .[0:500]' "$EXEC_FILE" 2>/dev/null) ---"
+          RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[] | select(.type == "text") | .text' "$EXEC_FILE" 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
           echo "--- Chain dispatch result (last 20 lines) ---"
           echo "$RESULT" | tail -20
