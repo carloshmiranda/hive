@@ -67,14 +67,14 @@ interface ImportReport {
 // Agent → Provider mapping
 const AGENT_PROVIDER: Record<string, Provider> = {
   // Brain tier — Claude (strategic decisions, tool use, web search, code execution)
-  ceo: "claude",         // Plans, reviews, portfolio analysis, kill decisions
-  scout: "claude",       // Ideas, market research, SEO keywords
-  engineer: "claude",    // Code, deploy, scaffold, fix (needs cwd)
-  evolver: "claude",     // Prompt analysis + improvement
+  ceo: "claude",         // Opus — plans, reviews, portfolio analysis, kill decisions
+  scout: "claude",       // Opus — ideas, market research, SEO keywords
+  engineer: "claude",    // Sonnet — code, deploy, scaffold, fix (needs cwd)
+  evolver: "claude",     // Opus — prompt analysis + improvement
   // Worker tier — free LLMs (content gen, simple analysis, no tool use)
-  growth: "gemini",      // Gemini Flash-Lite (content)
-  outreach: "gemini",    // Gemini Flash-Lite (emails)
-  ops: "groq",           // Groq Llama 3.3 (fast inference for health checks)
+  growth: "gemini",      // Gemini 2.5 Flash (content quality matters for SEO)
+  outreach: "gemini",    // Gemini 2.5 Flash (email personalization quality)
+  ops: "groq",           // Groq Llama 3.3 70B (fast inference for health checks)
 };
 
 async function dispatch(opts: DispatchOptions): Promise<string> {
@@ -138,8 +138,8 @@ async function dispatchClaude(opts: DispatchOptions): Promise<string> {
 async function dispatchGemini(opts: DispatchOptions): Promise<string> {
   const apiKey = await getSettingValueDirect("gemini_api_key");
   if (!apiKey) throw new Error("No gemini_api_key");
-  // Flash for code/complex, Flash-Lite for content/simple
-  const model = opts.agent === "engineer" ? "gemini-2.5-flash" : "gemini-2.5-flash-lite";
+  // Flash for content quality, Flash-Lite only as fallback
+  const model = "gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs || 120_000);

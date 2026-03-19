@@ -23,7 +23,7 @@ Hive is an autonomous venture orchestrator that generates business ideas, builds
 - [ ] First company deployed to production with landing page
 
 ### Milestone: VerdeDesk imported
-- [ ] Import via dashboard
+- [x] Import via dashboard
 - [ ] Pattern extraction → playbook entries
 - [ ] First CEO cycle on VerdeDesk
 - [ ] Outreach pipeline active
@@ -40,6 +40,15 @@ Hive is an autonomous venture orchestrator that generates business ideas, builds
 - [ ] Cross-company playbook has 20+ high-confidence entries
 - [ ] Healer successfully auto-fixes a cross-company error
 - [ ] Venture Brain successfully creates a cross-pollination directive
+
+### Milestone: Data-driven organic growth
+- [ ] GSC API integrated, keyword positions tracked per cycle
+- [ ] Bing Webmaster Tools integrated
+- [ ] IndexNow fires on every content publish
+- [ ] LLM citation tracker running every 3 cycles
+- [ ] Growth agent never creates content without visibility data
+- [ ] llms.txt and structured data in all company sites
+- [ ] Content performance feedback loop (stale content auto-refreshed)
 
 ### Milestone: Flolio import
 - [ ] Import Flolio (growth phase — more complex than fresh MVP)
@@ -89,3 +98,4 @@ Decisions that shaped the platform direction (detail in DECISIONS.md):
 | ADR-004 | 2026-03-18 | Sequential nightly processing | Shared Claude quota, can't parallelise |
 | ADR-009 | 2026-03-18 | Multi-provider model routing | Save Claude quota for brain tasks |
 | ADR-010 | 2026-03-19 | Multi-repo with shared intelligence | Clean isolation, Polsia-validated pattern |
+| ADR-013 | 2026-03-19 | Per-agent model selection | Opus for strategic, Sonnet for code, Flash for content |
