@@ -31,14 +31,26 @@ export async function POST(req: Request) {
 
   const sql = getDb();
 
-  // 1. Create the company record with 'mvp' status (it already exists, skip provisioning)
-  const [company] = await sql`
-    INSERT INTO companies (name, slug, description, status, github_repo)
-    VALUES (${name}, ${slug}, ${description || null}, 'mvp', ${source_url || null})
-    RETURNING *
-  `;
+  // 1. Create or reuse the company record
+  let [company] = await sql`SELECT * FROM companies WHERE slug = ${slug}`;
+  if (company) {
+    // Update existing record with latest info
+    [company] = await sql`
+      UPDATE companies SET name = ${name}, description = COALESCE(${description || null}, description),
+        github_repo = COALESCE(${source_url || null}, github_repo),
+        status = CASE WHEN status IN ('idea', 'approved') THEN 'mvp' ELSE status END
+      WHERE slug = ${slug} RETURNING *
+    `;
+  } else {
+    [company] = await sql`
+      INSERT INTO companies (name, slug, description, status, github_repo)
+      VALUES (${name}, ${slug}, ${description || null}, 'mvp', ${source_url || null})
+      RETURNING *
+    `;
+  }
 
-  // 2. Create the import record
+  // 2. Create the import record (clear any stale previous imports for this company)
+  await sql`DELETE FROM imports WHERE company_id = ${company.id} AND onboard_status = 'pending'`;
   const [importRecord] = await sql`
     INSERT INTO imports (company_id, source_type, source_url, scan_status, onboard_status)
     VALUES (${company.id}, ${source_type}, ${source_url || null}, 'pending', 'pending')
