@@ -116,17 +116,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
-          echo "--- Debug: unique types = $(jq '[.[].type] | unique' "$EXEC_FILE" 2>/dev/null) ---"
-          echo "--- Debug: unique subtypes = $(jq '[.[].subtype] | unique' "$EXEC_FILE" 2>/dev/null) ---"
-          echo "--- Debug: result entry = $(jq '[.[] | select(.type == "result")] | last' "$EXEC_FILE" 2>/dev/null | head -5) ---"
-          echo "--- Debug: assistant entries = $(jq '[.[] | select(.type == "assistant")] | length' "$EXEC_FILE" 2>/dev/null) ---"
-          echo "--- Debug: last assistant sample = $(jq '[.[] | select(.type == "assistant")] | last | keys' "$EXEC_FILE" 2>/dev/null) ---"
-          echo "--- Debug: last assistant message = $(jq -r '[.[] | select(.type == "assistant")] | last | .message // .content // .text // "NO_FIELD" | tostring | .[0:500]' "$EXEC_FILE" 2>/dev/null) ---"
-          RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | .message.content[] | select(.type == "text") | .text' "$EXEC_FILE" 2>/dev/null || echo "{}")
+          # Extract last assistant text from claude-code-action execution file
+          # Format: array of {type: "assistant", message: {content: [{type: "text", text: "..."}]}}
+          RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
-          echo "--- Chain dispatch result (last 20 lines) ---"
-          echo "$RESULT" | tail -20
+          echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
 
           dispatch() {
             curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
