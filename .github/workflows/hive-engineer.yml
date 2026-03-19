@@ -1,0 +1,119 @@
+name: Hive Engineer
+
+on:
+  repository_dispatch:
+    types:
+      - new_company
+      - feature_request
+      - ops_escalation
+
+  issues:
+    types: [opened, labeled]
+
+  pull_request_review:
+    types: [submitted]
+
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task description'
+        required: false
+        default: ''
+      company:
+        description: 'Company slug'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  engineer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Only run on issues with feature/bug labels, or approved PR reviews
+    if: >
+      github.event_name != 'issues' ||
+      contains(github.event.issue.labels.*.name, 'feature') ||
+      contains(github.event.issue.labels.*.name, 'bug')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Engineer context
+        id: context
+        run: |
+          EVENT="${{ github.event_name }}"
+
+          if [ "$EVENT" = "repository_dispatch" ]; then
+            ACTION="${{ github.event.action }}"
+            PAYLOAD='${{ toJson(github.event.client_payload) }}'
+            echo "trigger=${ACTION}" >> $GITHUB_OUTPUT
+            echo "payload=${PAYLOAD}" >> $GITHUB_OUTPUT
+          elif [ "$EVENT" = "issues" ]; then
+            echo "trigger=issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}" >> $GITHUB_OUTPUT
+            echo "payload={\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\",\"body\":$(echo '${{ github.event.issue.body }}' | jq -Rs .)}" >> $GITHUB_OUTPUT
+          elif [ "$EVENT" = "pull_request_review" ]; then
+            echo "trigger=pr_approved:#${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "payload={\"pr_number\":${{ github.event.pull_request.number }},\"state\":\"${{ github.event.review.state }}\"}" >> $GITHUB_OUTPUT
+          else
+            echo "trigger=manual" >> $GITHUB_OUTPUT
+            echo "payload={\"task\":\"${{ github.event.inputs.task }}\",\"company\":\"${{ github.event.inputs.company }}\"}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Engineer agent
+        id: agent
+        uses: anthropics/claude-code-base-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the Engineer agent of Hive. You write code, fix bugs, and deploy.
+
+            TRIGGER: ${{ steps.context.outputs.trigger }}
+            PAYLOAD: ${{ steps.context.outputs.payload }}
+
+            Read BRIEFING.md and CLAUDE.md for context.
+
+            Based on the trigger:
+            - new_company: Scaffold repo from templates/boilerplate, push to GitHub, set up Vercel + Neon
+            - feature_request: Read the CEO plan from cycles table, implement the code changes, commit + push
+            - ops_escalation: Read the error from agent_actions, diagnose and fix, commit + push
+            - issue (feature/bug): Implement the feature or fix the bug described in the issue
+            - pr_approved: Merge the PR and verify deploy
+            - manual: Execute the specified task
+
+            RULES:
+            - Always run `npx next build` before committing
+            - Create a branch for non-trivial changes, open a PR
+            - Write to agent_actions table: what you did, status, any errors
+            - If you open a PR, output: { "pr_opened": true, "pr_number": N, "company": "slug" }
+          max_turns: 25
+
+      - name: Chain dispatch
+        if: always() && steps.agent.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          RESULT=$(cat "${{ steps.agent.outputs.execution_file }}" | jq -r '[.[] | select(.role == "assistant")] | last | .content // ""' 2>/dev/null || echo "{}")
+          REPO="${{ github.repository }}"
+
+          dispatch() {
+            curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"event_type\":\"$1\",\"client_payload\":$2}"
+            echo "  Dispatched: $1"
+          }
+
+          # Chain to CEO if PR opened (strategy review)
+          echo "$RESULT" | grep -q "pr_opened.*true" && \
+            dispatch "ceo_review" "{\"source\":\"engineer\",\"pr_number\":$(echo "$RESULT" | jq -r '.pr_number // 0' 2>/dev/null)}"
+
+          echo "Chain dispatch complete"

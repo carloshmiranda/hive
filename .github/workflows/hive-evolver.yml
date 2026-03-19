@@ -1,0 +1,60 @@
+name: Hive Evolver
+
+on:
+  repository_dispatch:
+    types:
+      - evolve_trigger
+
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: 'Specific agent to evolve (leave empty for all underperformers)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  evolver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Evolver agent
+        id: agent
+        uses: anthropics/claude-code-base-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the Evolver agent of Hive. You analyze agent performance and improve prompts.
+
+            TARGET_AGENT: ${{ github.event.inputs.agent || github.event.client_payload.target_agent || 'all' }}
+
+            Read BRIEFING.md for context.
+
+            1. Query Neon for agent_actions from the last 14 days
+            2. Calculate success rate per agent: success / (success + failed)
+            3. For agents with < 70% success rate OR > 30 days since last prompt update:
+               a. Analyze failure patterns (common errors, missed outputs)
+               b. Read current active prompt from agent_prompts table
+               c. Generate an improved prompt addressing the failure patterns
+               d. Store new version in agent_prompts (is_active = false)
+               e. Create an approval gate (gate_type: 'prompt_upgrade')
+            4. Output JSON: { "agents_analyzed": N, "prompts_proposed": N, "details": [...] }
+
+            RULES:
+            - Never auto-activate a new prompt. Always create an approval gate.
+            - Include before/after diff in the approval description.
+            - Log everything to agent_actions.
+          max_turns: 15
+
+      # Evolver is a terminal node — no chain dispatch needed.
+      # Prompt upgrades go through approval gates, not agent chains.

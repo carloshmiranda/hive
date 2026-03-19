@@ -67,22 +67,15 @@ interface ImportReport {
 // Agent → Provider mapping
 const AGENT_PROVIDER: Record<string, Provider> = {
   // Brain tier — Claude (strategic decisions, tool use, web search, code execution)
-  ceo: "claude",
-  idea_scout: "claude",
-  venture_brain: "claude",
-  healer: "claude",
-  research_analyst: "claude",
-  prompt_evolver: "claude",
+  ceo: "claude",         // Plans, reviews, portfolio analysis, kill decisions
+  scout: "claude",       // Ideas, market research, SEO keywords
+  engineer: "claude",    // Code, deploy, scaffold, fix (needs cwd)
+  evolver: "claude",     // Prompt analysis + improvement
   // Worker tier — free LLMs (content gen, simple analysis, no tool use)
-  engineer: "gemini",    // Gemini 2.5 Flash (code)
   growth: "gemini",      // Gemini Flash-Lite (content)
   outreach: "gemini",    // Gemini Flash-Lite (emails)
   ops: "groq",           // Groq Llama 3.3 (fast inference for health checks)
 };
-
-// NOTE: Engineer agent uses Gemini for PLANNING/OUTPUT only.
-// Actual code execution (git, npm, deploy) MUST go through Claude Code CLI.
-// When the Engineer needs tool use, the executeAgent function should override to "claude".
 
 async function dispatch(opts: DispatchOptions): Promise<string> {
   if (DRY_RUN) {
@@ -536,7 +529,7 @@ async function runNightlyCycle() {
     const liveCompanies = allCompanies.filter(c => ["mvp", "active"].includes(c.status));
 
     const ideaScoutOutput = await dispatch({
-      agent: "idea_scout",
+      agent: "scout",
       prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
 
 YOUR JOB: Research the market using web search and propose THREE business ideas that Carlos should consider building next. He will pick one (or none).
@@ -748,7 +741,7 @@ Order them by your confidence score, highest first.`,
             // Log the action
             await sql`
               INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
-              VALUES (${null}, 'idea_scout', 'generate_ideas', ${`Proposed ${proposals.length} ideas: ${proposals.map((p: any) => `${p.name} [${p.market}]`).join(", ")} (${(idea.research?.searches_performed || []).length} searches)`}, 'success', ${JSON.stringify(idea)}, now(), now())
+              VALUES (${null}, 'scout', 'generate_ideas', ${`Proposed ${proposals.length} ideas: ${proposals.map((p: any) => `${p.name} [${p.market}]`).join(", ")} (${(idea.research?.searches_performed || []).length} searches)`}, 'success', ${JSON.stringify(idea)}, now(), now())
             `;
           } else {
             console.log(`  ⓘ All proposed slugs already exist — skipping`);
@@ -760,7 +753,7 @@ Order them by your confidence score, highest first.`,
       // Still log the raw output so it's not lost
       await sql`
         INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, output, started_at, finished_at)
-        VALUES (${null}, 'idea_scout', 'generate_ideas', 'Failed to parse idea proposals', 'failed', ${e.message}, ${JSON.stringify({ raw: ideaScoutOutput })}, now(), now())
+        VALUES (${null}, 'scout', 'generate_ideas', 'Failed to parse idea proposals', 'failed', ${e.message}, ${JSON.stringify({ raw: ideaScoutOutput })}, now(), now())
       `;
     }
   } else if (!SINGLE_COMPANY) {
@@ -1418,7 +1411,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
       const researchType = isFirstCycle ? "full (Cycle 0)" : isRefreshCycle ? "competitive refresh" : "directive refresh";
       console.log(`  ├─ 🔬 Research Analyst (${researchType})...`);
 
-      const researchPrompt = await getActivePrompt("research_analyst", companyCtx);
+      const researchPrompt = await getActivePrompt("scout", companyCtx);
 
       const reportsToGenerate = isFirstCycle || hasRefreshDirective
         ? "all 3 research reports (market_research, competitive_analysis, seo_keywords)"
@@ -1447,7 +1440,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 Focus on: new competitors since last analysis, pricing changes, feature launches, market share shifts.`;
 
       const researchOutput = await dispatch({
-        agent: "research_analyst",
+        agent: "scout",
         prompt: researchPrompt + `\n\nProduce ${reportsToGenerate} for this company.
 
 COMPANY: ${company.name}
@@ -1504,7 +1497,7 @@ After each JSON block, write a 1-2 sentence summary.`,
       // Log the research action
       await sql`
         INSERT INTO agent_actions (company_id, cycle_id, agent, action_type, description, status, started_at, finished_at)
-        VALUES (${company.id}, ${cycleId}, 'research_analyst', 'cycle_0_research',
+        VALUES (${company.id}, ${cycleId}, 'scout', 'cycle_0_research',
           ${`Cycle 0 research completed: ${reportTypes.length} reports`}, 'success', now(), now())
       `;
     }
@@ -1853,7 +1846,7 @@ CYCLE RESULTS:
       console.log("  ├─ Dispatching Healer for systemic fixes...");
       try {
         const healerOutput = await dispatch({
-          agent: "healer",
+          agent: "ops",
           prompt: `You are the Healer agent for Hive. Your job is to fix bugs that are breaking the orchestrator.
 
 ## Systemic errors (happening across multiple companies):
@@ -1908,7 +1901,7 @@ Output JSON:
             // Log the healing action
             await sql`
               INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
-              VALUES ('healer', 'self_heal', ${`Fixed ${fixCount} systemic error(s)${unfixable > 0 ? `, ${unfixable} unfixable` : ""}`}, 
+              VALUES ('ops', 'self_heal', ${`Fixed ${fixCount} systemic error(s)${unfixable > 0 ? `, ${unfixable} unfixable` : ""}`}, 
                 ${fixCount > 0 ? "success" : "partial"}, ${JSON.stringify(result)}, now(), now())
             `;
 
@@ -2039,7 +2032,7 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
 
     try {
       await dispatch({
-        agent: "venture_brain",
+        agent: "ceo",
         prompt: `You are the Venture Brain. Analyze the portfolio:
 
 ## Metrics (last 7 days):
@@ -2138,7 +2131,7 @@ Output a brief portfolio summary including any cross-pollination directives you 
           .join("\n");
 
         const evolverOutput = await dispatch({
-          agent: "prompt_evolver",
+          agent: "evolver",
           prompt: `You are the Prompt Evolver. Your job is to improve an agent's system prompt based on its recent performance data.
 
 ## Agent: ${agent}
@@ -2401,7 +2394,7 @@ ${currentPrompt.slice(0, 3000)}
       };
 
       await dispatch({
-        agent: "venture_brain", // uses Claude — this is strategic reflection
+        agent: "ceo", // uses Claude — this is strategic reflection
         prompt: `You are the Hive Operational Reflector. After each nightly run, you update Hive's institutional memory.
 
 ## Tonight's run data:

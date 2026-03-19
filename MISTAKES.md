@@ -107,3 +107,9 @@
 **Prevention:** When adding a new agent name or gate type to ANY code path, grep schema.sql for the CHECK constraint and update it in the same commit. Rule: `git diff --name-only | grep -q orchestrator && grep -c "CHECK.*agent" schema.sql` — if the orchestrator changed, verify the schema matches. Consider removing CHECK constraints entirely and relying on application-level validation (more flexible, same safety).
 **Affects:** both (schema + orchestrator + dispatch endpoint)
 
+### 2026-03-19 Agent proliferation without scope boundaries
+**What happened:** Started with 7 agents, grew to 10+ (Idea Scout, Research Analyst, Venture Brain, Kill Switch, Retro Analyst, Health Monitor, Auto Healer, Provisioner, etc.). Many were ghost names — referenced in code, referenced in CHECK constraints, but never actually dispatched as separate agents. Each "agent" burned a separate Claude call even when the scope overlapped (e.g. Venture Brain and CEO both do strategic analysis; Healer and Health Monitor both fix errors).
+**Root cause:** New capabilities were added as new agents instead of new triggers for existing agents. No litmus test for "does this need its own agent?"
+**Fix applied:** Consolidated to 7 agents (ADR-012). Migration 003 renames all records. "One agent, one verb" rule: CEO plans, Scout discovers, Engineer builds, Ops monitors, Growth creates, Outreach prospects, Evolver improves.
+**Prevention:** Before creating a new agent, ask: "Is this a new capability or a new trigger for an existing agent?" If the output format and tools are the same as an existing agent, it's a trigger, not an agent. Add it as a new event type on the existing workflow.
+**Affects:** both (schema, orchestrator, workflows, dispatch)

@@ -122,3 +122,32 @@
 - Monorepo: better boilerplate sharing, but makes company kills messy, tangles CI/CD, and gives the Engineer agent confusing cross-company context via cwd
 - Hybrid (Hive monorepo + company repos): no clear benefit — Hive is already the coordination layer
 **Consequences:** Company isolation is clean (delete repo = delete company). Imports require no git history migration. The playbook table becomes the critical knowledge store — if it degrades, cross-company learning stops. Each new company starts with accumulated portfolio knowledge via CLAUDE.md injection.
+
+### ADR-011: Event-Driven Execution with Zero Crons
+**Date:** 2026-03-19
+**Status:** Accepted (supersedes ADR-001 Mac-based intelligence, supersedes ADR-004 sequential nightly loop)
+**Context:** The Mac-based nightly loop via launchd had an 18+ hour delay between events and agent response. The Mac had to be on. Cron-based worker scheduling was fragile and wasted runs when no work existed.
+**Decision:** Fully event-driven architecture. Brain agents (CEO, Scout, Engineer, Evolver) run on GitHub Actions using `anthropics/claude-code-base-action` with a Max 5x OAuth token from `claude setup-token`. Worker agents (Ops, Growth, Outreach) run on Vercel serverless via `/api/agents/dispatch`. Agent chains: every workflow's final step dispatches the next agent via `repository_dispatch`. One sentinel workflow runs every 4h on GitHub Actions, queries Neon for 7 data conditions, and dispatches agents whose conditions are met. Vercel has zero crons — it only receives webhooks and serves the dashboard.
+**Alternatives considered:**
+- Keep Mac launchd: works but requires Mac to be on, 18h reaction delay
+- Full Vercel crons: 60s timeout too short for Claude reasoning
+- GitHub Actions crons for everything: burns minutes even when no work exists
+**Consequences:** Mac not required — close the lid, Hive keeps running. ~915 min/mo GitHub Actions usage (46% of 2,000 free tier for private repos). Self-regulating: no work = no dispatch = no cost. Total cost stays at $100/mo (Max 5x subscription only).
+
+### ADR-012: Agent Consolidation from 10 to 7
+**Date:** 2026-03-19
+**Status:** Accepted
+**Context:** The original architecture had 10+ agent names (CEO, Idea Scout, Research Analyst, Venture Brain, Kill Switch, Retro Analyst, Engineer, Growth, Outreach, Ops, Health Monitor, Auto Healer, Provisioner, Prompt Evolver). Many overlapped in scope or were ghost names referenced in code but never dispatched. Each agent name burned a separate Claude call.
+**Decision:** Consolidate to 7 agents with clear scope boundaries:
+- CEO absorbs Venture Brain, Kill Switch, Retro Analyst (all strategic)
+- Scout absorbs Idea Scout, Research Analyst (all discovery)
+- Engineer absorbs Provisioner (all code/infra)
+- Ops absorbs Health Monitor, Auto Healer, Healer (all operations)
+- Growth stays (content)
+- Outreach stays (email)
+- Evolver replaces Prompt Evolver (shorter name, same role)
+Migration 003 renames all existing records in agent_actions and agent_prompts.
+**Alternatives considered:**
+- Keep all 10: more granular but overlapping scopes cause confusion and wasted calls
+- Consolidate to 5: too aggressive, Growth and Outreach are distinct enough to warrant separation
+**Consequences:** Fewer Claude calls per cycle. Simpler chain dispatch logic. Agent CHECK constraint in schema reduced from 16 to 7 values. The "one agent, one verb" rule makes scope boundaries testable.

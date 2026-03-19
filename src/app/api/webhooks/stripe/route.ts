@@ -140,5 +140,29 @@ export async function POST(req: Request) {
     }
   }
 
+  // Dispatch repository_dispatch for brain agents to react to payment events
+  const ghPat = process.env.GH_PAT;
+  const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
+  if (ghPat && ["charge.succeeded", "customer.subscription.created"].includes(event.type)) {
+    try {
+      const metadata = (event.data.object as any).metadata || {};
+      await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+        method: "POST",
+        headers: {
+          Authorization: `token ${ghPat}`,
+          Accept: "application/vnd.github.v3+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          event_type: "stripe_payment",
+          client_payload: {
+            stripe_event: event.type,
+            company: metadata.hive_company || "",
+          },
+        }),
+      });
+    } catch { /* non-critical: CEO will still see the data in Neon */ }
+  }
+
   return Response.json({ received: true });
 }

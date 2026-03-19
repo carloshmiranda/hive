@@ -1,0 +1,118 @@
+name: Hive Scout
+
+on:
+  repository_dispatch:
+    types:
+      - pipeline_low
+      - company_killed
+      - new_company
+      - research_request
+
+  issues:
+    types: [opened, labeled]
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Mode: ideas, research, or both'
+        required: false
+        default: 'ideas'
+      company:
+        description: 'Company slug (for research mode)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Only run on issues with research label
+    if: >
+      github.event_name != 'issues' ||
+      contains(github.event.issue.labels.*.name, 'research')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Scout context
+        id: context
+        run: |
+          EVENT="${{ github.event_name }}"
+
+          if [ "$EVENT" = "repository_dispatch" ]; then
+            ACTION="${{ github.event.action }}"
+            PAYLOAD='${{ toJson(github.event.client_payload) }}'
+            echo "trigger=${ACTION}" >> $GITHUB_OUTPUT
+            echo "payload=${PAYLOAD}" >> $GITHUB_OUTPUT
+          elif [ "$EVENT" = "issues" ]; then
+            echo "trigger=research_issue" >> $GITHUB_OUTPUT
+            echo "payload={\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}" >> $GITHUB_OUTPUT
+          else
+            echo "trigger=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+            echo "payload={\"mode\":\"${{ github.event.inputs.mode }}\",\"company\":\"${{ github.event.inputs.company }}\"}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Scout agent
+        id: agent
+        uses: anthropics/claude-code-base-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the Scout agent of Hive. You find new business ideas AND do market research.
+
+            TRIGGER: ${{ steps.context.outputs.trigger }}
+            PAYLOAD: ${{ steps.context.outputs.payload }}
+
+            Read BRIEFING.md and CLAUDE.md for context.
+
+            ## If trigger is pipeline_low, company_killed, or ideas mode:
+            1. Query Neon for: active companies count, killed companies (avoid similar), playbook entries
+            2. Use web search to research 10-15 market opportunities
+            3. Generate exactly 3 proposals: 1 Portuguese market, 1 Global, 1 best-pick
+            4. For each: name, slug, description, TAM, competition level, MVP scope, confidence 0-1
+            5. Create each as a company (status: 'idea') + approval gate in Neon
+            6. Output JSON: { "proposals": [...], "research_delivered": true }
+
+            ## If trigger is research_request or research mode:
+            1. Query Neon for the target company's current state
+            2. Do competitive analysis, SEO keyword research, market sizing via web search
+            3. Write results to research_reports table
+            4. Output JSON: { "company": "slug", "research_delivered": true, "leads_found": bool }
+
+            MANDATORY: 3 proposals must include 1 PT, 1 Global, 1 best-pick. Write everything to Neon.
+          max_turns: 30
+
+      - name: Chain dispatch
+        if: always() && steps.agent.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          RESULT=$(cat "${{ steps.agent.outputs.execution_file }}" | jq -r '[.[] | select(.role == "assistant")] | last | .content // ""' 2>/dev/null || echo "{}")
+          REPO="${{ github.repository }}"
+
+          dispatch() {
+            curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"event_type\":\"$1\",\"client_payload\":$2}"
+            echo "  Dispatched: $1"
+          }
+
+          # Chain to Growth if research delivered
+          echo "$RESULT" | grep -q "research_delivered.*true" && \
+            dispatch "growth_trigger" "{\"source\":\"scout\",\"company\":\"$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)\"}"
+
+          # Chain to Outreach if leads found
+          echo "$RESULT" | grep -q "leads_found.*true" && \
+            dispatch "outreach_trigger" "{\"source\":\"scout\",\"company\":\"$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)\"}"
+
+          echo "Chain dispatch complete"

@@ -1,0 +1,215 @@
+name: Hive Sentinel
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'  # Every 4 hours
+
+  workflow_dispatch: {}
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  sentinel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install postgres client
+        run: npm install postgres
+
+      - name: Query conditions and dispatch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          REPO="${{ github.repository }}"
+
+          dispatch() {
+            curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"event_type\":\"$1\",\"client_payload\":$2}"
+            echo "  Dispatched: $1 with payload $2"
+          }
+
+          DISPATCHED=0
+
+          # Query all 7 conditions from Neon in one script
+          RESULTS=$(node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+
+          async function check() {
+            const results = {};
+
+            // 1. Pipeline count (idea + approved + provisioning + mvp + active)
+            const [pipeline] = await sql\`
+              SELECT COUNT(*) as cnt FROM companies
+              WHERE status IN ('idea','approved','provisioning','mvp','active')
+            \`;
+            results.pipeline_low = parseInt(pipeline.cnt) < 3;
+
+            // 2. Companies with no content in 7 days
+            const staleContent = await sql\`
+              SELECT c.slug FROM companies c
+              WHERE c.status IN ('mvp','active')
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_actions aa
+                WHERE aa.company_id = c.id
+                AND aa.agent = 'growth'
+                AND aa.status = 'success'
+                AND aa.finished_at > NOW() - INTERVAL '7 days'
+              )
+            \`;
+            results.stale_content = staleContent.map(r => r.slug);
+
+            // 3. Leads older than 5 days without outreach
+            const staleLeads = await sql\`
+              SELECT c.slug FROM companies c
+              WHERE c.status IN ('mvp','active')
+              AND EXISTS (
+                SELECT 1 FROM research_reports rr
+                WHERE rr.company_id = c.id AND rr.report_type = 'lead_list'
+                AND rr.updated_at < NOW() - INTERVAL '5 days'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_actions aa
+                WHERE aa.company_id = c.id
+                AND aa.agent = 'outreach'
+                AND aa.status = 'success'
+                AND aa.finished_at > NOW() - INTERVAL '5 days'
+              )
+            \`;
+            results.stale_leads = staleLeads.map(r => r.slug);
+
+            // 4. No CEO review in 48h for active companies
+            const noCeoReview = await sql\`
+              SELECT c.slug FROM companies c
+              WHERE c.status IN ('mvp','active')
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_actions aa
+                WHERE aa.company_id = c.id
+                AND aa.agent = 'ceo'
+                AND aa.status = 'success'
+                AND aa.finished_at > NOW() - INTERVAL '48 hours'
+              )
+            \`;
+            results.no_ceo_review = noCeoReview.map(r => r.slug);
+
+            // 5. Unverified deploy in 24h (deploy logged but no ops check)
+            const unverifiedDeploys = await sql\`
+              SELECT c.slug FROM companies c
+              WHERE c.status IN ('mvp','active')
+              AND EXISTS (
+                SELECT 1 FROM agent_actions aa
+                WHERE aa.company_id = c.id
+                AND aa.action_type = 'deploy'
+                AND aa.finished_at > NOW() - INTERVAL '24 hours'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_actions aa
+                WHERE aa.company_id = c.id
+                AND aa.agent = 'ops'
+                AND aa.action_type = 'health_check'
+                AND aa.finished_at > NOW() - INTERVAL '24 hours'
+              )
+            \`;
+            results.unverified_deploys = unverifiedDeploys.map(r => r.slug);
+
+            // 6. Completed cycles since last evolve > 10
+            const [lastEvolve] = await sql\`
+              SELECT MAX(finished_at) as last_run FROM agent_actions
+              WHERE agent = 'evolver' AND status = 'success'
+            \`;
+            const [cyclesSinceEvolve] = await sql\`
+              SELECT COUNT(*) as cnt FROM cycles
+              WHERE status = 'completed'
+              AND finished_at > COALESCE(\${lastEvolve?.last_run}, '2000-01-01'::timestamptz)
+            \`;
+            results.evolve_due = parseInt(cyclesSinceEvolve.cnt) > 10;
+
+            // 7. Agent failure rate > 20% in 48h
+            const [failureStats] = await sql\`
+              SELECT
+                COUNT(*) FILTER (WHERE status = 'failed') as failed,
+                COUNT(*) as total
+              FROM agent_actions
+              WHERE finished_at > NOW() - INTERVAL '48 hours'
+            \`;
+            const failRate = failureStats.total > 0 ? failureStats.failed / failureStats.total : 0;
+            results.high_failure_rate = failRate > 0.2 && failureStats.total >= 5;
+
+            console.log(JSON.stringify(results));
+            await sql.end();
+          }
+
+          check().catch(e => { console.error(e.message); process.exit(1); });
+          ")
+
+          echo "Sentinel results: $RESULTS"
+
+          # Parse and dispatch
+          PIPELINE_LOW=$(echo "$RESULTS" | jq -r '.pipeline_low')
+          STALE_CONTENT=$(echo "$RESULTS" | jq -r '.stale_content | length')
+          STALE_LEADS=$(echo "$RESULTS" | jq -r '.stale_leads | length')
+          NO_CEO=$(echo "$RESULTS" | jq -r '.no_ceo_review | length')
+          UNVERIFIED=$(echo "$RESULTS" | jq -r '.unverified_deploys | length')
+          EVOLVE_DUE=$(echo "$RESULTS" | jq -r '.evolve_due')
+          HIGH_FAIL=$(echo "$RESULTS" | jq -r '.high_failure_rate')
+
+          # 1. Pipeline low → Scout
+          if [ "$PIPELINE_LOW" = "true" ]; then
+            dispatch "pipeline_low" '{"source":"sentinel"}'
+            DISPATCHED=$((DISPATCHED + 1))
+          fi
+
+          # 2. Stale content → Growth (via workers)
+          if [ "$STALE_CONTENT" -gt 0 ]; then
+            for SLUG in $(echo "$RESULTS" | jq -r '.stale_content[]'); do
+              dispatch "growth_trigger" "{\"source\":\"sentinel\",\"company\":\"$SLUG\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 3. Stale leads → Outreach (via workers)
+          if [ "$STALE_LEADS" -gt 0 ]; then
+            for SLUG in $(echo "$RESULTS" | jq -r '.stale_leads[]'); do
+              dispatch "outreach_trigger" "{\"source\":\"sentinel\",\"company\":\"$SLUG\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 4. No CEO review → CEO
+          if [ "$NO_CEO" -gt 0 ]; then
+            FIRST_SLUG=$(echo "$RESULTS" | jq -r '.no_ceo_review[0]')
+            dispatch "ceo_review" "{\"source\":\"sentinel\",\"company\":\"$FIRST_SLUG\"}"
+            DISPATCHED=$((DISPATCHED + 1))
+          fi
+
+          # 5. Unverified deploys → Ops (via workers)
+          if [ "$UNVERIFIED" -gt 0 ]; then
+            for SLUG in $(echo "$RESULTS" | jq -r '.unverified_deploys[]'); do
+              dispatch "health_check" "{\"source\":\"sentinel\",\"company\":\"$SLUG\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 6. Evolve due → Evolver
+          if [ "$EVOLVE_DUE" = "true" ]; then
+            dispatch "evolve_trigger" '{"source":"sentinel"}'
+            DISPATCHED=$((DISPATCHED + 1))
+          fi
+
+          # 7. High failure rate → Evolver (urgent)
+          if [ "$HIGH_FAIL" = "true" ]; then
+            dispatch "evolve_trigger" '{"source":"sentinel","reason":"high_failure_rate"}'
+            DISPATCHED=$((DISPATCHED + 1))
+          fi
+
+          echo ""
+          echo "Sentinel complete: $DISPATCHED dispatches"

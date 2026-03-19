@@ -1,0 +1,127 @@
+name: Hive CEO
+
+on:
+  repository_dispatch:
+    types:
+      - stripe_payment
+      - cycle_complete
+      - gate_approved
+      - ceo_review
+
+  issues:
+    types: [opened, labeled]
+
+  pull_request:
+    types: [opened]
+
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Override task (e.g. "review company X", "portfolio analysis")'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  ceo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Only run on issues with directive/research labels
+    if: >
+      github.event_name != 'issues' ||
+      contains(github.event.issue.labels.*.name, 'directive') ||
+      contains(github.event.issue.labels.*.name, 'hive-directive')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build CEO context
+        id: context
+        run: |
+          EVENT="${{ github.event_name }}"
+          TASK="${{ github.event.inputs.task }}"
+
+          if [ "$EVENT" = "repository_dispatch" ]; then
+            ACTION="${{ github.event.action }}"
+            PAYLOAD='${{ toJson(github.event.client_payload) }}'
+            echo "trigger=repository_dispatch:${ACTION}" >> $GITHUB_OUTPUT
+            echo "payload=${PAYLOAD}" >> $GITHUB_OUTPUT
+          elif [ "$EVENT" = "issues" ]; then
+            echo "trigger=issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}" >> $GITHUB_OUTPUT
+            echo "payload={\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}" >> $GITHUB_OUTPUT
+          elif [ "$EVENT" = "pull_request" ]; then
+            echo "trigger=pr:#${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+            echo "payload={\"pr_number\":${{ github.event.pull_request.number }}}" >> $GITHUB_OUTPUT
+          else
+            echo "trigger=manual${TASK:+: $TASK}" >> $GITHUB_OUTPUT
+            echo "payload={\"task\":\"${TASK}\"}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run CEO agent
+        id: agent
+        uses: anthropics/claude-code-base-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the CEO agent of Hive, an autonomous venture orchestrator.
+
+            TRIGGER: ${{ steps.context.outputs.trigger }}
+            PAYLOAD: ${{ steps.context.outputs.payload }}
+
+            Read BRIEFING.md and CLAUDE.md for full context. Then:
+
+            1. Query Neon (DATABASE_URL is set) for: active companies, pending approvals, recent metrics, open directives
+            2. Based on the trigger:
+               - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
+               - cycle_complete: Score the cycle 1-10, extract playbook entries, check kill flags
+               - gate_approved: Route the approval to the right agent
+               - ceo_review: Do portfolio analysis across all companies
+               - issue/directive: Decompose into tasks, assign to agents
+               - PR opened: Review for strategic alignment
+               - manual: Execute the specified task
+            3. Write your plan to the cycles table
+            4. Output JSON with: { "actions": [...], "needs_research": bool, "needs_feature": bool, "company": "slug" }
+
+            IMPORTANT: Write ALL decisions to the database. Update BRIEFING.md if state changed.
+          max_turns: 25
+
+      - name: Chain dispatch
+        if: always() && steps.agent.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          RESULT=$(cat "${{ steps.agent.outputs.execution_file }}" | jq -r '[.[] | select(.role == "assistant")] | last | .content // ""' 2>/dev/null || echo "{}")
+          REPO="${{ github.repository }}"
+
+          dispatch() {
+            curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"event_type\":\"$1\",\"client_payload\":$2}"
+            echo "  Dispatched: $1"
+          }
+
+          # Chain to Scout if research needed
+          echo "$RESULT" | grep -q "needs_research.*true" && \
+            dispatch "research_request" "{\"source\":\"ceo\"}"
+
+          # Chain to Engineer if feature needed
+          echo "$RESULT" | grep -q "needs_feature.*true" && \
+            dispatch "feature_request" "{\"source\":\"ceo\",\"company\":\"$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)\"}"
+
+          # Chain to workers if plan has growth/outreach tasks
+          echo "$RESULT" | grep -q "growth" && \
+            dispatch "growth_trigger" "{\"source\":\"ceo\"}"
+          echo "$RESULT" | grep -q "outreach" && \
+            dispatch "outreach_trigger" "{\"source\":\"ceo\"}"
+
+          echo "Chain dispatch complete"

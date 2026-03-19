@@ -6,20 +6,41 @@
 
 ## Current State
 
-- **Phase:** Pre-launch. All infrastructure built. No companies running yet.
+- **Phase:** Event-driven migration complete. Ready for first agent dispatch.
+- **Architecture:** 7 agents, event-driven, zero crons (except sentinel every 4h). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
-- **Active companies:** 0 (Idea Scout ready, run `--scout-only` to generate first batch)
+- **Active companies:** 0
 - **Companies to import:** VerdeDesk (MVP on Vercel), Flolio (growth phase, import later)
-- **Blocked on:** 
-  - **Migration 002** must run against Neon before first orchestrator run (schema constraints)
-  - CRON_SECRET must be set in both Vercel env vars AND GitHub Actions secrets
+
+### Agent Architecture (7 agents)
+
+| Agent | Runtime | Trigger | Scope |
+|-------|---------|---------|-------|
+| CEO | GitHub Actions + Claude | Payments, cycle completions, gates, PRs, directives | Plan, review, score, kill |
+| Scout | GitHub Actions + Claude | Pipeline low, CEO requests, company killed | Ideas, market research, SEO keywords |
+| Engineer | GitHub Actions + Claude | Features, bugs, Ops escalation, new companies | Code, deploy, scaffold, fix |
+| Evolver | GitHub Actions + Claude | Cycle threshold, failure rate | Prompt analysis + improvement |
+| Ops | Vercel serverless + Groq | Deploys, sentinel, agent failures | Health check, metrics, error detect |
+| Growth | Vercel serverless + Gemini | Scout research delivered, sentinel (stale content) | Blog, SEO, social content |
+| Outreach | Vercel serverless + Gemini | Scout leads found, sentinel (stale leads) | Prospects, cold email, follow-up |
+
+### Execution Model
+
+- **Events**: Stripe payments, deploys, GitHub issues/PRs → trigger agents directly
+- **Chains**: Agent A finishes → dispatches Agent B via `repository_dispatch`
+- **Data conditions**: Sentinel queries Neon every 4h → dispatches agents whose work conditions are met
+
+- **Blocked on:**
   - Resend domain verification (need a real domain — Flolio's domain could work)
   - Gemini + Groq API keys (free, need to register)
-  - First `--scout-only` run to generate 3 business proposals
+  - First Scout run to generate 3 business proposals (trigger via GitHub Actions → Run workflow)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-19 [code] Event-driven architecture migration (ADR-011 + ADR-012)
+Migrated from Mac launchd nightly loop to fully event-driven GitHub Actions. 10 agents consolidated to 7 (migration 003). Created 4 brain workflows (hive-ceo.yml, hive-scout.yml, hive-engineer.yml, hive-evolver.yml) + sentinel (hive-sentinel.yml). Updated worker-agents.yml to remove all schedule triggers. Added repository_dispatch to Stripe webhook. Ops escalation chains to Engineer. Secrets set: CLAUDE_CODE_OAUTH_TOKEN, GH_PAT, DATABASE_URL. orchestrator.ts now fallback only.
 
 ### 2026-03-19 [chat] Critical schema fixes found during codebase review
 Full 78-file cross-reference found 7 issues that would crash the orchestrator on first real run: agent_actions.cycle_id/company_id were NOT NULL but Idea Scout, Healer, and Provisioner insert with NULL; agent CHECK constraint was missing 4 agent names (outreach, research_analyst, healer, orchestrator); approvals gate_type CHECK was missing 4 types (outreach_batch, vercel_pro_upgrade, social_account, first_revenue); settings table not in schema.sql; middleware didn't exclude /api/agents. Migration 002 fixes all of these. MISTAKES.md entry #13 captures the prevention rule.
@@ -47,13 +68,12 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Run migration 002** — `psql $DATABASE_URL -f migrations/002_fix_constraints.sql` (fixes schema crashes)
-2. **Set CRON_SECRET** — same value in Vercel env vars + GitHub Actions secrets
-3. **Register Gemini + Groq free API keys** — takes 2 min each, enables worker dispatch
-4. **Test worker dispatch** — `curl POST /api/agents/dispatch` with ops agent on verdedesk
-5. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
-6. **First `--scout-only` run** — generates 3 business proposals for Carlos to review
-7. **Import VerdeDesk** — via dashboard import dialog, triggers onboarding + pattern extraction
+1. **Register Gemini + Groq free API keys** — takes 2 min each, enables worker dispatch
+2. **Test CEO agent** — GitHub Actions → "Hive CEO" → Run workflow (manual dispatch)
+3. **Test Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
+4. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
+5. **Import VerdeDesk** — via dashboard import dialog, triggers onboarding + pattern extraction
+6. **Add GH_PAT to Vercel env** — `npx vercel env add GH_PAT production` (for Stripe → repository_dispatch)
 
 ## Open Questions
 

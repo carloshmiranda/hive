@@ -1,169 +1,126 @@
-# 🐝 Hive — Venture Orchestrator
+# Hive
 
-An autonomous system that spins up companies, builds MVPs, runs growth, and kills failures. You approve the big decisions. Hive does everything else.
+Autonomous venture orchestrator. Generates business ideas, spins up companies, runs them with AI agents, kills failures.
+
+**Carlos approves 4 gates.** New company, growth strategy, spend > €20, kill company. Everything else is autonomous.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────┐
-│  YOUR MAC (intelligence layer)              │
-│  ├─ orchestrator.ts (launchd, midnight)     │
-│  ├─ claude -p (Max 5x subscription)         │
-│  └─ pushes state to Neon + Vercel via APIs  │
-└─────────────┬───────────────────────────────┘
-              │
-┌─────────────▼───────────────────────────────┐
-│  VERCEL (serving layer)                     │
-│  ├─ Hive Dashboard (Next.js, Hobby plan)    │
-│  ├─ Company A site (Pro when revenue)       │
-│  ├─ Company B site (Hobby while MVP)        │
-│  └─ API routes → Neon                       │
-└─────────────┬───────────────────────────────┘
-              │
-┌─────────────▼───────────────────────────────┐
-│  NEON (single source of truth)              │
-│  ├─ Hive DB (orchestrator state)            │
-│  ├─ Company A DB (its own Neon project)     │
-│  └─ Company B DB (its own Neon project)     │
-└─────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="./docs/architecture.svg" alt="Hive Architecture" width="100%"/>
+</p>
 
-## Setup (one-time, ~45 minutes)
+### How it works
 
-### 1. Prerequisites
-- macOS with Claude Code CLI installed and logged into Max 5x
-- Node.js 20+, npm, npx, ts-node
-- Git configured with GitHub access
+Hive runs 7 AI agents across two tiers. Brain agents (CEO, Scout, Engineer, Evolver) run on GitHub Actions using Claude Code with a Max 5x OAuth token. Worker agents (Ops, Growth, Outreach) run on Vercel serverless using Gemini and Groq free APIs.
 
-### 2. Create accounts (all free tier)
-- **Neon**: https://neon.tech → create project "hive" → copy DATABASE_URL
-- **Vercel**: https://vercel.com → link GitHub account
-- **Stripe**: https://dashboard.stripe.com → enable Connect → get API keys
-- **Resend**: https://resend.com → verify domain → get API key
-- **GitHub**: create a Personal Access Token with `repo` + `workflow` scopes
+There are no scheduled crons. Agents are triggered by three mechanisms:
 
-### 3. Setup Hive database
+- **Events** — Stripe payment arrives, a deploy completes, you create a GitHub issue or approve a PR. These fire directly through GitHub's native event system or via `repository_dispatch` from Vercel webhooks.
+- **Chains** — When one agent finishes, it dispatches the next. Scout delivers research → Growth creates content. CEO flags a problem → Scout investigates. Ops finds an error → Engineer fixes it.
+- **Data conditions** — A lightweight sentinel queries Neon every 4 hours and dispatches agents whose work conditions are met (pipeline low, content stale, leads rotting). Most runs dispatch nothing. It catches gaps when chains break.
+
+### Agents
+
+| Agent | What it does | Triggered by |
+|---|---|---|
+| **CEO** | Plans cycles, reviews scores, portfolio analysis, kill recommendations | Payments, cycle completions, gates, PR reviews |
+| **Scout** | Finds new business ideas, market/SEO/competitive research | Pipeline low, CEO requests, company killed |
+| **Engineer** | Implements features, scaffolds companies, opens and merges PRs | GitHub issues (feature/bug), CEO, Ops escalation |
+| **Ops** | Health checks, metrics, error detection + fixing | Deploys, agent failures, sentinel |
+| **Growth** | Creates blog posts, SEO content, social posts | Scout research delivered, sentinel (stale content) |
+| **Outreach** | Finds prospects, drafts cold emails, plans follow-ups | Scout leads delivered, sentinel (stale leads) |
+| **Evolver** | Analyses agent performance, proposes prompt improvements | Cycle count threshold, failure rate threshold |
+
+### Stack
+
+| Layer | Service | Plan |
+|---|---|---|
+| Intelligence | Claude Max 5x via `claude setup-token` OAuth | $100/mo |
+| Compute (brain) | GitHub Actions, ubuntu runners | Free (private, ~46% of 2,000 min limit) |
+| Compute (workers) | Vercel serverless (Gemini Flash-Lite, Groq Llama 70B) | Free (Hobby) |
+| Database | Neon serverless Postgres | Free |
+| Dashboard | Next.js on Vercel | Free (Hobby) |
+
+**Total cost: $100/mo.** Mac not required — close the lid, Hive keeps running.
+
+### Interacting with Hive
+
+All interaction happens through GitHub:
+
+- **Create an issue** with label `directive` → CEO decomposes into tasks
+- **Create an issue** with label `feature` → Engineer implements it
+- **Create an issue** with label `research` → Scout investigates
+- **Approve a PR** → Engineer merges and deploys
+- **Comment mentioning an agent** → That agent responds in the thread
+- **Approve a gate** in the dashboard → Dependent agent proceeds
+
+### Key decisions
+
+See [DECISIONS.md](./DECISIONS.md) for the full Architecture Decision Record log. Key ones:
+
+- **ADR-009**: Multi-provider model routing (Claude for brain, Gemini/Groq for workers)
+- **ADR-010**: Multi-repo with shared intelligence layer
+- **ADR-011**: Event-driven execution on GitHub Actions with Max 5x OAuth
+- **ADR-012**: Agent consolidation from 10 to 7
+
+## Setup
+
+### Prerequisites
+
+- Claude Max 5x subscription
+- GitHub account (private repo, event-driven model stays within 2,000 min/mo free tier)
+- Vercel Hobby account
+- Neon free-tier database
+
+### Quick start
+
 ```bash
-# Run the schema against your Neon project
-psql $DATABASE_URL -f schema.sql
-```
+# 1. Generate a 1-year OAuth token from your Max 5x subscription
+claude setup-token
+# Copy the sk-ant-oat01-... token
 
-### 4. Deploy the dashboard
-```bash
-cd hive
-npm install
-vercel link        # link to your Vercel account
-vercel env add DATABASE_URL         # paste Neon connection string
-vercel env add STRIPE_SECRET_KEY    # paste Stripe key
-vercel env add RESEND_API_KEY       # paste Resend key
-vercel env add GITHUB_TOKEN         # paste GitHub PAT
+# 2. Add secrets to GitHub repo → Settings → Secrets → Actions
+#    CLAUDE_CODE_OAUTH_TOKEN = (token from step 1)
+#    DATABASE_URL = (Neon connection string)
+#    CRON_SECRET = (random 32-char hex: openssl rand -hex 32)
+#    GITHUB_PAT = (fine-grained token with contents:write)
+
+# 3. Deploy to Vercel
 vercel deploy --prod
+
+# 4. Run migration
+psql $DATABASE_URL < migrations/003_agent_consolidation.sql
+
+# 5. Test — trigger CEO agent manually
+# Go to GitHub → Actions → "Hive CEO" → Run workflow
 ```
 
-### 5. Install the orchestrator schedule
-```bash
-# Create logs directory
-mkdir -p ~/code/hive/logs
+## Project structure
 
-# Edit the plist to set your DATABASE_URL
-nano com.hive.orchestrator.plist
-
-# Install the LaunchAgent
-cp com.hive.orchestrator.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.hive.orchestrator.plist
-
-# Test manually
-npx ts-node orchestrator.ts --dry-run
+```
+hive/
+├── .github/workflows/     # Agent workflow files (event triggers + chains)
+│   ├── hive-ceo.yml
+│   ├── hive-scout.yml
+│   ├── hive-engineer.yml
+│   ├── hive-evolver.yml
+│   ├── hive-workers.yml   # Worker agent dispatch (curl → Vercel)
+│   └── hive-sentinel.yml  # Data condition checker
+├── src/app/
+│   ├── api/agents/        # Worker dispatch endpoint + company list
+│   ├── api/webhooks/      # Stripe → repository_dispatch
+│   ├── dashboard/         # Approval gates, company views, agent activity
+│   └── ...
+├── migrations/            # Neon schema migrations
+├── docs/
+│   └── architecture.svg   # Architecture diagram
+├── DECISIONS.md           # Architecture Decision Records
+├── BRIEFING.md            # Context for brain agents
+├── MEMORY.md              # Cross-company learnings
+└── MISTAKES.md            # Production incident log
 ```
 
-### 6. Seed your first company
-```sql
-INSERT INTO companies (name, slug, description, status)
-VALUES ('YourFirstIdea', 'your-first-idea', 'Description here', 'approved');
-```
+## License
 
-The next nightly run will pick it up, provision infrastructure, and start building.
-
-## Daily workflow
-
-1. **Midnight**: Orchestrator wakes, provisions approved companies, onboards imports, processes active companies
-2. **~1am**: Cycles complete, digest email sent
-3. **Morning**: Read the email, open the dashboard
-4. **Command bar**: Type directives like `pawly: add free trial` or `@engineer fix mobile layout` — creates GitHub Issue, processed next cycle
-5. **Approve/reject**: Action any pending gates
-6. **Import**: Click Import to bring an existing repo under Hive management
-
-## Interacting with Hive
-
-Three ways to communicate with the orchestrator:
-
-1. **Dashboard command bar** — type a directive, it becomes a GitHub Issue, gets processed next cycle
-2. **GitHub Issues** — create issues on the Hive repo with labels `hive-directive`, `company:{slug}`, `agent:{name}`
-3. **CLI** — run `npx ts-node orchestrator.ts --company pawly` for an immediate single-company cycle
-
-Directive format:
-- `pawly: add pricing page` → targets Pawly's CEO agent
-- `@engineer refactor the checkout flow` → targets Engineer agent for all companies  
-- `increase ad spend to €100` → CEO decides which company
-
-## Importing existing projects
-
-Bring projects like Flolio or acquired codebases under Hive management:
-
-1. Click **Import** in the dashboard
-2. Enter the project name, slug, and GitHub URL
-3. Hive scans the repo: tech stack, CLAUDE.md presence, env files, tests, CI, Stripe integration
-4. A scan report generates an approval gate with an onboarding plan
-5. On approval, the Onboarding agent clones, generates missing files, links to Vercel, and registers metrics
-6. Existing code is never overwritten — Hive adds alongside what's there
-
-## Commands
-
-```bash
-# Full nightly run (includes idea scout if conditions met)
-npx ts-node orchestrator.ts
-
-# Single company only
-npx ts-node orchestrator.ts --company pawly
-
-# Dry run (plan only, no execution)
-npx ts-node orchestrator.ts --dry-run
-
-# Force idea generation regardless of schedule
-npx ts-node orchestrator.ts --scout
-
-# Run ONLY the idea scout, skip company cycles
-npx ts-node orchestrator.ts --scout-only
-
-# Check orchestrator logs
-tail -f ~/code/hive/logs/orchestrator.stdout.log
-
-# Check launchd status
-launchctl list | grep hive
-```
-
-## Costs
-
-| Component | Monthly cost |
-|-----------|-------------|
-| Claude Max 5x | €100 (your existing subscription) |
-| Vercel Hobby (dashboard) | €0 |
-| Vercel Pro (per live company) | €20 each |
-| Neon free (20 projects) | €0 |
-| GitHub free | €0 |
-| Resend free (3K emails/mo) | €0 |
-| Stripe Connect | 0 base, transaction fees only |
-| **Total (0 live companies)** | **€100** |
-| **Total (2 live companies)** | **€140** |
-
-## Cloud migration
-
-When ready to move the brain off your Mac:
-1. Get an Anthropic API key at console.anthropic.com
-2. Store it as a GitHub Actions secret
-3. The orchestrator's `dispatch()` function swaps from CLI to SDK
-4. Same prompts, same state, same everything — just different transport
-
----
-
-Built by Carlos Miranda · Powered by Claude, Vercel, Neon
+Private. All rights reserved.

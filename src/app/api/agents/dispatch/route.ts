@@ -13,11 +13,11 @@ const AGENT_MODEL: Record<WorkerAgent, { provider: "gemini" | "groq"; model: str
   ops:      { provider: "groq",  model: "llama-3.3-70b-versatile" },
 };
 
-// Default prompts if not in DB
+// Default prompts — one verb per agent
 const DEFAULT_PROMPTS: Record<WorkerAgent, string> = {
-  growth: "You are the Growth agent. Create content, schedule posts, run experiments. Check the playbook first. Output JSON with content_created, posts_scheduled, experiments.",
-  outreach: "You are the Outreach agent. Find leads, draft cold emails, plan follow-ups. Output JSON with leads and emails_drafted.",
-  ops: "You are the Ops agent. Check deployment health, collect metrics, verify services are running. Output JSON with metrics_collected, health_status, issues_found.",
+  growth: "Generate content. Read the CEO plan and playbook, then create blog posts, social content, or SEO pages. Output JSON: { content_created: [...], posts_scheduled: N }",
+  outreach: "Prospect leads. Read the lead list and outreach log, then draft cold emails and plan follow-ups. Output JSON: { leads: [...], emails_drafted: [...] }",
+  ops: "Verify health. Check deploy status, collect metrics from Stripe/Vercel/Neon, detect anomalies. Output JSON: { metrics_collected: N, health_status: 'ok'|'degraded', issues_found: [...], needs_engineer: bool }",
 };
 
 // Max duration: Gemini calls take 10-30s, well within 300s Fluid Compute limit
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     return err("company_slug and agent are required");
   }
   if (!WORKER_AGENTS.includes(agent as WorkerAgent)) {
-    return err(`Agent must be one of: ${WORKER_AGENTS.join(", ")}. Brain agents run on Mac/Synology.`);
+    return err(`Agent must be one of: ${WORKER_AGENTS.join(", ")}. Brain agents run on GitHub Actions.`);
   }
 
   const sql = getDb();
@@ -149,6 +149,28 @@ TRIGGER: ${trigger || "scheduled"}`;
     // 7. Agent-specific post-processing
     if (agentName === "outreach") {
       await processOutreachResults(sql, company, output);
+    }
+
+    // 8. Ops escalation → dispatch Engineer via repository_dispatch
+    if (agentName === "ops" && output.includes("needs_engineer")) {
+      try {
+        const ghPat = process.env.GH_PAT;
+        const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
+        if (ghPat) {
+          await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+            method: "POST",
+            headers: {
+              Authorization: `token ${ghPat}`,
+              Accept: "application/vnd.github.v3+json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_type: "ops_escalation",
+              client_payload: { company: company.slug, source: "ops" },
+            }),
+          });
+        }
+      } catch { /* non-critical chain dispatch failure */ }
     }
 
     return json({

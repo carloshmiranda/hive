@@ -52,10 +52,7 @@ CREATE TABLE agent_actions (
   cycle_id      TEXT REFERENCES cycles(id),
   company_id    TEXT REFERENCES companies(id),
   agent         TEXT NOT NULL CHECK (agent IN (
-                  'ceo', 'engineer', 'growth', 'ops', 'venture_brain',
-                  'idea_scout', 'kill_switch', 'retro_analyst', 'prompt_evolver',
-                  'health_monitor', 'auto_healer', 'provisioner',
-                  'outreach', 'research_analyst', 'healer', 'orchestrator'
+                  'ceo', 'scout', 'engineer', 'ops', 'growth', 'outreach', 'evolver'
                 )),
   action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
   description   TEXT,
