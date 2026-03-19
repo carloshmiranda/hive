@@ -25,6 +25,7 @@ on:
 permissions:
   contents: write
   issues: write
+  id-token: write
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
