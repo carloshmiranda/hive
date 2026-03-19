@@ -156,7 +156,7 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 **Date:** 2026-03-19
 **Status:** Accepted
 **Context:** All GitHub Actions brain agents were running on Sonnet (claude-code-base-action v0.0.63 default). The action version had a bug where the model parameter was ignored (GitHub issue #255). Worker agents used Gemini 2.5 Flash-Lite, the lowest quality free tier option. Quality of CEO plans and Scout research directly impacts all downstream work.
-**Decision:** Explicit model selection per agent based on work type. Brain agents: CEO/Scout/Evolver on Opus (strategic, infrequent), Engineer on Sonnet (execution, speed matters). Workers: Growth/Outreach upgraded to Gemini 2.5 Flash (content quality), Ops stays on Groq Llama 3.3 70B (speed). Fallback chain: Flash → Flash-Lite → Groq. Action version upgraded from v0.0.63 to @beta.
+**Decision:** Explicit model selection per agent based on work type. Brain agents: CEO/Scout/Evolver on Opus (strategic, infrequent), Engineer on Sonnet (execution, speed matters). Workers: Growth/Outreach upgraded to Gemini 2.5 Flash (content quality), Ops stays on Groq Llama 3.3 70B (speed). Fallback chain: Flash → Flash-Lite → Groq. Action upgraded from claude-code-base-action v0.0.63 to claude-code-action v1 with native model input.
 **Alternatives considered:**
 - All agents on Opus: burns Max 5x quota too fast, Engineer doesn't benefit from extra reasoning
 - All agents on Sonnet: CEO and Scout produce mediocre plans/research that cascade into mediocre cycles

@@ -138,6 +138,6 @@
 ### 2026-03-19 claude-code-base-action v0.0.63 ignored model parameter
 **What happened:** All brain agents ran on Sonnet despite CLAUDE.md documenting them as "Opus via Max". The model parameter in the workflow YAML was silently ignored.
 **Root cause:** Version v0.0.63 of anthropics/claude-code-base-action had a bug (GitHub issue #255) where the ANTHROPIC_MODEL env var wasn't passed to the CLI. Fixed in later versions.
-**Fix applied:** Upgraded all workflows to @beta. Set explicit model per agent via `claude_args: "--model X"`.
+**Fix applied:** Upgraded all workflows from claude-code-base-action to claude-code-action@v1. Set explicit model per agent via native `model` input.
 **Prevention:** When using third-party GitHub Actions, always pin to a recent version and verify that configuration parameters actually take effect. Test with a manual dispatch and check the action logs for which model was used.
 **Affects:** all brain agents (CEO, Scout, Engineer, Evolver)
