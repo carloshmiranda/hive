@@ -101,3 +101,14 @@
 - Only improve via manual Claude Code sessions: no continuity between sessions
 - Fully autonomous self-modification: too risky without review gates
 **Consequences:** Hive accumulates institutional knowledge across sessions. New Claude Code sessions read these files and don't repeat past mistakes. The backlog is a living roadmap that the orchestrator can self-assign from.
+
+### ADR-009: Multi-provider model routing
+**Date:** 2026-03-18
+**Status:** Accepted
+**Context:** Running all agents through Claude Code CLI (Max 5x subscription) burns ~225 messages per 5hr window. With 2+ companies and 7 agents each, plus Idea Scout, Venture Brain, Healer, and Prompt Evolver, the nightly budget is exhausted before all companies can process.
+**Decision:** Route agent tasks by tier. Brain agents (CEO, Idea Scout, Research Analyst, Venture Brain, Healer, Prompt Evolver) use Claude CLI (needs tool use, complex reasoning, web search). Worker agents (Growth, Outreach) use Gemini free tier (content/email generation, no tool use). Ops uses Groq free tier (fastest inference for metric analysis). Engineer always uses Claude (needs cwd for code editing). Auto-fallback: Gemini fails → Groq → Claude.
+**Alternatives considered:**
+- All Claude: works but burns quota in 1-2 companies, can't scale to 5
+- All Gemini: can't do tool use (no git, no deploy, no web search)
+- Ollama local: latency too high for nightly batch, no web access
+**Consequences:** Claude quota reserved for ~6 brain tasks per company cycle (CEO plan, CEO review, Research, Engineer, Healer, Evolver) plus portfolio-level tasks. Growth, Outreach, and Ops run on free tiers at ~7,000+ requests/day capacity. If Gemini/Groq keys aren't configured, everything falls back to Claude (works for 1-2 companies, breaks at 3+).

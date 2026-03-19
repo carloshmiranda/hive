@@ -160,6 +160,44 @@ WEEKLY (Wednesday night):
   11. Prompt Evolver runs (see step 8 above)
 ```
 
+## Model Routing (Multi-Provider Dispatch)
+
+Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude (Max 5x subscription, unlimited via CLI). Worker tasks get free-tier LLMs. Fallback chain: primary → alternate → Claude as last resort.
+
+### Provider mapping
+
+| Agent | Provider | Model | Why |
+|-------|----------|-------|-----|
+| CEO | Claude CLI | Opus (via Max) | Strategic decisions, needs tool use |
+| Idea Scout | Claude CLI | Opus | Web search, complex reasoning |
+| Research Analyst | Claude CLI | Opus | Web search for market research |
+| Venture Brain | Claude CLI | Opus | Portfolio analysis, kill decisions |
+| Healer | Claude CLI | Opus | Code editing, needs cwd/tools |
+| Prompt Evolver | Claude CLI | Opus | Evaluating + rewriting prompts |
+| Engineer | Claude CLI* | Opus | Needs cwd for git/npm/deploy |
+| Growth | Gemini API | Flash-Lite | Content generation, no tool use |
+| Outreach | Gemini API | Flash-Lite | Email drafting, no tool use |
+| Ops | Groq API | Llama 3.3 70B | Quick metric analysis, fastest inference |
+
+*Engineer always routes to Claude because it needs `cwd` (code editing, git, npm). The router auto-forces Claude when `cwd` or `allowedTools` are set.
+
+### Fallback chain
+Gemini fails → try Groq → fall back to Claude (logs warning about quota burn)
+Groq fails → fall back to Claude
+
+### Free tier budget (per day)
+- Gemini Flash-Lite: 1,000 RPD (Growth + Outreach)
+- Gemini Flash: 250 RPD (if Engineer were routed here)
+- Groq: ~6,000 RPD (Ops)
+- Claude Max 5x: ~225 messages per 5hr window (CEO, Idea Scout, Brain, Healer, Engineer, Research, Evolver)
+
+### Required settings
+Add these in the Hive dashboard (/settings) to enable free-tier routing:
+- `gemini_api_key` — from https://aistudio.google.com/apikey (free, no credit card)
+- `groq_api_key` — from https://console.groq.com/keys (free)
+
+Without these keys, ALL agents fall back to Claude (works but burns quota faster).
+
 ## Self-Healing Architecture
 
 Hive has three layers of error recovery:

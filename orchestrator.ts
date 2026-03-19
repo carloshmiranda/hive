@@ -15,7 +15,11 @@
 import { spawn } from "child_process";
 import { neon } from "@neondatabase/serverless";
 import { readFileSync, existsSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // === CONFIG ===
 const HIVE_API = process.env.HIVE_API_URL || "http://localhost:3000/api";
@@ -29,76 +33,143 @@ const SCOUT_ONLY = process.argv.includes("--scout-only"); // Run only idea scout
 
 const sql = neon(DATABASE_URL);
 
-// === DISPATCH: The abstraction layer for cloud migration ===
+// === MULTI-PROVIDER DISPATCH ===
+// Brain (strategic) → Claude Code CLI (Max 5x subscription)
+// Workers → Gemini API free tier / Groq free tier
+// Fallback: if free tier fails → try next provider → Claude as last resort
+
+type Provider = "claude" | "gemini" | "groq";
+
 interface DispatchOptions {
   prompt: string;
-  cwd?: string;
-  allowedTools?: string[];
-  maxTurns?: number;
-  timeoutMs?: number; // default 5min, research tasks need more
-  model?: string; // "opus" for strategic, "sonnet" for execution
+  cwd?: string;              // only works with Claude (CLI tool use)
+  allowedTools?: string[];   // only works with Claude
+  maxTurns?: number;         // only works with Claude
+  timeoutMs?: number;
+  provider?: Provider;       // explicit override
+  agent?: string;            // used for auto-routing
 }
 
-// Agents that need deep reasoning get Opus; execution agents get Sonnet
-const AGENT_MODELS: Record<string, string> = {
-  ceo: "opus",
-  research_analyst: "opus",
-  idea_scout: "opus",
-  venture_brain: "opus",
-  healer: "opus",
-  prompt_evolver: "opus",
-  engineer: "sonnet",
-  growth: "sonnet",
-  outreach: "sonnet",
-  ops: "sonnet",
+// Agent → Provider mapping
+const AGENT_PROVIDER: Record<string, Provider> = {
+  // Brain tier — Claude (strategic decisions, tool use, web search, code execution)
+  ceo: "claude",
+  idea_scout: "claude",
+  venture_brain: "claude",
+  healer: "claude",
+  research_analyst: "claude",
+  prompt_evolver: "claude",
+  // Worker tier — free LLMs (content gen, simple analysis, no tool use)
+  engineer: "gemini",    // Gemini 2.5 Flash (code)
+  growth: "gemini",      // Gemini Flash-Lite (content)
+  outreach: "gemini",    // Gemini Flash-Lite (emails)
+  ops: "groq",           // Groq Llama 3.3 (fast inference for health checks)
 };
+
+// NOTE: Engineer agent uses Gemini for PLANNING/OUTPUT only.
+// Actual code execution (git, npm, deploy) MUST go through Claude Code CLI.
+// When the Engineer needs tool use, the executeAgent function should override to "claude".
 
 async function dispatch(opts: DispatchOptions): Promise<string> {
   if (DRY_RUN) {
-    console.log(`[DRY RUN] Would dispatch: ${opts.prompt.slice(0, 100)}...`);
+    const p = opts.provider || AGENT_PROVIDER[opts.agent || ""] || "claude";
+    console.log(`[DRY RUN] [${p}] ${opts.prompt.slice(0, 100)}...`);
     return "[DRY RUN] No output";
   }
 
-  // Build args
+  // If cwd or tools are needed, force Claude (only CLI can use them)
+  if (opts.cwd || opts.allowedTools?.length) {
+    return dispatchClaude(opts);
+  }
+
+  let provider = opts.provider || AGENT_PROVIDER[opts.agent || ""] || "claude";
+
+  // Check if keys are configured; fall back to Claude if not
+  if (provider === "gemini" && !(await getSettingValueDirect("gemini_api_key"))) provider = "claude";
+  if (provider === "groq" && !(await getSettingValueDirect("groq_api_key"))) provider = "claude";
+
+  // Dispatch with fallback chain: primary → alternate free tier → Claude
+  if (provider === "gemini") {
+    try { return await dispatchGemini(opts); } catch (e: any) {
+      console.log(`    ⚠ Gemini failed: ${e.message.slice(0, 60)}`);
+      try { return await dispatchGroq(opts); } catch {
+        console.log(`    ⚠ Groq fallback also failed, using Claude`);
+        return dispatchClaude(opts);
+      }
+    }
+  }
+  if (provider === "groq") {
+    try { return await dispatchGroq(opts); } catch (e: any) {
+      console.log(`    ⚠ Groq failed: ${e.message.slice(0, 60)}, using Claude`);
+      return dispatchClaude(opts);
+    }
+  }
+  return dispatchClaude(opts);
+}
+
+// === CLAUDE (CLI with tool use) ===
+async function dispatchClaude(opts: DispatchOptions): Promise<string> {
   const args = ["-p", opts.prompt, "--output-format", "text"];
-  if (opts.model) args.push("--model", opts.model);
   if (opts.cwd) args.push("--cwd", opts.cwd);
   if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
   if (opts.maxTurns) args.push("--max-turns", opts.maxTurns.toString());
-
   const timeout = opts.timeoutMs || 5 * 60 * 1000;
 
   return new Promise((resolve, reject) => {
-    const proc = spawn("claude", args, {
-      env: { ...process.env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let killed = false;
-
-    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-    const timer = setTimeout(() => {
-      killed = true;
-      proc.kill("SIGTERM");
-      setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
-    }, timeout);
-
-    proc.on("close", (code: number | null) => {
-      clearTimeout(timer);
-      if (killed) reject(new Error(`Dispatch timed out after ${Math.round(timeout / 1000)}s`));
-      else if (code !== 0) reject(new Error(`Dispatch exited ${code}: ${stderr.slice(0, 500)}`));
-      else resolve(stdout.trim());
-    });
-
-    proc.on("error", (err: Error) => {
-      clearTimeout(timer);
-      reject(new Error(`Dispatch spawn failed: ${err.message}`));
-    });
+    const proc = spawn("claude", args, { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "", killed = false;
+    proc.stdout.on("data", (c: Buffer) => { stdout += c.toString(); });
+    proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+    const timer = setTimeout(() => { killed = true; proc.kill("SIGTERM"); setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000); }, timeout);
+    proc.on("close", (code: number | null) => { clearTimeout(timer); if (killed) reject(new Error(`Claude timed out after ${Math.round(timeout/1000)}s`)); else if (code !== 0) reject(new Error(`Claude exited ${code}: ${stderr.slice(0,500)}`)); else resolve(stdout.trim()); });
+    proc.on("error", (err: Error) => { clearTimeout(timer); reject(new Error(`Claude spawn failed: ${err.message}`)); });
   });
+}
+
+// === GEMINI (HTTP API, free tier) ===
+async function dispatchGemini(opts: DispatchOptions): Promise<string> {
+  const apiKey = await getSettingValueDirect("gemini_api_key");
+  if (!apiKey) throw new Error("No gemini_api_key");
+  // Flash for code/complex, Flash-Lite for content/simple
+  const model = opts.agent === "engineer" ? "gemini-2.5-flash" : "gemini-2.5-flash-lite";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs || 120_000);
+  try {
+    const res = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: opts.prompt }] }], generationConfig: { maxOutputTokens: 8192, temperature: 0.7 } }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) { const e = await res.text(); throw new Error(`Gemini ${model} ${res.status}: ${e.slice(0,200)}`); }
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("Gemini empty response");
+    return text.trim();
+  } catch (err: any) { clearTimeout(timer); throw err.name === "AbortError" ? new Error(`Gemini timed out`) : err; }
+}
+
+// === GROQ (HTTP API, free tier, fastest inference) ===
+async function dispatchGroq(opts: DispatchOptions): Promise<string> {
+  const apiKey = await getSettingValueDirect("groq_api_key");
+  if (!apiKey) throw new Error("No groq_api_key");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs || 60_000);
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: opts.prompt }], max_tokens: 8192, temperature: 0.7 }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) { const e = await res.text(); throw new Error(`Groq ${res.status}: ${e.slice(0,200)}`); }
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content;
+    if (!text) throw new Error("Groq empty response");
+    return text.trim();
+  } catch (err: any) { clearTimeout(timer); throw err.name === "AbortError" ? new Error("Groq timed out") : err; }
 }
 
 // === DATABASE HELPERS ===
@@ -330,10 +401,10 @@ INSTRUCTIONS FOR THIS RETRY:
       const output = await dispatch({
         prompt: fullPrompt,
         cwd: opts.cwd,
-        model: AGENT_MODELS[opts.agent] || "sonnet",
-        maxTurns: attempt === 1 ? 10 : 15, // more room on retries
-        timeoutMs: attempt === 1 ? 5 * 60 * 1000 : 8 * 60 * 1000, // more time on retries
         allowedTools: opts.allowedTools,
+        agent: opts.agent, // routes to correct provider (claude/gemini/groq)
+        maxTurns: attempt === 1 ? 10 : 15,
+        timeoutMs: attempt === 1 ? 5 * 60 * 1000 : 8 * 60 * 1000,
       });
 
       await logAction({
@@ -413,23 +484,16 @@ async function runNightlyCycle() {
     // Verify orchestrator can reach Claude CLI
     if (!DRY_RUN) {
       try {
-        const cliCheck = await new Promise<string>((resolve, reject) => {
-          const proc = spawn("claude", ["--version"], {
-            env: { ...process.env },
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-          let out = "";
-          proc.stdout.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-          proc.on("close", (code: number | null) => {
-            if (code === 0) resolve(out.trim());
-            else reject(new Error(`exit ${code}`));
-          });
-          proc.on("error", reject);
-          setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, 10000);
+        const cliOk = await new Promise<boolean>((resolve) => {
+          const proc = spawn("claude", ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
+          const timer = setTimeout(() => { proc.kill(); resolve(false); }, 10000);
+          proc.on("close", (code) => { clearTimeout(timer); resolve(code === 0); });
+          proc.on("error", () => { clearTimeout(timer); resolve(false); });
         });
-        console.log(`  ✓ Claude CLI reachable (${cliCheck})`);
-      } catch (cliErr: any) {
-        console.log(`  ✗ Claude CLI not reachable (${cliErr.message}) — aborting`);
+        if (!cliOk) { console.log("  ✗ Claude CLI not reachable — aborting"); return; }
+        console.log("  ✓ Claude CLI reachable");
+      } catch {
+        console.log("  ✗ Claude CLI not reachable — aborting");
         return;
       }
     }
@@ -467,7 +531,7 @@ async function runNightlyCycle() {
     const liveCompanies = allCompanies.filter(c => ["mvp", "active"].includes(c.status));
 
     const ideaScoutOutput = await dispatch({
-      model: AGENT_MODELS.idea_scout,
+      agent: "idea_scout",
       allowedTools: ["WebSearch", "WebFetch"],
       prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
 
@@ -568,19 +632,13 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
 
     // Parse the output and create the company + approval gate
     try {
-      console.log(`  ⓘ Scout output: ${ideaScoutOutput.length} chars`);
+      // Extract JSON from the output (Claude may wrap it in markdown)
       const jsonMatch = ideaScoutOutput.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        console.log(`  ⚠ No JSON found in Idea Scout output`);
-        console.log(`  ⓘ Raw output (first 500 chars): ${ideaScoutOutput.slice(0, 500)}`);
-      } else {
+      if (jsonMatch) {
         const idea = JSON.parse(jsonMatch[0]);
         const proposal = idea.proposal;
 
-        if (!proposal?.name || !proposal?.slug) {
-          console.log(`  ⚠ Parsed JSON but missing proposal.name or proposal.slug`);
-          console.log(`  ⓘ Keys found: ${Object.keys(idea).join(", ")}`);
-        } else {
+        if (proposal?.name && proposal?.slug) {
           // Create the company in 'idea' status
           const [newCompany] = await sql`
             INSERT INTO companies (name, slug, description, status)
@@ -637,6 +695,8 @@ MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
       }
     } catch (e: any) {
       console.log(`  ⚠ Failed to parse Idea Scout output: ${e.message}`);
+      console.log(`    Output length: ${ideaScoutOutput.length}`);
+      console.log(`    Raw preview: ${ideaScoutOutput.slice(0, 300)}`);
       // Still log the raw output so it's not lost
       await sql`
         INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, output, started_at, finished_at)
@@ -745,7 +805,7 @@ ${directives.map(d => `- [#${d.id.slice(0,8)}] ${d.text}${d.agent ? ` (for ${d.a
 Focus on: new competitors since last analysis, pricing changes, feature launches, market share shifts.`;
 
       const researchOutput = await dispatch({
-        model: AGENT_MODELS.research_analyst,
+        agent: "research_analyst",
         allowedTools: ["WebSearch", "WebFetch"],
         prompt: researchPrompt + `\n\nProduce ${reportsToGenerate} for this company.
 
@@ -867,12 +927,12 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
         agent: "outreach",
         companyId: company.id,
         cycleId,
+        allowedTools: ["WebSearch", "WebFetch"],
         prompt: outreachPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\n` +
           (leadList ? "Review your existing lead list. Draft new cold emails for uncontacted leads. Plan follow-ups for leads that haven't replied. Find new leads if the list is thin (<10 active leads)."
             : "No lead list yet. Build the initial lead list using web search. Find 10-20 potential customers matching the target audience.") +
           "\n\nOutput your results as JSON. Use the lead_list and outreach_log report type formats from your instructions.",
         context: outreachContext,
-        allowedTools: ["WebSearch", "WebFetch"],
       });
 
       // Parse and store outreach results
@@ -1201,9 +1261,9 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
       });
 
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
-      // Transition company to mvp — it's onboarded and ready for the nightly cycle
-      await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id} AND status IN ('provisioning', 'approved', 'idea')`;
-      console.log(`  ✓ ${imp.name} onboarded → mvp`);
+      // Transition company to mvp so it enters the nightly cycle
+      await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id} AND status IN ('importing', 'idea', 'approved')`;
+      console.log(`  ✓ ${imp.name} onboarded with patterns extracted → status: mvp`);
     }
   }
 
@@ -1260,7 +1320,7 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
       console.log("  ├─ Dispatching Healer for systemic fixes...");
       try {
         const healerOutput = await dispatch({
-          model: AGENT_MODELS.healer,
+          agent: "healer",
           prompt: `You are the Healer agent for Hive. Your job is to fix bugs that are breaking the orchestrator.
 
 ## Systemic errors (happening across multiple companies):
@@ -1374,7 +1434,7 @@ Keep the fix minimal — address only this error. Commit message: "fix: [descrip
 
     try {
       await dispatch({
-        model: AGENT_MODELS.venture_brain,
+        agent: "venture_brain",
         prompt: `You are the Venture Brain. Analyze the portfolio:
 
 ${JSON.stringify(allMetrics, null, 2)}
@@ -1395,53 +1455,52 @@ Output a brief portfolio summary.`,
   }
 
   // === PROMPT EVOLVER: Data-driven prompt improvement ===
-  // Triggers when an agent has 10+ actions with <70% success rate, or prompt is 14+ days stale
-  const hasEnoughData = results.filter(r => r.status === "complete").length > 0;
+  // Triggers when: agent has 10+ actions AND (<70% success OR 30+ days since last evolution)
+  if (!SINGLE_COMPANY && !SCOUT_ONLY && !DRY_RUN) {
+    console.log("\n🧬 Prompt Evolver — analyzing agent performance");
 
-  if (hasEnoughData && !SINGLE_COMPANY && !SCOUT_ONLY) {
     const agents = ["ceo", "engineer", "growth", "ops", "research_analyst", "outreach"];
-    let evolverTriggered = false;
 
     for (const agent of agents) {
       try {
         // Get performance data for this agent over last 14 days
         const recentActions = await sql`
           SELECT status, error, reflection, description, finished_at
-          FROM agent_actions
-          WHERE agent = ${agent}
+          FROM agent_actions 
+          WHERE agent = ${agent} 
             AND started_at > now() - interval '14 days'
           ORDER BY finished_at DESC
           LIMIT 50
         `;
 
+        if (recentActions.length < 10) {
+          console.log(`  ⓘ ${agent}: not enough data (${recentActions.length}/10 actions) — skipping`);
+          continue;
+        }
+
         const total = recentActions.length;
         const successes = recentActions.filter((a: any) => a.status === "success").length;
         const failures = recentActions.filter((a: any) => a.status === "failed").length;
-        const successRate = total > 0 ? successes / total : 1;
+        const successRate = successes / total;
 
-        // Check prompt staleness
-        const [promptRow] = await sql`
-          SELECT updated_at FROM agent_prompts WHERE agent = ${agent} AND is_active = true LIMIT 1
-        `;
-        const promptAge = promptRow?.updated_at
-          ? (Date.now() - new Date(promptRow.updated_at).getTime()) / (1000 * 60 * 60 * 24)
-          : 999;
-
-        const needsEvolution = (total >= 10 && successRate < 0.7) || promptAge >= 14;
-        if (!needsEvolution) continue;
-
-        if (!evolverTriggered) {
-          console.log("\n🧬 Prompt Evolver — triggered by performance data");
-          evolverTriggered = true;
-        }
-
-        // Get version info for next prompt
+        // Check when we last evolved this agent's prompt
         const [latestVersion] = await sql`
-          SELECT version, created_at FROM agent_prompts
-          WHERE agent = ${agent}
+          SELECT version, created_at FROM agent_prompts 
+          WHERE agent = ${agent} 
           ORDER BY version DESC LIMIT 1
         `;
+        const daysSinceLastEvolve = latestVersion
+          ? Math.floor((Date.now() - new Date(latestVersion.created_at).getTime()) / 86400000)
+          : 999;
         const nextVersion = (latestVersion?.version || 0) + 1;
+
+        // Evolve if: success rate < 70%, or hasn't been evolved in 30+ days
+        const shouldEvolve = successRate < 0.7 || daysSinceLastEvolve >= 30;
+
+        if (!shouldEvolve) {
+          console.log(`  ✓ ${agent}: ${Math.round(successRate * 100)}% success rate (${total} actions) — no evolution needed`);
+          continue;
+        }
 
         console.log(`  ├─ ${agent}: ${Math.round(successRate * 100)}% success, ${failures} failures — generating variant...`);
 
@@ -1456,7 +1515,7 @@ Output a brief portfolio summary.`,
           .join("\n");
 
         const evolverOutput = await dispatch({
-          model: AGENT_MODELS.prompt_evolver,
+          agent: "prompt_evolver",
           prompt: `You are the Prompt Evolver. Your job is to improve an agent's system prompt based on its recent performance data.
 
 ## Agent: ${agent}
@@ -1527,12 +1586,6 @@ ${currentPrompt.slice(0, 3000)}
         console.log(`  ⚠ ${agent} evolution failed: ${evolveErr.message}`);
       }
     }
-
-    if (!evolverTriggered) {
-      console.log("\n🧬 Prompt Evolver — skipped (all agents performing well or insufficient data)");
-    }
-  } else if (!SINGLE_COMPANY && !SCOUT_ONLY) {
-    console.log("\n🧬 Prompt Evolver — skipped (no completed cycles to analyze)");
   }
 
   // === DAILY DIGEST EMAIL ===

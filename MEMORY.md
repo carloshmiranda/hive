@@ -47,6 +47,8 @@ Carlos Miranda — solo entrepreneur based in Amadora, Lisbon, Portugal. 15+ yea
 - orchestrator.ts cannot import from src/ (path aliases don't resolve in ts-node). Shares DATA via Neon, never CODE.
 - Vercel Hobby is non-commercial. Any company generating revenue needs Pro ($20/mo).
 - Claude Code subscription quota is shared across CLI, web, and desktop. Budget ~40 messages per company in nightly loop.
+- Without gemini_api_key and groq_api_key in settings, ALL agents fall back to Claude — works for 1-2 companies, burns quota at 3+. Get free keys: aistudio.google.com/apikey and console.groq.com/keys.
+- Gemini free tier RPD resets at midnight Pacific Time, not UTC. Factor this into nightly loop timing.
 - Vercel Functions have 60s timeout on Hobby. Chain long tasks via QStash or sequential API calls.
 
 ## What NOT to Do
@@ -86,3 +88,4 @@ Before starting work in any Claude Code session:
 - 2026-03-18: Deployment confirmed live at hive-phi.vercel.app (READY). Vercel project prj_n9JaPbWmRv0SKoHgkdXYOEGQtjRv. 71 files, 20 pages, all P0/P1/P2 complete.
 - 2026-03-18: Polsia feature parity: Outreach agent wired into nightly cycle (lead gen + cold email pipeline via Resend), periodic research refresh (competitive analysis every 7 cycles), research reports rendered in company detail page.
 - 2026-03-18: Self-healing architecture: pre-flight health check, Healer agent (systemic + company-specific error fixing), action-oriented retries (error context + fix instructions on attempts 2-3), error pattern classification.
+- 2026-03-18: Multi-provider dispatch: Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Claude CLI. Workers (Growth, Outreach) on Gemini free tier. Ops on Groq free tier. Engineer on Claude (needs cwd). Fallback chain: Gemini → Groq → Claude. Needs gemini_api_key + groq_api_key in settings.
