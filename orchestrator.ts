@@ -1201,7 +1201,9 @@ POST /api/directives with { text: "hive: [suggestion]" }`,
       });
 
       await sql`UPDATE imports SET onboard_status = 'complete' WHERE id = ${imp.id}`;
-      console.log(`  ✓ ${imp.name} onboarded with patterns extracted`);
+      // Transition company to mvp — it's onboarded and ready for the nightly cycle
+      await sql`UPDATE companies SET status = 'mvp', updated_at = now() WHERE id = ${imp.company_id} AND status IN ('provisioning', 'approved', 'idea')`;
+      console.log(`  ✓ ${imp.name} onboarded → mvp`);
     }
   }
 
