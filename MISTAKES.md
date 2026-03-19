@@ -141,3 +141,10 @@
 **Fix applied:** Upgraded all workflows from claude-code-base-action to claude-code-action@v1. Set explicit model per agent via native `model` input.
 **Prevention:** When using third-party GitHub Actions, always pin to a recent version and verify that configuration parameters actually take effect. Test with a manual dispatch and check the action logs for which model was used.
 **Affects:** all brain agents (CEO, Scout, Engineer, Evolver)
+
+### 2026-03-19 claude-code-action@v1 does not support `model` or `max_turns` as inputs
+**What happened:** CEO workflow ran on Sonnet despite `model: "claude-opus-4-20250514"` being set. Action logs showed: `Unexpected input(s) 'model', 'max_turns'`. The init message confirmed `"model": "claude-sonnet-4-6"` (default).
+**Root cause:** `claude-code-action@v1` only accepts `claude_args` for passing CLI flags like `--model` and `--max-turns`. The `model` and `max_turns` inputs don't exist — GitHub Actions silently ignores unknown inputs but logs a warning in the Post step.
+**Fix applied:** Changed all 4 brain workflows to use `claude_args: "--model claude-opus-4-20250514 --max-turns 25"` instead of separate `model` and `max_turns` inputs.
+**Prevention:** Always check the action's valid inputs list (shown in the `Unexpected input(s)` warning or in the action's `action.yml`). Don't assume input names — verify against the source. After deploying a workflow, check the init log for `"model":` to confirm the right model is running.
+**Affects:** all brain agents (CEO, Scout, Engineer, Evolver)
