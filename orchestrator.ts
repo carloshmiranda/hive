@@ -413,11 +413,23 @@ async function runNightlyCycle() {
     // Verify orchestrator can reach Claude CLI
     if (!DRY_RUN) {
       try {
-        const { execSync: execSyncCheck } = require("child_process");
-        execSyncCheck("claude --version", { encoding: "utf-8", timeout: 10000 });
-        console.log("  ✓ Claude CLI reachable");
-      } catch {
-        console.log("  ✗ Claude CLI not reachable — aborting");
+        const cliCheck = await new Promise<string>((resolve, reject) => {
+          const proc = spawn("claude", ["--version"], {
+            env: { ...process.env },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          let out = "";
+          proc.stdout.on("data", (chunk: Buffer) => { out += chunk.toString(); });
+          proc.on("close", (code: number | null) => {
+            if (code === 0) resolve(out.trim());
+            else reject(new Error(`exit ${code}`));
+          });
+          proc.on("error", reject);
+          setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, 10000);
+        });
+        console.log(`  ✓ Claude CLI reachable (${cliCheck})`);
+      } catch (cliErr: any) {
+        console.log(`  ✗ Claude CLI not reachable (${cliErr.message}) — aborting`);
         return;
       }
     }
