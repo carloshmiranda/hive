@@ -7,6 +7,7 @@ on:
       - cycle_complete
       - gate_approved
       - ceo_review
+      - cycle_start
 
   issues:
     types: [opened, labeled]

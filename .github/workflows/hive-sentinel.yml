@@ -48,12 +48,15 @@ jobs:
           async function check() {
             const results = {};
 
-            // 1. Pipeline count (idea + approved + provisioning + mvp + active)
+            // 1. Pipeline count — only fire Scout if no pending proposals exist
             const [pipeline] = await sql\`
               SELECT COUNT(*) as cnt FROM companies
               WHERE status IN ('idea','approved','provisioning','mvp','active')
             \`;
-            results.pipeline_low = parseInt(pipeline.cnt) < 3;
+            const [pendingIdeas] = await sql\`
+              SELECT COUNT(*) as cnt FROM companies WHERE status = 'idea'
+            \`;
+            results.pipeline_low = parseInt(pipeline.cnt) < 3 && parseInt(pendingIdeas.cnt) === 0;
 
             // 2. Companies with no content in 7 days
             const staleContent = await sql\`
@@ -206,7 +209,21 @@ jobs:
             \`;
             results.chain_gaps = chainGaps.map(r => ({ company: r.slug, source: r.source_agent }));
 
-            // 12. Cycles stuck in 'running' for >2 hours (auto-cleanup)
+            // 12. MVP/active companies that need a new cycle (no successful cycle in 24h)
+            const needsCycle = await sql\`
+              SELECT c.slug, c.id as company_id FROM companies c
+              WHERE c.status IN ('mvp', 'active')
+              AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
+              AND NOT EXISTS (
+                SELECT 1 FROM cycles cy
+                WHERE cy.company_id = c.id
+                AND cy.status IN ('running', 'completed')
+                AND cy.started_at > NOW() - INTERVAL '24 hours'
+              )
+            \`;
+            results.needs_cycle = needsCycle.map(r => ({ slug: r.slug, company_id: r.company_id }));
+
+            // 13. Cycles stuck in 'running' for >2 hours (auto-cleanup)
             const stuckCycles = await sql\`
               UPDATE cycles
               SET status = 'failed',
@@ -358,6 +375,21 @@ jobs:
             fi
           else
             echo "Skipping deploy drift check: VERCEL_TOKEN not set"
+          fi
+
+          # 12. Companies needing a new cycle → CEO (max 2 per sentinel run)
+          NEEDS_CYCLE=$(echo "$RESULTS" | jq -r '.needs_cycle | length')
+          if [ "$NEEDS_CYCLE" -gt 0 ]; then
+            CYCLE_COUNT=0
+            for i in $(seq 0 $((NEEDS_CYCLE - 1))); do
+              if [ "$CYCLE_COUNT" -ge 2 ]; then break; fi
+              SLUG=$(echo "$RESULTS" | jq -r ".needs_cycle[$i].slug")
+              CID=$(echo "$RESULTS" | jq -r ".needs_cycle[$i].company_id")
+              echo "Company $SLUG needs a new cycle — dispatching CEO"
+              dispatch "cycle_start" "{\"source\":\"sentinel\",\"company\":\"$SLUG\",\"company_id\":\"$CID\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+              CYCLE_COUNT=$((CYCLE_COUNT + 1))
+            done
           fi
 
           echo ""
