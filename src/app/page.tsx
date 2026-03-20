@@ -628,26 +628,60 @@ export default function DashboardPage() {
                       const confidenceColor = confidence >= 0.7 ? "var(--hive-green)" : confidence >= 0.5 ? "var(--hive-amber)" : "var(--hive-red)";
                       const confidenceBg = confidence >= 0.7 ? "var(--hive-green-bg)" : confidence >= 0.5 ? "var(--hive-amber-bg)" : "var(--hive-red-bg)";
                       const confidenceBorder = confidence >= 0.7 ? "var(--hive-green-border)" : confidence >= 0.5 ? "var(--hive-amber-border)" : "var(--hive-red-border)";
-                      const isPortuguese = proposal.market === "pt" || a.description?.toLowerCase().includes("portug");
+                      const isPortuguese = proposal.market === "pt" || proposal.market === "Portugal" || a.description?.toLowerCase().includes("portug");
                       const hasRichData = proposal.problem || proposal.solution || proposal.monetisation || proposal.mvp_scope;
+                      const businessModel = proposal.business_model || "saas";
+                      const modelLabels: Record<string, string> = {
+                        saas: "SaaS", blog: "Blog", digital_product: "Digital Product", faceless_channel: "Faceless Channel",
+                        virtual_influencer: "Virtual Influencer", affiliate_site: "Affiliate", newsletter: "Newsletter",
+                        dropshipping: "Dropshipping", api_service: "API Service", marketplace: "Marketplace",
+                      };
+                      const automationScore = proposal.automation_score || 0;
+                      const automationPct = Math.round(automationScore * 100);
                       return (
                         <div key={a.id} style={{
                           padding: 20, borderRadius: 10,
                           background: "var(--hive-amber-bg)", border: "1px solid var(--hive-amber-border)",
                         }}>
-                          {/* Header: name + confidence + market flag */}
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                          {/* Header: name + badges */}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <span style={{ fontSize: 16 }}>{isPortuguese ? "🇵🇹" : "🌍"}</span>
                               <span style={{ fontSize: 15, fontWeight: 600, color: "var(--hive-text)" }}>
                                 {proposal.name || a.title}
                               </span>
                             </div>
-                            {confidencePct > 0 && (
-                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 600,
-                                padding: "2px 10px", borderRadius: 4,
-                                background: confidenceBg, color: confidenceColor, border: `1px solid ${confidenceBorder}` }}>
-                                {confidencePct}% confidence
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              {confidencePct > 0 && (
+                                <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 600,
+                                  padding: "2px 10px", borderRadius: 4,
+                                  background: confidenceBg, color: confidenceColor, border: `1px solid ${confidenceBorder}` }}>
+                                  {confidencePct}%
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {/* Model + automation tags */}
+                          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                            <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              padding: "2px 8px", borderRadius: 4,
+                              background: "rgba(139,92,246,0.15)", color: "rgb(139,92,246)", border: "1px solid rgba(139,92,246,0.3)" }}>
+                              {modelLabels[businessModel] || businessModel}
+                            </span>
+                            {automationPct > 0 && (
+                              <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                                padding: "2px 8px", borderRadius: 4,
+                                background: automationPct >= 90 ? "var(--hive-green-bg)" : "var(--hive-amber-bg)",
+                                color: automationPct >= 90 ? "var(--hive-green)" : "var(--hive-amber)",
+                                border: `1px solid ${automationPct >= 90 ? "var(--hive-green-border)" : "var(--hive-amber-border)"}` }}>
+                                {automationPct}% automatable
+                              </span>
+                            )}
+                            {proposal.revenue_streams && proposal.revenue_streams.length > 1 && (
+                              <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                                padding: "2px 8px", borderRadius: 4,
+                                background: "rgba(59,130,246,0.15)", color: "rgb(59,130,246)", border: "1px solid rgba(59,130,246,0.3)" }}>
+                                {proposal.revenue_streams.length} revenue streams
                               </span>
                             )}
                           </div>
@@ -684,6 +718,11 @@ export default function DashboardPage() {
                               {proposal.tam && (
                                 <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", lineHeight: 1.5 }}>
                                   <strong style={{ color: "var(--hive-text-secondary)", fontWeight: 600 }}>TAM:</strong> {proposal.tam}
+                                </div>
+                              )}
+                              {proposal.automation_plan && (
+                                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", lineHeight: 1.5 }}>
+                                  <strong style={{ color: "var(--hive-text-secondary)", fontWeight: 600 }}>Automation:</strong> {proposal.automation_plan}
                                 </div>
                               )}
                             </div>

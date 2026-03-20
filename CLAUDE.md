@@ -168,6 +168,9 @@ STEP 1: Idea Scout (condition: pipeline < 3 companies AND active < 5)
   Pipeline = companies in idea + approved + provisioning + mvp + active status
   - Researches market via web search, generates exactly 3 proposals
   - MANDATORY mix: 1 Portuguese 🇵🇹, 1 Global 🌍, 1 best-pick
+  - Any digital business model: SaaS, blogs, faceless channels, newsletters, affiliate sites, digital products, virtual influencers, dropshipping, API services, marketplaces
+  - Must be 100% automatable by AI agents (automation score ≥80%)
+  - Shippable in 1-2 weeks, €500-€5k monthly revenue target
   - 5 research phases: PT discovery → Global discovery → Competition → Validation → Rank
   - Creates 3 companies (status: 'idea'), each with own approval gate
   - Carlos approves which to build, rejects the rest (rejected → auto-killed)

@@ -618,13 +618,31 @@ ${rejectedApprovals.length > 0 ? "\nRejected approvals with feedback:\n" + rejec
 ${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
 
 ## Constraints:
-- Must be buildable as a SaaS or digital product (no physical goods)
-- MVP must be shippable in 1-2 weeks by AI agents
-- Must have a clear monetisation path (subscription, one-time, or usage-based)
+- Must be 100% digital (no physical goods, no inventory, no shipping)
+- Must be FULLY automatable — AI agents must be able to run the entire business (content creation, marketing, customer interaction, fulfilment) with minimal human intervention
+- MVP must be launchable in 1-2 weeks by AI agents
+- Must have a clear monetisation path
 - Must NOT overlap with existing portfolio companies
-- Prefer niches where Carlos's IT/SaaS background is an advantage
 - Prefer markets with validated demand (people already searching for solutions)
-- Target: €500-€5,000 MRR within 3 months if the idea works
+- Target: €500-€5,000 monthly revenue within 3 months if the idea works
+
+## Business model categories to explore (not just SaaS!):
+Think broadly across ALL digital business models. SaaS is just one option:
+
+1. **SaaS / Digital tools** — subscription software solving a specific pain point
+2. **Content sites / Blogs** — SEO-driven content monetised via ads (AdSense/Mediavine), affiliate marketing, sponsored posts, or premium content. Agents write all content, optimise SEO, manage ad placements.
+3. **Digital products** — templates, courses, e-books, Notion templates, Figma kits, prompt libraries. Create once, sell repeatedly. Agents create the product, landing page, and marketing.
+4. **Faceless social media channels** — YouTube (voiceover + stock/AI footage), TikTok, Instagram. Monetised via ads, sponsorships, affiliate links. Agents script, produce, and post all content.
+5. **Virtual influencers / AI personalities** — AI-generated persona with consistent brand. Monetised via sponsored content, merch, affiliate deals. Agents manage the entire persona.
+6. **Affiliate / comparison sites** — niche review/comparison sites that earn commissions. Agents write reviews, update comparisons, optimise for buyer-intent keywords.
+7. **Newsletter businesses** — free or paid newsletters in a niche. Monetised via sponsorships, paid tiers (Substack/Beehiiv), or as lead gen for other products. Agents write, curate, and grow the list.
+8. **Dropshipping / print-on-demand** — no inventory, supplier ships directly. Agents manage the store, product listings, ads, and customer service. (Only if fully automatable via APIs like Printful, Shopify, etc.)
+9. **API / data services** — sell access to data, AI models, or automated workflows via API. Usage-based pricing.
+10. **Marketplace / directory** — curated listings monetised via featured placements, subscriptions, or transaction fees. Agents curate and update listings.
+
+The BEST ideas combine multiple revenue streams (e.g., a blog with affiliate links AND a paid newsletter AND a digital product).
+
+Evaluate each idea on its AUTOMATION SCORE: how much of the daily operation can AI agents handle without human input? Reject any idea scoring below 80% automation.
 
 ## MANDATORY MIX: You MUST propose exactly 3 ideas with this market distribution:
 1. **Portuguese market** — solve a challenge specific to Portugal (regulatory, cultural, language, local infrastructure gap)
@@ -646,20 +664,25 @@ Look for: regulatory changes creating new compliance burdens, underserved demogr
 markets where existing tools are foreign/generic and don't understand Portuguese specifics,
 pain points people complain about on forums and social media.
 
-### Phase 2: Global market discovery (3-5 searches)
-Search for trending SaaS niches, underserved developer/business tools, emerging needs:
+### Phase 2: Global market discovery (5-8 searches across multiple models)
+Search BROADLY — not just SaaS. Explore multiple business models:
 - "micro SaaS ideas trending ${new Date().getFullYear()}"
-- "SaaS tool gaps developer tools ${new Date().getFullYear()}"
-- "underserved B2B niches small business"
-- Look at Product Hunt, Indie Hackers, Hacker News for signals
+- "profitable blog niches ${new Date().getFullYear()}"
+- "faceless YouTube channel ideas automated ${new Date().getFullYear()}"
+- "best affiliate niches high commission ${new Date().getFullYear()}"
+- "AI automated business ideas ${new Date().getFullYear()}"
+- "newsletter business profitable niches"
+- "digital products selling online passive income"
+- "print on demand profitable niches ${new Date().getFullYear()}"
+- Look at Product Hunt, Indie Hackers, Hacker News, Beehiiv top newsletters, and trending YouTube niches
 
 ### Phase 3: Competition analysis (2-3 searches per niche)
 For each niche you identify, search for existing solutions:
-- "[niche] software" (add "Portugal" for Portuguese ideas)
-- "[niche] SaaS tool"
-- Search competitor names you find, check their pricing, reviews, feature gaps
-You want niches where competitors are: too expensive, too generic (not PT-localised), 
-enterprise-only, or simply don't exist yet.
+- "[niche] software/blog/channel/newsletter" (add "Portugal" for Portuguese ideas)
+- "[niche] review site" or "[niche] affiliate program"
+- Search competitor names you find, check their traffic (SimilarWeb), revenue, content gaps
+You want niches where competitors are: too expensive, too generic (not PT-localised),
+low quality content, enterprise-only, or simply don't exist yet.
 
 ### Phase 4: Demand validation (1-2 searches per niche)
 Search for evidence people actually want this:
@@ -693,14 +716,18 @@ Pick the top 3 respecting the mandatory mix above.
       "name": "Product Name",
       "slug": "product-slug",
       "description": "One-line pitch",
+      "business_model": "saas | blog | digital_product | faceless_channel | virtual_influencer | affiliate_site | newsletter | dropshipping | api_service | marketplace",
+      "revenue_streams": ["primary stream", "secondary stream if applicable"],
       "market": "Portugal" or "Global",
       "target_audience": "Who this is for",
       "problem": "What pain point it solves",
       "solution": "How it solves it",
-      "monetisation": "Pricing model and target",
+      "monetisation": "Pricing model and target monthly revenue",
       "mvp_scope": "What the first version includes (bullet points)",
       "competitive_advantage": "Why this wins against alternatives",
       "estimated_tam": "Total addressable market estimate with source",
+      "automation_score": 0.0-1.0,
+      "automation_plan": "How AI agents will run this day-to-day (content creation, marketing, fulfilment, customer interaction)",
       "confidence": 0.0-1.0
     }
   ]
