@@ -444,6 +444,7 @@ async function executeAgent(opts: {
   context: string;
   cwd?: string;
   allowedTools?: string[];
+  provider?: Provider;       // explicit provider override (e.g., "claude" for strategic Growth pre-spec)
 }): Promise<{ success: boolean; output: string }> {
   let lastError = "";
   let lastOutput = "";
@@ -477,6 +478,7 @@ INSTRUCTIONS FOR THIS RETRY:
         cwd: opts.cwd,
         allowedTools: opts.allowedTools,
         agent: opts.agent, // routes to correct provider (claude/gemini/groq)
+        provider: opts.provider, // explicit override (e.g., strategic tasks on free-tier agents)
         maxTurns: attempt === 1 ? 10 : 15,
         timeoutMs: attempt === 1 ? 5 * 60 * 1000 : 8 * 60 * 1000,
       });
@@ -1727,6 +1729,7 @@ ${proposal?.context ? `\nORIGINAL PROPOSAL:\n${JSON.stringify(proposal.context.p
       console.log("  ├─ Growth pre-spec (distribution planning)...");
       const prespecResult = await executeAgent({
         agent: "growth",
+        provider: "claude",  // strategic planning needs Claude, not Gemini Flash
         companyId: company.id,
         cycleId,
         prompt: growthPrompt + `\n\n## PRE-SPEC MODE
