@@ -591,214 +591,32 @@ async function runNightlyCycle() {
       ORDER BY a.decided_at DESC LIMIT 10
     `;
 
-    const ideaScoutOutput = await dispatch({
-      agent: "scout",
-      prompt: `You are the Idea Scout agent for Hive, a venture orchestrator owned by Carlos Miranda.
+    // Load Scout prompt from shared file + inject dynamic context
+    const scoutPromptBase = readFileSync(join(__dirname, "prompts", "scout.md"), "utf-8");
 
-YOUR JOB: Research the market using web search and propose THREE business ideas that Carlos should consider building next. He will pick one (or none).
+    const dynamicContext = `
+## DYNAMIC CONTEXT (injected at runtime — DO NOT ignore this section):
 
-## Carlos's profile
-- 15+ years IT experience (identity/access management, device management, SaaS operations, onboarding automation)
-- Based in Lisbon, Portugal
-- Solo entrepreneur — all companies are run by AI agents with his approval
-- Interests: personal finance, crypto/DeFi, developer tools, automation
-- Existing tech stack: Next.js, Vercel, Neon, Stripe, Tailwind
+### Current portfolio (${liveCompanies.length} active):
+${liveCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description} [target audience: expats/freelancers/developers — infer from description]`).join("\n") || "No active companies yet"}
 
-## Current portfolio (${liveCompanies.length} active):
-${liveCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description}`).join("\n") || "No active companies yet"}
-
-## EXISTING AND PAST COMPANIES (do NOT propose anything similar):
+### EXISTING AND PAST COMPANIES (do NOT propose anything that overlaps):
 ${allCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description || "no description"} [status: ${c.status}]`).join("\n") || "None"}
 
-## PREVIOUSLY REJECTED IDEAS (learn from these — do NOT propose similar concepts):
+### PREVIOUSLY REJECTED IDEAS (learn from these — do NOT propose similar concepts):
 ${recentlyRejected.length > 0 ? recentlyRejected.map((c: any) => `- ${c.name}: ${c.description || "no description"} — Rejection reason: ${c.kill_reason}`).join("\n") : "None"}
 ${rejectedApprovals.length > 0 ? "\nRejected approvals with feedback:\n" + rejectedApprovals.map((a: any) => `- ${a.title}: ${a.decision_note || "no reason given"}`).join("\n") : ""}
 
-## Playbook learnings (what works):
+### Playbook learnings (what works):
 ${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
+`;
 
-## Constraints:
-- Must be 100% digital (no physical goods, no inventory, no shipping)
-- Must be FULLY automatable — AI agents must be able to run the entire business (content creation, marketing, customer interaction, fulfilment) with minimal human intervention
-- MVP must be launchable in 1-2 weeks by AI agents
-- Must have a clear monetisation path
-- Must NOT overlap with existing portfolio companies
-- Prefer markets with validated demand (people already searching for solutions)
-- Target: €500-€5,000 monthly revenue within 3 months if the idea works
-
-## Business model categories to explore (not just SaaS!):
-Think broadly across ALL digital business models. SaaS is just one option:
-
-1. **SaaS / Digital tools** — subscription software solving a specific pain point
-2. **Content sites / Blogs** — SEO-driven content monetised via ads (AdSense/Mediavine), affiliate marketing, sponsored posts, or premium content. Agents write all content, optimise SEO, manage ad placements.
-3. **Digital products** — templates, courses, e-books, Notion templates, Figma kits, prompt libraries. Create once, sell repeatedly. Agents create the product, landing page, and marketing.
-4. **Faceless social media channels** — YouTube (voiceover + stock/AI footage), TikTok, Instagram. Monetised via ads, sponsorships, affiliate links. Agents script, produce, and post all content.
-5. **Virtual influencers / AI personalities** — AI-generated persona with consistent brand. Monetised via sponsored content, merch, affiliate deals. Agents manage the entire persona.
-6. **Affiliate / comparison sites** — niche review/comparison sites that earn commissions. Agents write reviews, update comparisons, optimise for buyer-intent keywords.
-7. **Newsletter businesses** — free or paid newsletters in a niche. Monetised via sponsorships, paid tiers (Substack/Beehiiv), or as lead gen for other products. Agents write, curate, and grow the list.
-8. **Dropshipping / print-on-demand** — no inventory, supplier ships directly. Agents manage the store, product listings, ads, and customer service. (Only if fully automatable via APIs like Printful, Shopify, etc.)
-9. **API / data services** — sell access to data, AI models, or automated workflows via API. Usage-based pricing.
-10. **Marketplace / directory** — curated listings monetised via featured placements, subscriptions, or transaction fees. Agents curate and update listings.
-
-The BEST ideas combine multiple revenue streams (e.g., a blog with affiliate links AND a paid newsletter AND a digital product).
-
-Evaluate each idea on its AUTOMATION SCORE: how much of the daily operation can AI agents handle without human input? Reject any idea scoring below 80% automation.
-
-## MANDATORY MIX: You MUST propose exactly 3 ideas with this market distribution:
-1. **Portuguese market** — solve a challenge specific to Portugal (regulatory, cultural, language, local infrastructure gap)
-2. **Global/English market** — any digital business model, English-first
-3. **Your best pick** — whichever market you think has the strongest opportunity based on your research
-
-IMPORTANT: At least ONE of the 3 proposals MUST be a non-SaaS business model (blog, newsletter, faceless channel, affiliate site, digital product, etc.). Diversify the portfolio.
-
-## RESEARCH METHODOLOGY (you must follow this):
-
-You have access to web_search AND web_fetch. Use BOTH. Do not rely on your training data alone.
-- **web_search**: for discovering topics, finding trends, checking competition
-- **web_fetch**: for visiting specific pages to extract detailed information (Reddit threads, forum posts, Product Hunt pages, Google Trends, YouTube channels)
-
-### Phase 1: Community & forum mining (5-8 actions)
-This is your richest signal source. Visit actual communities where people express frustration and demand:
-
-**Reddit** — fetch these subreddits and look for recurring complaints, requests, and pain points:
-- web_fetch: https://www.reddit.com/r/SaaS/top/?t=month (trending SaaS discussions)
-- web_fetch: https://www.reddit.com/r/Entrepreneur/top/?t=month (business ideas, what's working)
-- web_fetch: https://www.reddit.com/r/juststart/top/?t=month (content sites, affiliate, niche sites)
-- web_fetch: https://www.reddit.com/r/passive_income/top/?t=month (passive income ideas)
-- web_fetch: https://www.reddit.com/r/portugal/top/?t=month (Portuguese-specific pain points)
-- web_search: "site:reddit.com what business can be fully automated ${new Date().getFullYear()}"
-- web_search: "site:reddit.com faceless YouTube channel income report ${new Date().getFullYear()}"
-
-**Hacker News** — tech-savvy audience, high signal:
-- web_fetch: https://news.ycombinator.com/shownew (new launches)
-- web_search: "site:news.ycombinator.com 'I built' OR 'Show HN' passive income ${new Date().getFullYear()}"
-
-**Indie Hackers** — real revenue numbers:
-- web_search: "site:indiehackers.com revenue report ${new Date().getFullYear()}"
-- web_search: "site:indiehackers.com newsletter business OR blog income OR affiliate"
-
-### Phase 2: Trend & market signals (5-8 actions)
-Look at what's actually growing right now:
-
-**Google Trends** — validate demand is rising, not falling:
-- web_fetch: https://trends.google.com/trending?geo=PT (trending in Portugal)
-- web_fetch: https://trends.google.com/trending?geo=US (trending globally)
-- For each promising niche, check: web_search "google trends [niche keyword]"
-
-**Product Hunt** — what's launching, what gets traction:
-- web_fetch: https://www.producthunt.com/ (today's launches)
-- web_search: "site:producthunt.com [niche] launched ${new Date().getFullYear()}"
-
-**YouTube** — faceless channel research:
-- web_search: "faceless YouTube channel niches making money ${new Date().getFullYear()}"
-- web_search: "YouTube automation channel income report"
-- web_search: "most profitable YouTube niches CPM ${new Date().getFullYear()}"
-
-**TikTok** — short-form content opportunities:
-- web_search: "TikTok trending niches ${new Date().getFullYear()}"
-- web_search: "TikTok faceless account income ${new Date().getFullYear()}"
-- web_search: "TikTok shop trending products automated ${new Date().getFullYear()}"
-- web_search: "most profitable TikTok niches creator fund"
-
-**Instagram / Pinterest** — visual content & commerce:
-- web_search: "Instagram faceless theme page income ${new Date().getFullYear()}"
-- web_search: "Pinterest affiliate marketing niches ${new Date().getFullYear()}"
-- web_fetch: https://trends.pinterest.com/ (Pinterest's own trend data — great for product/content ideas)
-- web_search: "Instagram reels automation tools ${new Date().getFullYear()}"
-- web_search: "most profitable Instagram niches without showing face"
-
-**X/Twitter** — real-time signals:
-- web_search: "site:twitter.com OR site:x.com 'I built' OR 'MRR' OR 'revenue' ${new Date().getFullYear()}"
-- web_search: "Twitter/X automated account income report"
-
-**Newsletter & content**:
-- web_search: "most profitable newsletter niches ${new Date().getFullYear()}"
-- web_search: "blog income report ${new Date().getFullYear()}" (real revenue data)
-- web_search: "highest paying affiliate programs ${new Date().getFullYear()}"
-
-**Portuguese market specifically**:
-- web_search: "Portugal small business challenges ${new Date().getFullYear()}"
-- web_search: "Portugal new laws regulations ${new Date().getFullYear()}"
-- web_search: "Portugal freelancer expat problems"
-- web_search: "negócios online Portugal ${new Date().getFullYear()}"
-- web_fetch: https://www.reddit.com/r/literaciafinanceira/top/?t=month (PT financial literacy)
-
-### Phase 3: Competition deep-dive (2-3 per niche)
-For each promising niche, verify the competitive landscape:
-- web_search: "[niche] software/tool/site" (find existing players)
-- web_search: "[niche] alternative" or "[competitor] alternative" (find gaps in existing solutions)
-- web_fetch: visit competitor sites to check pricing, features, and quality
-- web_search: "[competitor] review" (find weaknesses users complain about)
-- For content/affiliate: check if top Google results are low-quality — that's your opening
-
-### Phase 4: Demand validation (2-3 per niche)
-Confirm real demand with multiple signals:
-- web_search: "how to [solve problem]" (search volume proxy)
-- web_search: "[problem] site:reddit.com" (people actively seeking solutions)
-- web_search: "[niche] market size ${new Date().getFullYear()}" (TAM data)
-- web_fetch: check Google Trends for the niche keywords (rising = good, declining = avoid)
-- For Portuguese niches: check INE (statistics), government data, news articles
-
-### Phase 5: Rank and build 3 proposals
-Score each niche on:
-1. **Demand strength** — community complaints, search volume, trend direction
-2. **Competition gap** — underserved, overpriced, low quality, or non-existent
-3. **Automation feasibility** — can AI agents run 80%+ of daily operations?
-4. **Revenue path clarity** — how exactly does money come in? Multiple streams preferred
-5. **Time to first revenue** — how quickly can this generate income?
-6. **Timing** — regulatory tailwind, cultural shift, technology enabler?
-Pick the top 3 respecting the mandatory mix above.
-
-## Output format (JSON only, no markdown wrapping):
-{
-  "research": {
-    "sources_consulted": ["reddit", "hackernews", "producthunt", "youtube", "tiktok", "instagram", "pinterest", "google_trends", "indie_hackers", "other"],
-    "searches_performed": ["query1", "query2", ...],
-    "pages_fetched": ["url1", "url2", ...],
-    "key_signals": [
-      { "source": "reddit/r/passive_income", "signal": "what you found", "relevance": "high/medium/low" }
-    ],
-    "niches_considered": [
-      {
-        "niche": "...",
-        "business_model": "saas/blog/newsletter/faceless_channel/affiliate/etc",
-        "market": "Portugal" or "Global",
-        "demand_evidence": "specific data points from communities, trends, search volume",
-        "competitors_found": ["name: pricing — gaps"],
-        "timing": "why now",
-        "verdict": "pursue / pass — reason"
-      }
-    ]
-  },
-  "proposals": [
-    {
-      "name": "Product Name",
-      "slug": "product-slug",
-      "description": "One-line pitch",
-      "business_model": "saas | blog | digital_product | faceless_channel | virtual_influencer | affiliate_site | newsletter | dropshipping | api_service | marketplace",
-      "revenue_streams": ["primary stream", "secondary stream if applicable"],
-      "market": "Portugal" or "Global",
-      "target_audience": "Who this is for",
-      "problem": "What pain point it solves",
-      "solution": "How it solves it",
-      "monetisation": "Pricing model and target monthly revenue",
-      "mvp_scope": "What the first version includes (bullet points)",
-      "competitive_advantage": "Why this wins against alternatives",
-      "estimated_tam": "Total addressable market estimate with source",
-      "automation_score": 0.0-1.0,
-      "automation_plan": "How AI agents will run this day-to-day (content creation, marketing, fulfilment, customer interaction)",
-      "confidence": 0.0-1.0
-    }
-  ]
-}
-
-IMPORTANT: The "proposals" array MUST contain exactly 3 items.
-At least 1 must have "market": "Portugal".
-At least 1 must have "market": "Global".
-Order them by your confidence score, highest first.`,
+    const ideaScoutOutput = await dispatch({
+      agent: "scout",
+      prompt: scoutPromptBase + "\n" + dynamicContext,
       allowedTools: ["WebSearch", "WebFetch"],
-      maxTurns: 50, // more turns needed — web_fetch on Reddit/HN/PH/YouTube/TikTok/Pinterest + web_search
-      timeoutMs: 25 * 60 * 1000, // 25 min — multi-source research takes longer
+      maxTurns: 50,
+      timeoutMs: 25 * 60 * 1000,
     });
 
     // Debug logging for Idea Scout output

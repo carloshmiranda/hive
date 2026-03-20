@@ -620,8 +620,15 @@ export default function DashboardPage() {
                       let research: any = {};
                       try {
                         const ctx = typeof a.context === "string" ? JSON.parse(a.context) : a.context;
-                        proposal = ctx?.proposal || {};
-                        research = ctx?.research || {};
+                        // Handle both formats: {proposal: {...}, research: {...}} and flat {name, slug, ...}
+                        if (ctx?.proposal) {
+                          proposal = ctx.proposal;
+                          research = ctx.research || {};
+                        } else if (ctx?.name && ctx?.slug) {
+                          // Flat format — the context IS the proposal (backward compat)
+                          proposal = ctx;
+                          research = ctx.research || {};
+                        }
                       } catch { /* fall back to plain text */ }
                       const confidence = proposal.confidence || 0;
                       const confidencePct = Math.round(confidence * 100);
@@ -728,12 +735,33 @@ export default function DashboardPage() {
                             </div>
                           )}
 
+                          {/* Portfolio synergy */}
+                          {proposal.portfolio_synergy && proposal.portfolio_synergy.synergy_score > 0 && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10,
+                              padding: "8px 12px", borderRadius: 6,
+                              background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)" }}>
+                              <span style={{ fontSize: 14 }}>🔗</span>
+                              <div style={{ fontSize: 11, color: "rgb(59,130,246)", lineHeight: 1.4 }}>
+                                <strong>Synergy {Math.round(proposal.portfolio_synergy.synergy_score * 100)}%</strong>
+                                {proposal.portfolio_synergy.related_companies?.length > 0 && (
+                                  <span> with {proposal.portfolio_synergy.related_companies.join(", ")}</span>
+                                )}
+                                {proposal.portfolio_synergy.cross_sell_opportunity && (
+                                  <span> — {proposal.portfolio_synergy.cross_sell_opportunity}</span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
                           {/* Research stats */}
-                          {(research.searches_performed || research.niches_considered) && (
+                          {(research.sources_consulted || research.searches_performed || research.niches_considered) && (
                             <div style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)", marginBottom: 14 }}>
-                              Research: {research.searches_performed ? `${research.searches_performed} searches` : ""}
-                              {research.searches_performed && research.niches_considered ? " · " : ""}
-                              {research.niches_considered ? `${research.niches_considered} niches evaluated` : ""}
+                              Research: {Array.isArray(research.sources_consulted) ? `${research.sources_consulted.length} sources` : ""}
+                              {Array.isArray(research.sources_consulted) && (Array.isArray(research.searches_performed) || research.searches_performed) ? " · " : ""}
+                              {Array.isArray(research.searches_performed) ? `${research.searches_performed.length} searches` : (research.searches_performed ? `${research.searches_performed} searches` : "")}
+                              {(Array.isArray(research.pages_fetched) && research.pages_fetched.length > 0) ? ` · ${research.pages_fetched.length} pages fetched` : ""}
+                              {(Array.isArray(research.key_signals) && research.key_signals.length > 0) ? ` · ${research.key_signals.length} signals` : ""}
+                              {Array.isArray(research.niches_considered) ? ` · ${research.niches_considered.length} niches` : (research.niches_considered ? ` · ${research.niches_considered} niches` : "")}
                             </div>
                           )}
 

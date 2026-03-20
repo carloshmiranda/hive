@@ -82,15 +82,34 @@ jobs:
             TRIGGER: ${{ steps.context.outputs.trigger }}
             PAYLOAD: ${{ steps.context.outputs.payload }}
 
-            Read BRIEFING.md and CLAUDE.md for context.
+            ## STEP 1: Read your full prompt and context
+            1. Read `prompts/scout.md` — this contains your COMPLETE research methodology, business model categories, output format, and constraints. Follow it exactly.
+            2. Read `BRIEFING.md` for current state.
+            3. Read `CLAUDE.md` for architecture context.
 
-            ## If trigger is pipeline_low, company_killed, or ideas mode:
-            1. Query Neon for: active companies count, killed companies (avoid similar), playbook entries
-            2. Use web search to research 10-15 market opportunities
-            3. Generate exactly 3 proposals: 1 Portuguese market, 1 Global, 1 best-pick
-            4. For each: name, slug, description, TAM, competition level, MVP scope, confidence 0-1
-            5. Create each as a company (status: 'idea') + approval gate in Neon
-            6. Output JSON: { "proposals": [...], "research_delivered": true }
+            ## STEP 2: Gather dynamic context from Neon
+            Query the database (use DATABASE_URL env var) for:
+            - All existing companies: `SELECT name, slug, description, status, kill_reason FROM companies ORDER BY created_at`
+            - Recently rejected: `SELECT name, description, kill_reason FROM companies WHERE status = 'killed' AND kill_reason IS NOT NULL AND killed_at > NOW() - INTERVAL '90 days'`
+            - Rejected approvals: `SELECT title, decision_note FROM approvals WHERE gate_type = 'new_company' AND status = 'rejected' AND decided_at > NOW() - INTERVAL '90 days'`
+            - Playbook: `SELECT domain, insight, confidence FROM playbook WHERE superseded_by IS NULL ORDER BY confidence DESC LIMIT 10`
+
+            Inject all of this as context into your research — the prompt file tells you how.
+
+            ## STEP 3: Execute research following prompts/scout.md methodology
+            Use BOTH web_search AND web_fetch. You MUST web_fetch at least 5 community URLs (Reddit, HN, etc.) — do not skip this.
+
+            ## STEP 4: Write results to Neon
+            For each of your 3 proposals:
+            1. Create the company: `INSERT INTO companies (name, slug, description, status) VALUES (..., 'idea') ON CONFLICT (slug) DO NOTHING RETURNING *`
+            2. Create an approval gate with the FULL proposal in context (wrapped as `{"proposal": {...}, "research": {...}}`):
+               ```sql
+               INSERT INTO approvals (company_id, gate_type, title, description, context)
+               VALUES (company_id, 'new_company', 'Launch {name} [{flag} {market}]', '{problem} → {solution}',
+                 '{"proposal": {full proposal object}, "research": {research object}}'::jsonb)
+               ```
+               IMPORTANT: The context field MUST be a JSON object with "proposal" and "research" keys. The dashboard reads context.proposal to render rich cards.
+            3. Log to agent_actions: `INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at) VALUES ('scout', 'idea_generation', '...', 'success', '{...}'::jsonb, NOW(), NOW())`
 
             ## If trigger is research_request or research mode:
             1. Query Neon for the target company's current state
@@ -98,7 +117,8 @@ jobs:
             3. Write results to research_reports table
             4. Output JSON: { "company": "slug", "research_delivered": true, "leads_found": bool }
 
-            MANDATORY: 3 proposals must include 1 PT, 1 Global, 1 best-pick. Write everything to Neon.
+            ## Output (for chain dispatch):
+            After writing to Neon, output: { "proposals": [...slugs...], "research_delivered": true }
 
       - name: Log failure to DB
         if: always() && steps.agent.outcome == 'failure'
