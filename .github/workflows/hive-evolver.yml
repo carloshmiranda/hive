@@ -66,6 +66,21 @@ jobs:
                ORDER BY c.company_id, c.cycle_number DESC
                ```
 
+            1b. STALLED COMPANIES — Companies with no agent activity at all:
+               ```sql
+               SELECT c.slug, c.status,
+                 MAX(aa.finished_at) as last_activity,
+                 (SELECT COUNT(*) FROM cycles cy WHERE cy.company_id = c.id) as total_cycles,
+                 (SELECT COUNT(*) FROM infra i WHERE i.company_id = c.id) as infra_count
+               FROM companies c
+               LEFT JOIN agent_actions aa ON aa.company_id = c.id
+               WHERE c.status IN ('mvp', 'active')
+               GROUP BY c.id, c.slug, c.status
+               HAVING MAX(aa.finished_at) < NOW() - INTERVAL '48 hours'
+                  OR MAX(aa.finished_at) IS NULL
+               ```
+               If a company has infra but no activity in 48h, that's a CRITICAL gap — something in the dispatch chain is broken.
+
             2. CAPABILITY GAPS — Query escalations and repeated failures:
                ```sql
                SELECT agent, error, COUNT(*) as occurrences

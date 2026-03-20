@@ -209,7 +209,21 @@ jobs:
             \`;
             results.chain_gaps = chainGaps.map(r => ({ company: r.slug, source: r.source_agent }));
 
-            // 12. MVP/active companies that need a new cycle (no successful cycle in 24h)
+            // 12. Stalled companies (no agent activity in 72h despite having infra)
+            const stalled = await sql\`
+              SELECT c.slug, c.id as company_id,
+                MAX(aa.finished_at) as last_activity
+              FROM companies c
+              LEFT JOIN agent_actions aa ON aa.company_id = c.id
+              WHERE c.status IN ('mvp', 'active')
+              AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
+              GROUP BY c.id, c.slug
+              HAVING MAX(aa.finished_at) < NOW() - INTERVAL '72 hours'
+                OR MAX(aa.finished_at) IS NULL
+            \`;
+            results.stalled_companies = stalled.map(r => ({ slug: r.slug, company_id: r.company_id, last_activity: r.last_activity }));
+
+            // 13. MVP/active companies that need a new cycle (no successful cycle in 24h)
             const needsCycle = await sql\`
               SELECT c.slug, c.id as company_id FROM companies c
               WHERE c.status IN ('mvp', 'active')
@@ -377,7 +391,40 @@ jobs:
             echo "Skipping deploy drift check: VERCEL_TOKEN not set"
           fi
 
-          # 12. Companies needing a new cycle → Scout research first, then CEO plans
+          # 12. Stalled companies (72h no activity) → escalation + force cycle
+          STALLED=$(echo "$RESULTS" | jq -r '.stalled_companies | length')
+          if [ "$STALLED" -gt 0 ]; then
+            npm install --no-save postgres 2>/dev/null
+            for i in $(seq 0 $((STALLED - 1))); do
+              SLUG=$(echo "$RESULTS" | jq -r ".stalled_companies[$i].slug")
+              CID=$(echo "$RESULTS" | jq -r ".stalled_companies[$i].company_id")
+              LAST=$(echo "$RESULTS" | jq -r ".stalled_companies[$i].last_activity")
+              echo "STALLED: $SLUG — no activity since $LAST — creating escalation + forcing cycle"
+
+              # Create escalation approval so Carlos is notified
+              node -e "
+              const postgres = require('postgres');
+              const sql = postgres(process.env.DATABASE_URL);
+              (async () => {
+                await sql\`
+                  INSERT INTO approvals (company_id, gate_type, title, description, context)
+                  VALUES (\${\"$CID\"}, 'escalation',
+                    \${'Stalled: ' + \"$SLUG\" + ' — no activity in 72h'},
+                    'Company has infrastructure but no agent has run successfully in 72+ hours. The dispatch chain may be broken.',
+                    \${JSON.stringify({last_activity: \"$LAST\", detected_by: 'sentinel'})}::jsonb)
+                  ON CONFLICT DO NOTHING
+                \`;
+                await sql.end();
+              })();
+              "
+
+              # Also force a cycle start
+              dispatch "research_request" "{\"source\":\"sentinel_stalled\",\"company\":\"$SLUG\",\"company_id\":\"$CID\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 13. Companies needing a new cycle → Scout research first, then CEO plans
           NEEDS_CYCLE=$(echo "$RESULTS" | jq -r '.needs_cycle | length')
           if [ "$NEEDS_CYCLE" -gt 0 ]; then
             CYCLE_COUNT=0
