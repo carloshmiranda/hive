@@ -149,6 +149,13 @@
 **Prevention:** Any self-hosted system that monitors other systems must also monitor itself. When building detection/healing for child resources, always ask: "does this also cover the parent?" Add the parent as a first-class target, not an afterthought.
 **Affects:** hive (dashboard, detection layer)
 
+### 2026-03-20 dispatchEvent silently failed on Vercel — GH_PAT only in GitHub Actions
+**What happened:** Clicking Approve on evolver proposals (and all approval side effects) silently did nothing. No workflow was triggered. The approval status updated in the DB but `dispatchEvent()` returned without sending anything.
+**Root cause:** All three `dispatchEvent()` functions read `process.env.GH_PAT`. That env var is set as a GitHub Actions secret but NOT as a Vercel env var. The dashboard runs on Vercel, so `GH_PAT` was always undefined. The function had `if (!ghPat) return;` which silently returned.
+**Fix applied:** Extracted `dispatchEvent` to `src/lib/dispatch.ts`. It reads `github_token` from the encrypted settings table first (works on Vercel), falls back to `GH_PAT` env var (works in GitHub Actions). Added error logging instead of silent failure.
+**Prevention:** When code runs on Vercel and needs secrets, read from the settings table (encrypted in Neon), not from env vars. Env vars set as GitHub Actions secrets are NOT available on Vercel. The two runtimes have different secret stores. Any function that dispatches events from the dashboard must use the settings table.
+**Affects:** all approval side effects, evolver proposals, github webhook escalation
+
 ### 2026-03-20 Evolver approval button did nothing for non-prompt proposals
 **What happened:** Clicking "Approve" on `setup_action` and `knowledge_gap` evolver proposals only set `status = 'approved'` in the DB. No dispatch, no todo, no follow-up. The `implemented_at` field existed in the schema but nothing ever set it, even for `prompt_update` proposals that were implemented immediately.
 **Root cause:** The PATCH handler only had a code path for `prompt_update`. Other proposal types were designed to be "passed to CEO as context" via the orchestrator's query, but this was a passive injection — no active dispatch or tracking.
