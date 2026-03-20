@@ -646,65 +646,124 @@ Evaluate each idea on its AUTOMATION SCORE: how much of the daily operation can 
 
 ## MANDATORY MIX: You MUST propose exactly 3 ideas with this market distribution:
 1. **Portuguese market** — solve a challenge specific to Portugal (regulatory, cultural, language, local infrastructure gap)
-2. **Global/English market** — broad SaaS play, English-first
+2. **Global/English market** — any digital business model, English-first
 3. **Your best pick** — whichever market you think has the strongest opportunity based on your research
+
+IMPORTANT: At least ONE of the 3 proposals MUST be a non-SaaS business model (blog, newsletter, faceless channel, affiliate site, digital product, etc.). Diversify the portfolio.
 
 ## RESEARCH METHODOLOGY (you must follow this):
 
-You have access to web search. USE IT. Do not rely on your training data alone.
+You have access to web_search AND web_fetch. Use BOTH. Do not rely on your training data alone.
+- **web_search**: for discovering topics, finding trends, checking competition
+- **web_fetch**: for visiting specific pages to extract detailed information (Reddit threads, forum posts, Product Hunt pages, Google Trends, YouTube channels)
 
-### Phase 1: Portuguese market discovery (3-5 searches)
-Search for CURRENT pain points in Portugal. Example queries:
-- "Portugal small business challenges ${new Date().getFullYear()}"
-- "Portugal housing crisis rental market ${new Date().getFullYear()}"
-- "Portugal freelancer tax compliance problems"
-- "Portugal digital transformation SME gaps"
-- "Portugal new laws regulations ${new Date().getFullYear()}"
-Look for: regulatory changes creating new compliance burdens, underserved demographics, 
-markets where existing tools are foreign/generic and don't understand Portuguese specifics,
-pain points people complain about on forums and social media.
+### Phase 1: Community & forum mining (5-8 actions)
+This is your richest signal source. Visit actual communities where people express frustration and demand:
 
-### Phase 2: Global market discovery (5-8 searches across multiple models)
-Search BROADLY — not just SaaS. Explore multiple business models:
-- "micro SaaS ideas trending ${new Date().getFullYear()}"
-- "profitable blog niches ${new Date().getFullYear()}"
-- "faceless YouTube channel ideas automated ${new Date().getFullYear()}"
-- "best affiliate niches high commission ${new Date().getFullYear()}"
-- "AI automated business ideas ${new Date().getFullYear()}"
-- "newsletter business profitable niches"
-- "digital products selling online passive income"
-- "print on demand profitable niches ${new Date().getFullYear()}"
-- Look at Product Hunt, Indie Hackers, Hacker News, Beehiiv top newsletters, and trending YouTube niches
+**Reddit** — fetch these subreddits and look for recurring complaints, requests, and pain points:
+- web_fetch: https://www.reddit.com/r/SaaS/top/?t=month (trending SaaS discussions)
+- web_fetch: https://www.reddit.com/r/Entrepreneur/top/?t=month (business ideas, what's working)
+- web_fetch: https://www.reddit.com/r/juststart/top/?t=month (content sites, affiliate, niche sites)
+- web_fetch: https://www.reddit.com/r/passive_income/top/?t=month (passive income ideas)
+- web_fetch: https://www.reddit.com/r/portugal/top/?t=month (Portuguese-specific pain points)
+- web_search: "site:reddit.com what business can be fully automated ${new Date().getFullYear()}"
+- web_search: "site:reddit.com faceless YouTube channel income report ${new Date().getFullYear()}"
 
-### Phase 3: Competition analysis (2-3 searches per niche)
-For each niche you identify, search for existing solutions:
-- "[niche] software/blog/channel/newsletter" (add "Portugal" for Portuguese ideas)
-- "[niche] review site" or "[niche] affiliate program"
-- Search competitor names you find, check their traffic (SimilarWeb), revenue, content gaps
-You want niches where competitors are: too expensive, too generic (not PT-localised),
-low quality content, enterprise-only, or simply don't exist yet.
+**Hacker News** — tech-savvy audience, high signal:
+- web_fetch: https://news.ycombinator.com/shownew (new launches)
+- web_search: "site:news.ycombinator.com 'I built' OR 'Show HN' passive income ${new Date().getFullYear()}"
 
-### Phase 4: Demand validation (1-2 searches per niche)
-Search for evidence people actually want this:
-- Search volume proxies: "how to [solve problem]" queries
-- Forum complaints, Reddit threads, social media frustration
-- Government data on market size (number of landlords, freelancers, SMEs, etc.)
-- News articles about the problem growing
+**Indie Hackers** — real revenue numbers:
+- web_search: "site:indiehackers.com revenue report ${new Date().getFullYear()}"
+- web_search: "site:indiehackers.com newsletter business OR blog income OR affiliate"
+
+### Phase 2: Trend & market signals (5-8 actions)
+Look at what's actually growing right now:
+
+**Google Trends** — validate demand is rising, not falling:
+- web_fetch: https://trends.google.com/trending?geo=PT (trending in Portugal)
+- web_fetch: https://trends.google.com/trending?geo=US (trending globally)
+- For each promising niche, check: web_search "google trends [niche keyword]"
+
+**Product Hunt** — what's launching, what gets traction:
+- web_fetch: https://www.producthunt.com/ (today's launches)
+- web_search: "site:producthunt.com [niche] launched ${new Date().getFullYear()}"
+
+**YouTube** — faceless channel research:
+- web_search: "faceless YouTube channel niches making money ${new Date().getFullYear()}"
+- web_search: "YouTube automation channel income report"
+- web_search: "most profitable YouTube niches CPM ${new Date().getFullYear()}"
+
+**TikTok** — short-form content opportunities:
+- web_search: "TikTok trending niches ${new Date().getFullYear()}"
+- web_search: "TikTok faceless account income ${new Date().getFullYear()}"
+- web_search: "TikTok shop trending products automated ${new Date().getFullYear()}"
+- web_search: "most profitable TikTok niches creator fund"
+
+**Instagram / Pinterest** — visual content & commerce:
+- web_search: "Instagram faceless theme page income ${new Date().getFullYear()}"
+- web_search: "Pinterest affiliate marketing niches ${new Date().getFullYear()}"
+- web_fetch: https://trends.pinterest.com/ (Pinterest's own trend data — great for product/content ideas)
+- web_search: "Instagram reels automation tools ${new Date().getFullYear()}"
+- web_search: "most profitable Instagram niches without showing face"
+
+**X/Twitter** — real-time signals:
+- web_search: "site:twitter.com OR site:x.com 'I built' OR 'MRR' OR 'revenue' ${new Date().getFullYear()}"
+- web_search: "Twitter/X automated account income report"
+
+**Newsletter & content**:
+- web_search: "most profitable newsletter niches ${new Date().getFullYear()}"
+- web_search: "blog income report ${new Date().getFullYear()}" (real revenue data)
+- web_search: "highest paying affiliate programs ${new Date().getFullYear()}"
+
+**Portuguese market specifically**:
+- web_search: "Portugal small business challenges ${new Date().getFullYear()}"
+- web_search: "Portugal new laws regulations ${new Date().getFullYear()}"
+- web_search: "Portugal freelancer expat problems"
+- web_search: "negócios online Portugal ${new Date().getFullYear()}"
+- web_fetch: https://www.reddit.com/r/literaciafinanceira/top/?t=month (PT financial literacy)
+
+### Phase 3: Competition deep-dive (2-3 per niche)
+For each promising niche, verify the competitive landscape:
+- web_search: "[niche] software/tool/site" (find existing players)
+- web_search: "[niche] alternative" or "[competitor] alternative" (find gaps in existing solutions)
+- web_fetch: visit competitor sites to check pricing, features, and quality
+- web_search: "[competitor] review" (find weaknesses users complain about)
+- For content/affiliate: check if top Google results are low-quality — that's your opening
+
+### Phase 4: Demand validation (2-3 per niche)
+Confirm real demand with multiple signals:
+- web_search: "how to [solve problem]" (search volume proxy)
+- web_search: "[problem] site:reddit.com" (people actively seeking solutions)
+- web_search: "[niche] market size ${new Date().getFullYear()}" (TAM data)
+- web_fetch: check Google Trends for the niche keywords (rising = good, declining = avoid)
+- For Portuguese niches: check INE (statistics), government data, news articles
 
 ### Phase 5: Rank and build 3 proposals
-Score each niche on: demand strength, competition gap, timing (regulatory tailwind?), 
-MVP feasibility (can AI agents ship it in 1-2 weeks?), Carlos's skill match.
+Score each niche on:
+1. **Demand strength** — community complaints, search volume, trend direction
+2. **Competition gap** — underserved, overpriced, low quality, or non-existent
+3. **Automation feasibility** — can AI agents run 80%+ of daily operations?
+4. **Revenue path clarity** — how exactly does money come in? Multiple streams preferred
+5. **Time to first revenue** — how quickly can this generate income?
+6. **Timing** — regulatory tailwind, cultural shift, technology enabler?
 Pick the top 3 respecting the mandatory mix above.
 
 ## Output format (JSON only, no markdown wrapping):
 {
   "research": {
+    "sources_consulted": ["reddit", "hackernews", "producthunt", "youtube", "tiktok", "instagram", "pinterest", "google_trends", "indie_hackers", "other"],
     "searches_performed": ["query1", "query2", ...],
+    "pages_fetched": ["url1", "url2", ...],
+    "key_signals": [
+      { "source": "reddit/r/passive_income", "signal": "what you found", "relevance": "high/medium/low" }
+    ],
     "niches_considered": [
-      { 
-        "niche": "...", 
+      {
+        "niche": "...",
+        "business_model": "saas/blog/newsletter/faceless_channel/affiliate/etc",
         "market": "Portugal" or "Global",
-        "demand_evidence": "what you found in search results",
+        "demand_evidence": "specific data points from communities, trends, search volume",
         "competitors_found": ["name: pricing — gaps"],
         "timing": "why now",
         "verdict": "pursue / pass — reason"
@@ -738,8 +797,8 @@ At least 1 must have "market": "Portugal".
 At least 1 must have "market": "Global".
 Order them by your confidence score, highest first.`,
       allowedTools: ["WebSearch", "WebFetch"],
-      maxTurns: 30, // more turns for broader research
-      timeoutMs: 20 * 60 * 1000, // 20 min — researching 3 ideas takes longer
+      maxTurns: 50, // more turns needed — web_fetch on Reddit/HN/PH/YouTube/TikTok/Pinterest + web_search
+      timeoutMs: 25 * 60 * 1000, // 25 min — multi-source research takes longer
     });
 
     // Debug logging for Idea Scout output
