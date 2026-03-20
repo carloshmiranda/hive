@@ -103,6 +103,7 @@ jobs:
                - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
                - cycle_complete: Score the cycle 1-10 using mode-specific criteria from prompts/ceo.md
                - gate_approved: Route the approval. If gate_type is 'new_company', output needs_provisioning: true so Engineer can scaffold the repo, Vercel project, Neon DB, and Stripe product. Include the company slug.
+               - cycle_start: Start a new cycle for the specified company. Load research reports, determine lifecycle mode, create a cycle plan with engineering_tasks and growth_tasks.
                - ceo_review: Do portfolio analysis across all companies
                - issue/directive: Decompose into tasks, assign to agents
                - PR opened: Review for strategic alignment

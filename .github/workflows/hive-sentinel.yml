@@ -377,7 +377,7 @@ jobs:
             echo "Skipping deploy drift check: VERCEL_TOKEN not set"
           fi
 
-          # 12. Companies needing a new cycle → CEO (max 2 per sentinel run)
+          # 12. Companies needing a new cycle → Scout research first, then CEO plans
           NEEDS_CYCLE=$(echo "$RESULTS" | jq -r '.needs_cycle | length')
           if [ "$NEEDS_CYCLE" -gt 0 ]; then
             CYCLE_COUNT=0
@@ -385,8 +385,8 @@ jobs:
               if [ "$CYCLE_COUNT" -ge 2 ]; then break; fi
               SLUG=$(echo "$RESULTS" | jq -r ".needs_cycle[$i].slug")
               CID=$(echo "$RESULTS" | jq -r ".needs_cycle[$i].company_id")
-              echo "Company $SLUG needs a new cycle — dispatching CEO"
-              dispatch "cycle_start" "{\"source\":\"sentinel\",\"company\":\"$SLUG\",\"company_id\":\"$CID\"}"
+              echo "Company $SLUG needs a new cycle — dispatching Scout research → CEO"
+              dispatch "research_request" "{\"source\":\"sentinel_cycle\",\"company\":\"$SLUG\",\"company_id\":\"$CID\",\"chain_to_ceo\":true}"
               DISPATCHED=$((DISPATCHED + 1))
               CYCLE_COUNT=$((CYCLE_COUNT + 1))
             done

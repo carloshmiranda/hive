@@ -165,12 +165,19 @@ jobs:
             echo "  Dispatched: $1"
           }
 
-          # Chain to Growth if research delivered
-          echo "$RESULT" | grep -q "research_delivered.*true" && \
-            dispatch "growth_trigger" "{\"source\":\"scout\",\"company\":\"$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)\"}"
+          COMPANY=$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)
+          PAYLOAD='${{ toJson(github.event.client_payload) }}'
+
+          # Chain to CEO for cycle planning when research is delivered
+          if echo "$RESULT" | grep -q "research_delivered.*true"; then
+            dispatch "cycle_start" "{\"source\":\"scout_research\",\"company\":\"$COMPANY\"}"
+
+            # Also chain to Growth for content
+            dispatch "growth_trigger" "{\"source\":\"scout\",\"company\":\"$COMPANY\"}"
+          fi
 
           # Chain to Outreach if leads found
           echo "$RESULT" | grep -q "leads_found.*true" && \
-            dispatch "outreach_trigger" "{\"source\":\"scout\",\"company\":\"$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)\"}"
+            dispatch "outreach_trigger" "{\"source\":\"scout\",\"company\":\"$COMPANY\"}"
 
           echo "Chain dispatch complete"
