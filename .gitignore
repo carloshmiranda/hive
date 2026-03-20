@@ -8,3 +8,4 @@ logs/
 .vercel
 hive-project.tar.gz
 .env*.local
+.claude/worktrees/
