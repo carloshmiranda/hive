@@ -228,13 +228,61 @@ async function createCycle(companyId: string, cycleNumber: number) {
 
 async function updateCycle(cycleId: string, data: Record<string, any>) {
   await sql`
-    UPDATE cycles SET 
+    UPDATE cycles SET
       status = ${data.status || "completed"},
       ceo_plan = ${JSON.stringify(data.ceo_plan) || null},
       ceo_review = ${JSON.stringify(data.ceo_review) || null},
       finished_at = now()
     WHERE id = ${cycleId}
   `;
+}
+
+async function checkAndHandleRunningCycles(companyId: string): Promise<boolean> {
+  // Check for running cycles
+  const [runningCycle] = await sql`
+    SELECT id, cycle_number, started_at
+    FROM cycles
+    WHERE company_id = ${companyId} AND status = 'running'
+    ORDER BY started_at DESC
+    LIMIT 1
+  `;
+
+  if (!runningCycle) {
+    return true; // No running cycles, safe to create new one
+  }
+
+  const startedAt = new Date(runningCycle.started_at);
+  const now = new Date();
+  const hoursRunning = (now.getTime() - startedAt.getTime()) / (1000 * 60 * 60);
+
+  if (hoursRunning > 2) {
+    console.log(`  ⚠ Cycle ${runningCycle.cycle_number} has been running for ${Math.round(hoursRunning * 10) / 10}h — marking as failed`);
+
+    // Mark the stuck cycle as failed
+    await sql`
+      UPDATE cycles SET
+        status = 'failed',
+        finished_at = now()
+      WHERE id = ${runningCycle.id}
+    `;
+
+    // Log this as an action for visibility
+    await sql`
+      INSERT INTO agent_actions (
+        company_id, cycle_id, agent, action_type, description, status,
+        error, started_at, finished_at
+      ) VALUES (
+        ${companyId}, ${runningCycle.id}, 'orchestrator', 'cycle_timeout',
+        ${`Cycle ${runningCycle.cycle_number} timed out after ${Math.round(hoursRunning * 10) / 10}h`},
+        'failed', 'Cycle exceeded 2-hour timeout limit', now(), now()
+      )
+    `;
+
+    return true; // Stuck cycle cleaned up, safe to create new one
+  }
+
+  console.log(`  ⏳ Cycle ${runningCycle.cycle_number} still running (${Math.round(hoursRunning * 10) / 10}h) — skipping new cycle`);
+  return false; // Cycle still running, don't create new one
 }
 
 async function logAction(data: {
@@ -1389,6 +1437,18 @@ Output a brief summary of what was assimilated.`,
     console.log(`\n▸ ${company.name} (${company.slug}) — ${company.status} [cycles: ${company.cycle_count}]`);
 
     try {
+    // Check if there are any running cycles and handle timeouts
+    const canCreateCycle = await checkAndHandleRunningCycles(company.id);
+    if (!canCreateCycle) {
+      results.push({
+        company: company.slug,
+        status: "skipped",
+        duration: Math.round((Date.now() - companyStart) / 1000)
+      });
+      console.log(`  ⏭ Skipped — previous cycle still running`);
+      continue;
+    }
+
     const cycleNumber = await getLatestCycleNumber(company.id);
     const cycleId = await createCycle(company.id, cycleNumber);
     const metrics = await getMetrics(company.id);
