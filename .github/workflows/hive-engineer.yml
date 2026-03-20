@@ -6,6 +6,7 @@ on:
       - new_company
       - feature_request
       - ops_escalation
+      - deploy_drift
 
   issues:
     types: [opened, labeled]
@@ -91,9 +92,10 @@ jobs:
             Read BRIEFING.md and CLAUDE.md for context.
 
             Based on the trigger:
-            - new_company: Scaffold repo from templates/boilerplate, push to GitHub, set up Vercel + Neon
+            - new_company: Scaffold repo from templates/boilerplate, push to GitHub, set up Vercel + Neon. Query the company from DB for its description and Scout proposal. Update status to 'mvp' when done.
             - feature_request: Read the CEO plan from cycles table, implement the code changes, commit + push
-            - ops_escalation: Read the error from agent_actions, diagnose and fix, commit + push
+            - ops_escalation: Read the error from agent_actions, diagnose and fix, commit + push. If gate_type is 'kill_teardown', delete the Vercel project, archive the GitHub repo, and update infra table.
+            - deploy_drift: Production is running stale code. Check Vercel deployment status, trigger a redeploy if needed, or investigate build failures.
             - issue (feature/bug): Implement the feature or fix the bug described in the issue
             - pr_approved: Merge the PR and verify deploy
             - manual: Execute the specified task

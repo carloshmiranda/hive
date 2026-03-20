@@ -38,21 +38,52 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         if (approval.company_id) {
           await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${approval.company_id} AND status = 'idea'`;
         }
-        // Dispatch CEO to route the approval
-        await dispatchEvent("gate_approved", { gate_type: "new_company", company_id: approval.company_id });
+        // Dispatch CEO to route the approval (include slug for chain dispatch)
+        const [newComp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
+        await dispatchEvent("gate_approved", { gate_type: "new_company", company_id: approval.company_id, company: newComp?.slug });
         break;
 
       case "kill_company":
-        // Mark company as killed
+        // Mark company as killed and dispatch teardown + notification
         if (approval.company_id) {
-          await sql`
-            UPDATE companies SET 
-              status = 'killed', 
-              killed_at = now(), 
+          const [killedComp] = await sql`
+            UPDATE companies SET
+              status = 'killed',
+              killed_at = now(),
               kill_reason = ${note || "Approved by Kill Switch"},
-              updated_at = now() 
+              updated_at = now()
             WHERE id = ${approval.company_id}
+            RETURNING slug
           `;
+          // Notify Scout (to avoid similar ideas) and Engineer (to teardown infra)
+          await dispatchEvent("company_killed", { company: killedComp?.slug, company_id: approval.company_id });
+          await dispatchEvent("ops_escalation", { gate_type: "kill_teardown", company: killedComp?.slug, company_id: approval.company_id });
+        }
+        break;
+
+      case "spend_approval":
+        // Budget approved — dispatch to the requesting agent
+        if (approval.company_id) {
+          const spendCtx = approval.context as { agent?: string; amount?: number } | null;
+          const [spendComp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
+          await dispatchEvent("agent_dispatch", {
+            agent: spendCtx?.agent || "growth",
+            company: spendComp?.slug,
+            budget_approved: spendCtx?.amount || 0,
+            source: "spend_approval",
+          });
+        }
+        break;
+
+      case "growth_strategy":
+        // Growth strategy approved — dispatch to Growth agent with approved plan
+        if (approval.company_id) {
+          const [stratComp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
+          await dispatchEvent("growth_trigger", {
+            source: "approved_strategy",
+            company: stratComp?.slug,
+            approval_id: approval.id,
+          });
         }
         break;
 

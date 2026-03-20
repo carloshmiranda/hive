@@ -145,7 +145,19 @@ jobs:
             const failRate = failureStats.total > 0 ? failureStats.failed / failureStats.total : 0;
             results.high_failure_rate = failRate > 0.2 && failureStats.total >= 5;
 
-            // 8. Companies stuck in 'approved' status (not provisioned)
+            // 8. Stale research (active companies with no research in 14 days)
+            const staleResearch = await sql\`
+              SELECT c.slug FROM companies c
+              WHERE c.status IN ('mvp','active')
+              AND NOT EXISTS (
+                SELECT 1 FROM research_reports rr
+                WHERE rr.company_id = c.id
+                AND rr.updated_at > NOW() - INTERVAL '14 days'
+              )
+            \`;
+            results.stale_research = staleResearch.map(r => r.slug);
+
+            // 9. Companies stuck in 'approved' status (not provisioned)
             const stuckApproved = await sql\`
               SELECT slug FROM companies
               WHERE status = 'approved'
@@ -253,7 +265,16 @@ jobs:
             DISPATCHED=$((DISPATCHED + 1))
           fi
 
-          # 8. Companies stuck in 'approved' → dispatch provisioning via Engineer
+          # 8. Stale research → Scout research refresh
+          STALE_RESEARCH=$(echo "$RESULTS" | jq -r '.stale_research | length')
+          if [ "$STALE_RESEARCH" -gt 0 ]; then
+            FIRST_SLUG=$(echo "$RESULTS" | jq -r '.stale_research[0]')
+            echo "Stale research for $FIRST_SLUG — dispatching research refresh"
+            dispatch "research_request" "{\"source\":\"sentinel\",\"company\":\"$FIRST_SLUG\"}"
+            DISPATCHED=$((DISPATCHED + 1))
+          fi
+
+          # 9. Companies stuck in 'approved' → dispatch provisioning via Engineer
           STUCK_APPROVED=$(echo "$RESULTS" | jq -r '.stuck_approved | length')
           if [ "$STUCK_APPROVED" -gt 0 ]; then
             for SLUG in $(echo "$RESULTS" | jq -r '.stuck_approved[]'); do

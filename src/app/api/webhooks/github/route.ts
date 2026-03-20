@@ -113,6 +113,8 @@ export async function POST(req: Request) {
               ${JSON.stringify({ failures: Number(recentFailures.cnt), last_error: desc })}
             )
           `;
+          // Auto-dispatch Engineer to investigate deploy failures
+          await dispatchEvent("ops_escalation", { source: "github_webhook", company: repoName, error: desc });
         }
       } else if (state === "success") {
         await sql`
@@ -156,4 +158,21 @@ export async function POST(req: Request) {
   }
 
   return Response.json({ received: true });
+}
+
+async function dispatchEvent(eventType: string, payload: Record<string, any>) {
+  try {
+    const ghPat = process.env.GH_PAT;
+    const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
+    if (!ghPat) return;
+    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `token ${ghPat}`,
+        Accept: "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ event_type: eventType, client_payload: payload }),
+    });
+  } catch { /* non-critical */ }
 }

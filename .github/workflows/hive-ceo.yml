@@ -190,4 +190,9 @@ jobs:
           echo "$RESULT" | grep -q "outreach" && \
             dispatch "outreach_trigger" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
 
+          # Always dispatch cycle_complete so Evolver/reflection can run
+          if [ -n "$COMPANY" ]; then
+            dispatch "cycle_complete" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
+          fi
+
           echo "Chain dispatch complete"
