@@ -165,8 +165,12 @@ jobs:
             echo "  Dispatched: $1"
           }
 
-          COMPANY=$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null)
+          COMPANY=$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null || echo "")
           PAYLOAD='${{ toJson(github.event.client_payload) }}'
+          # Fallback: extract company from payload if jq couldn't parse agent output
+          if [ -z "$COMPANY" ]; then
+            COMPANY=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company // ""' 2>/dev/null || echo "")
+          fi
 
           # Chain to CEO for cycle planning when research is delivered
           if echo "$RESULT" | grep -q "research_delivered.*true"; then
