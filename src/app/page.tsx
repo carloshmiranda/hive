@@ -616,36 +616,89 @@ export default function DashboardPage() {
                     letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Scout proposals</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                     {ideas.map(a => {
-                      const proposal = a.context?.proposal || {};
+                      let proposal: any = {};
+                      let research: any = {};
+                      try {
+                        const ctx = typeof a.context === "string" ? JSON.parse(a.context) : a.context;
+                        proposal = ctx?.proposal || {};
+                        research = ctx?.research || {};
+                      } catch { /* fall back to plain text */ }
                       const confidence = proposal.confidence || 0;
+                      const confidencePct = Math.round(confidence * 100);
+                      const confidenceColor = confidence >= 0.7 ? "var(--hive-green)" : confidence >= 0.5 ? "var(--hive-amber)" : "var(--hive-red)";
+                      const confidenceBg = confidence >= 0.7 ? "var(--hive-green-bg)" : confidence >= 0.5 ? "var(--hive-amber-bg)" : "var(--hive-red-bg)";
+                      const confidenceBorder = confidence >= 0.7 ? "var(--hive-green-border)" : confidence >= 0.5 ? "var(--hive-amber-border)" : "var(--hive-red-border)";
                       const isPortuguese = proposal.market === "pt" || a.description?.toLowerCase().includes("portug");
+                      const hasRichData = proposal.problem || proposal.solution || proposal.monetisation || proposal.mvp_scope;
                       return (
                         <div key={a.id} style={{
                           padding: 20, borderRadius: 10,
                           background: "var(--hive-amber-bg)", border: "1px solid var(--hive-amber-border)",
                         }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                            <div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                                <span style={{ fontSize: 15, fontWeight: 600, color: "var(--hive-text)" }}>{a.title}</span>
-                                {confidence > 0 && (
-                                  <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                                    padding: "2px 8px", borderRadius: 4,
-                                    background: "var(--hive-amber-bg)", color: "var(--hive-amber)", border: "1px solid var(--hive-amber-border)" }}>
-                                    {Math.round(confidence * 100)}%
-                                  </span>
-                                )}
-                                <span style={{ fontSize: 12 }}>{isPortuguese ? "🇵🇹" : "🌍"}</span>
-                              </div>
-                              <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6 }}>{a.description}</div>
+                          {/* Header: name + confidence + market flag */}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 16 }}>{isPortuguese ? "🇵🇹" : "🌍"}</span>
+                              <span style={{ fontSize: 15, fontWeight: 600, color: "var(--hive-text)" }}>
+                                {proposal.name || a.title}
+                              </span>
                             </div>
+                            {confidencePct > 0 && (
+                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 600,
+                                padding: "2px 10px", borderRadius: 4,
+                                background: confidenceBg, color: confidenceColor, border: `1px solid ${confidenceBorder}` }}>
+                                {confidencePct}% confidence
+                              </span>
+                            )}
                           </div>
-                          {(proposal.tam || proposal.monetisation) && (
-                            <div style={{ display: "flex", gap: 24, marginBottom: 14, fontSize: 12, color: "var(--hive-text-tertiary)" }}>
-                              {proposal.tam && <span><strong style={{ color: "var(--hive-text-secondary)" }}>TAM:</strong> {proposal.tam}</span>}
-                              {proposal.monetisation && <span><strong style={{ color: "var(--hive-text-secondary)" }}>Model:</strong> {proposal.monetisation}</span>}
+
+                          {/* Description */}
+                          <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6, marginBottom: hasRichData ? 14 : 10 }}>
+                            {proposal.description || a.description}
+                          </div>
+
+                          {/* Rich detail fields */}
+                          {hasRichData && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14,
+                              padding: "12px 14px", borderRadius: 8, background: "rgba(0,0,0,0.12)" }}>
+                              {proposal.problem && (
+                                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", lineHeight: 1.5 }}>
+                                  <strong style={{ color: "var(--hive-text-secondary)", fontWeight: 600 }}>Problem:</strong> {proposal.problem}
+                                </div>
+                              )}
+                              {proposal.solution && (
+                                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", lineHeight: 1.5 }}>
+                                  <strong style={{ color: "var(--hive-text-secondary)", fontWeight: 600 }}>Solution:</strong> {proposal.solution}
+                                </div>
+                              )}
+                              {proposal.monetisation && (
+                                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", lineHeight: 1.5 }}>
+                                  <strong style={{ color: "var(--hive-text-secondary)", fontWeight: 600 }}>Revenue:</strong> {proposal.monetisation}
+                                </div>
+                              )}
+                              {proposal.mvp_scope && (
+                                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", lineHeight: 1.5 }}>
+                                  <strong style={{ color: "var(--hive-text-secondary)", fontWeight: 600 }}>MVP:</strong> {proposal.mvp_scope}
+                                </div>
+                              )}
+                              {proposal.tam && (
+                                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", lineHeight: 1.5 }}>
+                                  <strong style={{ color: "var(--hive-text-secondary)", fontWeight: 600 }}>TAM:</strong> {proposal.tam}
+                                </div>
+                              )}
                             </div>
                           )}
+
+                          {/* Research stats */}
+                          {(research.searches_performed || research.niches_considered) && (
+                            <div style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)", marginBottom: 14 }}>
+                              Research: {research.searches_performed ? `${research.searches_performed} searches` : ""}
+                              {research.searches_performed && research.niches_considered ? " · " : ""}
+                              {research.niches_considered ? `${research.niches_considered} niches evaluated` : ""}
+                            </div>
+                          )}
+
+                          {/* Action buttons */}
                           <div style={{ display: "flex", gap: 8 }}>
                             <button onClick={() => handleApproval(a.id, "approved")} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,

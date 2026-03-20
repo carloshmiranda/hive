@@ -573,8 +573,23 @@ async function runNightlyCycle() {
     console.log("\n💡 Idea Scout — searching for opportunities");
 
     const playbook = await getPlaybook();
-    const killedCompanies = allCompanies.filter(c => c.status === "killed");
     const liveCompanies = allCompanies.filter(c => ["mvp", "active"].includes(c.status));
+
+    // Query recently rejected/killed companies with kill_reason for feedback loop
+    const recentlyRejected = await sql`
+      SELECT name, slug, description, kill_reason, killed_at
+      FROM companies
+      WHERE status = 'killed' AND kill_reason IS NOT NULL AND killed_at > NOW() - INTERVAL '90 days'
+      ORDER BY killed_at DESC LIMIT 10
+    `;
+
+    // Query rejected approvals for additional context on why ideas were turned down
+    const rejectedApprovals = await sql`
+      SELECT a.title, a.description, a.decision_note, a.decided_at
+      FROM approvals a
+      WHERE a.gate_type = 'new_company' AND a.status = 'rejected' AND a.decided_at > NOW() - INTERVAL '90 days'
+      ORDER BY a.decided_at DESC LIMIT 10
+    `;
 
     const ideaScoutOutput = await dispatch({
       agent: "scout",
@@ -592,8 +607,12 @@ YOUR JOB: Research the market using web search and propose THREE business ideas 
 ## Current portfolio (${liveCompanies.length} active):
 ${liveCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description}`).join("\n") || "No active companies yet"}
 
-## Previously killed (avoid similar ideas):
-${killedCompanies.map(c => `- ${c.name}: ${c.description} — killed because too similar or no traction`).join("\n") || "None"}
+## EXISTING AND PAST COMPANIES (do NOT propose anything similar):
+${allCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description || "no description"} [status: ${c.status}]`).join("\n") || "None"}
+
+## PREVIOUSLY REJECTED IDEAS (learn from these — do NOT propose similar concepts):
+${recentlyRejected.length > 0 ? recentlyRejected.map((c: any) => `- ${c.name}: ${c.description || "no description"} — Rejection reason: ${c.kill_reason}`).join("\n") : "None"}
+${rejectedApprovals.length > 0 ? "\nRejected approvals with feedback:\n" + rejectedApprovals.map((a: any) => `- ${a.title}: ${a.decision_note || "no reason given"}`).join("\n") : ""}
 
 ## Playbook learnings (what works):
 ${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
@@ -709,11 +728,62 @@ Order them by your confidence score, highest first.`,
         const proposals = idea.proposals || (idea.proposal ? [idea.proposal] : []);
 
         if (proposals.length > 0) {
-          // Create each company in 'idea' status
-          const createdCompanies: Array<{ id: string; name: string; slug: string; idx: number }> = [];
+          // Semantic similarity check — filter out proposals too similar to existing companies
+          const getWords = (text: string): Set<string> => {
+            if (!text) return new Set();
+            return new Set(
+              text.toLowerCase()
+                .replace(/[^a-z0-9\s]/g, " ")
+                .split(/\s+/)
+                .filter(w => w.length > 2) // skip short words like "a", "to", "is"
+            );
+          };
+          const wordOverlap = (a: Set<string>, b: Set<string>): number => {
+            if (a.size === 0 || b.size === 0) return 0;
+            let shared = 0;
+            for (const w of a) { if (b.has(w)) shared++; }
+            const minSize = Math.min(a.size, b.size);
+            return minSize > 0 ? shared / minSize : 0;
+          };
+
+          const filteredProposals: Array<{ proposal: any; idx: number }> = [];
           for (let i = 0; i < proposals.length; i++) {
             const p = proposals[i];
             if (!p?.name || !p?.slug) continue;
+
+            const proposalNameWords = getWords(p.name);
+            const proposalDescWords = getWords(p.description || "");
+            const proposalProblemWords = getWords(p.problem || "");
+            const proposalSolutionWords = getWords(p.solution || "");
+            // Combine all proposal text for broader matching
+            const proposalAllWords = new Set([...proposalDescWords, ...proposalProblemWords, ...proposalSolutionWords]);
+
+            let isDuplicate = false;
+            for (const existing of allCompanies) {
+              const existingNameWords = getWords(existing.name);
+              const existingDescWords = getWords(existing.description || "");
+              const existingAllWords = new Set([...existingNameWords, ...existingDescWords]);
+
+              // Check name-to-name overlap
+              const nameOverlap = wordOverlap(proposalNameWords, existingNameWords);
+              // Check description/problem/solution overlap with existing description
+              const descOverlap = wordOverlap(proposalAllWords, existingAllWords);
+
+              if (nameOverlap > 0.5 || descOverlap > 0.5) {
+                console.log(`  ⚠ Skipping '${p.name}' — too similar to existing '${existing.name}' (${existing.status})`);
+                isDuplicate = true;
+                break;
+              }
+            }
+
+            if (!isDuplicate) {
+              filteredProposals.push({ proposal: p, idx: i });
+            }
+          }
+
+          // Create each company in 'idea' status
+          const createdCompanies: Array<{ id: string; name: string; slug: string; idx: number }> = [];
+          for (const { proposal: p, idx: i } of filteredProposals) {
             const [newCompany] = await sql`
               INSERT INTO companies (name, slug, description, status)
               VALUES (${p.name}, ${p.slug}, ${p.description}, 'idea')
@@ -2255,6 +2325,119 @@ curl -X POST http://localhost:3000/api/playbook -H "Content-Type: application/js
             }
           }
         }
+
+        // === PROCESS GAP DETECTION ===
+        // Lightweight checks that create evolver_proposals directly (no agent dispatch needed)
+        console.log(`\n🔍 Process health check...`);
+        let processGaps = 0;
+
+        // 1. Scout duplicate rate: ideas killed within 24h of creation (likely duplicates/instant rejections)
+        const [scoutStats] = await sql`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'killed' AND killed_at < created_at + interval '24 hours') as quick_kills,
+            COUNT(*) as total_proposals
+          FROM companies
+          WHERE created_at > now() - interval '30 days'
+            AND id IN (SELECT company_id FROM approvals WHERE gate_type = 'new_company')
+        `;
+        const totalProposals = Number(scoutStats.total_proposals);
+        const quickKills = Number(scoutStats.quick_kills);
+        const scoutDuplicateRate = totalProposals > 0 ? quickKills / totalProposals : 0;
+        if (scoutDuplicateRate > 0.3 && totalProposals >= 3) {
+          await sql`
+            INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, signal_data, proposed_fix)
+            VALUES (
+              'process',
+              'medium',
+              'Process gap: Scout duplicate/rejection rate too high',
+              ${`${quickKills} of ${totalProposals} Scout proposals (${Math.round(scoutDuplicateRate * 100)}%) were killed within 24h of creation in the last 30 days. This suggests the Scout is proposing ideas that are immediately rejected — either duplicates, poor quality, or misaligned with Carlos's preferences.`},
+              'companies + approvals tables',
+              ${JSON.stringify({ quick_kills: quickKills, total_proposals: totalProposals, rate: scoutDuplicateRate })},
+              ${JSON.stringify({ type: "setup_action", description: "Review Scout prompt for idea quality filters. Consider adding market size minimums, duplicate checking against existing companies, or preference learning from past rejections." })}
+            )
+          `;
+          processGaps++;
+          console.log(`  ⚠ Scout duplicate rate: ${Math.round(scoutDuplicateRate * 100)}% (${quickKills}/${totalProposals}) — proposal created`);
+        }
+
+        // 2. Approval staleness: pending approvals older than 48h
+        const staleApprovals = await sql`
+          SELECT id, gate_type, title, created_at
+          FROM approvals
+          WHERE status = 'pending' AND created_at < now() - interval '48 hours'
+        `;
+        if (staleApprovals.length > 3) {
+          await sql`
+            INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, signal_data, proposed_fix)
+            VALUES (
+              'process',
+              'high',
+              'Process gap: Too many stale approvals',
+              ${`${staleApprovals.length} approvals have been pending for >48h. This blocks the pipeline — companies can't be provisioned, prompts can't be upgraded, and growth strategies can't execute. Gate types: ${staleApprovals.map((a: any) => a.gate_type).join(', ')}.`},
+              'approvals table',
+              ${JSON.stringify({ count: staleApprovals.length, gates: staleApprovals.map((a: any) => ({ id: a.id, gate_type: a.gate_type, title: a.title, age_hours: Math.round((Date.now() - new Date(a.created_at).getTime()) / 3600000) })) })},
+              ${JSON.stringify({ type: "setup_action", description: "Review and decide on stale approvals. Consider auto-expiring low-priority gates after 7 days, or batching approval notifications." })}
+            )
+          `;
+          processGaps++;
+          console.log(`  ⚠ Stale approvals: ${staleApprovals.length} pending >48h — proposal created`);
+        }
+
+        // 3. Stuck approved companies: approved but not provisioned within 3 days
+        const stuckApproved = await sql`
+          SELECT slug, name, updated_at
+          FROM companies
+          WHERE status = 'approved' AND updated_at < now() - interval '3 days'
+        `;
+        if (stuckApproved.length > 0) {
+          await sql`
+            INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, signal_data, proposed_fix)
+            VALUES (
+              'process',
+              'critical',
+              'Process gap: Approved companies stuck without provisioning',
+              ${`${stuckApproved.length} company(ies) have been in 'approved' status for >3 days without being provisioned: ${stuckApproved.map((c: any) => c.slug).join(', ')}. The provisioning step (Step 2) is likely broken or being skipped.`},
+              'companies table',
+              ${JSON.stringify({ companies: stuckApproved.map((c: any) => ({ slug: c.slug, name: c.name, stuck_since: c.updated_at })) })},
+              ${JSON.stringify({ type: "setup_action", description: "Investigate provisioning step in orchestrator. Check GitHub API, Neon API, and Vercel API connectivity. Run a manual provisioning cycle with --company flag." })}
+            )
+          `;
+          processGaps++;
+          console.log(`  ⚠ Stuck approved: ${stuckApproved.map((c: any) => c.slug).join(', ')} — proposal created`);
+        }
+
+        // 4. Cycle gaps: active/mvp companies without a cycle in >7 days
+        const cycleGapCompanies = await sql`
+          SELECT c.slug, c.name, c.status,
+            (SELECT MAX(started_at) FROM cycles WHERE company_id = c.id) as last_cycle
+          FROM companies c
+          WHERE c.status IN ('mvp', 'active')
+          AND NOT EXISTS (
+            SELECT 1 FROM cycles WHERE company_id = c.id AND started_at > now() - interval '7 days'
+          )
+        `;
+        if (cycleGapCompanies.length > 0) {
+          await sql`
+            INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, signal_data, proposed_fix)
+            VALUES (
+              'process',
+              'high',
+              'Process gap: Active companies missing nightly cycles',
+              ${`${cycleGapCompanies.length} active/mvp company(ies) haven't had a cycle in >7 days: ${cycleGapCompanies.map((c: any) => `${c.slug} (last: ${c.last_cycle ? new Date(c.last_cycle).toISOString().slice(0, 10) : 'never'})`).join(', ')}. These companies are stagnating without CEO planning or engineering work.`},
+              'companies + cycles tables',
+              ${JSON.stringify({ companies: cycleGapCompanies.map((c: any) => ({ slug: c.slug, status: c.status, last_cycle: c.last_cycle })) })},
+              ${JSON.stringify({ type: "setup_action", description: "Check orchestrator logs for skip reasons. Verify company priority ordering. Run manual cycle with --company flag for affected companies." })}
+            )
+          `;
+          processGaps++;
+          console.log(`  ⚠ Cycle gaps: ${cycleGapCompanies.map((c: any) => c.slug).join(', ')} — proposal created`);
+        }
+
+        if (processGaps === 0) {
+          console.log(`  ✓ No process gaps detected`);
+        } else {
+          console.log(`  📋 ${processGaps} process gap(s) added to evolver proposals`);
+        }
       }
     } catch { /* non-critical */ }
   }
@@ -2335,7 +2518,7 @@ Output a brief portfolio summary including any cross-pollination directives you 
   if (isWednesday && hasEnoughData && !SINGLE_COMPANY && !SCOUT_ONLY) {
     console.log("\n🧬 Prompt Evolver — analyzing agent performance");
 
-    const agents = ["ceo", "engineer", "growth", "ops"];
+    const agents = ["ceo", "scout", "engineer", "growth", "ops"];
 
     for (const agent of agents) {
       try {
@@ -2390,6 +2573,44 @@ Output a brief portfolio summary including any cross-pollination directives you 
           .map((a: any) => `- ${a.description.slice(0, 100)}${a.error ? ` | Error: ${a.error.slice(0, 80)}` : ""}${a.reflection ? ` | Reflection: ${a.reflection.slice(0, 80)}` : ""}`)
           .join("\n");
 
+        // Scout-specific: gather rejection data to feed into evolver prompt
+        let scoutRejectionSection = "";
+        if (agent === "scout") {
+          const rejections = await sql`
+            SELECT c.name, c.kill_reason, a.decision_note
+            FROM companies c
+            LEFT JOIN approvals a ON a.company_id = c.id AND a.gate_type = 'new_company'
+            WHERE c.status = 'killed' AND c.killed_at > now() - interval '30 days'
+            ORDER BY c.killed_at DESC
+            LIMIT 20
+          `;
+          if (rejections.length > 0) {
+            // Group rejection reasons for pattern detection
+            const reasonCounts: Record<string, number> = {};
+            for (const r of rejections) {
+              const reason = (r as any).kill_reason || (r as any).decision_note || "no reason given";
+              const normalized = reason.slice(0, 60).toLowerCase();
+              reasonCounts[normalized] = (reasonCounts[normalized] || 0) + 1;
+            }
+            const commonReasons = Object.entries(reasonCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([reason, count]) => `  - "${reason}" (${count}x)`)
+              .join("\n");
+            const recentList = rejections.slice(0, 10)
+              .map((r: any) => `  - ${r.name}: ${r.kill_reason || r.decision_note || "no reason"}`)
+              .join("\n");
+            scoutRejectionSection = `\n## REJECTION ANALYSIS:
+${rejections.length} ideas rejected in last 30 days.
+Common rejection reasons:
+${commonReasons}
+Recent rejections:
+${recentList}
+
+Use this rejection data to improve the Scout prompt — address the patterns that lead to rejections.
+For example: if rejections cite "too niche", emphasize broader markets. If "already exists", add duplicate checking.\n`;
+          }
+        }
+
         const evolverOutput = await dispatch({
           agent: "evolver",
           prompt: `You are the Prompt Evolver. Your job is to improve an agent's system prompt based on its recent performance data.
@@ -2399,7 +2620,7 @@ Output a brief portfolio summary including any cross-pollination directives you 
 
 ## Recent failures:
 ${failureDetails || "No specific failures logged"}
-
+${scoutRejectionSection}
 ## Current prompt:
 ${currentPrompt.slice(0, 3000)}
 
