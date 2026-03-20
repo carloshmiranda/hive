@@ -37,8 +37,8 @@ Common root causes in Hive:
 ### 3. Fix the code
 - Edit the minimal set of files needed
 - Run `npm run build` to verify compilation
-- For orchestrator.ts: just save it (ts-node runs it directly)
 - For src/ files: build must pass, then commit + push to deploy to Vercel
+- For workflow files (.github/workflows/): commit + push to activate
 
 ### 4. Verify and document
 - If the build passes, commit with message: `fix: [what was broken]`

@@ -18,7 +18,7 @@
 
 ### ADR-001: Mac-based intelligence, cloud-based serving
 **Date:** 2026-03-18
-**Status:** Accepted
+**Status:** Superseded by ADR-011, ADR-019
 **Context:** The orchestrator needs Claude-level reasoning for company management. Options: run agents on Vercel serverless, run on a VPS, or run on Carlos's Mac via Claude Code CLI with his Max 5x subscription.
 **Decision:** Intelligence layer runs on Mac via `claude -p`. Serving layer (dashboard, webhooks, company sites) runs on Vercel.
 **Alternatives considered:**
@@ -232,3 +232,13 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Auto-implement fixes: too risky, Carlos should review structural changes
 - Separate agents for each gap type: over-engineered, one agent with three layers is simpler
 **Consequences:** Evolver becomes the system's self-awareness layer. It detects problems across all three dimensions and proposes specific, evidence-backed fixes. Playbook utilization becomes measurable. The Inbox becomes the single review surface for all improvement proposals.
+
+### ADR-019: Remove orchestrator.ts Mac fallback
+**Date:** 2026-03-20
+**Status:** Accepted (completes ADR-011 cloud migration)
+**Context:** After ADR-011 moved all orchestration to GitHub Actions, `orchestrator.ts` (2000+ lines) and `com.hive.orchestrator.plist` remained as "fallback." In practice they were never used post-migration, drifted from the actual workflows, and caused context loss — a Claude Code session incorrectly assumed the orchestrator still ran on Mac via launchd because the file existed.
+**Decision:** Delete `orchestrator.ts`, `com.hive.orchestrator.plist`, and the `ts-node` dev dependency. Remove `orchestrate` npm scripts. Update all documentation references. The git history preserves the full file for reference if ever needed.
+**Alternatives considered:**
+- Keep as reference: actively harmful — its presence implies it's used, causing context confusion
+- Extract useful patterns to a doc: the patterns (retry logic, structured handoffs, agent dispatch) are already implemented in GitHub Actions workflows and documented in ARCHITECTURE.md
+**Consequences:** Single source of truth for orchestration is now `.github/workflows/`. No risk of future sessions confusing the fallback with the actual system. One fewer 2000-line file to maintain. `ts-node` dependency removed.

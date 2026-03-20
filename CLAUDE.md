@@ -90,29 +90,23 @@ Hive improves itself, not just sub-companies. The same patterns apply:
 6. Creates an approval gate: "Hive self-improvement: {title}. Review PR #{number}."
 7. Carlos reviews and merges (or rejects with feedback → goes back to backlog with notes)
 
-## Architecture: Two-Tier Event Processing
+## Architecture: Event-Driven Cloud Execution
+
+All orchestration runs in the cloud via GitHub Actions + Vercel serverless. No Mac dependency.
 
 ### Tier 1: Vercel webhooks (real-time, deterministic, no AI, $0)
-These run 24/7 on Vercel regardless of whether the Mac is on:
-- **Stripe webhook** (`/api/webhooks/stripe`): Logs payments, updates MRR, counts customers, detects first revenue → triggers Vercel Pro upgrade approval gate
+- **Stripe webhook** (`/api/webhooks/stripe`): Logs payments, updates MRR, counts customers, detects first revenue → dispatches CEO via `repository_dispatch`
 - **GitHub webhook** (`/api/webhooks/github`): Logs deploys, detects failures → escalates after 3 failures in 24h, captures GitHub Issues with `hive-directive` label as directives
 - **Metrics cron** (`/api/cron/metrics`): Runs at 8am + 6pm, scrapes Vercel Analytics for page views
 
-These keep the dashboard current during the day. No AI needed — pure deterministic logic.
+### Tier 2: GitHub Actions brain agents (event-driven, Claude Code)
+Brain agents (CEO, Scout, Engineer, Evolver) run on GitHub Actions via `anthropics/claude-code-action`. Triggered by `repository_dispatch` events — no scheduled crons, no Mac required.
 
-### Tier 2: Nightly loop (strategic, Claude Code, Mac)
-Runs at midnight via launchd. By the time it starts, Tier 1 has already populated today's metrics in Neon. The agents read pre-collected data rather than querying external APIs for basics.
+### Tier 3: Vercel serverless worker agents
+Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Triggered by brain agent chain dispatch.
 
-The nightly loop focuses on what needs intelligence:
-- CEO strategic planning (incorporating directives from you)
-- Engineer coding tasks
-- Growth content creation + marketing
-- Portfolio analysis + Kill Switch evaluation
-- Playbook updates + pattern extraction from imports
-
-### Middle ground: on-demand cycles
-Run `npx ts-node orchestrator.ts --company pawly` for an immediate single-company cycle.
-Useful when webhooks detect something significant (signup spike, viral moment) and you want agents to react now, not at midnight.
+### Sentinel (health monitor, every 4h)
+`hive-sentinel.yml` runs on GitHub Actions cron, queries Neon for 12 health conditions, and dispatches the appropriate agent for any condition that's met. This is the only scheduled workflow.
 
 ## Learning from Imports
 
@@ -159,7 +153,7 @@ Before any Growth, SEO, or marketing action, read the `playbook` table for appli
 ### 6. Prompt versioning
 Your own system prompts (per agent role) are stored in `agent_prompts` table. The Prompt Evolver can propose changes, but they go through shadow testing and an approval gate before activation.
 
-## Nightly Loop (run by orchestrator.ts)
+## Agent Execution Flow (GitHub Actions)
 
 ```
 PRE-FLIGHT: Health check (DB, Claude CLI, recent errors)
@@ -272,8 +266,8 @@ Knowledge sharing happens through the Neon database, not code imports:
           └────────┬─────────┘
                    │
           ┌────────▼────────┐
-          │   Orchestrator   │  ← reads all, dispatches to each
-          │  (orchestrator.ts)│
+          │  GitHub Actions   │  ← reads all, dispatches to each
+          │  (event-driven)   │
           └──────────────────┘
 ```
 
@@ -347,9 +341,9 @@ Retries are action-oriented, not just reflective. The agent sees its error and i
 Runs at the end of every nightly cycle if there are errors in the last 48h. Two modes:
 
 **Systemic errors** (same error in 2+ companies, or 3+ occurrences):
-- Indicates a bug in the orchestrator, shared template, or API
+- Indicates a bug in a shared template, workflow, or API
 - Healer dispatched with cwd = Hive repo, reads errors → finds root cause → fixes code → builds → commits
-- Example: a bad SQL query in orchestrator.ts referencing a column that doesn't exist
+- Example: a bad SQL query in a workflow referencing a column that doesn't exist
 
 **Company-specific errors** (only in one company):
 - Indicates a bug in that company's code
@@ -402,9 +396,9 @@ Hive email works in two modes based on the `sending_domain` setting:
 5. **Verify in Resend:** Click "Verify DNS Records" — wait for green status
 6. **Set in Hive settings:** Go to `/settings`, add `sending_domain` = `mail.yourdomain.com`
 
-### Two code contexts
+### Email code
 
-- **Orchestrator digest + outreach**: Inlined in orchestrator.ts. Direct Resend API calls. Cannot import from `src/`. Reads `sending_domain` from settings to build from addresses.
+- **Digest + outreach**: Handled by the Digest workflow (`hive-digest.yml`) and Outreach worker agent via `/api/agents/dispatch`.
 - **Company transactional emails**: Use `src/lib/resend.ts` which provides `sendEmail()`, `buildFromAddress()`, `canSendOutreach()` + templates:
   - `renderWelcomeEmail()` — new customer onboarding
   - `renderReceiptEmail()` — payment confirmation
@@ -507,7 +501,6 @@ hive/
 ├── BACKLOG.md             ← prioritised improvements
 ├── DECISIONS.md           ← architectural decision records
 ├── schema.sql             ← Neon schema (13 tables)
-├── orchestrator.ts        ← nightly loop runner (runs via ts-node)
 ├── package.json
 ├── src/
 │   ├── middleware.ts       ← auth redirect
@@ -552,10 +545,10 @@ hive/
 │       ├── schema.sql       ← customers + waitlist + email_sequences + email_log
 │       ├── .env.example
 │       └── src/app/        ← landing page (LAUNCH_MODE), checkout, success, webhooks (Stripe + Resend), waitlist API
-├── prompts/                ← agent system prompts (TBD, using defaults)
-└── com.hive.orchestrator.plist  ← macOS LaunchAgent
+├── prompts/                ← agent system prompts
+└── .github/workflows/     ← GitHub Actions workflows (primary orchestration)
 ```
 
-## Cloud Migration Path
+## Orchestration
 
-The `dispatch()` function in orchestrator.ts is the abstraction layer. Today it calls `claude -p`. When Carlos adds an API key and approves migration, swap to Claude Agent SDK `query()`. Same prompts, same CLAUDE.md, same Neon state. One function change.
+All agent dispatch runs on GitHub Actions via `anthropics/claude-code-action`. See `.github/workflows/` for the 7 workflows and `ARCHITECTURE.md` for the full system diagram.

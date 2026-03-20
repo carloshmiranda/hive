@@ -132,14 +132,6 @@ NEXT_PUBLIC_URL=http://localhost:3000
 EOF
 echo "  ✓ .env.local created"
 
-# Create logs directory for orchestrator
-mkdir -p logs
-echo "  ✓ logs/ directory created"
-
-# Update launchd plist with actual values
-sed -i '' "s|YOUR_NEON_CONNECTION_STRING|$DATABASE_URL|g" com.hive.orchestrator.plist
-sed -i '' "s|/Users/carlos/code/hive|$HIVE_DIR|g" com.hive.orchestrator.plist
-echo "  ✓ LaunchAgent plist updated"
 echo ""
 
 # --- Done ---
@@ -163,12 +155,10 @@ echo ""
 echo "  3. Set up GitHub webhooks:"
 echo "     gh api repos/$GITHUB_USERNAME/hive/hooks -f url=$DEPLOY_URL/api/webhooks/github -f content_type=json -f 'events[]=push' -f 'events[]=deployment_status' -f 'events[]=issues'"
 echo ""
-echo "  4. Test the orchestrator:"
-echo "     npx ts-node orchestrator.ts --dry-run"
-echo ""
-echo "  5. Install the nightly schedule:"
-echo "     cp com.hive.orchestrator.plist ~/Library/LaunchAgents/"
-echo "     launchctl load ~/Library/LaunchAgents/com.hive.orchestrator.plist"
+echo "  4. Set up GitHub Actions secrets:"
+echo "     gh secret set CLAUDE_CODE_OAUTH_TOKEN --body '<your-token>'"
+echo "     gh secret set GH_PAT --body '<your-pat>'"
+echo "     gh secret set DATABASE_URL --body '$DATABASE_URL'"
 echo ""
 echo "Then open Claude Code in this directory and start building."
 echo "============================================"
