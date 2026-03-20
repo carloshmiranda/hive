@@ -204,10 +204,16 @@ export default function DashboardPage() {
   }, [fetchAll]);
 
   const handleApproval = async (id: string, decision: "approved" | "rejected") => {
+    let note: string | undefined;
+    if (decision === "rejected") {
+      const input = prompt("Rejection reason (helps Scout avoid similar ideas):");
+      if (input === null) return; // user cancelled
+      note = input || undefined;
+    }
     const res = await fetch(`/api/approvals/${id}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({ decision, note }),
     });
     if (res.ok) fetchAll();
   };
