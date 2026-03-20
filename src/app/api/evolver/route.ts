@@ -114,6 +114,19 @@ export async function PATCH(req: Request) {
         title: proposal.title,
         change: proposal.proposed_fix?.change,
       });
+
+    } else if (fixType === "code_fix") {
+      // Dispatch to Engineer to implement the fix
+      const affectedCompanies = proposal.affected_companies || [];
+      const firstCompany = affectedCompanies[0];
+      await dispatchEvent("feature_request", {
+        source: "evolver",
+        proposal_id: proposal.id,
+        title: proposal.title,
+        change: proposal.proposed_fix?.change,
+        target: proposal.proposed_fix?.target,
+        company: firstCompany || "",
+      });
     }
   }
 

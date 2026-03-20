@@ -33,6 +33,8 @@ permissions:
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
 jobs:
   engineer:
@@ -119,8 +121,9 @@ jobs:
           node -e "
           const postgres = require('postgres');
           const sql = postgres(process.env.DATABASE_URL);
+          const SLUG = '${COMPANY}';
           async function log() {
-            const companyId = '${COMPANY}' ? (await sql\`SELECT id FROM companies WHERE slug = ${COMPANY} LIMIT 1\`)[0]?.id : null;
+            const companyId = SLUG ? (await sql\`SELECT id FROM companies WHERE slug = \${SLUG} LIMIT 1\`)[0]?.id : null;
             await sql\`
               INSERT INTO agent_actions (agent, action_type, status, error, output, started_at, finished_at, company_id)
               VALUES ('engineer', 'feature_request', 'failed',
