@@ -45,6 +45,9 @@ Extend the assessment endpoint to detect non-Next.js stacks: check for remix.con
 ### 🟢 P3 — Capability diff alerting
 When an assessment shows a capability regression (something that existed now doesn't), create an automatic escalation. Catches cases where a deploy accidentally removed a webhook route or a migration dropped a table.
 
+### ⚪ P3 — Neon Data API for lightweight agent access
+Enable Neon Data API (PostgREST) on company projects for schema discovery via OpenAPI spec, simple agent CRUD (Growth writing email sequences, Ops reading metrics), and future client-side access with RLS. Hybrid: Data API for simple frequent ops, direct SQL for complex/DDL. Full design doc from brainstorm session available. Revisit after 5-10 successful cycles prove DB access is a bottleneck. See brainstorm notes for full 10-part implementation plan (migration, client lib, neon-api helpers, assessment integration, agent prompts, provisioner update, boilerplate changes).
+
 ### ⚪ P3 — Cloud migration
 Move the intelligence layer from Mac to cloud. Swap `dispatch()` from `claude -p` to Claude Agent SDK `query()`. Run on GitHub Actions or a VPS. The abstraction layer is already designed for this.
 
