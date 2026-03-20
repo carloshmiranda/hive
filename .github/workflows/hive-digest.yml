@@ -41,11 +41,18 @@ jobs:
               return;
             }
 
-            // Portfolio summary
+            // Portfolio summary (mrr/customers live in metrics, not companies)
             const companies = await sql\`
-              SELECT slug, status, company_type, mrr, customers FROM companies
-              WHERE status IN ('idea','approved','provisioning','mvp','active')
-              ORDER BY status, slug
+              SELECT c.slug, c.status, c.company_type,
+                COALESCE(m.mrr, 0) as mrr,
+                COALESCE(m.customers, 0) as customers
+              FROM companies c
+              LEFT JOIN (
+                SELECT DISTINCT ON (company_id) company_id, mrr, customers
+                FROM metrics ORDER BY company_id, date DESC
+              ) m ON m.company_id = c.id
+              WHERE c.status IN ('idea','approved','provisioning','mvp','active')
+              ORDER BY c.status, c.slug
             \`;
 
             // Last 24h agent activity
@@ -141,7 +148,7 @@ jobs:
             // Log the digest action
             await sql\`
               INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
-              VALUES ('sentinel', 'daily_digest', 'success',
+              VALUES ('ops', 'daily_digest', 'success',
                 \${'Digest sent: ' + companies.length + ' companies, EUR ' + totalMrr.toFixed(2) + ' MRR, ' + approvals.length + ' pending approvals'},
                 NOW(), NOW())
             \`;

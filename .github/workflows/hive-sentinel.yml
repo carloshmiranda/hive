@@ -198,6 +198,21 @@ jobs:
             \`;
             results.chain_gaps = chainGaps.map(r => ({ company: r.slug, source: r.source_agent }));
 
+            // 12. Cycles stuck in 'running' for >2 hours (auto-cleanup)
+            const stuckCycles = await sql\`
+              UPDATE cycles
+              SET status = 'failed',
+                  finished_at = NOW(),
+                  ceo_review = jsonb_build_object('timeout_reason', 'Cycle stuck in running state >2h, cleaned up by Sentinel')
+              WHERE status = 'running'
+                AND started_at < NOW() - INTERVAL '2 hours'
+              RETURNING cycle_number, company_id
+            \`;
+            if (stuckCycles.length > 0) {
+              results.stuck_cycles_cleaned = stuckCycles.length;
+              console.error('Cleaned ' + stuckCycles.length + ' stuck cycles');
+            }
+
             console.log(JSON.stringify(results));
             await sql.end();
           }
