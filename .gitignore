@@ -9,3 +9,6 @@ logs/
 hive-project.tar.gz
 .env*.local
 .claude/worktrees/
+docs/
+files.zip
+hive-claude-code-prompt.md

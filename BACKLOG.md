@@ -68,6 +68,9 @@ The orchestrator should be able to propose and implement improvements to its own
 ## Done
 <!-- Move completed items here with date -->
 
+### ✅ 2026-03-20 — Self-improving feedback loops
+Scout semantic deduplication (word-overlap check against all companies, not just slug). Rejection feedback loop (kill_reasons + rejection notes fed to Scout prompt). Process gap detection in Evolver (Scout duplicate rate, stale approvals, stuck companies, cycle gaps). Rich proposal cards in dashboard (market flag, confidence badge, structured fields). Rejection-to-Evolver pipeline (Scout prompt evolution includes rejection pattern analysis).
+
 ### ✅ 2026-03-18 — Auth on dashboard
 NextAuth v5 + GitHub OAuth + single-user lockdown. Every API route and page protected.
 
