@@ -1,4 +1,5 @@
 name: Hive Evolver
+run-name: "Evolver: ${{ github.event.action || 'weekly' }} — ${{ github.event.inputs.focus || 'all' }}"
 
 on:
   schedule:

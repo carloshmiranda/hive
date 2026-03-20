@@ -3,7 +3,7 @@ import { getSettingValue } from "@/lib/settings";
 
 // Vercel Cron: runs at 8am and 6pm (configure in vercel.json)
 // Collects page_views from Vercel Analytics for all active companies
-// The nightly loop still does full analysis — this keeps the dashboard current during the day
+// Also ensures every MVP/active company has a metrics row for today
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -17,44 +17,53 @@ export async function GET(req: Request) {
 
   const sql = getDb();
   const vercelToken = await getSettingValue("vercel_token");
-  if (!vercelToken) return Response.json({ error: "Vercel token not configured" }, { status: 500 });
-
   const today = new Date().toISOString().split("T")[0];
 
-  // Get all active companies with Vercel project IDs
+  // Get all active/mvp companies — use infra table for Vercel project IDs
+  // since companies.vercel_project_id may not be set
   const companies = await sql`
-    SELECT c.id, c.slug, c.vercel_project_id FROM companies c
-    WHERE c.status IN ('active', 'mvp') AND c.vercel_project_id IS NOT NULL
+    SELECT c.id, c.slug,
+      COALESCE(c.vercel_project_id, i.resource_id) as vercel_project_id
+    FROM companies c
+    LEFT JOIN infra i ON i.company_id = c.id AND i.service = 'vercel'
+    WHERE c.status IN ('active', 'mvp')
   `;
 
-  const results: Array<{ slug: string; views: number }> = [];
+  const results: Array<{ slug: string; views: number; source: string }> = [];
 
   for (const company of companies) {
     try {
-      // Fetch page views from Vercel Web Analytics
-      const from = new Date();
-      from.setHours(0, 0, 0, 0);
+      let views = 0;
+      let source = "default";
 
-      const res = await fetch(
-        `https://vercel.com/api/web/insights/stats?projectId=${company.vercel_project_id}&from=${from.toISOString()}&to=${new Date().toISOString()}`,
-        { headers: { Authorization: `Bearer ${vercelToken}` } }
-      );
+      // Try Vercel Analytics if we have a project ID and token
+      if (vercelToken && company.vercel_project_id) {
+        const from = new Date();
+        from.setHours(0, 0, 0, 0);
 
-      if (res.ok) {
-        const data = await res.json();
-        const views = data.pageViews || data.totalPageViews || 0;
+        const res = await fetch(
+          `https://vercel.com/api/web/insights/stats?projectId=${company.vercel_project_id}&from=${from.toISOString()}&to=${new Date().toISOString()}`,
+          { headers: { Authorization: `Bearer ${vercelToken}` } }
+        );
 
-        await sql`
-          INSERT INTO metrics (company_id, date, page_views)
-          VALUES (${company.id}, ${today}, ${views})
-          ON CONFLICT (company_id, date) DO UPDATE SET page_views = ${views}
-        `;
-
-        results.push({ slug: company.slug, views });
+        if (res.ok) {
+          const data = await res.json();
+          views = data.pageViews || data.totalPageViews || 0;
+          source = "vercel_analytics";
+        }
       }
+
+      // Always ensure a metrics row exists for today (even with 0s)
+      // This prevents the dashboard from showing "no data"
+      await sql`
+        INSERT INTO metrics (company_id, date, page_views)
+        VALUES (${company.id}, ${today}, ${views})
+        ON CONFLICT (company_id, date) DO UPDATE SET page_views = GREATEST(metrics.page_views, ${views})
+      `;
+
+      results.push({ slug: company.slug, views, source });
     } catch (e) {
-      // Non-critical — log and continue
-      console.error(`Failed to fetch analytics for ${company.slug}:`, e);
+      console.error(`Failed to collect metrics for ${company.slug}:`, e);
     }
   }
 

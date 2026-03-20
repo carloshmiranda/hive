@@ -1,4 +1,5 @@
 name: Hive Digest
+run-name: "Digest: daily portfolio summary"
 
 on:
   schedule:

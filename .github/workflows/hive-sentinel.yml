@@ -1,4 +1,5 @@
 name: Hive Sentinel
+run-name: "Sentinel: health check"
 
 on:
   schedule:

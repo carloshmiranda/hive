@@ -1,4 +1,5 @@
 name: Hive Scout
+run-name: "Scout: ${{ github.event.action || github.event.inputs.mode || 'scheduled' }} — ${{ github.event.client_payload.company || github.event.inputs.company || 'pipeline' }}"
 
 on:
   repository_dispatch:

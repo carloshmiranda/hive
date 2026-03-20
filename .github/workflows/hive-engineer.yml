@@ -1,4 +1,5 @@
 name: Hive Engineer
+run-name: "Engineer: ${{ github.event.action || github.event_name }} — ${{ github.event.client_payload.company || github.event.inputs.company || 'task' }}"
 
 on:
   repository_dispatch:
@@ -122,7 +123,16 @@ jobs:
                       ('<id>', 'vercel', '<slug>', '{}')
                ON CONFLICT DO NOTHING
                ```
-            6. Update company status: `UPDATE companies SET status = 'mvp', updated_at = NOW() WHERE id = '<id>'`
+            6. Update company with status AND infra references:
+               ```sql
+               UPDATE companies SET
+                 status = 'mvp',
+                 vercel_project_id = '<slug>',
+                 vercel_url = 'https://<slug>.vercel.app',
+                 github_repo = 'carloshmiranda/<slug>',
+                 updated_at = NOW()
+               WHERE id = '<id>'
+               ```
             7. Log success: `INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at) VALUES ('engineer', '<id>', 'scaffold_company', 'success', 'Provisioned: GitHub repo + Vercel project', NOW(), NOW())`
 
             Do NOT create a Neon database or Stripe product — skip those for now.

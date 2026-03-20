@@ -1,4 +1,5 @@
 name: Hive Workers
+run-name: "Workers: ${{ github.event.action || github.event.inputs.agent || 'dispatch' }} — ${{ github.event.client_payload.company || github.event.inputs.company || 'all' }}"
 
 on:
   repository_dispatch:
