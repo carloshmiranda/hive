@@ -100,6 +100,7 @@ jobs:
             Use BOTH web_search AND web_fetch. You MUST web_fetch at least 5 community URLs (Reddit, HN, etc.) — do not skip this.
 
             ## STEP 4: Write results to Neon
+            IMPORTANT: You are a RESEARCHER. Do NOT classify proposals as "expansion" vs "new_company" — the CEO agent handles that decision later.
             For each of your 3 proposals:
             1. Create the company: `INSERT INTO companies (name, slug, description, status) VALUES (..., 'idea') ON CONFLICT (slug) DO NOTHING RETURNING *`
             2. Create an approval gate with the FULL proposal in context (wrapped as `{"proposal": {...}, "research": {...}}`):
@@ -109,6 +110,7 @@ jobs:
                  '{"proposal": {full proposal object}, "research": {research object}}'::jsonb)
                ```
                IMPORTANT: The context field MUST be a JSON object with "proposal" and "research" keys. The dashboard reads context.proposal to render rich cards.
+               If a proposal has `expansion_candidate` data (synergy_score > 0.4), still create it as `new_company` gate — the CEO will re-evaluate.
             3. Log to agent_actions: `INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at) VALUES ('scout', 'idea_generation', '...', 'success', '{...}'::jsonb, NOW(), NOW())`
 
             ## If trigger is research_request or research mode:

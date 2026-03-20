@@ -164,17 +164,25 @@ Your own system prompts (per agent role) are stored in `agent_prompts` table. Th
 ```
 PRE-FLIGHT: Health check (DB, Claude CLI, recent errors)
 
-STEP 1: Idea Scout (condition: pipeline < 3 companies AND active < 5)
+STEP 1: Idea Scout + CEO Venture Evaluation (condition: pipeline < 3 AND active < 5)
   Pipeline = companies in idea + approved + provisioning + mvp + active status
-  - Researches market via web search, generates exactly 3 proposals
-  - MANDATORY mix: 1 Portuguese 🇵🇹, 1 Global 🌍, 1 best-pick
-  - Any digital business model: SaaS, blogs, faceless channels, newsletters, affiliate sites, digital products, virtual influencers, dropshipping, API services, marketplaces
-  - Must be 100% automatable by AI agents (automation score ≥80%)
-  - Shippable in 1-2 weeks, €500-€5k monthly revenue target
-  - 5 research phases: PT discovery → Global discovery → Competition → Validation → Rank
-  - Creates 3 companies (status: 'idea'), each with own approval gate
-  - Carlos approves which to build, rejects the rest (rejected → auto-killed)
-  - 30 max turns, 20 min timeout
+
+  1a. Scout RESEARCHES (does NOT decide expand-vs-new):
+    - Researches market via web search, generates exactly 3 proposals
+    - MANDATORY mix: 1 Portuguese 🇵🇹, 1 Global 🌍, 1 best-pick
+    - Any digital business model: SaaS, blogs, faceless channels, newsletters, etc.
+    - Must be 100% automatable by AI agents (automation score ≥80%)
+    - Provides synergy data (audience_overlap, expansion_candidate) but does NOT classify
+    - 50 max turns, 25 min timeout
+
+  1b. CEO EVALUATES each proposal:
+    - Decides: new_company | expansion | question
+    - New company → creates company in 'idea' status + new_company approval
+    - Expansion → creates growth_strategy approval on existing company
+    - Question → creates growth_strategy approval with question_for_carlos
+    - Decision framework: overlap > 0.7 → expansion/question; < 0.3 → new_company
+
+  - Carlos approves which to build, rejects the rest
   - Skipped if pipeline already has 3+ companies, or --company flag used
   - Force with: --scout or --scout-only
 
@@ -194,12 +202,21 @@ STEP 4: Company cycles — priority order:
        - Uses web search to produce market_research, competitive_analysis, seo_keywords reports
        - Stored in research_reports table, fed to CEO + Growth + Outreach as context
     1. Read open directives from Carlos (dashboard/GitHub Issues)
-    2. CEO: Read metrics + playbook + research + directives → write plan to cycles table
-    3. Engineer: Execute code tasks from plan → commit to GitHub → deploy
-    4. Growth (inbound): SEO blog posts from keywords report, social media, content calendar
-    5. Outreach (outbound): Build lead list, draft cold emails, send via Resend (first batch needs approval, then auto max 10/day)
-    6. Ops: Verify metrics → fill gaps → check health
-    7. CEO: Review cycle → score 1-10 → extract playbook entries → kill flag if needed
+    2. CEO: Read metrics + playbook + research + directives → write STRUCTURED plan (engineering_tasks, growth_tasks with IDs)
+    3. Growth pre-spec (BUILD MODE ONLY): Plan distribution channels, SEO requirements, build_requests BEFORE Engineering
+    4. Engineer: Execute engineering_tasks + growth build_requests → commit to GitHub → deploy
+    5. Growth (inbound): Execute growth_tasks informed by engineer results → SEO, content, social
+    6. Outreach (outbound): Build lead list, draft cold emails, send via Resend (first batch needs approval, then auto max 10/day)
+    7. Ops: Verify metrics → fill gaps → check health
+    8. CEO: Review cycle with STRUCTURED results → score 1-10, grade agents (A/B/C/F) → playbook → kill flag
+
+  Structured handoffs between agents:
+    - CEO plan → Engineer: JSON with engineering_tasks[{id, task, acceptance}]
+    - CEO plan → Growth: JSON with growth_tasks[{id, task, rationale, target_keyword}]
+    - Growth pre-spec → Engineer: JSON with distribution_channels, seo_requirements, build_requests
+    - Engineer results → CEO review: JSON with tasks_completed[{task_id, status, commit}]
+    - Growth results → CEO review: JSON with content_created[{task_id, type, status}]
+    - CEO review → cycles table: JSON with score, agent_grades, next_cycle_priorities
 
 STEP 5: Self-healing (Healer agent)
   - Classifies systemic vs company-specific errors from last 48h

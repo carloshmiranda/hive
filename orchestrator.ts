@@ -413,6 +413,28 @@ function getDefaultPrompt(agent: string, company?: { name: string; slug: string 
   return fallbacks[agent] || "Execute the assigned task and return results as JSON.";
 }
 
+// === STRUCTURED HANDOFF PARSING ===
+// Extracts and validates JSON handoffs from raw agent output.
+// Falls back to null so consumers can degrade to raw strings.
+function parseHandoff<T>(rawOutput: string, requiredKeys: string[]): T | null {
+  const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    // Unwrap common wrappers (agents often wrap in {plan: {...}} or {review: {...}})
+    const unwrapped = parsed.plan || parsed.review || parsed;
+    for (const key of requiredKeys) {
+      if (!(key in unwrapped) && !(key in parsed)) {
+        console.log(`    ⚠ Handoff missing key: ${key}`);
+        return null;
+      }
+    }
+    return parsed as T;
+  } catch {
+    return null;
+  }
+}
+
 // === AGENT EXECUTION WITH RETRY + SELF-HEAL ===
 async function executeAgent(opts: {
   agent: string;
@@ -685,46 +707,79 @@ ${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.
             }
           }
 
-          // Process proposals by type: new_company, expansion, or question
+          // CEO Venture Evaluation — let CEO decide expand-vs-new for each proposal
+          console.log("  ├─ CEO evaluating proposals (expand vs new)...");
+          let ceoDecisions: Array<{ proposal_index: number; decision: string; expand_target?: string; expand_what?: string; question_for_carlos?: string; reasoning?: string }> = [];
+
+          try {
+            const ceoEvalOutput = await dispatch({
+              agent: "ceo",
+              prompt: `You are the Venture CEO. The Scout has researched ${filteredProposals.length} opportunities.
+
+CURRENT PORTFOLIO:
+${liveCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description}`).join("\n") || "No active companies"}
+
+ALL COMPANIES (including killed/idea):
+${allCompanies.map(c => `- ${c.name} (${c.slug}): ${c.description || "no description"} [${c.status}]`).join("\n")}
+
+SCOUT PROPOSALS:
+${filteredProposals.map(({ proposal: p }, i) => `\n### Proposal ${i}: ${p.name}\n${JSON.stringify(p, null, 2)}`).join("\n")}
+
+Read prompts/ceo.md section "Venture Evaluation mode" for your decision framework and output format.
+For each proposal, decide: new_company, expansion, or question. Output JSON with a "decisions" array.`,
+              timeoutMs: 5 * 60 * 1000,
+            });
+
+            const parsed = parseHandoff<{ decisions: any[] }>(ceoEvalOutput, ["decisions"]);
+            if (parsed?.decisions) {
+              ceoDecisions = parsed.decisions;
+            }
+          } catch (e: any) {
+            console.log(`    ⚠ CEO evaluation failed: ${e.message.slice(0, 80)} — defaulting all to new_company`);
+          }
+
+          // Process proposals using CEO decisions (fallback: new_company for all)
           let proposalCount = 0;
 
           for (let i = 0; i < filteredProposals.length; i++) {
-            const { proposal: p, idx } = filteredProposals[i];
-            const proposalType = p.proposal_type || "new_company";
+            const { proposal: p } = filteredProposals[i];
+            const ceoDec = ceoDecisions.find(d => d.proposal_index === i);
+            const decision = ceoDec?.decision || "new_company";
             const marketTag = (p.market === "Portugal" || p.market === "pt") ? "🇵🇹 PT" : "🌍 Global";
             const num = i + 1;
 
-            if (proposalType === "expansion" || proposalType === "question") {
-              // EXPANSION or QUESTION — don't create a new company, create a growth_strategy approval on the existing one
-              const targetSlug = p.expand_target;
+            if (decision === "expansion" || decision === "question") {
+              // EXPANSION or QUESTION — create growth_strategy approval on the existing company
+              const targetSlug = ceoDec?.expand_target || p.expansion_candidate?.target_slug;
               let targetCompanyId: string | null = null;
               if (targetSlug) {
                 const [target] = await sql`SELECT id FROM companies WHERE slug = ${targetSlug}`;
                 targetCompanyId = target?.id || null;
               }
 
-              const gateType = proposalType === "question" ? "growth_strategy" : "growth_strategy";
-              const typeLabel = proposalType === "question" ? "❓ Question" : "📈 Expand";
-              const title = proposalType === "question"
+              const typeLabel = decision === "question" ? "❓ Question" : "📈 Expand";
+              const expandWhat = ceoDec?.expand_what || p.expansion_candidate?.what_to_add || p.name;
+              const title = decision === "question"
                 ? `${typeLabel}: ${p.name} — standalone or expand ${targetSlug}?`
-                : `${typeLabel}: Add ${p.expand_what || p.name} to ${targetSlug} [${marketTag}]`;
+                : `${typeLabel}: Add ${expandWhat} to ${targetSlug} [${marketTag}]`;
 
               await sql`
                 INSERT INTO approvals (company_id, gate_type, title, description, context)
                 VALUES (
                   ${targetCompanyId},
-                  ${gateType},
+                  'growth_strategy',
                   ${title},
                   ${`**${p.description}**\n\n` +
-                    (p.expand_what ? `**What to add:** ${p.expand_what}\n` : "") +
-                    (p.question_for_carlos ? `\n**Decision needed:**\n${p.question_for_carlos}\n\n` : "") +
+                    `**What to add:** ${expandWhat}\n` +
+                    (ceoDec?.question_for_carlos ? `\n**Decision needed:**\n${ceoDec.question_for_carlos}\n\n` : "") +
+                    `**CEO reasoning:** ${ceoDec?.reasoning || "N/A"}\n` +
                     `**Market:** ${p.market || "Global"}\n` +
                     `**Problem:** ${p.problem}\n` +
                     `**Solution:** ${p.solution}\n` +
                     `**Monetisation:** ${p.monetisation}\n` +
                     `**MVP scope:** ${p.mvp_scope}\n` +
                     `**Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%`},
-                  ${JSON.stringify({ proposal: p, all_proposals: proposals, research: idea.research })}
+                  ${JSON.stringify({ proposal: p, ceo_decision: ceoDec, all_proposals: proposals, research: idea.research })}
                 )
               `;
               console.log(`    ${num}. ${typeLabel} ${p.name} → ${targetSlug || "unknown"} [${p.market || "Global"}] — ${Math.round((p.confidence || 0.5) * 100)}%`);
@@ -748,13 +803,14 @@ ${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.
                     ${"🆕 Launch " + p.name + " [" + marketTag + "]"},
                     ${`**${p.description}**\n\n` +
                       `**Model:** ${p.business_model || "saas"}\n` +
+                      `**CEO reasoning:** ${ceoDec?.reasoning || "N/A"}\n` +
                       `**Market:** ${p.market || "Global"}\n` +
                       `**Problem:** ${p.problem}\n` +
                       `**Solution:** ${p.solution}\n` +
                       `**Monetisation:** ${p.monetisation}\n` +
                       `**MVP scope:** ${p.mvp_scope}\n` +
                       `**Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%`},
-                    ${JSON.stringify({ proposal: p, all_proposals: proposals, research: idea.research })}
+                    ${JSON.stringify({ proposal: p, ceo_decision: ceoDec, all_proposals: proposals, research: idea.research })}
                   )
                 `;
                 console.log(`    ${num}. 🆕 ${p.name} (${p.slug}) [${p.market || "Global"}] — ${Math.round((p.confidence || 0.5) * 100)}%`);
@@ -1649,17 +1705,48 @@ ${proposal?.context ? `\nORIGINAL PROPOSAL:\n${JSON.stringify(proposal.context.p
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + "\n\n" + lifecycleContext + "\n\nWrite tonight's plan." +
+      prompt: ceoPrompt + "\n\n" + lifecycleContext + "\n\nWrite tonight's plan. Use the structured output format with engineering_tasks (id: eng-1, eng-2) and growth_tasks (id: growth-1, growth-2)." +
         (directives.length > 0 ? `\n\nIMPORTANT: Carlos has given ${directives.length} directive(s). These take priority. Incorporate them into your plan and note which directive IDs you're addressing.` : ""),
       context,
     });
+
+    // Parse CEO plan into structured handoff
+    const ceoPlanParsed = parseHandoff<any>(ceoPlan.output, ["mode"]);
+    const planData = ceoPlanParsed?.plan || ceoPlanParsed;
 
     // Close directives that the CEO incorporated
     for (const d of directives) {
       await closeDirective(d.id, `Incorporated into cycle ${cycleNumber} plan`);
     }
 
-    // Step 2: Engineer executes
+    // Step 2: Growth pre-spec (build mode only — distribution planning BEFORE engineering)
+    const growthPrompt = await getActivePrompt("growth", companyCtx);
+    let growthPrespec: any = null;
+
+    if (planData?.mode === "build") {
+      console.log("  ├─ Growth pre-spec (distribution planning)...");
+      const prespecResult = await executeAgent({
+        agent: "growth",
+        companyId: company.id,
+        cycleId,
+        prompt: growthPrompt + `\n\n## PRE-SPEC MODE
+You are in PRE-SPEC mode. The CEO has planned the product features below. Your job is NOT to create content yet. Instead, plan HOW you will distribute this product.
+
+CEO PLAN:
+${planData ? JSON.stringify(planData, null, 2) : ceoPlan.output.slice(0, 2000)}
+
+Output a distribution pre-spec as JSON following the Pre-Spec output format in your prompt (distribution_channels, seo_requirements, conversion_flow, build_requests).
+This informs the Engineer what to build alongside features so distribution is baked in from day 1.`,
+        context,
+      });
+
+      growthPrespec = parseHandoff<any>(prespecResult.output, ["build_requests"]);
+      if (growthPrespec) {
+        console.log(`    ✓ Pre-spec: ${(growthPrespec.build_requests || []).length} build requests, ${(growthPrespec.distribution_channels || []).length} channels planned`);
+      }
+    }
+
+    // Step 3: Engineer executes (with structured plan + growth prespec)
     console.log("  ├─ Engineer executing...");
     const companyCwd = `/Users/carlos.miranda/Documents/Github/${company.slug}`;
     let companyRepoExists = existsSync(companyCwd);
@@ -1682,21 +1769,36 @@ ${proposal?.context ? `\nORIGINAL PROPOSAL:\n${JSON.stringify(proposal.context.p
       agent: "engineer",
       companyId: company.id,
       cycleId,
-      prompt: engPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the engineering tasks.`,
+      prompt: engPrompt +
+        `\n\nCEO PLAN (structured):\n${planData ? JSON.stringify(planData, null, 2) : ceoPlan.output.slice(0, 2000)}` +
+        (growthPrespec
+          ? `\n\nGROWTH DISTRIBUTION PRE-SPEC:\n${JSON.stringify(growthPrespec, null, 2)}\n\n` +
+            `IMPORTANT: The Growth agent needs these from you: ${(growthPrespec.build_requests || []).join("; ") || "none specified"}. ` +
+            `Build these alongside the CEO's engineering_tasks. Distribution-readiness is part of your acceptance criteria.`
+          : "") +
+        `\n\nExecute the engineering tasks. Reference task IDs (eng-1, eng-2) in your output.`,
       context,
       cwd: companyCwd, // local repo path
     });
 
-    // Step 3: Growth executes (inbound: content, SEO, social)
+    // Parse engineer result for structured handoff
+    const engParsed = parseHandoff<any>(engResult.output, ["tasks_completed"]);
+
+    // Step 4: Growth executes content (inbound: content, SEO, social)
     console.log("  ├─ Growth executing...");
-    const growthPrompt = await getActivePrompt("growth", companyCtx);
     const growthResult = await executeAgent({
       agent: "growth",
       companyId: company.id,
       cycleId,
-      prompt: growthPrompt + `\n\nCEO PLAN: ${ceoPlan.output}\n\nExecute the growth tasks. You have access to research reports — use SEO keywords and market research to inform content.`,
+      prompt: growthPrompt +
+        `\n\nCEO PLAN (structured):\n${planData ? JSON.stringify(planData, null, 2) : ceoPlan.output.slice(0, 2000)}` +
+        `\n\nENGINEER RESULTS:\n${engParsed ? JSON.stringify(engParsed, null, 2) : `Status: ${engResult.success ? "SUCCESS" : "FAILED"} — ${engResult.output.slice(0, 500)}`}` +
+        `\n\nExecute the growth tasks. Reference task IDs (growth-1, growth-2) in your output. You have access to research reports — use SEO keywords and market research to inform content.`,
       context,
     });
+
+    // Parse growth result for structured handoff
+    const growthParsed = parseHandoff<any>(growthResult.output, ["content_created"]);
 
     // Step 3b: Outreach executes (outbound: lead gen, cold email, community engagement)
     // Skipped for companies with no research reports yet (wait for Cycle 0 to complete)
@@ -1839,18 +1941,21 @@ OUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach
       context,
     });
 
-    // Step 5: CEO reviews
+    // Step 6: CEO reviews (all structured handoffs)
     console.log("  └─ CEO reviewing cycle...");
     const ceoReview = await executeAgent({
       agent: "ceo",
       companyId: company.id,
       cycleId,
-      prompt: ceoPrompt + `\n\nReview tonight's cycle results. Score the cycle 1-10. Write assessment. Include a playbook_entry if you learned something worth sharing across companies.
+      prompt: ceoPrompt + `\n\nReview tonight's cycle results. Score the cycle 1-10. Grade each agent (A/B/C/F). Include a playbook_entry if you learned something. List next_cycle_priorities.
 
-CYCLE RESULTS:
-- Engineer: ${engResult.success ? "SUCCESS" : "FAILED"} — ${engResult.output.slice(0, 300)}
-- Growth: ${growthResult.success ? "SUCCESS" : "FAILED"} — ${growthResult.output.slice(0, 300)}
-- Ops: ${opsResult.success ? "SUCCESS" : "FAILED"} — ${opsResult.output.slice(0, 300)}`,
+STRUCTURED RESULTS:
+Engineer: ${engParsed ? JSON.stringify(engParsed, null, 2) : `${engResult.success ? "SUCCESS" : "FAILED"} — ${engResult.output.slice(0, 500)}`}
+Growth: ${growthParsed ? JSON.stringify(growthParsed, null, 2) : `${growthResult.success ? "SUCCESS" : "FAILED"} — ${growthResult.output.slice(0, 500)}`}
+Ops: ${opsResult.success ? "SUCCESS" : "FAILED"} — ${opsResult.output.slice(0, 300)}
+${growthPrespec ? `\nGrowth Pre-Spec was: ${JSON.stringify(growthPrespec, null, 2)}` : ""}
+
+Use the structured review output format with agent_grades and next_cycle_priorities.`,
       context,
     });
 
@@ -1950,7 +2055,13 @@ CYCLE RESULTS:
       `;
     } catch { /* non-critical */ }
 
-    await updateCycle(cycleId, { status: "completed", ceo_plan: ceoPlan.output, ceo_review: ceoReview.output });
+    // Store structured handoffs when available, raw output as fallback
+    const reviewParsed = parseHandoff<any>(ceoReview.output, ["score"]);
+    await updateCycle(cycleId, {
+      status: "completed",
+      ceo_plan: planData ? JSON.stringify(planData) : ceoPlan.output,
+      ceo_review: reviewParsed ? JSON.stringify(reviewParsed.review || reviewParsed) : ceoReview.output,
+    });
 
     const duration = Math.round((Date.now() - companyStart) / 1000);
     console.log(`  ✓ Cycle ${cycleNumber} complete (${duration}s)`);

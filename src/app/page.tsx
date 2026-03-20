@@ -250,12 +250,15 @@ export default function DashboardPage() {
 
   // Derived data
   const blockerCount = todos.filter(t => t.severity === "blocker").length;
-  // Scout proposals include new_company AND growth_strategy with Scout context (expansion/question types)
+  // Scout proposals include new_company AND growth_strategy with Scout/CEO context (expansion/question types)
   const isScoutProposal = (a: any) => {
     if (a.gate_type === "new_company") return true;
     if (a.gate_type === "growth_strategy") {
       try {
         const ctx = typeof a.context === "string" ? JSON.parse(a.context) : a.context;
+        // New format: ceo_decision with decision field
+        if (ctx?.ceo_decision?.decision === "expansion" || ctx?.ceo_decision?.decision === "question") return true;
+        // Legacy format: proposal_type on the proposal itself
         const p = ctx?.proposal || ctx;
         return p?.proposal_type === "expansion" || p?.proposal_type === "question";
       } catch { return false; }
@@ -657,9 +660,27 @@ export default function DashboardPage() {
                       };
                       const automationScore = proposal.automation_score || 0;
                       const automationPct = Math.round(automationScore * 100);
-                      const proposalType = proposal.proposal_type || "new_company";
-                      const isExpansion = proposalType === "expansion";
-                      const isQuestion = proposalType === "question";
+                      // Read decision from CEO evaluation (new format) or legacy proposal_type
+                      const ceoDecision = (() => {
+                        try {
+                          const ctx = typeof a.context === "string" ? JSON.parse(a.context) : a.context;
+                          return ctx?.ceo_decision?.decision || proposal.proposal_type || "new_company";
+                        } catch { return proposal.proposal_type || "new_company"; }
+                      })();
+                      const expandTarget = (() => {
+                        try {
+                          const ctx = typeof a.context === "string" ? JSON.parse(a.context) : a.context;
+                          return ctx?.ceo_decision?.expand_target || proposal.expand_target || proposal.expansion_candidate?.target_slug || "";
+                        } catch { return ""; }
+                      })();
+                      const questionForCarlos = (() => {
+                        try {
+                          const ctx = typeof a.context === "string" ? JSON.parse(a.context) : a.context;
+                          return ctx?.ceo_decision?.question_for_carlos || proposal.question_for_carlos || "";
+                        } catch { return ""; }
+                      })();
+                      const isExpansion = ceoDecision === "expansion";
+                      const isQuestion = ceoDecision === "question";
                       return (
                         <div key={a.id} style={{
                           padding: 20, borderRadius: 10,
@@ -691,7 +712,7 @@ export default function DashboardPage() {
                                 background: isQuestion ? "rgba(245,158,11,0.15)" : "rgba(59,130,246,0.15)",
                                 color: isQuestion ? "rgb(245,158,11)" : "rgb(59,130,246)",
                                 border: `1px solid ${isQuestion ? "rgba(245,158,11,0.3)" : "rgba(59,130,246,0.3)"}` }}>
-                                {isQuestion ? "❓ Decision needed" : `📈 Expand ${proposal.expand_target}`}
+                                {isQuestion ? "❓ Decision needed" : `📈 Expand ${expandTarget}`}
                               </span>
                             )}
                             <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", fontWeight: 500,
@@ -723,12 +744,12 @@ export default function DashboardPage() {
                           </div>
 
                           {/* Question for Carlos (decision-type proposals) */}
-                          {proposal.question_for_carlos && (
+                          {questionForCarlos && (
                             <div style={{ padding: "12px 14px", borderRadius: 8, marginBottom: 14,
                               background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
                               <div style={{ fontSize: 11, fontWeight: 600, color: "rgb(245,158,11)", marginBottom: 6 }}>Decision needed:</div>
                               <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", lineHeight: 1.6 }}>
-                                {proposal.question_for_carlos}
+                                {questionForCarlos}
                               </div>
                             </div>
                           )}
