@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { dispatchEvent } from "@/lib/dispatch";
 
 // GET /api/evolver          → list proposals (default: pending)
 // GET /api/evolver?status=all → all proposals
@@ -133,19 +134,3 @@ export async function PATCH(req: Request) {
   return json({ ok: true, status: decision });
 }
 
-async function dispatchEvent(eventType: string, payload: Record<string, any>) {
-  try {
-    const ghPat = process.env.GH_PAT;
-    const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
-    if (!ghPat) return;
-    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `token ${ghPat}`,
-        Accept: "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ event_type: eventType, client_payload: payload }),
-    });
-  } catch { /* non-critical */ }
-}

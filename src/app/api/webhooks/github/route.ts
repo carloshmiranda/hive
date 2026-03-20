@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import { createHmac, timingSafeEqual } from "crypto";
+import { dispatchEvent } from "@/lib/dispatch";
 
 // Receives GitHub webhook events
 // Auth: HMAC-SHA256 signature verification via GITHUB_WEBHOOK_SECRET
@@ -160,19 +161,3 @@ export async function POST(req: Request) {
   return Response.json({ received: true });
 }
 
-async function dispatchEvent(eventType: string, payload: Record<string, any>) {
-  try {
-    const ghPat = process.env.GH_PAT;
-    const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
-    if (!ghPat) return;
-    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `token ${ghPat}`,
-        Accept: "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ event_type: eventType, client_payload: payload }),
-    });
-  } catch { /* non-critical */ }
-}

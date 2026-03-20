@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { dispatchEvent } from "@/lib/dispatch";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -154,19 +155,3 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   return json(approval);
 }
 
-async function dispatchEvent(eventType: string, payload: Record<string, any>) {
-  try {
-    const ghPat = process.env.GH_PAT;
-    const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
-    if (!ghPat) return;
-    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `token ${ghPat}`,
-        Accept: "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ event_type: eventType, client_payload: payload }),
-    });
-  } catch { /* non-critical */ }
-}
