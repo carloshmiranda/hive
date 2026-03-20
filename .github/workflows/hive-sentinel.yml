@@ -392,6 +392,50 @@ jobs:
             echo "Skipping deploy drift check: VERCEL_TOKEN not set"
           fi
 
+          # 11. HTTP health check: verify every company's Vercel URL returns 200
+          DEPLOY_BROKEN=""
+          for row in $(echo "$RESULTS" | jq -c '.needs_cycle[]? // empty' 2>/dev/null); do
+            true  # placeholder, we check all mvp/active below
+          done
+          # Get all company URLs from DB
+          npm install --no-save @neondatabase/serverless 2>/dev/null
+          HEALTH_RESULTS=$(node -e "
+          const { neon } = require('@neondatabase/serverless');
+          const sql = neon(process.env.DATABASE_URL);
+          (async () => {
+            const companies = await sql\`
+              SELECT slug, vercel_url FROM companies
+              WHERE status IN ('mvp', 'active') AND vercel_url IS NOT NULL
+            \`;
+            const results = [];
+            for (const c of companies) {
+              try {
+                const res = await fetch(c.vercel_url, { redirect: 'follow', signal: AbortSignal.timeout(10000) });
+                if (res.status >= 400) {
+                  results.push({ slug: c.slug, url: c.vercel_url, status: res.status, healthy: false });
+                }
+              } catch (e) {
+                results.push({ slug: c.slug, url: c.vercel_url, status: 0, error: e.message, healthy: false });
+              }
+            }
+            console.log(JSON.stringify(results));
+          })();
+          " 2>/dev/null || echo "[]")
+
+          BROKEN_DEPLOYS=$(echo "$HEALTH_RESULTS" | jq -r 'length')
+          if [ "$BROKEN_DEPLOYS" -gt 0 ]; then
+            echo "BROKEN DEPLOYMENTS detected:"
+            echo "$HEALTH_RESULTS" | jq -r '.[] | "  \(.slug): HTTP \(.status) at \(.url)"'
+            for i in $(seq 0 $((BROKEN_DEPLOYS - 1))); do
+              SLUG=$(echo "$HEALTH_RESULTS" | jq -r ".[$i].slug")
+              STATUS=$(echo "$HEALTH_RESULTS" | jq -r ".[$i].status")
+              dispatch "ops_escalation" "{\"source\":\"sentinel\",\"company\":\"$SLUG\",\"reason\":\"deploy_broken\",\"http_status\":$STATUS}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          else
+            echo "All company deployments healthy"
+          fi
+
           # 12. Stalled companies (72h no activity) → escalation + force cycle
           STALLED=$(echo "$RESULTS" | jq -r '.stalled_companies | length')
           if [ "$STALLED" -gt 0 ]; then

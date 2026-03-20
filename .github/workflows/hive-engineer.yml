@@ -116,6 +116,16 @@ jobs:
                  -d '{"name":"<slug>","framework":"nextjs","gitRepository":{"type":"github","repo":"carloshmiranda/<slug>"}}'
                ```
                If Vercel returns "project already exists", skip this step.
+            4b. Set environment variables on the Vercel project:
+               ```
+               # The boilerplate needs DATABASE_URL at build time for API routes
+               # For now, use a placeholder that makes neon() skip at build time
+               curl -s -X POST "https://api.vercel.com/v10/projects/<slug>/env" \
+                 -H "Authorization: Bearer $VERCEL_TOKEN" \
+                 -H "Content-Type: application/json" \
+                 -d '[{"key":"DATABASE_URL","value":"placeholder_set_real_value_later","target":["production","preview"],"type":"plain"}]'
+               ```
+               This prevents build failures from missing env vars.
             5. Record infra in DB using DATABASE_URL:
                ```sql
                INSERT INTO infra (company_id, service, resource_id, config)
