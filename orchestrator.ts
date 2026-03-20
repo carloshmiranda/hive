@@ -1437,19 +1437,19 @@ Output a brief summary of what was assimilated.`,
     console.log(`\n▸ ${company.name} (${company.slug}) — ${company.status} [cycles: ${company.cycle_count}]`);
 
     try {
-    // Check if there are any running cycles and handle timeouts
-    const canCreateCycle = await checkAndHandleRunningCycles(company.id);
-    if (!canCreateCycle) {
-      results.push({
-        company: company.slug,
-        status: "skipped",
-        duration: Math.round((Date.now() - companyStart) / 1000)
-      });
-      console.log(`  ⏭ Skipped — previous cycle still running`);
-      continue;
-    }
+      // Check if there are any running cycles and handle timeouts
+      const canCreateCycle = await checkAndHandleRunningCycles(company.id);
+      if (!canCreateCycle) {
+        results.push({
+          company: company.slug,
+          status: "skipped",
+          duration: Math.round((Date.now() - companyStart) / 1000)
+        });
+        console.log(`  ⏭ Skipped — previous cycle still running`);
+        continue;
+      }
 
-    const cycleNumber = await getLatestCycleNumber(company.id);
+      const cycleNumber = await getLatestCycleNumber(company.id);
     const cycleId = await createCycle(company.id, cycleNumber);
     const metrics = await getMetrics(company.id);
     const playbook = await getPlaybook();
