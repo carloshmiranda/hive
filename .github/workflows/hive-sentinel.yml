@@ -10,11 +10,12 @@ on:
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
   VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  CRON_SECRET: ${{ secrets.CRON_SECRET }}
 
 jobs:
   sentinel:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Setup Node
@@ -253,6 +254,63 @@ jobs:
               console.error('Cleaned ' + stuckCycles.length + ' stuck cycles');
             }
 
+            // 14. Rate-limited agents (0 turns, finished within 2min of starting)
+            // These failed because of Max 5x quota, not code bugs — retry after window resets
+            const rateLimited = await sql\`
+              SELECT aa.id, aa.agent, aa.action_type, aa.company_id, c.slug,
+                aa.error, aa.finished_at
+              FROM agent_actions aa
+              LEFT JOIN companies c ON c.id = aa.company_id
+              WHERE aa.status = 'failed'
+              AND aa.error ILIKE '%exhausted after 0 turns%'
+              AND aa.finished_at > NOW() - INTERVAL '6 hours'
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_actions aa2
+                WHERE aa2.company_id = aa.company_id
+                AND aa2.agent = aa.agent
+                AND aa2.action_type = aa.action_type
+                AND aa2.status = 'success'
+                AND aa2.started_at > aa.finished_at
+              )
+            \`;
+            results.rate_limited = rateLimited.map(r => ({
+              agent: r.agent, action_type: r.action_type,
+              slug: r.slug, company_id: r.company_id
+            }));
+
+            // 15. Recently provisioned companies with no successful deploy
+            // (provisioned in last 2h but vercel_url still broken or never checked)
+            const recentProvisions = await sql\`
+              SELECT c.slug, c.id as company_id, c.vercel_url, aa.finished_at as provisioned_at
+              FROM companies c
+              JOIN agent_actions aa ON aa.company_id = c.id
+                AND aa.action_type = 'scaffold_company'
+                AND aa.status = 'success'
+                AND aa.finished_at > NOW() - INTERVAL '2 hours'
+              WHERE c.status = 'mvp'
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_actions aa2
+                WHERE aa2.company_id = c.id
+                AND aa2.action_type = 'deploy_verified'
+                AND aa2.finished_at > aa.finished_at
+              )
+            \`;
+            results.unverified_provisions = recentProvisions.map(r => ({
+              slug: r.slug, company_id: r.company_id, url: r.vercel_url
+            }));
+
+            // 16. Metrics health: companies with no metrics row in 48h
+            const noMetrics = await sql\`
+              SELECT c.slug FROM companies c
+              WHERE c.status IN ('mvp', 'active')
+              AND NOT EXISTS (
+                SELECT 1 FROM metrics m
+                WHERE m.company_id = c.id
+                AND m.date > CURRENT_DATE - INTERVAL '2 days'
+              )
+            \`;
+            results.missing_metrics = noMetrics.map(r => r.slug);
+
             console.log(JSON.stringify(results));
             await sql.end();
           }
@@ -482,6 +540,73 @@ jobs:
               DISPATCHED=$((DISPATCHED + 1))
               CYCLE_COUNT=$((CYCLE_COUNT + 1))
             done
+          fi
+
+          # 14. Rate-limited agents (0 turns) → re-dispatch the original action
+          RATE_LIMITED=$(echo "$RESULTS" | jq -r '.rate_limited | length')
+          if [ "$RATE_LIMITED" -gt 0 ]; then
+            echo "RATE-LIMITED agents detected (0 turns = Max 5x quota hit):"
+            for i in $(seq 0 $((RATE_LIMITED - 1))); do
+              AGENT=$(echo "$RESULTS" | jq -r ".rate_limited[$i].agent")
+              ACTION=$(echo "$RESULTS" | jq -r ".rate_limited[$i].action_type")
+              SLUG=$(echo "$RESULTS" | jq -r ".rate_limited[$i].slug")
+              CID=$(echo "$RESULTS" | jq -r ".rate_limited[$i].company_id")
+              echo "  $AGENT/$ACTION for $SLUG — retrying"
+
+              # Map agent+action back to the right dispatch event
+              if [ "$AGENT" = "engineer" ]; then
+                if [ "$ACTION" = "scaffold_company" ] || [ "$ACTION" = "provision_company" ]; then
+                  dispatch "new_company" "{\"source\":\"sentinel_retry\",\"company\":\"$SLUG\",\"company_id\":\"$CID\"}"
+                else
+                  dispatch "feature_request" "{\"source\":\"sentinel_retry\",\"company\":\"$SLUG\",\"company_id\":\"$CID\"}"
+                fi
+              elif [ "$AGENT" = "scout" ]; then
+                dispatch "research_request" "{\"source\":\"sentinel_retry\",\"company\":\"$SLUG\",\"company_id\":\"$CID\"}"
+              elif [ "$AGENT" = "ceo" ]; then
+                dispatch "cycle_start" "{\"source\":\"sentinel_retry\",\"company\":\"$SLUG\",\"company_id\":\"$CID\"}"
+              fi
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 15. Recently provisioned but unverified → HTTP check + log result
+          UNVERIFIED_PROV=$(echo "$RESULTS" | jq -r '.unverified_provisions | length')
+          if [ "$UNVERIFIED_PROV" -gt 0 ]; then
+            echo "Verifying recently provisioned deployments:"
+            for i in $(seq 0 $((UNVERIFIED_PROV - 1))); do
+              SLUG=$(echo "$RESULTS" | jq -r ".unverified_provisions[$i].slug")
+              URL=$(echo "$RESULTS" | jq -r ".unverified_provisions[$i].url")
+              CID=$(echo "$RESULTS" | jq -r ".unverified_provisions[$i].company_id")
+              if [ -n "$URL" ] && [ "$URL" != "null" ]; then
+                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
+                echo "  $SLUG: HTTP $HTTP_STATUS at $URL"
+                if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+                  echo "  ✓ Deploy verified for $SLUG"
+                else
+                  echo "  ✗ Deploy BROKEN for $SLUG — dispatching fix"
+                  dispatch "ops_escalation" "{\"source\":\"sentinel\",\"company\":\"$SLUG\",\"reason\":\"post_provision_deploy_broken\",\"http_status\":$HTTP_STATUS}"
+                  DISPATCHED=$((DISPATCHED + 1))
+                fi
+              else
+                echo "  $SLUG: no vercel_url set — dispatching provisioning fix"
+                dispatch "new_company" "{\"source\":\"sentinel\",\"company\":\"$SLUG\",\"company_id\":\"$CID\",\"reason\":\"missing_url\"}"
+                DISPATCHED=$((DISPATCHED + 1))
+              fi
+            done
+          fi
+
+          # 16. Missing metrics → seed via cron endpoint or log warning
+          MISSING_METRICS=$(echo "$RESULTS" | jq -r '.missing_metrics | length')
+          if [ "$MISSING_METRICS" -gt 0 ]; then
+            echo "WARNING: Companies with no metrics in 48h:"
+            echo "$RESULTS" | jq -r '.missing_metrics[] | "  \(.)"'
+            # Trigger the metrics cron to populate
+            if [ -n "$VERCEL_TOKEN" ]; then
+              echo "  Triggering metrics collection via cron endpoint..."
+              curl -s -o /dev/null -w "  Metrics cron: HTTP %{http_code}\n" \
+                -H "Authorization: Bearer ${CRON_SECRET:-}" \
+                "https://hive-phi.vercel.app/api/cron/metrics" || true
+            fi
           fi
 
           echo ""
