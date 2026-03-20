@@ -177,7 +177,8 @@ jobs:
           fi
 
           # Chain to Outreach if leads found
-          echo "$RESULT" | grep -q "leads_found.*true" && \
+          if echo "$RESULT" | grep -q "leads_found.*true"; then
             dispatch "outreach_trigger" "{\"source\":\"scout\",\"company\":\"$COMPANY\"}"
+          fi
 
           echo "Chain dispatch complete"

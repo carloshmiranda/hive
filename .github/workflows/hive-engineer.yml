@@ -94,19 +94,41 @@ jobs:
             Read BRIEFING.md and CLAUDE.md for context.
 
             Based on the trigger:
-            - new_company: Scaffold repo from templates/boilerplate, push to GitHub, set up Vercel + Neon. Query the company from DB for its description and Scout proposal. Update status to 'mvp' when done.
-            - feature_request: Read the CEO plan from cycles table, implement the code changes, commit + push
-            - ops_escalation: Read the error from agent_actions, diagnose and fix, commit + push. If gate_type is 'kill_teardown', delete the Vercel project, archive the GitHub repo, and update infra table.
-            - deploy_drift: Production is running stale code. Check Vercel deployment status, trigger a redeploy if needed, or investigate build failures.
-            - issue (feature/bug): Implement the feature or fix the bug described in the issue
+
+            ## new_company — Provision infrastructure for a new company
+            Query the company from DB: `SELECT name, slug, description FROM companies WHERE id = '<company_id>'`
+            Then execute these steps IN ORDER using the GitHub, Vercel, and Neon APIs (read src/lib/github.ts, src/lib/vercel.ts, src/lib/neon-api.ts for helper functions):
+
+            1. Create GitHub repo: `gh repo create carloshmiranda/<slug> --private --description "<description>"`
+            2. Copy templates/boilerplate/ into the new repo, customize package.json name and CLAUDE.md with company details
+            3. Push to the new repo: `cd /tmp/<slug> && git init && git add -A && git commit -m "Initial scaffold" && git remote add origin https://github.com/carloshmiranda/<slug>.git && git push -u origin main`
+            4. Create Vercel project: Use the Vercel API (VERCEL_TOKEN env var) — `POST https://api.vercel.com/v10/projects` with `{ name: "<slug>", gitRepository: { type: "github", repo: "carloshmiranda/<slug>" } }`
+            5. Record infra in DB: `INSERT INTO infra (company_id, service, resource_id, config) VALUES ('<id>', 'github', 'carloshmiranda/<slug>', '{}'), ('<id>', 'vercel', '<project_id>', '{}')`
+            6. Update company status: `UPDATE companies SET status = 'mvp', updated_at = NOW() WHERE id = '<id>'`
+            7. Log success: `INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at) VALUES ('engineer', '<id>', 'scaffold_company', 'success', 'Provisioned: GitHub repo + Vercel project', NOW(), NOW())`
+
+            Skip Neon DB and Stripe setup for now — those can be added in a later cycle.
+
+            ## feature_request — Build features from CEO plan
+            Read the CEO plan from cycles table, implement the code changes in the company's repo, commit + push.
+
+            ## ops_escalation — Fix errors
+            Read the error from agent_actions, diagnose and fix, commit + push.
+
+            ## deploy_drift — Fix stale deployments
+            Check Vercel deployment status, trigger a redeploy if needed.
+
+            ## Other triggers
+            - issue (feature/bug): Implement the feature or fix described
             - pr_approved: Merge the PR and verify deploy
             - manual: Execute the specified task
 
             RULES:
-            - Always run `npx next build` before committing
-            - Create a branch for non-trivial changes, open a PR
+            - For feature_request: run `npx next build` before committing, create a branch and open a PR
+            - For new_company: commit directly to main (it's a new repo)
             - Write to agent_actions table: what you did, status, any errors
             - If you open a PR, output: { "pr_opened": true, "pr_number": N, "company": "slug" }
+            - Output: { "company": "<slug>", "provisioned": true } for new_company
 
       - name: Log failure to DB
         if: always() && steps.agent.outcome == 'failure'
