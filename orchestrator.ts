@@ -685,85 +685,94 @@ ${playbook.slice(0, 10).map(p => `- [${p.domain}] ${p.insight} (confidence: ${p.
             }
           }
 
-          // Create each company in 'idea' status
-          const createdCompanies: Array<{ id: string; name: string; slug: string; idx: number }> = [];
-          for (const { proposal: p, idx: i } of filteredProposals) {
-            const [newCompany] = await sql`
-              INSERT INTO companies (name, slug, description, status)
-              VALUES (${p.name}, ${p.slug}, ${p.description}, 'idea')
-              ON CONFLICT (slug) DO NOTHING
-              RETURNING *
-            `;
-            if (newCompany) {
-              createdCompanies.push({ id: newCompany.id, name: p.name, slug: p.slug, idx: i });
-            }
-          }
+          // Process proposals by type: new_company, expansion, or question
+          let proposalCount = 0;
 
-          if (createdCompanies.length > 0) {
-            // Build a single approval gate describing all 3 options
-            const researchSummary = idea.research ? [
-              idea.research.searches_performed?.length 
-                ? `**Searches performed:** ${idea.research.searches_performed.length} web queries` : "",
-              ...(idea.research.niches_considered || []).map((n: any) =>
-                `- **${n.niche}** (${n.market || "unknown"}): ${n.verdict}`
-              ),
-            ].filter(Boolean).join("\n") : "";
+          for (let i = 0; i < filteredProposals.length; i++) {
+            const { proposal: p, idx } = filteredProposals[i];
+            const proposalType = p.proposal_type || "new_company";
+            const marketTag = (p.market === "Portugal" || p.market === "pt") ? "🇵🇹 PT" : "🌍 Global";
+            const num = i + 1;
 
-            const proposalDescriptions = proposals.map((p: any, i: number) => {
-              const num = i + 1;
-              const marketTag = p.market === "Portugal" ? "🇵🇹 PT" : "🌍 Global";
-              return `### Option ${num}: ${p.name} [${marketTag}]\n` +
-                `**${p.description}**\n` +
-                `- **Problem:** ${p.problem}\n` +
-                `- **Solution:** ${p.solution}\n` +
-                `- **Target:** ${p.target_audience}\n` +
-                `- **Monetisation:** ${p.monetisation}\n` +
-                `- **MVP scope:** ${p.mvp_scope}\n` +
-                `- **Competitive advantage:** ${p.competitive_advantage || "N/A"}\n` +
-                `- **TAM:** ${p.estimated_tam}\n` +
-                `- **Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%`;
-            }).join("\n\n---\n\n");
+            if (proposalType === "expansion" || proposalType === "question") {
+              // EXPANSION or QUESTION — don't create a new company, create a growth_strategy approval on the existing one
+              const targetSlug = p.expand_target;
+              let targetCompanyId: string | null = null;
+              if (targetSlug) {
+                const [target] = await sql`SELECT id FROM companies WHERE slug = ${targetSlug}`;
+                targetCompanyId = target?.id || null;
+              }
 
-            // Create ONE approval per proposal (so Carlos can approve individually)
-            for (const cc of createdCompanies) {
-              const p = proposals[cc.idx];
-              const num = cc.idx + 1;
-              const marketTag = p.market === "Portugal" ? "🇵🇹 PT" : "🌍 Global";
+              const gateType = proposalType === "question" ? "growth_strategy" : "growth_strategy";
+              const typeLabel = proposalType === "question" ? "❓ Question" : "📈 Expand";
+              const title = proposalType === "question"
+                ? `${typeLabel}: ${p.name} — standalone or expand ${targetSlug}?`
+                : `${typeLabel}: Add ${p.expand_what || p.name} to ${targetSlug} [${marketTag}]`;
+
               await sql`
                 INSERT INTO approvals (company_id, gate_type, title, description, context)
                 VALUES (
-                  ${cc.id},
-                  'new_company',
-                  ${"Option " + num + ": Launch " + p.name + " [" + marketTag + "]"},
+                  ${targetCompanyId},
+                  ${gateType},
+                  ${title},
                   ${`**${p.description}**\n\n` +
+                    (p.expand_what ? `**What to add:** ${p.expand_what}\n` : "") +
+                    (p.question_for_carlos ? `\n**Decision needed:**\n${p.question_for_carlos}\n\n` : "") +
                     `**Market:** ${p.market || "Global"}\n` +
                     `**Problem:** ${p.problem}\n` +
                     `**Solution:** ${p.solution}\n` +
-                    `**Target:** ${p.target_audience}\n` +
                     `**Monetisation:** ${p.monetisation}\n` +
                     `**MVP scope:** ${p.mvp_scope}\n` +
-                    `**Competitive advantage:** ${p.competitive_advantage || "N/A"}\n` +
-                    `**TAM:** ${p.estimated_tam}\n` +
-                    `**Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%\n\n` +
-                    `---\n### Research trail\n${researchSummary}`},
+                    `**Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%`},
                   ${JSON.stringify({ proposal: p, all_proposals: proposals, research: idea.research })}
                 )
               `;
-            }
+              console.log(`    ${num}. ${typeLabel} ${p.name} → ${targetSlug || "unknown"} [${p.market || "Global"}] — ${Math.round((p.confidence || 0.5) * 100)}%`);
+              proposalCount++;
 
-            console.log(`  ✓ Proposed ${createdCompanies.length} ideas — awaiting approval:`);
-            createdCompanies.forEach(cc => {
-              const p = proposals[cc.idx];
-              console.log(`    ${cc.idx + 1}. ${p.name} (${p.slug}) [${p.market || "Global"}] — ${Math.round((p.confidence || 0.5) * 100)}%`);
-            });
-            if (idea.research?.searches_performed?.length) {
-              console.log(`    Research: ${idea.research.searches_performed.length} web searches, ${(idea.research.niches_considered || []).length} niches evaluated`);
+            } else {
+              // NEW COMPANY — create company in 'idea' status + new_company approval
+              if (!p.slug) continue;
+              const [newCompany] = await sql`
+                INSERT INTO companies (name, slug, description, status)
+                VALUES (${p.name}, ${p.slug}, ${p.description}, 'idea')
+                ON CONFLICT (slug) DO NOTHING
+                RETURNING *
+              `;
+              if (newCompany) {
+                await sql`
+                  INSERT INTO approvals (company_id, gate_type, title, description, context)
+                  VALUES (
+                    ${newCompany.id},
+                    'new_company',
+                    ${"🆕 Launch " + p.name + " [" + marketTag + "]"},
+                    ${`**${p.description}**\n\n` +
+                      `**Model:** ${p.business_model || "saas"}\n` +
+                      `**Market:** ${p.market || "Global"}\n` +
+                      `**Problem:** ${p.problem}\n` +
+                      `**Solution:** ${p.solution}\n` +
+                      `**Monetisation:** ${p.monetisation}\n` +
+                      `**MVP scope:** ${p.mvp_scope}\n` +
+                      `**Confidence:** ${Math.round((p.confidence || 0.5) * 100)}%`},
+                    ${JSON.stringify({ proposal: p, all_proposals: proposals, research: idea.research })}
+                  )
+                `;
+                console.log(`    ${num}. 🆕 ${p.name} (${p.slug}) [${p.market || "Global"}] — ${Math.round((p.confidence || 0.5) * 100)}%`);
+                proposalCount++;
+              }
             }
+          }
 
+          if (proposalCount > 0) {
+            console.log(`  ✓ ${proposalCount} proposals created — awaiting approval`);
             // Log the action
+            const summary = filteredProposals.map(({ proposal: p }) => {
+              const type = p.proposal_type === "expansion" ? "📈" : p.proposal_type === "question" ? "❓" : "🆕";
+              return `${type} ${p.name} [${p.market || "Global"}]`;
+            }).join(", ");
             await sql`
               INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
-              VALUES (${null}, 'scout', 'generate_ideas', ${`Proposed ${proposals.length} ideas: ${proposals.map((p: any) => `${p.name} [${p.market}]`).join(", ")} (${(idea.research?.searches_performed || []).length} searches)`}, 'success', ${JSON.stringify(idea)}, now(), now())
+              VALUES (${null}, 'scout', 'generate_ideas', ${`Proposed ${proposalCount}: ${summary}`}, 'success', ${JSON.stringify(idea)}, now(), now())
             `;
           } else {
             console.log(`  ⓘ All proposed slugs already exist — skipping`);
