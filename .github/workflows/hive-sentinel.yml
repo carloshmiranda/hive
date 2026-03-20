@@ -165,6 +165,14 @@ jobs:
             \`;
             results.stuck_approved = stuckApproved.map(r => r.slug);
 
+            // 9b. Orphaned MVPs (status=mvp but no infra provisioned)
+            const orphanedMvps = await sql\`
+              SELECT c.slug FROM companies c
+              WHERE c.status = 'mvp'
+              AND NOT EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
+            \`;
+            results.orphaned_mvps = orphanedMvps.map(r => r.slug);
+
             // 9. Agents hitting max_turns (wasting quota without completing work)
             const maxTurnsHits = await sql\`
               SELECT agent, COUNT(*) as cnt
@@ -299,7 +307,17 @@ jobs:
             done
           fi
 
-          # 9. Max turns exhaustion → log warning + trigger Evolver
+          # 9b. Orphaned MVPs (status=mvp but no infra) → reset to approved and re-provision
+          ORPHANED=$(echo "$RESULTS" | jq -r '.orphaned_mvps | length')
+          if [ "$ORPHANED" -gt 0 ]; then
+            for SLUG in $(echo "$RESULTS" | jq -r '.orphaned_mvps[]'); do
+              echo "Company $SLUG is MVP with no infra — dispatching provisioning"
+              dispatch "new_company" "{\"source\":\"sentinel\",\"company\":\"$SLUG\",\"reason\":\"orphaned_mvp\"}"
+              DISPATCHED=$((DISPATCHED + 1))
+            done
+          fi
+
+          # 10. Max turns exhaustion → log warning + trigger Evolver
           MAX_TURNS_AGENTS=$(echo "$RESULTS" | jq -r '.max_turns_exhaustion | length')
           if [ "$MAX_TURNS_AGENTS" -gt 0 ]; then
             echo "WARNING: Agents hitting max_turns repeatedly:"
