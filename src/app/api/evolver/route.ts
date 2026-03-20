@@ -64,20 +64,75 @@ export async function PATCH(req: Request) {
     WHERE id = ${id}
   `;
 
-  // If approved and it's a prompt_update, activate the new prompt version
-  if (decision === "approved" && proposal.proposed_fix?.type === "prompt_update") {
-    const targetAgent = proposal.proposed_fix.target;
-    if (targetAgent) {
-      // Deactivate current active prompt
-      await sql`UPDATE agent_prompts SET is_active = false WHERE agent = ${targetAgent} AND is_active = true`;
-      // Activate the latest inactive prompt for this agent
+  if (decision === "approved") {
+    const fixType = proposal.proposed_fix?.type;
+
+    if (fixType === "prompt_update") {
+      // Activate the new prompt version immediately
+      const targetAgent = proposal.proposed_fix.target;
+      if (targetAgent) {
+        await sql`UPDATE agent_prompts SET is_active = false WHERE agent = ${targetAgent} AND is_active = true`;
+        await sql`
+          UPDATE agent_prompts SET is_active = true, promoted_at = NOW()
+          WHERE agent = ${targetAgent} AND is_active = false
+          AND id = (SELECT id FROM agent_prompts WHERE agent = ${targetAgent} ORDER BY version DESC LIMIT 1)
+        `;
+      }
+      // prompt_update is implemented immediately — mark it
+      await sql`UPDATE evolver_proposals SET status = 'implemented', implemented_at = NOW() WHERE id = ${id}`;
+
+    } else if (fixType === "setup_action") {
+      // Create a manual action todo so it surfaces in the dashboard
+      const affectedCompanies = proposal.affected_companies || [];
+      const firstCompany = affectedCompanies[0];
+      let companyId = null;
+      if (firstCompany) {
+        const [comp] = await sql`SELECT id FROM companies WHERE slug = ${firstCompany} LIMIT 1`;
+        companyId = comp?.id || null;
+      }
       await sql`
-        UPDATE agent_prompts SET is_active = true, promoted_at = NOW()
-        WHERE agent = ${targetAgent} AND is_active = false
-        AND id = (SELECT id FROM agent_prompts WHERE agent = ${targetAgent} ORDER BY version DESC LIMIT 1)
+        INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at, company_id)
+        VALUES ('evolver', 'setup_action', ${`Evolver proposal approved: ${proposal.title}`}, 'pending_manual',
+          ${JSON.stringify({ proposal_id: proposal.id, proposed_fix: proposal.proposed_fix, diagnosis: proposal.diagnosis })}::jsonb,
+          NOW(), NOW(), ${companyId})
       `;
+      // Also dispatch to CEO so it can incorporate in next cycle plan
+      await dispatchEvent("ceo_review", {
+        source: "evolver",
+        proposal_id: proposal.id,
+        proposal_type: fixType,
+        title: proposal.title,
+        change: proposal.proposed_fix?.change,
+      });
+
+    } else if (fixType === "knowledge_gap") {
+      // Dispatch to CEO to extract knowledge into playbook
+      await dispatchEvent("ceo_review", {
+        source: "evolver",
+        proposal_id: proposal.id,
+        proposal_type: fixType,
+        title: proposal.title,
+        change: proposal.proposed_fix?.change,
+      });
     }
   }
 
   return json({ ok: true, status: decision });
+}
+
+async function dispatchEvent(eventType: string, payload: Record<string, any>) {
+  try {
+    const ghPat = process.env.GH_PAT;
+    const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
+    if (!ghPat) return;
+    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `token ${ghPat}`,
+        Accept: "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ event_type: eventType, client_payload: payload }),
+    });
+  } catch { /* non-critical */ }
 }

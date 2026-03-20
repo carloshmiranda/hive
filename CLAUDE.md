@@ -205,8 +205,10 @@ STEP 5: Self-healing (Healer agent)
 STEP 6: Venture Brain (requires 2+ active companies)
   - Portfolio analysis, resource allocation, kill switch evaluation
 
-STEP 7: Prompt Evolver (Wednesdays only)
-  - Agents with <70% success rate or 30+ days stale → generate improved prompt → approval gate
+STEP 7: Evolver (Wednesdays + event-driven)
+  - Three-layer gap detection: outcome, capability, knowledge
+  - Generates max 5 proposals per run → dashboard Inbox
+  - On approval: prompt_update → immediate activation + implemented_at; setup_action → pending_manual todo + CEO dispatch; knowledge_gap → CEO dispatch
 
 STEP 8: Daily digest email
   - Portfolio MRR/customers, per-company cycle status, pending approvals, errors

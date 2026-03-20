@@ -271,6 +271,33 @@ export async function GET() {
         });
       }
     }
+
+    // Approved but not yet implemented proposals (stale approvals — action was taken but never completed)
+    const staleApproved = await sql`
+      SELECT id, title, proposed_fix, reviewed_at
+      FROM evolver_proposals
+      WHERE status = 'approved' AND implemented_at IS NULL
+      AND reviewed_at < NOW() - INTERVAL '48 hours'
+      ORDER BY reviewed_at ASC
+      LIMIT 3
+    `;
+
+    for (const p of staleApproved) {
+      const id = `evolver_stale:${p.id}`;
+      if (!dismissedIds.has(id)) {
+        todos.push({
+          id,
+          severity: "info",
+          category: "agent",
+          title: `Stale Evolver approval: ${p.title}`,
+          detail: `Approved ${Math.round((Date.now() - new Date(p.reviewed_at).getTime()) / 86400000)}d ago but not yet implemented. Type: ${p.proposed_fix?.type || "unknown"}.`,
+          action_url: null,
+          action_label: null,
+          company_slug: null,
+          dismissable: true,
+        });
+      }
+    }
   } catch { /* evolver_proposals table may not exist yet */ }
 
   // Deploy drift: is the latest main SHA deployed on Vercel?

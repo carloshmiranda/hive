@@ -149,6 +149,13 @@
 **Prevention:** Any self-hosted system that monitors other systems must also monitor itself. When building detection/healing for child resources, always ask: "does this also cover the parent?" Add the parent as a first-class target, not an afterthought.
 **Affects:** hive (dashboard, detection layer)
 
+### 2026-03-20 Evolver approval button did nothing for non-prompt proposals
+**What happened:** Clicking "Approve" on `setup_action` and `knowledge_gap` evolver proposals only set `status = 'approved'` in the DB. No dispatch, no todo, no follow-up. The `implemented_at` field existed in the schema but nothing ever set it, even for `prompt_update` proposals that were implemented immediately.
+**Root cause:** The PATCH handler only had a code path for `prompt_update`. Other proposal types were designed to be "passed to CEO as context" via the orchestrator's query, but this was a passive injection — no active dispatch or tracking.
+**Fix applied:** Three type-specific handlers: `prompt_update` → activate prompt + set `implemented_at`; `setup_action` → create `pending_manual` todo + dispatch `ceo_review`; `knowledge_gap` → dispatch `ceo_review`. Added stale approval detection in todos (>48h without implementation).
+**Prevention:** When adding a new entity type with an approval flow, trace each type's post-approval path end-to-end. If clicking "Approve" doesn't trigger a visible downstream action, the flow is broken. Every approval should either (a) do something immediately, (b) create a trackable action item, or (c) dispatch to an agent. "Passive context injection" is not sufficient — it has no feedback loop.
+**Affects:** hive (evolver proposals, dashboard)
+
 ### 2026-03-19 claude-code-action@v1 does not support `model` or `max_turns` as inputs
 **What happened:** CEO workflow ran on Sonnet despite `model: "claude-opus-4-20250514"` being set. Action logs showed: `Unexpected input(s) 'model', 'max_turns'`. The init message confirmed `"model": "claude-sonnet-4-6"` (default).
 **Root cause:** `claude-code-action@v1` only accepts `claude_args` for passing CLI flags like `--model` and `--max-turns`. The `model` and `max_turns` inputs don't exist — GitHub Actions silently ignores unknown inputs but logs a warning in the Post step.

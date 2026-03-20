@@ -158,5 +158,8 @@ Google Search Console API client (`src/lib/gsc.ts`) with JWT service account aut
 ### ✅ 2026-03-19 — Company capability inventory (ADR-018)
 `capabilities` JSONB on companies table. Assessment endpoint scans DB tables, Vercel env vars, repo files. All agents capability-aware — skip missing features, report gaps. Compatibility matrix gates proposals. Dashboard shows capabilities grid with re-assess button. Migration 007.
 
+### ✅ 2026-03-20 — Evolver proposal approval flow
+Closed 3 gaps: `prompt_update` sets `implemented_at` on approve; `setup_action` creates manual todo + dispatches CEO; `knowledge_gap` dispatches CEO. Stale approval detection (>48h) surfaces in dashboard todos. `dispatchEvent()` added to evolver API route.
+
 ### ✅ 2026-03-19 — Waitlist system + email lifecycle framework (ADR-016)
 Waitlist-first launch: boilerplate schema (waitlist + email_sequences + email_log), API with referral mechanics, Resend webhook for email tracking, LAUNCH_MODE-driven landing page (waitlist/early_access/live). Growth owns all email sequences with A/B testing and open/click tracking. CEO monitors waitlist in build mode. Provisioner seeds default sequences. Hive metrics extended (migration 006).

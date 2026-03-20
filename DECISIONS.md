@@ -226,6 +226,7 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Cross-company flag for proposals that benefit multiple companies
 - Approved proposals injected into agent context in next cycle
 - Proposals auto-marked as implemented after the affected company's next cycle
+- **Update 2026-03-20:** Approval now has side effects per type: `prompt_update` → immediate activation + `implemented_at` set; `setup_action` → creates `pending_manual` todo + dispatches `ceo_review`; `knowledge_gap` → dispatches `ceo_review`. Stale approved proposals (>48h without implementation) surface as dashboard todos.
 **Alternatives considered:**
 - Keep prompt-only evolution: too narrow, misses infrastructure and knowledge gaps
 - Auto-implement fixes: too risky, Carlos should review structural changes
