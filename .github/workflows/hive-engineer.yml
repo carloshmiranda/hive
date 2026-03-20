@@ -97,17 +97,35 @@ jobs:
 
             ## new_company — Provision infrastructure for a new company
             Query the company from DB: `SELECT name, slug, description FROM companies WHERE id = '<company_id>'`
-            Then execute these steps IN ORDER using the GitHub, Vercel, and Neon APIs (read src/lib/github.ts, src/lib/vercel.ts, src/lib/neon-api.ts for helper functions):
+            Then execute these steps IN ORDER:
 
-            1. Create GitHub repo: `gh repo create carloshmiranda/<slug> --private --description "<description>"`
-            2. Copy templates/boilerplate/ into the new repo, customize package.json name and CLAUDE.md with company details
-            3. Push to the new repo: `cd /tmp/<slug> && git init && git add -A && git commit -m "Initial scaffold" && git remote add origin https://github.com/carloshmiranda/<slug>.git && git push -u origin main`
-            4. Create Vercel project: Use the Vercel API (VERCEL_TOKEN env var) — `POST https://api.vercel.com/v10/projects` with `{ name: "<slug>", gitRepository: { type: "github", repo: "carloshmiranda/<slug>" } }`
-            5. Record infra in DB: `INSERT INTO infra (company_id, service, resource_id, config) VALUES ('<id>', 'github', 'carloshmiranda/<slug>', '{}'), ('<id>', 'vercel', '<project_id>', '{}')`
+            IMPORTANT: For ALL `gh` commands, you MUST set GH_TOKEN so it uses the personal access token:
+            `export GH_TOKEN="$GH_PAT"`
+
+            1. Create GitHub repo: `GH_TOKEN="$GH_PAT" gh repo create carloshmiranda/<slug> --private --description "<description>"`
+               If the repo already exists, skip this step.
+            2. Copy templates/boilerplate/ into /tmp/<slug>, customize package.json name and CLAUDE.md with company details
+            3. Push to the new repo: `cd /tmp/<slug> && git init && git add -A && git commit -m "Initial scaffold" && git remote add origin https://x-access-token:${GH_PAT}@github.com/carloshmiranda/<slug>.git && git push -u origin main`
+               If the remote already has commits, use `git push -u origin main --force`.
+            4. Create Vercel project using curl:
+               ```
+               curl -s -X POST "https://api.vercel.com/v10/projects" \
+                 -H "Authorization: Bearer $VERCEL_TOKEN" \
+                 -H "Content-Type: application/json" \
+                 -d '{"name":"<slug>","framework":"nextjs","gitRepository":{"type":"github","repo":"carloshmiranda/<slug>"}}'
+               ```
+               If Vercel returns "project already exists", skip this step.
+            5. Record infra in DB using DATABASE_URL:
+               ```sql
+               INSERT INTO infra (company_id, service, resource_id, config)
+               VALUES ('<id>', 'github', 'carloshmiranda/<slug>', '{}'),
+                      ('<id>', 'vercel', '<slug>', '{}')
+               ON CONFLICT DO NOTHING
+               ```
             6. Update company status: `UPDATE companies SET status = 'mvp', updated_at = NOW() WHERE id = '<id>'`
             7. Log success: `INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at) VALUES ('engineer', '<id>', 'scaffold_company', 'success', 'Provisioned: GitHub repo + Vercel project', NOW(), NOW())`
 
-            Skip Neon DB and Stripe setup for now — those can be added in a later cycle.
+            Do NOT create a Neon database or Stripe product — skip those for now.
 
             ## feature_request — Build features from CEO plan
             Read the CEO plan from cycles table, implement the code changes in the company's repo, commit + push.
@@ -165,6 +183,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          set +e  # Prevent grep/jq exit codes from crashing the step
           RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
           echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
