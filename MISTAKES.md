@@ -169,3 +169,24 @@
 **Fix applied:** Changed all 4 brain workflows to use `claude_args: "--model claude-opus-4-20250514 --max-turns 25"` instead of separate `model` and `max_turns` inputs.
 **Prevention:** Always check the action's valid inputs list (shown in the `Unexpected input(s)` warning or in the action's `action.yml`). Don't assume input names — verify against the source. After deploying a workflow, check the init log for `"model":` to confirm the right model is running.
 **Affects:** all brain agents (CEO, Scout, Engineer, Evolver)
+
+### 2026-03-20 No HTTP health checks — broken deploys go undetected
+**What happened:** Senhorio's Vercel deployment was in ERROR state (build failed due to missing DATABASE_URL env var). Nobody detected it — not Sentinel, not Ops, not the Engineer. The dashboard showed Senhorio as "mvp" with infra, appearing healthy.
+**Root cause:** Three monitoring gaps: (1) Sentinel's deploy_drift only compares Git SHAs, never checks if the build succeeded. (2) Ops agent says "health_status: ok" based on LLM reasoning, not actual HTTP checks. (3) GitHub webhook needs 3 failures in 24h to escalate — a single broken first deploy is invisible.
+**Fix applied:** Added real HTTP health checks to Sentinel — curls every company's vercel_url every 4h and dispatches ops_escalation if not 200. Added post-provisioning verification within 2h of scaffold_company.
+**Prevention:** Every monitoring system must verify actual observable behavior (HTTP 200), not just metadata (SHAs, timestamps, log entries). "Did the deploy event happen?" is not the same as "is the site actually up?"
+**Affects:** both
+
+### 2026-03-20 Engineer provisions infra but doesn't set env vars or update companies table
+**What happened:** Engineer created GitHub repo + Vercel project for Senhorio but: (1) never set DATABASE_URL env var on Vercel → build failed, (2) never updated companies.vercel_project_id → metrics cron found 0 companies to scrape → metrics table stayed empty → dashboard showed all zeros.
+**Root cause:** Provisioning prompt had explicit steps for creating resources but no step for configuring them. The boilerplate's /api/waitlist route calls neon() at build time, requiring DATABASE_URL.
+**Fix applied:** Added step 4b to Engineer provisioning prompt (set env vars via Vercel API). Added step 6 to update companies table columns. Backfilled existing companies from infra table.
+**Prevention:** Provisioning checklists must include post-creation configuration, not just resource creation. Every resource that needs env vars should have a verification step.
+**Affects:** hive
+
+### 2026-03-20 Rate-limited agents fail silently with 0 turns — never retried
+**What happened:** When Max 5x quota is exhausted, agents fail with "exhausted after 0 turns ($0 USD)". These failures are logged but never retried after the quota window resets. Work is silently dropped.
+**Root cause:** No distinction between "code bug" failures and "quota exhaustion" failures. Both are logged identically and neither triggers automatic retry.
+**Fix applied:** Sentinel now detects 0-turn failures from the last 6h, maps them back to the correct dispatch event type, and re-dispatches automatically.
+**Prevention:** Transient failures (rate limits, network timeouts) need retry logic distinct from permanent failures (code bugs, missing permissions). The system should classify errors and handle each category differently.
+**Affects:** both
