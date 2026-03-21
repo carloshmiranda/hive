@@ -308,3 +308,10 @@
 **Fix applied:** Removed all token outputs from the context job. Each job that needs tokens (provision, build, build-hive) now fetches its own tokens via its own OIDC exchange step. Context job only passes non-secret values (trigger, payload, company, company_repo).
 **Prevention:** NEVER pass secrets between GitHub Actions jobs via outputs. Each job must fetch its own secrets independently. The `::add-mask::` + job output pattern is fundamentally broken for secrets. Use OIDC token exchange per-job instead.
 **Affects:** hive (any multi-job workflow passing secrets via outputs)
+
+### 2026-03-21 Shell injection from ${{ }} in workflow run scripts
+**What happened:** Engineer build job crashed with `syntax error near unexpected token '('` when the task description contained parentheses. The dispatch step for Vercel Analytics task never ran.
+**Root cause:** `PAYLOAD='${{ needs.context.outputs.payload }}'` injects the JSON directly into the shell script. If the payload contains shell metacharacters (`(`, `)`, `$`, backticks, etc.), bash interprets them as syntax. This is the same class of bug as the 422 JSON escaping issue — user-provided strings must never be injected raw into shell scripts.
+**Fix applied:** Changed from inline `PAYLOAD='${{ }}'` to `env: PAYLOAD_JSON: ${{ }}`. GitHub Actions env vars are safely passed without shell interpretation.
+**Prevention:** NEVER use `${{ }}` inside shell `run:` blocks for values that may contain special characters. Always pass them via `env:` block, which is safe. This applies to ALL workflow inputs, payloads, and user-provided strings.
+**Affects:** hive (engineer build dispatch, any workflow using ${{ }} in run blocks)
