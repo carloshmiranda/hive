@@ -284,3 +284,15 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Neon Data API (HTTP/JSON): still requires API key secret on each repo, less control over authorization
 - GitHub repository environments with secrets: reduces blast radius but doesn't eliminate secret management
 **Consequences:** Company repos need ZERO secrets. All auth happens at runtime via OIDC (a free GitHub feature). Token rotation only requires updating Hive settings — company repos auto-get new tokens. The API gateway provides authorization (only allowed workflows from the right owner), rate limiting potential, and audit trail. Trade-off: company workflows are now coupled to Hive API availability — if Vercel is down, company builds can't load context.
+
+### ADR-023: Priority-scored cycle dispatch with budget-aware throttling
+**Date:** 2026-03-21
+**Status:** Accepted (extends ADR-011)
+**Context:** Sentinel dispatched cycle_start to companies using a flat query (first N companies with no cycle in 24h). With Claude Max 5x's ~225 messages/5h budget, this wastes quota on low-priority companies while starving high-priority ones. A company with 8 pending tasks and an open Carlos directive should be cycled before one with 1 task and 10 completed cycles.
+**Decision:** Replace flat query with composite priority score ranking. Score formula: `(pending_tasks × 2) + (days_since_cycle × 3, capped at 14) + lifecycle_bonus + directive_override - (completed_cycles × 0.5)`. Bonuses: new MVPs with <3 cycles (+18), struggling companies with CEO score <5 (+5), open Carlos directive (+15). Companies are dispatched in score order. Budget-aware throttling checks `agent_actions` for Claude turns consumed in the last 5 hours: >70% → max 1 dispatch, >90% → skip cycles entirely (only escalations processed).
+**Data signals used:** company_tasks (pending count), cycles (recency, total, CEO score), directives (Carlos override), metrics (revenue for future optimization), agent_actions (budget tracking).
+**Alternatives considered:**
+- Round-robin (fair but ignores urgency): doesn't prioritize where value is highest
+- Manual priority setting (Carlos ranks companies): doesn't scale, adds friction
+- Time-based only (oldest first): ignores task backlog and lifecycle stage
+**Consequences:** Companies with more pending work, open directives, or struggling scores get dispatched first. Budget is protected — high usage automatically reduces dispatch volume. The priority_score is logged in dispatches for observability. Trade-off: the scoring query is more complex (CTE with 7 subqueries), but runs only every 4h in Sentinel so performance impact is negligible.

@@ -285,17 +285,59 @@ export async function GET(req: Request) {
       OR MAX(aa.finished_at) IS NULL
   `;
 
-  // 13. Companies needing new cycle (no cycle in 24h)
+  // 13. Companies needing new cycle — ranked by priority score
+  // Score = task pressure + staleness + lifecycle bonus + directive override
+  // Higher score = dispatched first. Budget-aware: checks daily Claude usage.
   const needsCycle = await sql`
-    SELECT c.slug, c.id as company_id FROM companies c
-    WHERE c.status IN ('mvp', 'active')
-    AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
-    AND NOT EXISTS (
-      SELECT 1 FROM cycles cy
-      WHERE cy.company_id = c.id
-      AND cy.status IN ('running', 'completed')
-      AND cy.started_at > NOW() - INTERVAL '24 hours'
+    WITH company_signals AS (
+      SELECT
+        c.slug,
+        c.id as company_id,
+        c.status,
+        -- Pending task count (proposed + approved = work waiting)
+        COALESCE((SELECT COUNT(*) FROM company_tasks ct
+          WHERE ct.company_id = c.id AND ct.status IN ('proposed', 'approved')), 0) AS pending_tasks,
+        -- Days since last completed cycle
+        COALESCE(EXTRACT(EPOCH FROM (NOW() - (
+          SELECT MAX(cy.finished_at) FROM cycles cy
+          WHERE cy.company_id = c.id AND cy.status = 'completed'
+        ))) / 86400.0, 30) AS days_since_cycle,
+        -- Total completed cycles
+        COALESCE((SELECT COUNT(*) FROM cycles cy
+          WHERE cy.company_id = c.id AND cy.status = 'completed'), 0) AS total_cycles,
+        -- Last CEO score (NULL if no review yet)
+        (SELECT (cy.ceo_review->>'score')::int FROM cycles cy
+          WHERE cy.company_id = c.id AND cy.ceo_review IS NOT NULL
+          ORDER BY cy.finished_at DESC LIMIT 1) AS last_score,
+        -- Has open Carlos directive (urgent override)
+        EXISTS(SELECT 1 FROM directives d
+          WHERE d.company_id = c.id AND d.status = 'open') AS has_directive,
+        -- Has revenue (active paying customers)
+        EXISTS(SELECT 1 FROM metrics m
+          WHERE m.company_id = c.id AND m.metric = 'mrr'
+          AND m.value > 0 AND m.recorded_at > NOW() - INTERVAL '30 days') AS has_revenue
+      FROM companies c
+      WHERE c.status IN ('mvp', 'active')
+      AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM cycles cy
+        WHERE cy.company_id = c.id
+        AND cy.status IN ('running', 'completed')
+        AND cy.started_at > NOW() - INTERVAL '24 hours'
+      )
     )
+    SELECT slug, company_id,
+      (
+        (pending_tasks * 2)
+        + (LEAST(days_since_cycle, 14) * 3)
+        + (CASE WHEN total_cycles = 0 THEN 10 ELSE 0 END)
+        + (CASE WHEN last_score IS NOT NULL AND last_score < 5 THEN 5 ELSE 0 END)
+        + (CASE WHEN has_directive THEN 15 ELSE 0 END)
+        + (CASE WHEN status = 'mvp' AND total_cycles < 3 THEN 8 ELSE 0 END)
+        - (LEAST(total_cycles, 20) * 0.5)
+      ) AS priority_score
+    FROM company_signals
+    ORDER BY priority_score DESC
   `;
 
   // 13b. Stuck cycles (running >2h, auto-cleanup)
@@ -833,16 +875,35 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "research_request", payload: { company: r.slug, reason: "stalled" } });
   }
 
-  // 13. Companies needing new cycle (max 2 per run)
+  // 13. Companies needing new cycle — budget-aware dispatch
+  // Check daily Claude usage to throttle cycle dispatches
+  const dailyUsage = await sql`
+    SELECT COUNT(*) as action_count,
+      COALESCE(SUM((metadata->>'turns_used')::int), 0) as total_turns
+    FROM agent_actions
+    WHERE agent IN ('ceo', 'scout', 'engineer', 'evolver', 'healer')
+    AND started_at > NOW() - INTERVAL '5 hours'
+  `;
+  const turnsUsed = Number(dailyUsage[0]?.total_turns || 0);
+  const budgetCeiling = 225; // Claude Max 5x ~225 messages per 5h window
+  const budgetUsedPct = turnsUsed / budgetCeiling;
+
+  // Throttle: >90% budget → skip cycles, >70% → max 1, otherwise max 2
+  const maxDispatches = budgetUsedPct > 0.9 ? 0 : budgetUsedPct > 0.7 ? 1 : MAX_CYCLE_DISPATCHES;
+
   for (const r of needsCycle) {
-    if (cycleDispatches >= MAX_CYCLE_DISPATCHES) break;
+    if (cycleDispatches >= maxDispatches) break;
     await dispatchToActions("research_request", {
       source: "sentinel_cycle",
       company: r.slug,
       company_id: r.company_id,
       chain_to_ceo: true,
     });
-    dispatches.push({ type: "brain", target: "cycle_start", payload: { company: r.slug } });
+    dispatches.push({
+      type: "brain",
+      target: "cycle_start",
+      payload: { company: r.slug, priority_score: r.priority_score },
+    });
     cycleDispatches++;
   }
 

@@ -133,8 +133,18 @@ If patterns are better than the current boilerplate, create a directive suggesti
 
 ## Your Operating Rules
 
-### 1. Sequential execution
+### 1. Sequential execution with priority scoring
 You run one company at a time. Max 5x gives ~225 messages per 5-hour window. Budget ~40 messages per company, leaving headroom for the Venture Brain.
+
+Sentinel ranks companies by priority score before dispatching cycles:
+- Pending tasks × 2 (task backlog pressure)
+- Days since last cycle × 3 (staleness penalty, capped at 14 days)
+- New MVPs with < 3 cycles: +18 (need initial momentum)
+- CEO score < 5 on last cycle: +5 (struggling companies)
+- Open Carlos directive: +15 (manual override)
+- Completed cycles × -0.5 (diminishing returns on mature companies)
+
+Budget-aware throttling: >70% of 5h Claude budget consumed → max 1 dispatch, >90% → skip cycles entirely (only process escalations).
 
 ### 2. State lives in Neon
 Never store state in files or memory. Read from and write to Neon via the Hive API (`/api/*` routes). Every action, every decision, every metric — it goes to the database.
@@ -192,10 +202,10 @@ STEP 2: Provision approved companies (status: 'approved' → 'mvp')
 STEP 3: Onboard imported projects (prioritized over regular cycles)
   - Clone/analyze → setup integrations → extract patterns → write playbook
 
-STEP 4: Company cycles — priority order:
-  - New companies first (0 cycles — need initial momentum)
-  - Struggling companies next (lowest CEO score from last cycle)
-  - Oldest as tiebreaker
+STEP 4: Company cycles — dispatched by Sentinel priority score (see Rule 1):
+  - Sentinel ranks all eligible companies (no cycle in 24h) by composite score
+  - Top N companies dispatched (N = 1-2 based on budget remaining)
+  - Score factors: pending tasks, staleness, lifecycle stage, CEO score, directives
   
   FOR EACH company WHERE status IN ('mvp', 'active'):
     0. Research Analyst (Cycle 0: full market/competitive/SEO, every 7 cycles: competitive refresh, on directive: full refresh)
