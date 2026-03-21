@@ -287,3 +287,17 @@
 **Fix applied:** Replaced inline string construction with `jq -n --arg` to build the entire request body. This properly escapes the payload as a JSON string value, not a nested object.
 **Prevention:** NEVER construct JSON bodies with string interpolation in shell scripts — use `jq -n` with `--arg` for proper escaping. When passing JSON-within-JSON (like a payload string that itself is JSON), the inner JSON must be string-escaped. Rule: if the value could contain `"`, `{`, or `}`, use `jq --arg` not `$()` interpolation.
 **Affects:** hive (Engineer → company dispatch chain, all company builds)
+
+### 2026-03-21 Claude CLI --allowedTools is variadic — eats the next positional argument
+**What happened:** `claude -p --allowedTools 'Bash,Read,Write,Edit' "Your prompt here"` resulted in "Error: Input must be provided" — the CLI received no prompt.
+**Root cause:** The `--allowedTools` flag in Claude Code CLI accepts `<tools...>` (variadic). In Commander.js, variadic options consume ALL subsequent non-flag arguments. So `--allowedTools 'Bash,Read,Write,Edit' "prompt"` treated the prompt string as another tool name, leaving no positional prompt argument.
+**Fix applied:** Switched company repo workflows to `anthropics/claude-code-action@v1` which handles CLI invocation internally. The action passes `claude_args` and `prompt` separately, avoiding the variadic issue.
+**Prevention:** When calling `claude -p` directly (not via claude-code-action), either: (a) pipe the prompt via stdin (`echo "prompt" | claude -p --allowedTools ...`), (b) use `--` to terminate flag parsing before the prompt, or (c) use claude-code-action which handles this correctly. NEVER pass a prompt as a positional argument after a variadic flag.
+**Affects:** both (any workflow using direct `claude -p` CLI)
+
+### 2026-03-21 CLAUDE_CODE_OAUTH_TOKEN doesn't work with direct `claude -p` CLI
+**What happened:** Company repo workflows using `claude -p` with `CLAUDE_CODE_OAUTH_TOKEN` env var returned 401: "Invalid authentication credentials". The Hive repo's CEO workflow using `claude-code-action` with the same token type worked fine.
+**Root cause:** `claude-code-action` handles OAuth token authentication internally (likely via `claude setup-token` or config file injection). The direct `claude -p` CLI doesn't automatically use `CLAUDE_CODE_OAUTH_TOKEN` as an env var for authentication — it needs either interactive login, `ANTHROPIC_API_KEY`, or token setup via `claude setup-token`.
+**Fix applied:** Switched all company repo workflows from direct `claude -p` to `anthropics/claude-code-action@v1`. The action handles auth properly via its `claude_code_oauth_token` input.
+**Prevention:** Always use `claude-code-action` for GitHub Actions workflows, never call `claude -p` directly. The action handles authentication, CLI installation, and output capture. Direct CLI usage requires manual auth setup that's fragile in CI environments.
+**Affects:** both (any workflow calling claude CLI directly)
