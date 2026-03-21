@@ -307,6 +307,33 @@ export async function GET(req: Request) {
     RETURNING cycle_number, company_id
   `;
 
+  // 13c. Failed agent tasks with unfinished CEO plan work — re-dispatch
+  // When Engineer/Growth fails, the tasks from ceo_plan are lost. Detect and retry.
+  const failedWithPlanWork = await sql`
+    SELECT DISTINCT aa.agent, aa.action_type, aa.company_id, c.slug, c.github_repo
+    FROM agent_actions aa
+    JOIN companies c ON c.id = aa.company_id
+    WHERE aa.status = 'failed'
+    AND aa.agent IN ('engineer', 'growth')
+    AND aa.finished_at > NOW() - INTERVAL '12 hours'
+    AND c.status IN ('mvp', 'active')
+    AND c.github_repo IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM agent_actions aa2
+      WHERE aa2.company_id = aa.company_id
+      AND aa2.agent = aa.agent
+      AND aa2.status = 'success'
+      AND aa2.started_at > aa.finished_at
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM agent_actions aa3
+      WHERE aa3.company_id = aa.company_id
+      AND aa3.agent = aa.agent
+      AND aa3.action_type = 'sentinel_retry'
+      AND aa3.started_at > NOW() - INTERVAL '6 hours'
+    )
+  `;
+
   // 14. Rate-limited agents (0 turns)
   const rateLimited = await sql`
     SELECT aa.agent, aa.action_type, aa.company_id, c.slug
@@ -722,6 +749,26 @@ export async function GET(req: Request) {
   for (const r of orphanedMvps) {
     await dispatchToActions("new_company", { source: "sentinel", company: r.slug, reason: "orphaned_mvp" });
     dispatches.push({ type: "brain", target: "new_company", payload: { company: r.slug, reason: "orphaned_mvp" } });
+  }
+
+  // 13c. Failed agent tasks → re-dispatch with context preservation
+  for (const r of failedWithPlanWork) {
+    const eventType = r.agent === "engineer" ? "feature_request" : "growth_trigger";
+    await dispatchToActions(eventType, {
+      source: "sentinel_retry",
+      company: r.slug,
+      company_id: r.company_id,
+      reason: "failed_task_recovery",
+      original_agent: r.agent,
+    });
+    // Log the retry so we don't re-dispatch again for 6h
+    await sql`
+      INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+      VALUES (${r.agent}, ${r.company_id}, 'sentinel_retry', 'success',
+        ${"Sentinel re-dispatched " + r.agent + " for " + r.slug + " after failed task (plan work preserved in cycles table)"},
+        NOW(), NOW())
+    `;
+    dispatches.push({ type: "brain", target: eventType, payload: { company: r.slug, reason: "failed_task_recovery" } });
   }
 
   // 10. Max turns exhaustion → Evolver
