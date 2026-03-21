@@ -174,9 +174,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       }
 
       case "first_revenue": {
-        // First paying customer detected — create the Vercel Pro upgrade gate
+        // First paying customer — graduate from mvp to active + create Vercel Pro upgrade gate
         if (approval.company_id) {
           const [comp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
+          await sql`UPDATE companies SET status = 'active', updated_at = NOW() WHERE id = ${approval.company_id} AND status = 'mvp'`;
           await sql`
             INSERT INTO approvals (company_id, gate_type, title, description, context)
             VALUES (
