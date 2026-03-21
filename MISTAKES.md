@@ -184,6 +184,13 @@
 **Prevention:** Provisioning checklists must include post-creation configuration, not just resource creation. Every resource that needs env vars should have a verification step.
 **Affects:** hive
 
+### 2026-03-21 cycle_complete dispatch loop burned ~30 GitHub Actions runs in 20 minutes
+**What happened:** CEO `cycle_complete` chain dispatch included "Always dispatch cycle_complete" at the end. Each `cycle_complete` → CEO runs → dispatches `cycle_complete` again → infinite loop. Each iteration spawned 5 workflow runs (CEO, Engineer feature_request, Engineer new_company, Scout research, Growth). ~30 runs in 20 minutes before manually cancelled.
+**Root cause:** `cycle_complete` was treated as a trigger that needed the same downstream dispatches as `cycle_start`. But `cycle_complete` is a TERMINAL event — the CEO reviews the cycle and writes to DB, no further chaining needed. Also, `check_signal` used `grep -qi "$1"` as a fallback which matched prose mentions (e.g., the word "needs_provisioning" appearing in CEO's reasoning text), causing false `new_company` dispatches every time.
+**Fix applied:** (1) `cycle_complete` is now terminal — NO dispatches. (2) Only `cycle_start` dispatches downstream agents. (3) `gate_approved` only dispatches `new_company` if explicitly flagged. (4) `check_signal` uses strict JSON pattern matching only (`"key": true`), no prose matching. (5) Engineer `new_company` now checks if already provisioned before re-scaffolding.
+**Prevention:** Never create dispatch loops. Every event type must be classified as either TRIGGER (creates downstream work) or TERMINAL (writes to DB, no chaining). Draw the dispatch graph before deploying. Also: never use broad text matching on LLM output for dispatch decisions — false positives cause cascading waste.
+**Affects:** hive (GitHub Actions budget, all agent workflows)
+
 ### 2026-03-21 Engineer feature_request prompt was 1 line — caused 100% failure rate
 **What happened:** Every `feature_request` dispatch to Engineer failed with `error_max_turns` (51 turns, $1.49 each). Senhorio's cycle 1 CEO plan (tax calculator + landing page) was never built despite multiple attempts.
 **Root cause:** Four compounding failures: (1) CEO chain dispatch sent `company: ""` — the Engineer had no idea which company to work on. (2) The `feature_request` prompt was literally one sentence: "Read the CEO plan from cycles table, implement the code changes in the company's repo, commit + push." No instructions on HOW to clone the company repo, authenticate git, query the cycle, or scope work. (3) The Engineer runs on the hive repo checkout — for `feature_request` it needs to clone the company's repo, but had no instructions. (4) CEO plan had 2 medium tasks; no instruction to limit scope.
