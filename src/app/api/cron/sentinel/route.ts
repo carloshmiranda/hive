@@ -311,8 +311,9 @@ export async function GET(req: Request) {
   const rateLimited = await sql`
     SELECT aa.agent, aa.action_type, aa.company_id, c.slug
     FROM agent_actions aa
-    LEFT JOIN companies c ON c.id = aa.company_id
+    INNER JOIN companies c ON c.id = aa.company_id
     WHERE aa.status = 'failed'
+    AND aa.company_id IS NOT NULL
     AND aa.error ILIKE '%exhausted after 0 turns%'
     AND aa.finished_at > NOW() - INTERVAL '6 hours'
     AND NOT EXISTS (

@@ -39,8 +39,8 @@ jobs:
     outputs:
       trigger: ${{ steps.ctx.outputs.trigger }}
       payload: ${{ steps.ctx.outputs.payload }}
-      company: ${{ steps.ctx.outputs.company }}
-      company_repo: ${{ steps.ctx.outputs.company_repo }}
+      company: ${{ steps.resolve.outputs.company }}
+      company_repo: ${{ steps.resolve.outputs.company_repo }}
 
     steps:
       - name: Build context
