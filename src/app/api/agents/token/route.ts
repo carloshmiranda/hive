@@ -58,10 +58,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Verify workflow is allowed
-  const workflow = String(claims.workflow || "");
-  const workflowFile = workflow.split("/").pop() || workflow;
-  if (!ALLOWED_WORKFLOWS.includes(workflowFile)) {
-    return err(`Workflow ${workflowFile} not authorized`, 403);
+  // workflow_ref looks like: "owner/repo/.github/workflows/hive-build.yml@refs/heads/main"
+  // workflow claim is just the name: "Hive Build" — not useful for matching
+  const workflowRef = String(claims.job_workflow_ref || claims.workflow_ref || "");
+  const workflowFile = workflowRef.split("/").pop()?.split("@")[0] || "";
+  if (!workflowFile || !ALLOWED_WORKFLOWS.includes(workflowFile)) {
+    return err(`Workflow '${workflowFile || claims.workflow}' not authorized`, 403);
   }
 
   // Determine which token to return based on request
