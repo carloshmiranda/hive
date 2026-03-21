@@ -107,7 +107,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 15 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 20 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You provision infrastructure for new companies.
 
@@ -207,6 +207,55 @@ jobs:
                WHERE id = '<id>'
                ```
             7. Log success: `INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at) VALUES ('engineer', '<id>', 'scaffold_company', 'success', 'Provisioned: GitHub repo + Vercel project', NOW(), NOW())`
+            8. Generate initial product spec from the Scout proposal:
+               Using the approval context you already queried (step 2, proposal + research), construct a product_spec JSON:
+               ```json
+               {
+                 "mission": "<1 sentence from problem + solution>",
+                 "what_we_build": "<1 paragraph describing the MVP>",
+                 "vision": "<1 sentence long-term goal>",
+                 "target_users": ["<user persona 1>", "<user persona 2>"],
+                 "value_proposition": "<from proposal>",
+                 "pricing_model": "<from proposal monetization>",
+                 "competitive_positioning": "<1 sentence from competitive analysis>",
+                 "feature_roadmap": {
+                   "mvp": ["<feature 1>", "<feature 2>", "<feature 3>"],
+                   "launch": ["<feature 4>", "<feature 5>"],
+                   "scale": ["<feature 6>"]
+                 },
+                 "spec_version": 1,
+                 "last_updated_cycle": 0
+               }
+               ```
+               Write to DB:
+               ```sql
+               INSERT INTO research_reports (company_id, report_type, content, summary)
+               VALUES ('<id>', 'product_spec', '<product_spec_json>'::jsonb, 'Initial spec from Scout proposal')
+               ON CONFLICT (company_id, report_type) DO UPDATE SET content = EXCLUDED.content, summary = EXCLUDED.summary, updated_at = NOW()
+               ```
+               Also extract Scout research into separate reports if available in the approval context:
+               ```sql
+               INSERT INTO research_reports (company_id, report_type, content, summary)
+               SELECT '<id>', unnest(ARRAY['market_research','competitive_analysis','seo_keywords']),
+                      unnest(ARRAY[context->'research'->'market_research', context->'research'->'competitive_analysis', context->'research'->'seo_keywords']),
+                      'Extracted from Scout proposal'
+               FROM approvals WHERE company_id = '<id>' AND gate_type = 'new_company' AND context->'research' IS NOT NULL
+               ON CONFLICT (company_id, report_type) DO NOTHING
+               ```
+            9. Generate initial task backlog (5-8 tasks):
+               Based on the product spec, create initial tasks via SQL:
+               ```sql
+               INSERT INTO company_tasks (company_id, category, title, description, priority, source)
+               VALUES
+                 ('<id>', 'engineering', 'Build core value flow', '<describe the main user flow based on the product spec>', 1, 'ceo'),
+                 ('<id>', 'engineering', 'Set up Stripe checkout', 'Configure pricing page and Stripe integration for the monetization model', 1, 'ceo'),
+                 ('<id>', 'growth', 'Optimize landing page copy', 'Replace boilerplate hero/features with compelling copy targeting the primary user persona', 1, 'ceo'),
+                 ('<id>', 'growth', 'Write first SEO blog post', 'Target the highest-volume keyword from SEO research with a 1500+ word article', 2, 'ceo'),
+                 ('<id>', 'research', 'Validate target audience assumptions', 'Search Reddit/HN/forums for real user complaints matching our value proposition', 2, 'ceo'),
+                 ('<id>', 'qa', 'End-to-end test core flow', 'Verify waitlist signup, email confirmation, and referral link work correctly', 2, 'ceo')
+               ON CONFLICT DO NOTHING
+               ```
+               Customize the task descriptions based on the actual company and product spec.
 
             Do NOT create a Neon database or Stripe product — skip those for now.
             Output: { "company": "<slug>", "provisioned": true }

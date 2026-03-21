@@ -319,11 +319,19 @@ export default function DashboardPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 32, height: 32, background: "linear-gradient(135deg, #f0b944, #c49a30)", borderRadius: 6,
             display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800, color: "#0c0c0f" }}>H</div>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--hive-text)", letterSpacing: "-0.02em" }}>Hive</div>
-            <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>venture orchestrator</div>
-          </div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--hive-text)", letterSpacing: "-0.02em" }}>Hive</div>
         </div>
+        {portfolio && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)" }}>
+            <span>MRR <span style={{ fontWeight: 600, color: portfolio.total_mrr > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(portfolio.total_mrr)}</span></span>
+            <span style={{ color: "var(--hive-text-dim)" }}>·</span>
+            <span>Customers <span style={{ fontWeight: 600, color: "var(--hive-text)" }}>{portfolio.total_customers}</span></span>
+            <span style={{ color: "var(--hive-text-dim)" }}>·</span>
+            <span>Companies <span style={{ fontWeight: 600, color: "var(--hive-text)" }}>{portfolio.live_companies}</span></span>
+            <span style={{ color: "var(--hive-text-dim)" }}>·</span>
+            <span>Last cycle <span style={{ fontWeight: 600, color: "var(--hive-text)" }}>{portfolio.last_cycle_at ? timeAgo(portfolio.last_cycle_at) : "—"}</span></span>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <Link href="/settings" style={{ fontSize: 13, color: "var(--hive-text-secondary)", fontFamily: "var(--hive-sans)", textDecoration: "none" }}>Settings</Link>
           {lastRefresh && (
@@ -459,24 +467,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Metric cards */}
-          {portfolio && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
-              {[
-                { label: "Portfolio MRR", value: fmtCurrency(portfolio.total_mrr) },
-                { label: "Total customers", value: String(portfolio.total_customers), sub: portfolio.total_waitlist > 0 ? `${portfolio.total_waitlist} waitlist` : undefined },
-                { label: "Active companies", value: String(portfolio.live_companies), sub: `${portfolio.total_companies} total` },
-                { label: "Last cycle", value: portfolio.last_cycle_at ? timeAgo(portfolio.last_cycle_at) : "—", sub: "Runs on events" },
-              ].map((m, i) => (
-                <div key={i} style={{ padding: "16px 20px", background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
-                  <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 6 }}>{m.label}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "var(--hive-mono)", color: "var(--hive-text)" }}>{m.value}</div>
-                  {m.sub && <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", marginTop: 2 }}>{m.sub}</div>}
-                </div>
-              ))}
-            </div>
-          )}
-
           {/* Scout proposals banner */}
           {ideas.length > 0 && (
             <div onClick={() => setActiveTab("inbox")} style={{
@@ -506,7 +496,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
                 {portfolioCompanies.map(c => {
                   const m = c.latest_metrics;
                   const isLive = ["active", "mvp"].includes(c.status);
@@ -515,69 +505,67 @@ export default function DashboardPage() {
                   const scoreColor = score !== null ? (score >= 7 ? "var(--hive-green)" : score >= 4 ? "var(--hive-amber)" : "var(--hive-red)") : "var(--hive-text-tertiary)";
 
                   return (
-                    <div key={c.id} style={{
-                      padding: 20, background: "var(--hive-surface)", borderRadius: 10,
-                      border: "1px solid var(--hive-border)", transition: "background 0.15s",
-                    }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface-hover)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface)"; }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                            <Link href={`/company/${c.slug}`} style={{ fontSize: 15, fontWeight: 600, color: "var(--hive-text)", textDecoration: "none" }}>{c.name}</Link>
+                    <Link key={c.id} href={`/company/${c.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
+                      <div style={{
+                        padding: "16px 18px", background: "var(--hive-surface)", borderRadius: 10,
+                        border: "1px solid var(--hive-border)", transition: "background 0.15s", cursor: "pointer",
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface-hover)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface)"; }}>
+                        {/* Top line: name + badge | CEO score */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--hive-text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</span>
                             <StatusBadge status={c.status} />
                           </div>
-                          <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.5 }}>{c.description}</div>
+                          {score !== null && (
+                            <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+                              <span style={{ fontSize: 24, fontWeight: 700, fontFamily: "var(--hive-mono)", color: scoreColor, lineHeight: 1 }}>{score}</span>
+                              <span style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>CEO</span>
+                            </div>
+                          )}
                         </div>
-                        {score !== null && (
-                          <div style={{ textAlign: "center", marginLeft: 16 }}>
-                            <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--hive-mono)", color: scoreColor }}>{score}</div>
-                            <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)" }}>CEO</div>
+
+                        {/* Mini metrics row */}
+                        {isLive && (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+                            <div>
+                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>MRR</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", color: (m?.mrr || 0) > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(m?.mrr || 0)}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>{(m?.customers || 0) > 0 ? "Customers" : (m?.waitlist_total || 0) > 0 ? "Waitlist" : "Customers"}</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{(m?.customers || 0) > 0 ? m.customers : (m?.waitlist_total || 0) > 0 ? m.waitlist_total : 0}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>Views</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{m?.page_views || 0}</div>
+                            </div>
                           </div>
                         )}
-                      </div>
 
-                      {isLive && (
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginTop: 16 }}>
-                          <div>
-                            <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em" }}>MRR</div>
-                            <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "var(--hive-mono)", color: (m?.mrr || 0) > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(m?.mrr || 0)}</div>
+                        {c.status === "provisioning" && (
+                          <div style={{ fontSize: 12, color: "var(--hive-amber)", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
+                            Provisioning...
                           </div>
-                          <div>
-                            <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em" }}>{(m?.customers || 0) > 0 ? "Customers" : (m?.waitlist_total || 0) > 0 ? "Waitlist" : "Customers"}</div>
-                            <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{(m?.customers || 0) > 0 ? m.customers : (m?.waitlist_total || 0) > 0 ? m.waitlist_total : 0}</div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em" }}>Views</div>
-                            <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{m?.page_views || 0}</div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em" }}>Cycles</div>
-                            <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{cycleCount}</div>
-                          </div>
-                        </div>
-                      )}
-
-                      {c.status === "provisioning" && (
-                        <div style={{ fontSize: 12, color: "var(--hive-amber)", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                          <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
-                          Infrastructure being created...
-                        </div>
-                      )}
-
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--hive-border-subtle)" }}>
-                        <div style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
-                          {c.vercel_url || "no deployment yet"}
-                        </div>
-                        {(c.pending_approvals || 0) > 0 && (
-                          <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                            padding: "2px 8px", borderRadius: 8,
-                            background: "var(--hive-amber-bg)", color: "var(--hive-amber)", border: "1px solid var(--hive-amber-border)" }}>
-                            {c.pending_approvals} pending
-                          </span>
                         )}
+
+                        {/* Footer: cycles + pending */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 10, borderTop: "1px solid var(--hive-border-subtle)" }}>
+                          <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                            {cycleCount} cycle{cycleCount !== 1 ? "s" : ""}
+                          </div>
+                          {(c.pending_approvals || 0) > 0 && (
+                            <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              padding: "2px 8px", borderRadius: 8,
+                              background: "var(--hive-amber-bg)", color: "var(--hive-amber)", border: "1px solid var(--hive-amber-border)" }}>
+                              {c.pending_approvals} pending
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    </Link>
                   );
                 })}
               </div>
@@ -596,7 +584,7 @@ export default function DashboardPage() {
                 }}>View all →</button>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                {actions.slice(0, 4).map(a => {
+                {actions.slice(0, 8).map(a => {
                   const isFail = a.status === "failed";
                   return (
                     <div key={a.id} style={{
