@@ -46,14 +46,6 @@ jobs:
           git config user.name "Hive Engineer"
           git config user.email "noreply@github.com"
 
-      - name: Setup Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code@latest
-
       - name: Load product context from Hive DB
         id: context
         run: |
@@ -106,7 +98,12 @@ jobs:
             for (const r of reports) {
               ctx.research[r.report_type] = { summary: r.summary, content: r.content };
             }
-            require('fs').writeFileSync('/tmp/product-context.json', JSON.stringify(ctx, null, 2));
+            // Write to file for step output (truncate to 8000 chars)
+            const json = JSON.stringify(ctx, null, 2).slice(0, 8000);
+            require('fs').writeFileSync('/tmp/product-context.json', json);
+            // Also write as step output
+            const fs = require('fs');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'product_ctx<<CTXEOF\n' + json + '\nCTXEOF\n');
             await sql.end();
           }
           load().catch(e => { console.error(e.message); process.exit(0); });
@@ -114,102 +111,88 @@ jobs:
 
       - name: Run build agent
         id: agent
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          # Load product context if available
-          PRODUCT_CTX=""
-          if [ -f /tmp/product-context.json ]; then
-            PRODUCT_CTX=$(cat /tmp/product-context.json | head -c 8000)
-          fi
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
+          prompt: |
+            You are the Engineer agent of Hive. You build features and fix bugs.
 
-          # Write prompt to file via heredoc + envsubst (avoids --allowedTools variadic flag issue)
-          export PRODUCT_CTX
-          envsubst '${PRODUCT_CTX}' > /tmp/build-prompt.txt <<'BUILDPROMPT'
-          You are the Engineer agent of Hive. You build features and fix bugs.
+            TRIGGER: ${{ github.event.inputs.trigger }}
+            COMPANY: ${{ github.event.inputs.company_slug }}
+            PAYLOAD: ${{ github.event.inputs.payload }}
 
-          TRIGGER: ${{ github.event.inputs.trigger }}
-          COMPANY: ${{ github.event.inputs.company_slug }}
-          PAYLOAD: ${{ github.event.inputs.payload }}
+            You are in the company repo. Work in the current directory.
 
-          You are in the company repo. Work in the current directory.
+            ## PRODUCT CONTEXT
+            Use this to understand WHY you're building, who the users are, and how the product makes money.
+            Make architectural decisions informed by this context (naming, pricing tiers, feature gating, competitive gaps).
+            ${{ steps.context.outputs.product_ctx }}
 
-          ## PRODUCT CONTEXT
-          Use this to understand WHY you're building, who the users are, and how the product makes money.
-          Make architectural decisions informed by this context (naming, pricing tiers, feature gating, competitive gaps).
-          ${PRODUCT_CTX}
+            ## feature_request — Build features from CEO plan
+            1. Get the active cycle plan from Hive DB:
+               ```sql
+               SELECT id, cycle_number, ceo_plan FROM cycles
+               WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}')
+               AND status = 'running' ORDER BY created_at DESC LIMIT 1
+               ```
+            2. Check for existing work:
+               - `git branch -r | grep hive/` — existing feature branches
+               - `GH_TOKEN="$GH_PAT" gh pr list --state open --json number,title,headRefName`
+            3. Read `ceo_plan.engineering_tasks`. ALSO check `engineering_tasks` from PRODUCT CONTEXT — these are from the company_tasks backlog.
+               If ceo_plan has no engineering_tasks, use the backlog tasks instead. Pick the FIRST uncompleted task.
+               IMPORTANT: Implement ONE task per run. You have limited turns.
+            3b. If the task has an `id` from company_tasks, mark it in_progress before starting:
+                ```sql
+                UPDATE company_tasks SET status = 'in_progress', updated_at = NOW() WHERE id = '<task_id>'
+                ```
+            4. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
+               - Check competitive_analysis for what competitors do (match or beat them)
+               - Check the pricing model to build the right tier-gating structure
+               - Check target_audience to get naming and UX right
+            5. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
+            6. Implement the task following acceptance criteria
+            7. Install dependencies if needed: `npm install`
+            8. Build to verify: `npx next build` — fix any errors
+            9. Commit and push:
+               ```bash
+               git add -A && git commit -m "feat: <task summary>"
+               git push -u origin hive/cycle-<N>-<task-id>
+               ```
+            10. Open a PR:
+               `GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"`
+            11. If the task has acceptance criteria, verify them before marking done.
+            12. Mark the task done in company_tasks (if it has an id):
+                ```sql
+                UPDATE company_tasks SET status = 'done', updated_at = NOW() WHERE id = '<task_id>'
+                ```
+            13. Log to Hive DB:
+                ```sql
+                INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+                VALUES ('engineer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
+                  'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
+                ```
+            14. Output: { "pr_opened": true, "pr_number": N, "company": "${{ github.event.inputs.company_slug }}" }
 
-          ## feature_request — Build features from CEO plan
-          1. Get the active cycle plan from Hive DB:
-             ```sql
-             SELECT id, cycle_number, ceo_plan FROM cycles
-             WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}')
-             AND status = 'running' ORDER BY created_at DESC LIMIT 1
-             ```
-          2. Check for existing work:
-             - `git branch -r | grep hive/` — existing feature branches
-             - `GH_TOKEN="$GH_PAT" gh pr list --state open --json number,title,headRefName`
-          3. Read `ceo_plan.engineering_tasks`. ALSO check `engineering_tasks` from PRODUCT CONTEXT — these are from the company_tasks backlog.
-             If ceo_plan has no engineering_tasks, use the backlog tasks instead. Pick the FIRST uncompleted task.
-             IMPORTANT: Implement ONE task per run. You have limited turns.
-          3b. If the task has an `id` from company_tasks, mark it in_progress before starting:
-              ```sql
-              UPDATE company_tasks SET status = 'in_progress', updated_at = NOW() WHERE id = '<task_id>'
-              ```
-          4. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
-             - Check competitive_analysis for what competitors do (match or beat them)
-             - Check the pricing model to build the right tier-gating structure
-             - Check target_audience to get naming and UX right
-          5. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
-          6. Implement the task following acceptance criteria
-          7. Install dependencies if needed: `npm install`
-          8. Build to verify: `npx next build` — fix any errors
-          9. Commit and push:
-             ```bash
-             git add -A && git commit -m "feat: <task summary>"
-             git push -u origin hive/cycle-<N>-<task-id>
-             ```
-          10. Open a PR:
-             `GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"`
-          11. If the task has acceptance criteria, verify them before marking done.
-          12. Mark the task done in company_tasks (if it has an id):
-              ```sql
-              UPDATE company_tasks SET status = 'done', updated_at = NOW() WHERE id = '<task_id>'
-              ```
-          13. Log to Hive DB:
-              ```sql
-              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-              VALUES ('engineer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
-                'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
-              ```
-          14. Output: { "pr_opened": true, "pr_number": N, "company": "${{ github.event.inputs.company_slug }}" }
+            ## ops_escalation — Fix errors
+            1. Query recent errors from Hive DB:
+               `SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3`
+            2. Diagnose and fix the issue in the current directory
+            3. Build, commit, push, log to agent_actions
 
-          ## ops_escalation — Fix errors
-          1. Query recent errors from Hive DB:
-             `SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3`
-          2. Diagnose and fix the issue in the current directory
-          3. Build, commit, push, log to agent_actions
+            ## deploy_drift — Fix stale deployments
+            Check Vercel deployment status, trigger a redeploy if needed.
 
-          ## deploy_drift — Fix stale deployments
-          Check Vercel deployment status, trigger a redeploy if needed.
-
-          RULES:
-          - Implement ONE task per run, create a branch and open a PR
-          - Always use `GH_TOKEN="$GH_PAT"` for gh commands
-          - Write to agent_actions table: what you did, status, any errors
-          - If you open a PR, output: { "pr_opened": true, "pr_number": N }
-          - If you discover issues you can't fix in this run, add them to BACKLOG.md (read it first to avoid duplicates)
-          - After completing work, move the relevant BACKLOG.md item to Done with today's date
-          BUILDPROMPT
-
-          cat /tmp/build-prompt.txt | claude -p \
-            --model claude-sonnet-4-20250514 \
-            --max-turns 35 \
-            --allowedTools 'Bash,Read,Write,Edit' \
-            2>&1 | tee /tmp/claude-output.txt
+            RULES:
+            - Implement ONE task per run, create a branch and open a PR
+            - Always use `GH_TOKEN="$GH_PAT"` for gh commands
+            - Write to agent_actions table: what you did, status, any errors
+            - If you open a PR, output: { "pr_opened": true, "pr_number": N }
+            - If you discover issues you can't fix in this run, add them to BACKLOG.md (read it first to avoid duplicates)
+            - After completing work, move the relevant BACKLOG.md item to Done with today's date
 
       - name: Log failure to Hive DB
-        if: failure()
+        if: always() && steps.agent.outcome == 'failure'
         run: |
           npm install --no-save postgres 2>/dev/null
           node -e "
@@ -228,14 +211,20 @@ jobs:
           "
 
       - name: Chain dispatch to CEO
-        if: success()
+        if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          OUTPUT=$(cat /tmp/claude-output.txt 2>/dev/null || echo "{}")
-          PR_NUM=$(echo "$OUTPUT" | grep -oP '"?pr_number"?\s*[:=]\s*"?\K\d+' | head -1 || echo "0")
+          set +e
+          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          if [ ! -f "$EXEC_FILE" ] || [ -z "$EXEC_FILE" ]; then
+            EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+          fi
+          RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "$EXEC_FILE" 2>/dev/null || echo "{}")
 
-          if echo "$OUTPUT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true'; then
+          PR_NUM=$(echo "$RESULT" | grep -oP '"?pr_number"?\s*[:=]\s*"?\K\d+' | head -1 || echo "0")
+
+          if echo "$RESULT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true'; then
             curl -s -X POST "https://api.github.com/repos/carloshmiranda/hive/dispatches" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \

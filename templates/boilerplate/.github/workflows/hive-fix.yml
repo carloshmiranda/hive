@@ -43,14 +43,6 @@ jobs:
           git config user.name "Hive Healer"
           git config user.email "noreply@github.com"
 
-      - name: Setup Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code@latest
-
       - name: Load error context from Hive DB
         id: context
         run: |
@@ -94,7 +86,10 @@ jobs:
               previous_fixes: fixes.map(f => f.description),
               cross_company_patterns: patterns.map(p => p.description),
             };
-            require('fs').writeFileSync('/tmp/error-context.json', JSON.stringify(ctx, null, 2));
+            const json = JSON.stringify(ctx, null, 2).slice(0, 8000);
+            require('fs').writeFileSync('/tmp/error-context.json', json);
+            const fs = require('fs');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'error_ctx<<CTXEOF\n' + json + '\nCTXEOF\n');
             await sql.end();
           }
           load().catch(e => { console.error(e.message); require('fs').writeFileSync('/tmp/error-context.json', '{}'); process.exit(0); });
@@ -102,66 +97,53 @@ jobs:
 
       - name: Run fix agent
         id: agent
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          ERROR_CTX=""
-          if [ -f /tmp/error-context.json ]; then
-            ERROR_CTX=$(cat /tmp/error-context.json | head -c 8000)
-          fi
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 20 --allowedTools Bash,Read,Write,Edit"
+          prompt: |
+            You are the Healer agent of Hive, fixing a bug in this company's codebase.
 
-          # Write prompt to file (avoids --allowedTools variadic flag consuming the prompt)
-          export ERROR_CTX
-          envsubst '${ERROR_CTX}' > /tmp/fix-prompt.txt <<'FIXPROMPT'
-          You are the Healer agent of Hive, fixing a bug in this company's codebase.
+            ERROR: ${{ github.event.inputs.error_summary }}
+            COMPANY: ${{ github.event.inputs.company_slug }}
+            SOURCE: ${{ github.event.inputs.source }}
+            PAYLOAD: ${{ github.event.inputs.payload }}
 
-          ERROR: ${{ github.event.inputs.error_summary }}
-          COMPANY: ${{ github.event.inputs.company_slug }}
-          SOURCE: ${{ github.event.inputs.source }}
-          PAYLOAD: ${{ github.event.inputs.payload }}
+            ## ERROR CONTEXT (from Hive DB)
+            ${{ steps.context.outputs.error_ctx }}
 
-          ## ERROR CONTEXT (from Hive DB)
-          ${ERROR_CTX}
+            ## YOUR PROCESS
+            1. Read the error details above. Understand what failed and why.
+            2. Check CROSS-COMPANY PATTERNS — if a similar error was fixed in another company, apply the same approach.
+            3. Search the codebase for the root cause:
+               - Check recent git log: `git log --oneline -10`
+               - Search for the error: `grep -r 'error text' src/`
+               - Read the relevant file(s)
+            4. Fix the minimal set of files needed. Do NOT refactor.
+            5. Build to verify: `npx next build`
+            6. Commit and push:
+               ```bash
+               git add -A && git commit -m "fix: <what was broken>"
+               git push origin main
+               ```
+            7. Log to Hive DB:
+               ```sql
+               INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+               VALUES ('healer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
+                 'error_fix', 'success', '<what was fixed>', NOW(), NOW())
+               ```
+            8. Write a playbook entry if this could help other companies:
+               ```sql
+               INSERT INTO playbook (domain, insight, evidence, confidence)
+               VALUES ('engineering', '<what to do when this happens>', '<the error>', 0.7)
+               ```
 
-          ## YOUR PROCESS
-          1. Read the error details above. Understand what failed and why.
-          2. Check CROSS-COMPANY PATTERNS — if a similar error was fixed in another company, apply the same approach.
-          3. Search the codebase for the root cause:
-             - Check recent git log: `git log --oneline -10`
-             - Search for the error: `grep -r 'error text' src/`
-             - Read the relevant file(s)
-          4. Fix the minimal set of files needed. Do NOT refactor.
-          5. Build to verify: `npx next build`
-          6. Commit and push:
-             ```bash
-             git add -A && git commit -m "fix: <what was broken>"
-             git push origin main
-             ```
-          7. Log to Hive DB:
-             ```sql
-             INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-             VALUES ('healer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
-               'error_fix', 'success', '<what was fixed>', NOW(), NOW())
-             ```
-          8. Write a playbook entry if this could help other companies:
-             ```sql
-             INSERT INTO playbook (domain, insight, evidence, confidence)
-             VALUES ('engineering', '<what to do when this happens>', '<the error>', 0.7)
-             ```
-
-          RULES:
-          - Fix, don't refactor. Minimum change to resolve the error.
-          - Max 3 files per fix. If more needed, log an escalation and add to BACKLOG.md.
-          - Always run `npx next build` before committing.
-          - Push directly to main (fixes don't need PR review).
-          - If you find deeper issues you can't fix now, add them to BACKLOG.md with priority and evidence.
-          FIXPROMPT
-
-          cat /tmp/fix-prompt.txt | claude -p \
-            --model claude-sonnet-4-20250514 \
-            --max-turns 20 \
-            --allowedTools 'Bash,Read,Write,Edit' \
-            2>&1 | tee /tmp/claude-output.txt
+            RULES:
+            - Fix, don't refactor. Minimum change to resolve the error.
+            - Max 3 files per fix. If more needed, log an escalation and add to BACKLOG.md.
+            - Always run `npx next build` before committing.
+            - Push directly to main (fixes don't need PR review).
+            - If you find deeper issues you can't fix now, add them to BACKLOG.md with priority and evidence.
 
       - name: Log results to Hive DB
         if: always()
@@ -184,7 +166,7 @@ jobs:
           "
 
       - name: Notify Hive on completion
-        if: success()
+        if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
