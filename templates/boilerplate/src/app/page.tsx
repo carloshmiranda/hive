@@ -106,7 +106,7 @@ function WaitlistForm() {
 }
 
 function CTAButtons() {
-  const href = LAUNCH_MODE === "early_access" ? "/checkout" : "/checkout";
+  const href = LAUNCH_MODE === "early_access" ? "/checkout" : "#waitlist";
   const label = LAUNCH_MODE === "early_access" ? "Get early access" : "Get started";
   return (
     <div className="flex gap-4 justify-center">
@@ -126,19 +126,32 @@ const DESCRIPTION = "{{DESCRIPTION}}";
 const VALUE_PROPOSITION = "{{VALUE_PROPOSITION}}";
 
 /* Features — Provisioner replaces these with real product features from the Scout proposal */
+/* Icons are inline SVGs — Engineer should customize per product */
 const FEATURES = [
   {
-    icon: "📊",
+    icon: (
+      <svg className="w-6 h-6 text-gray-900" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+      </svg>
+    ),
     title: "{{FEATURE_1_TITLE}}",
     description: "{{FEATURE_1_DESC}}",
   },
   {
-    icon: "⚡",
+    icon: (
+      <svg className="w-6 h-6 text-gray-900" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+      </svg>
+    ),
     title: "{{FEATURE_2_TITLE}}",
     description: "{{FEATURE_2_DESC}}",
   },
   {
-    icon: "🔒",
+    icon: (
+      <svg className="w-6 h-6 text-gray-900" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+      </svg>
+    ),
     title: "{{FEATURE_3_TITLE}}",
     description: "{{FEATURE_3_DESC}}",
   },
@@ -173,6 +186,7 @@ export default function HomePage() {
         </div>
       </nav>
 
+      <main>
       {/* Hero */}
       <header id="waitlist" className="max-w-3xl mx-auto px-6 pt-16 pb-20 text-center">
         <div className="inline-block px-3 py-1 mb-6 text-xs font-medium text-gray-600 bg-gray-100 rounded-full">
@@ -225,7 +239,7 @@ export default function HomePage() {
         <div className="grid md:grid-cols-3 gap-8">
           {FEATURES.map((feature, i) => (
             <div key={i} className="p-6 rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-sm transition">
-              <div className="text-2xl mb-3">{feature.icon}</div>
+              <div className="mb-3">{feature.icon}</div>
               <h3 className="font-semibold text-gray-900 mb-2">{feature.title}</h3>
               <p className="text-sm text-gray-500 leading-relaxed">{feature.description}</p>
             </div>
@@ -242,9 +256,9 @@ export default function HomePage() {
           </div>
           <div className="grid md:grid-cols-3 gap-8">
             {[
-              { step: "1", title: "Sign up", desc: "Create your account in seconds. No credit card required." },
-              { step: "2", title: "Set up", desc: "Connect your data and configure your preferences." },
-              { step: "3", title: "Get results", desc: "Start seeing insights and saving time immediately." },
+              { step: "1", title: "{{STEP_1_TITLE}}", desc: "{{STEP_1_DESC}}" },
+              { step: "2", title: "{{STEP_2_TITLE}}", desc: "{{STEP_2_DESC}}" },
+              { step: "3", title: "{{STEP_3_TITLE}}", desc: "{{STEP_3_DESC}}" },
             ].map((item, i) => (
               <div key={i} className="text-center">
                 <div className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-bold mx-auto mb-4">
@@ -287,6 +301,8 @@ export default function HomePage() {
         {LAUNCH_MODE === "waitlist" && <WaitlistForm />}
         {LAUNCH_MODE !== "waitlist" && <CTAButtons />}
       </section>
+
+      </main>
 
       {/* Footer */}
       <footer className="border-t border-gray-200 py-12">

@@ -314,7 +314,8 @@ Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude
 | Engineer (build) | Claude (GitHub Actions) | Sonnet | 35 | Code execution, speed > reasoning |
 | Evolver | Claude (GitHub Actions) | Opus | 25 | Meta-cognitive prompt improvement |
 | Growth | Company repo Actions (Gemini CLI) | 2.5 Flash | 25 | Can write files directly to company repo (blog posts, SEO pages). 1K RPD free tier. Fallback: Gemini API on Vercel |
-| Healer (company) | Company repo Actions (Claude Sonnet) | Sonnet | 20 | Fixes bugs in company code. Free on public repos. Fallback: Hive Engineer |
+| Healer (systemic) | Hive repo Actions (Claude Sonnet) | Sonnet | 20 | Fixes shared bugs in Hive code (hive-healer.yml on Hive repo) |
+| Healer (company) | Company repo Actions (Claude Sonnet) | Sonnet | 20 | Fixes bugs in company code (hive-fix.yml dispatched to company repo). Free on public repos. Fallback: Hive Engineer |
 | Outreach | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Email personalization quality — doesn't need repo access |
 | Ops | Groq API (Vercel serverless) | Llama 3.3 70B | N/A | Fast inference for health checks |
 | Sentinel | Vercel cron (Node.js) | None | N/A | Pure DB queries + HTTP checks, no LLM |
@@ -336,11 +337,8 @@ Add these in the Hive dashboard (/settings) to enable free-tier routing:
 
 Without these keys, ALL agents fall back to Claude (works but burns quota faster).
 
-### Company repo secrets (set by provisioner)
-- `DATABASE_URL` — Hive Neon connection string (agents log results back)
-- `GH_PAT` — GitHub token for cross-repo dispatch
-- `CLAUDE_CODE_OAUTH_TOKEN` — for Engineer build + Healer fix workflows
-- `GEMINI_API_KEY` — for Growth content workflow (Gemini CLI)
+### Company repo secrets
+Company repos need ZERO secrets (ADR-022). All tokens are fetched at runtime via OIDC token exchange. The provisioner sets no GitHub Actions secrets on company repos.
 
 ## Self-Healing Architecture
 
@@ -439,7 +437,7 @@ When an approval with gate_type='new_company' is approved:
 1. Create GitHub repo via API (`carloshmiranda/{slug}`) — **PUBLIC** (unlimited Actions minutes)
 2. Push Next.js boilerplate with CLAUDE.md, Stripe, auth scaffold, `hive-build.yml` workflow
 3. Replace ALL `{{PLACEHOLDER}}` strings in boilerplate files with real company data
-4. Set GitHub Actions secrets on company repo (DATABASE_URL, GH_PAT, CLAUDE_CODE_OAUTH_TOKEN)
+4. Company repos need ZERO secrets. All tokens are fetched at runtime via OIDC token exchange (see ADR-022).
 5. Create Vercel project linked to GitHub repo (Hobby initially)
 6. Set env vars in Vercel (NEON connection string, Stripe keys, etc.)
 7. Email sending uses the shared `sending_domain` setting — no per-company email setup needed
@@ -447,7 +445,7 @@ When an approval with gate_type='new_company' is approved:
 9. Update company status to 'mvp'
 10. First CEO cycle runs on next nightly loop
 
-**Why public repos?** GitHub gives unlimited Actions minutes for public repos. Company repos contain no secrets (those live in Vercel env vars and GitHub Actions secrets). Hive (private) dispatches build tasks to company repos via `workflow_dispatch`, so build minutes come from the company's unlimited quota instead of Hive's 2,000 min/month.
+**Why public repos?** GitHub gives unlimited Actions minutes for public repos. Company repos contain no secrets — all tokens are fetched at runtime via OIDC token exchange (ADR-022), and app secrets live in Vercel env vars. Hive (private) dispatches build tasks to company repos via `workflow_dispatch`, so build minutes come from the company's unlimited quota instead of Hive's 2,000 min/month.
 
 ## Importing Existing Projects
 

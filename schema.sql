@@ -61,7 +61,7 @@ CREATE TABLE agent_actions (
   action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
   description   TEXT,
   status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
-                  'pending', 'running', 'success', 'failed', 'skipped', 'escalated'
+                  'pending', 'running', 'success', 'failed', 'skipped', 'escalated', 'pending_manual'
                 )),
   input         JSONB,           -- what was fed to the agent
   output        JSONB,           -- what it produced
@@ -87,7 +87,8 @@ CREATE TABLE approvals (
                   'outreach_batch',      -- first cold email batch needs approval
                   'vercel_pro_upgrade',  -- company needs Vercel Pro (has revenue)
                   'social_account',      -- Growth wants a social media account created
-                  'first_revenue'        -- first paying customer detected
+                  'first_revenue',       -- first paying customer detected
+                  'capability_migration' -- boilerplate capability migration proposal
                 )),
   title         TEXT NOT NULL,
   description   TEXT NOT NULL,

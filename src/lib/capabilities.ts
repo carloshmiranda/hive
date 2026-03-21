@@ -19,7 +19,7 @@ export function hasCapability(
   if (!capabilities) return { exists: false };
   const cap = capabilities[key] as Record<string, unknown> | undefined;
   if (!cap) return { exists: false };
-  return { exists: false, ...cap };
+  return { ...cap, exists: true };
 }
 
 /**
