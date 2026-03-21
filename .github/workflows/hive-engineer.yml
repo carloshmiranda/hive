@@ -128,11 +128,11 @@ jobs:
             1. Create GitHub repo: `GH_TOKEN="$GH_PAT" gh repo create carloshmiranda/<slug> --public --description "<description>"`
                If the repo already exists, skip this step.
             2. Copy templates/boilerplate/ into /tmp/<slug>, then replace ALL template placeholders:
-               Run these sed commands (use -i for in-place, order matters):
+               Run these sed commands (use `sed -i` WITHOUT quotes after -i — this runs on Ubuntu):
                ```bash
                cd /tmp/<slug>
                # IMPORTANT: Do NOT run sed on .github/workflows/ — those use ${{ }} (GitHub Actions syntax, not templates)
-               find . -path ./.github -prune -o -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' -o -name '*.txt' -o -name '*.md' -o -name '*.mjs' -o -name '*.example' \) -print | xargs sed -i '' \
+               find . -path ./.github -prune -o -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' -o -name '*.txt' -o -name '*.md' -o -name '*.mjs' -o -name '*.example' \) -print | xargs sed -i \
                  -e 's/{{SLUG}}/<slug>/g' \
                  -e 's/{{COMPANY_NAME}}/<company_name>/g' \
                  -e 's/{{DESCRIPTION}}/<description>/g' \
@@ -142,7 +142,15 @@ jobs:
                ```
                Get TARGET_AUDIENCE and VALUE_PROPOSITION from the proposal context (step below).
                Do NOT replace `{{POSITION}}` in waitlist/route.ts — that's a runtime template.
-               Verify no template placeholders remain: `grep -r '{{[A-Z]' /tmp/<slug>/ --include='*.ts' --include='*.tsx' --include='*.json' --include='*.txt' --include='*.md' | grep -v POSITION | grep -v node_modules`
+               CRITICAL verification — fail if placeholders remain:
+               ```bash
+               REMAINING=$(grep -r '{{[A-Z]' /tmp/<slug>/ --include='*.ts' --include='*.tsx' --include='*.json' --include='*.txt' --include='*.md' | grep -v POSITION | grep -v node_modules | grep -v NAME | grep -v REFERRAL | head -5)
+               if [ -n "$REMAINING" ]; then
+                 echo "ERROR: Unreplaced template placeholders found:"
+                 echo "$REMAINING"
+                 echo "Fix the sed commands above before continuing."
+               fi
+               ```
                - CLAUDE.md: Use templates/company-claude.md, replace ALL {{PLACEHOLDERS}} with real company data from the DB query.
                  Query the approval context for the full proposal: `SELECT context FROM approvals WHERE company_id = '<id>' AND gate_type = 'new_company' ORDER BY created_at DESC LIMIT 1`
                  Use context.proposal for description, target audience, etc.
