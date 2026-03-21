@@ -87,11 +87,21 @@ jobs:
               WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5
             \`;
 
+            // Engineering tasks from company_tasks backlog
+            const engineeringTasks = await sql\`
+              SELECT id, title, description, priority, acceptance, status
+              FROM company_tasks
+              WHERE company_id = \${co.id} AND category = 'engineering'
+              AND status IN ('proposed', 'approved')
+              ORDER BY priority ASC, created_at ASC LIMIT 5
+            \`.catch(() => []);
+
             const ctx = {
               description: co.description,
               research: {},
               proposal: proposal?.context?.proposal || null,
-              playbook: playbook.map(p => p.domain + ': ' + p.insight)
+              playbook: playbook.map(p => p.domain + ': ' + p.insight),
+              engineering_tasks: engineeringTasks
             };
             for (const r of reports) {
               ctx.research[r.report_type] = { summary: r.summary, content: r.content };
@@ -140,8 +150,13 @@ jobs:
           2. Check for existing work:
              - \`git branch -r | grep hive/\` — existing feature branches
              - \`GH_TOKEN=\"\$GH_PAT\" gh pr list --state open --json number,title,headRefName\`
-          3. Read \`ceo_plan.engineering_tasks\`. Pick the FIRST uncompleted task.
+          3. Read \`ceo_plan.engineering_tasks\`. ALSO check \`engineering_tasks\` from PRODUCT CONTEXT — these are from the company_tasks backlog.
+             If ceo_plan has no engineering_tasks, use the backlog tasks instead. Pick the FIRST uncompleted task.
              IMPORTANT: Implement ONE task per run. You have limited turns.
+          3b. If the task has an \`id\` from company_tasks, mark it in_progress before starting:
+              \`\`\`sql
+              UPDATE company_tasks SET status = 'in_progress', updated_at = NOW() WHERE id = '<task_id>'
+              \`\`\`
           4. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
              - Check competitive_analysis for what competitors do (match or beat them)
              - Check the pricing model to build the right tier-gating structure
@@ -157,13 +172,18 @@ jobs:
              \`\`\`
           10. Open a PR:
              \`GH_TOKEN=\"\$GH_PAT\" gh pr create --title \"feat: <task summary>\" --body \"Cycle <N>, Task <task-id>: <description>\"\`
-          11. Log to Hive DB:
+          11. If the task has acceptance criteria, verify them before marking done.
+          12. Mark the task done in company_tasks (if it has an id):
+              \`\`\`sql
+              UPDATE company_tasks SET status = 'done', updated_at = NOW() WHERE id = '<task_id>'
+              \`\`\`
+          13. Log to Hive DB:
               \`\`\`sql
               INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
               VALUES ('engineer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
                 'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
               \`\`\`
-          12. Output: { \"pr_opened\": true, \"pr_number\": N, \"company\": \"${{ github.event.inputs.company_slug }}\" }
+          14. Output: { \"pr_opened\": true, \"pr_number\": N, \"company\": \"${{ github.event.inputs.company_slug }}\" }
 
           ## ops_escalation — Fix errors
           1. Query recent errors from Hive DB:

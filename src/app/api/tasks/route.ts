@@ -8,23 +8,20 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const companyId = searchParams.get("company_id");
   const status = searchParams.get("status");
+  const category = searchParams.get("category");
+  const includeDone = searchParams.get("include_done") === "true";
 
   const sql = getDb();
 
   if (companyId) {
-    const tasks = status
-      ? await sql`
-          SELECT t.*, c.slug as company_slug, c.name as company_name
-          FROM company_tasks t JOIN companies c ON c.id = t.company_id
-          WHERE t.company_id = ${companyId} AND t.status = ${status}
-          ORDER BY t.priority ASC, t.created_at DESC
-        `
-      : await sql`
-          SELECT t.*, c.slug as company_slug, c.name as company_name
-          FROM company_tasks t JOIN companies c ON c.id = t.company_id
-          WHERE t.company_id = ${companyId} AND t.status NOT IN ('done', 'dismissed')
-          ORDER BY t.priority ASC, t.created_at DESC
-        `;
+    const tasks = await sql`
+      SELECT t.*, c.slug as company_slug, c.name as company_name
+      FROM company_tasks t JOIN companies c ON c.id = t.company_id
+      WHERE t.company_id = ${companyId}
+        ${status ? sql`AND t.status = ${status}` : includeDone ? sql`` : sql`AND t.status NOT IN ('done', 'dismissed')`}
+        ${category ? sql`AND t.category = ${category}` : sql``}
+      ORDER BY t.priority ASC, t.created_at DESC
+    `;
     return json(tasks);
   }
 
@@ -32,7 +29,9 @@ export async function GET(req: Request) {
   const tasks = await sql`
     SELECT t.*, c.slug as company_slug, c.name as company_name
     FROM company_tasks t JOIN companies c ON c.id = t.company_id
-    WHERE t.status NOT IN ('done', 'dismissed')
+    WHERE 1=1
+      ${status ? sql`AND t.status = ${status}` : includeDone ? sql`` : sql`AND t.status NOT IN ('done', 'dismissed')`}
+      ${category ? sql`AND t.category = ${category}` : sql``}
     ORDER BY t.priority ASC, t.created_at DESC
     LIMIT 100
   `;

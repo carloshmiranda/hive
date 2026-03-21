@@ -280,3 +280,10 @@
 **Fix applied:** Manually pushed updated files to all 3 company repos via GitHub Contents API.
 **Prevention:** When updating templates/boilerplate/ workflow files or adding new boilerplate docs, ALWAYS push changes to all existing company repos in the same session. Use `gh api` to iterate over active companies. The Sentinel should also detect stale workflow files (compare SHA against boilerplate) and auto-update them.
 **Affects:** both (any boilerplate change)
+
+### 2026-03-21 Engineer dispatch to company repos returned 422 — no company builds ever ran
+**What happened:** Every Engineer dispatch to company repos (hive-build.yml) failed with HTTP 422: "Invalid value for input 'payload'". Zero company repo workflows ever executed successfully. All 6 Engineer feature_request dispatches failed identically.
+**Root cause:** The `workflow_dispatch` request body was constructed with inline string interpolation. The `payload` input was injected as `$(echo "$PAYLOAD" | jq -c '.')` which outputs raw JSON like `{"company":"verdedesk"}` directly into the JSON body. GitHub `workflow_dispatch` inputs are strings, not objects. The raw JSON broke the outer JSON structure, making the `payload` field invalid.
+**Fix applied:** Replaced inline string construction with `jq -n --arg` to build the entire request body. This properly escapes the payload as a JSON string value, not a nested object.
+**Prevention:** NEVER construct JSON bodies with string interpolation in shell scripts — use `jq -n` with `--arg` for proper escaping. When passing JSON-within-JSON (like a payload string that itself is JSON), the inner JSON must be string-escaped. Rule: if the value could contain `"`, `{`, or `}`, use `jq --arg` not `$()` interpolation.
+**Affects:** hive (Engineer → company dispatch chain, all company builds)

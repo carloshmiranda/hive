@@ -42,6 +42,12 @@ type Cycle = {
   id: string; cycle_number: number; status: string; ceo_plan: any; ceo_review: any;
   started_at: string; finished_at: string | null; company_id: string;
 };
+type Task = {
+  id: string; company_id: string; company_slug: string; company_name: string;
+  category: string; title: string; description: string; priority: number;
+  status: string; source: string; acceptance: string | null; cycle_id: string | null;
+  created_at: string; updated_at: string;
+};
 type EvolverProposal = {
   id: string; gap_type: string; severity: string; title: string; diagnosis: string;
   signal_source: string; signal_data: any; proposed_fix: any;
@@ -76,6 +82,23 @@ const GATE_COLORS: Record<string, { color: string; bg: string; border: string }>
   prompt_upgrade: { color: "var(--hive-blue)", bg: "var(--hive-blue-bg)", border: "var(--hive-blue-border)" },
   escalation: { color: "var(--hive-amber)", bg: "var(--hive-amber-bg)", border: "var(--hive-amber-border)" },
 };
+const TASK_CATEGORY_MAP: Record<string, { label: string; color: string }> = {
+  engineering: { label: "Engineering", color: "#34d399" },
+  growth: { label: "Growth", color: "#a78bfa" },
+  research: { label: "Research", color: "#60a5fa" },
+  qa: { label: "QA", color: "#f472b6" },
+  ops: { label: "Ops", color: "#fb923c" },
+  strategy: { label: "Strategy", color: "#f0b944" },
+};
+const TASK_STATUS_MAP: Record<string, { label: string; color: string }> = {
+  proposed: { label: "Proposed", color: "#9d9da8" },
+  approved: { label: "Approved", color: "#60a5fa" },
+  in_progress: { label: "In Progress", color: "#f0b944" },
+  done: { label: "Done", color: "#34d399" },
+  dismissed: { label: "Dismissed", color: "#f87171" },
+};
+const PRIORITY_LABELS = ["P0", "P1", "P2", "P3"];
+const PRIORITY_COLORS = ["#f87171", "#fb923c", "#60a5fa", "#9d9da8"];
 const DOMAIN_ICONS: Record<string, string> = {
   growth: "📈", engineering: "⚙️", pricing: "💰", ops: "🔧", seo: "🔍", strategy: "🎯",
   marketing: "📣", email: "✉️", onboarding: "🚀", retention: "🔄",
@@ -159,8 +182,11 @@ export default function DashboardPage() {
   const [playbook, setPlaybook] = useState<PlaybookEntry[]>([]);
   const [cycles, setCycles] = useState<Cycle[]>([]);
   const [evolverProposals, setEvolverProposals] = useState<EvolverProposal[]>([]);
-  const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence">("overview");
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence" | "tasks">("overview");
   const [activityFilter, setActivityFilter] = useState("all");
+  const [taskCategoryFilter, setTaskCategoryFilter] = useState("all");
+  const [taskCompanyFilter, setTaskCompanyFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [cmdInput, setCmdInput] = useState("");
   const [cmdSending, setCmdSending] = useState(false);
@@ -180,6 +206,7 @@ export default function DashboardPage() {
     setPlaybook(data.playbook);
     setCycles(data.cycles);
     setEvolverProposals(data.evolverProposals || []);
+    setTasks(data.tasks || []);
     setLoading(false);
     setLastRefresh(new Date());
 
@@ -352,6 +379,7 @@ export default function DashboardPage() {
         <TabButton label="Inbox" active={activeTab === "inbox"} count={inboxCount} onClick={() => setActiveTab("inbox")} />
         <TabButton label="Activity" active={activeTab === "activity"} onClick={() => setActiveTab("activity")} />
         <TabButton label="Intelligence" active={activeTab === "intelligence"} onClick={() => setActiveTab("intelligence")} />
+        <TabButton label="Tasks" active={activeTab === "tasks"} count={tasks.length} onClick={() => setActiveTab("tasks")} />
       </div>
 
       {/* ==================== OVERVIEW TAB ==================== */}
@@ -1104,6 +1132,116 @@ export default function DashboardPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ==================== TASKS TAB ==================== */}
+      {activeTab === "tasks" && (
+        <div className="animate-in">
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginBottom: 12 }}>
+              Track approved tasks across companies. Agents pick these up and mark them done.
+            </div>
+            {/* Filters */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)", alignSelf: "center" }}>Category:</span>
+              {["all", ...Object.keys(TASK_CATEGORY_MAP)].map(cat => (
+                <button key={cat} onClick={() => setTaskCategoryFilter(cat)}
+                  style={{ fontSize: 11, fontFamily: "var(--hive-mono)", padding: "3px 10px", borderRadius: 4, cursor: "pointer",
+                    border: `1px solid ${taskCategoryFilter === cat ? "var(--hive-amber-border)" : "var(--hive-border-subtle)"}`,
+                    background: taskCategoryFilter === cat ? "var(--hive-amber-bg)" : "transparent",
+                    color: taskCategoryFilter === cat ? "var(--hive-amber)" : "var(--hive-text-secondary)" }}>
+                  {cat === "all" ? "All" : TASK_CATEGORY_MAP[cat]?.label || cat}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)", alignSelf: "center" }}>Company:</span>
+              {["all", ...Array.from(new Set(tasks.map(t => t.company_slug))).sort()].map(slug => (
+                <button key={slug} onClick={() => setTaskCompanyFilter(slug)}
+                  style={{ fontSize: 11, fontFamily: "var(--hive-mono)", padding: "3px 10px", borderRadius: 4, cursor: "pointer",
+                    border: `1px solid ${taskCompanyFilter === slug ? "var(--hive-amber-border)" : "var(--hive-border-subtle)"}`,
+                    background: taskCompanyFilter === slug ? "var(--hive-amber-bg)" : "transparent",
+                    color: taskCompanyFilter === slug ? "var(--hive-amber)" : "var(--hive-text-secondary)" }}>
+                  {slug === "all" ? "All" : slug}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {(() => {
+            const filtered = tasks.filter(t =>
+              (taskCategoryFilter === "all" || t.category === taskCategoryFilter) &&
+              (taskCompanyFilter === "all" || t.company_slug === taskCompanyFilter)
+            );
+            if (filtered.length === 0) return (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--hive-text-dim)", fontSize: 13, fontFamily: "var(--hive-mono)" }}>
+                No active tasks {taskCategoryFilter !== "all" ? `in ${taskCategoryFilter}` : ""} {taskCompanyFilter !== "all" ? `for ${taskCompanyFilter}` : ""}
+              </div>
+            );
+
+            // Group by company
+            const byCompany: Record<string, Task[]> = {};
+            for (const t of filtered) {
+              (byCompany[t.company_slug] ||= []).push(t);
+            }
+
+            return Object.entries(byCompany).map(([slug, companyTasks]) => (
+              <div key={slug} style={{ marginBottom: 24 }}>
+                <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 600, color: "var(--hive-text-secondary)",
+                  letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8 }}>
+                  {companyTasks[0].company_name || slug}
+                  <span style={{ fontWeight: 400, color: "var(--hive-text-dim)", marginLeft: 8 }}>{companyTasks.length} tasks</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {companyTasks.map(t => {
+                    const catInfo = TASK_CATEGORY_MAP[t.category] || { label: t.category, color: "#9d9da8" };
+                    const statusInfo = TASK_STATUS_MAP[t.status] || { label: t.status, color: "#9d9da8" };
+                    return (
+                      <div key={t.id} style={{ padding: "10px 14px", background: "var(--hive-card-bg)", border: "1px solid var(--hive-border-subtle)",
+                        borderRadius: 8, borderLeft: `3px solid ${catInfo.color}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--hive-text)", marginBottom: 4 }}>{t.title}</div>
+                            <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", lineHeight: 1.4 }}>
+                              {t.description.length > 120 ? t.description.slice(0, 120) + "..." : t.description}
+                            </div>
+                            {t.acceptance && (
+                              <div style={{ fontSize: 11, color: "var(--hive-text-dim)", marginTop: 4, fontFamily: "var(--hive-mono)" }}>
+                                Acceptance: {t.acceptance.length > 80 ? t.acceptance.slice(0, 80) + "..." : t.acceptance}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                            <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", fontWeight: 600,
+                              padding: "2px 6px", borderRadius: 3, color: PRIORITY_COLORS[t.priority] || "#9d9da8",
+                              background: (PRIORITY_COLORS[t.priority] || "#9d9da8") + "14",
+                              border: `1px solid ${(PRIORITY_COLORS[t.priority] || "#9d9da8")}2a` }}>
+                              {PRIORITY_LABELS[t.priority] || "P?"}
+                            </span>
+                            <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              padding: "2px 6px", borderRadius: 3, color: catInfo.color,
+                              background: catInfo.color + "14", border: `1px solid ${catInfo.color}2a` }}>
+                              {catInfo.label}
+                            </span>
+                            <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              padding: "2px 6px", borderRadius: 3, color: statusInfo.color,
+                              background: statusInfo.color + "14", border: `1px solid ${statusInfo.color}2a` }}>
+                              {statusInfo.label}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, marginTop: 6, fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)" }}>
+                          <span>src: {t.source}</span>
+                          <span>{timeAgo(t.created_at)}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ));
+          })()}
         </div>
       )}
 

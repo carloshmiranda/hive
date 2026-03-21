@@ -35,14 +35,24 @@
 - **Worker dispatch**: Growth/Outreach/Ops called directly from chain dispatch steps (no GitHub Actions proxy)
 
 - **Blocked on:**
-  - Resend domain verification (need a real domain — Flolio's domain could work)
+  - Resend domain verification (need a real domain for outreach emails)
+  - Stripe product creation per company (no company can accept payments yet)
 - **Known issues:**
-  - 9 Scout proposals pending approval (noise — need mass reject or auto-expire)
-  - GH_PAT may lack `workflow` scope — causes Engineer 404 when dispatching to company repos (Carlos to verify)
+  - 9 Scout proposals pending approval (auto-expiry planned)
+- **Recently fixed:**
+  - Engineer → company repo dispatch 422 bug (payload JSON escaping) — company builds should now work
+  - Task tracking system live (company_tasks + dashboard Tasks tab + agent integration)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-21 [code] Task tracking + dispatch fix + roadmap overhaul
+**Critical fix:** Engineer → company repo dispatch returned 422 on EVERY attempt. Payload JSON was injected raw instead of string-escaped. Fixed with `jq -n --arg`. This means no company repo workflow (hive-build, hive-growth) has ever successfully run. Should now work.
+**Task tracking:** Full `company_tasks` lifecycle: tasks API with category/status/company filters, PATCH supports cycle_id, dashboard Tasks tab with category + company filters. Company workflows (build + growth) read tasks from backlog, mark in_progress/done, verify acceptance criteria. Pushed to all 3 repos.
+**Roadmap overhaul:** Restructured for "free tier first, upgrade on revenue" philosophy. 4 phases: First Revenue → Portfolio at Scale → Intelligence → Platform. Added concrete milestones for dispatch chain verification, zero-intervention operation, business model diversity.
+**Backlog refresh:** 15 items across P0-P3. Two P0 blockers: email domain (outreach blocked) and Stripe products (payments blocked). New P1s: dispatch chain e2e verification, PR auto-merge, refund/churn handling. New P2s: company health score, cycle score correlation, Venture Brain activation, performance-driven model routing.
+**MISTAKES.md:** New entry for the 422 dispatch bug — JSON string escaping rule.
 
 ### 2026-03-21 [code] Dashboard approval details + failure fixes + secret cleanup
 **Dashboard:** Company cards now show pending approval details (gate type + title) instead of just a count. Digest email includes per-company approvals in the portfolio table.

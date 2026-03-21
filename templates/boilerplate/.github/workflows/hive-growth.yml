@@ -98,6 +98,15 @@ jobs:
               AND implemented_at IS NULL LIMIT 3
             \`;
 
+            // Growth tasks from company_tasks backlog
+            const growthTasks = await sql\`
+              SELECT id, title, description, priority, acceptance, status
+              FROM company_tasks
+              WHERE company_id = \${co.id} AND category = 'growth'
+              AND status IN ('proposed', 'approved')
+              ORDER BY priority ASC, created_at ASC LIMIT 5
+            \`.catch(() => []);
+
             const ctx = {
               company: { name: co.name, slug: co.slug, description: co.description, capabilities: co.capabilities },
               ceo_plan: cycle?.ceo_plan || null,
@@ -105,6 +114,7 @@ jobs:
               metrics: metrics.map(m => ({ date: m.date, mrr: m.mrr, customers: m.customers, page_views: m.page_views, signups: m.signups, waitlist: m.waitlist_total })),
               playbook: playbook.map(p => p.domain + ': ' + p.insight),
               evolver_proposals: proposals.map(p => p.proposed_fix),
+              growth_tasks: growthTasks,
             };
             for (const r of reports) {
               ctx.research[r.report_type] = { summary: r.summary, content: r.content };
@@ -136,6 +146,16 @@ jobs:
 
           ## YOUR PROCESS
           1. Read the CEO plan from context. Identify your growth_tasks.
+             ALSO check growth_tasks from CONTEXT — these are from the company_tasks backlog.
+             If CEO plan has no growth_tasks, use the backlog tasks instead.
+             If a task has an id from company_tasks, mark it in_progress before starting:
+             \`\`\`bash
+             node -e \"const sql = require('postgres')(process.env.DATABASE_URL); sql\\\`UPDATE company_tasks SET status='in_progress', updated_at=NOW() WHERE id='<task_id>'\\\`.then(() => sql.end())\"
+             \`\`\`
+             After completing, mark it done:
+             \`\`\`bash
+             node -e \"const sql = require('postgres')(process.env.DATABASE_URL); sql\\\`UPDATE company_tasks SET status='done', updated_at=NOW() WHERE id='<task_id>'\\\`.then(() => sql.end())\"
+             \`\`\`
           2. Read research reports (market_research, competitive_analysis, seo_keywords, content_performance).
           3. If CONTENT PERFORMANCE data exists with refresh_items, prioritize refreshing declining content BEFORE creating new content.
           4. Read the codebase to understand the current site structure (pages, blog, meta tags).

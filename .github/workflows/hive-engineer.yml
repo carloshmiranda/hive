@@ -315,21 +315,24 @@ jobs:
 
           echo "Dispatching build to ${COMPANY_REPO} (runs on company's unlimited Actions minutes)"
 
+          # Build request body with jq to handle JSON escaping properly
+          # workflow_dispatch inputs are strings, so payload must be a JSON-encoded string
+          PAYLOAD_STR=$(echo "$PAYLOAD" | jq -c '.' 2>/dev/null || echo '{}')
+          REQUEST_BODY=$(jq -n \
+            --arg ref "main" \
+            --arg task "$TASK_SUMMARY" \
+            --arg slug "$COMPANY" \
+            --arg trigger "$TRIGGER" \
+            --arg payload "$PAYLOAD_STR" \
+            '{ref: $ref, inputs: {task_summary: $task, company_slug: $slug, trigger: $trigger, payload: $payload}}')
+
           # Trigger workflow_dispatch on the company repo's hive-build.yml
           HTTP_CODE=$(curl -s -o /tmp/dispatch-response.txt -w "%{http_code}" \
             -X POST "https://api.github.com/repos/${COMPANY_REPO}/actions/workflows/hive-build.yml/dispatches" \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"ref\": \"main\",
-              \"inputs\": {
-                \"task_summary\": \"${TASK_SUMMARY}\",
-                \"company_slug\": \"${COMPANY}\",
-                \"trigger\": \"${TRIGGER}\",
-                \"payload\": $(echo "$PAYLOAD" | jq -c '.' 2>/dev/null || echo '{}')
-              }
-            }")
+            -d "$REQUEST_BODY")
 
           if [ "$HTTP_CODE" = "204" ]; then
             echo "Build dispatched to ${COMPANY_REPO} (HTTP ${HTTP_CODE})"

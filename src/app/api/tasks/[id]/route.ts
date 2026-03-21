@@ -7,11 +7,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const { id } = await params;
   const body = await req.json();
-  const { status, priority } = body;
+  const { status, priority, cycle_id } = body;
 
   const sql = getDb();
 
-  const updates: string[] = [];
   if (status) {
     const valid = ["proposed", "approved", "in_progress", "done", "dismissed"];
     if (!valid.includes(status)) return err("Invalid status", 400);
@@ -21,6 +20,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     UPDATE company_tasks SET
       status = COALESCE(${status || null}, status),
       priority = COALESCE(${priority ?? null}, priority),
+      cycle_id = COALESCE(${cycle_id || null}, cycle_id),
       updated_at = now()
     WHERE id = ${id}
     RETURNING *

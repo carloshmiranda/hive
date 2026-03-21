@@ -20,7 +20,7 @@ export async function GET(req: Request) {
 }
 
 async function mainDashboard(sql: ReturnType<typeof getDb>) {
-  const [counts, revenue, pendingCount, todayTokens, lastCycle, companies, actions, approvals, playbook, cycles, evolverProposals] =
+  const [counts, revenue, pendingCount, todayTokens, lastCycle, companies, actions, approvals, playbook, cycles, evolverProposals, tasks] =
     await Promise.all([
       sql`
         SELECT
@@ -94,6 +94,13 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
           created_at DESC
         LIMIT 20
       `.catch(() => []),
+      sql`
+        SELECT t.*, c.slug as company_slug, c.name as company_name
+        FROM company_tasks t JOIN companies c ON c.id = t.company_id
+        WHERE t.status NOT IN ('done', 'dismissed')
+        ORDER BY t.priority ASC, t.created_at DESC
+        LIMIT 100
+      `.catch(() => []),
     ]);
 
   return json({
@@ -114,6 +121,7 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
     playbook,
     cycles,
     evolverProposals,
+    tasks,
   });
 }
 

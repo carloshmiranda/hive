@@ -17,193 +17,123 @@
 
 ## Up Next
 
-### 🟡 P1 — Email domain for Resend (outreach blocked)
-Outreach emails are skipped because `sending_domain` is not set. Need a real domain (e.g. `hivehq.io`, `usehive.co`) to add DNS records for Resend verification. Flolio's domain could also work with a `hive.` subdomain. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. See CLAUDE.md "Email (Resend)" section for full setup guide. ~10 min task once domain is chosen.
+### 🔴 P0 — Email domain for Resend (outreach fully blocked)
+Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
+
+### 🔴 P0 — Stripe product creation on provision (payments blocked)
+Provisioner scaffolds everything BUT doesn't create Stripe Product + Price with `metadata.hive_company = slug`. Without this, companies cannot accept payments. The mvp → active transition depends on first_revenue which can never trigger. Fix: add Stripe API call in hive-engineer.yml provision job. One API call.
+
+### 🟡 P1 — Verify dispatch chain end-to-end
+The 422 payload bug on Engineer → company repo dispatch is fixed but never tested in production. Need to trigger a real CEO cycle and verify: CEO plan → Engineer dispatch → company hive-build.yml runs → PR created → Growth dispatch → company hive-growth.yml runs. If any link breaks, the whole system is fire-and-forget.
+
+### 🟡 P1 — PR auto-merge for company repos
+Engineer creates PRs on company repos but nobody merges them. Stale PRs accumulate. Options: (a) Add a workflow that auto-merges `hive/*` branches after build passes, (b) Have Engineer push directly to main (simpler for AI-managed repos). Decision needed.
 
 ### 🟡 P1 — Scout proposal auto-expiry
-9 pending proposals cluttering the inbox with no action for days. Add auto-expiry: proposals older than 7 days auto-reject with reason "expired — not reviewed". Sentinel can check this. Prevents proposal debt from accumulating.
+9 pending proposals cluttering the inbox. Add auto-expiry: proposals older than 7 days auto-reject with reason "expired — not reviewed". Sentinel check. Prevents approval debt.
 
-### 🟡 P1 — Secret scanning on company repos before making public
-Flolio had plaintext API keys in committed JSON files that got exposed when repos went public. The Onboarding/Provisioner agent should scan for common secret patterns (API keys, tokens, passwords) before making a repo public. Block if secrets found, create an approval gate with details.
+### 🟡 P1 — Secret scanning before repos go public
+Flolio had plaintext API keys in committed JSON. Onboarding/Provisioner should scan for common secret patterns (regex: API keys, tokens, passwords, connection strings) BEFORE making a repo public. Block if secrets found, create approval gate.
+
+### 🟡 P1 — Refund and churn handling in Stripe webhook
+`charge.refunded` and `customer.subscription.deleted` events not handled. Revenue metrics could be wrong if a customer churns or requests a refund. Add handlers that decrement MRR/customers and log the event.
 
 ---
 
 ## Planned
 
-### 🟢 P2 — Company Neon databases (per-company data isolation)
-Companies currently share the Hive Neon DB (no isolation). Each company should have its own Neon project for customer data (waitlist, email_log, customers). Provisioner creates via Neon API (free tier: 10 projects). Company boilerplate DATABASE_URL points to its own DB. Hive DB keeps orchestration tables only.
-
-### 🟢 P2 — Stripe products per company
-Provisioner should create Stripe Product + Price with `metadata.hive_company = slug`. Currently skipped in provisioning. Required before any company can accept payments (and trigger the mvp → active transition).
-
-### 🟢 P2 — Dashboard: batch approve/reject for Scout proposals
-Currently must click into each proposal individually. Add checkboxes + "Reject all" / "Approve selected" buttons on the Inbox tab. Saves time when 9+ proposals are pending.
+### 🟢 P2 — Per-company Neon databases (data isolation)
+Companies share Hive's Neon DB. Each company should have its own Neon project (free tier: 10 projects). Provisioner creates via Neon API, sets DATABASE_URL per company. Hive DB keeps orchestration tables only. Critical at 5+ companies.
 
 ### 🟢 P2 — Cost tracking per agent run
-Agent actions log turns and cost but it's not surfaced. Add a daily/weekly cost summary to the digest email and dashboard. Track burn rate against Claude Max 5x quota limits. Alert when approaching window boundaries.
+Agent actions log turns but cost isn't surfaced. Add daily/weekly cost summary to digest email and dashboard. Track Claude quota burn rate. Alert when approaching 225 messages/5h window. Essential for scaling decisions.
+
+### 🟢 P2 — Dashboard: batch approve/reject for Scout proposals
+Currently must click into each proposal individually. Add checkboxes + "Reject all" / "Approve selected" buttons on Inbox tab. Saves time with 9+ proposals pending.
+
+### 🟢 P2 — Company health score (composite metric)
+No single metric tells you if a company is healthy. Create a composite: revenue trend (30%), traffic trend (20%), error rate (20%), cycle scores (20%), task completion rate (10%). Show in dashboard, feed to Venture Brain for kill decisions.
+
+### 🟢 P2 — Cycle score → agent performance correlation
+When CEO scores a cycle 3/10, which agent failed? Correlate cycle scores with agent grades and task completion rates. Surface "Engineer has completed 0/5 tasks in last 3 cycles" patterns. Feed to Evolver for targeted improvements.
 
 ### 🟢 P2 — Stack detection for imported companies
-Extend the assessment endpoint to detect non-Next.js stacks: check for remix.config, astro.config, nuxt.config, etc. Detect non-Neon databases (Supabase, PlanetScale) from DATABASE_URL patterns. Detect non-Resend email providers from env var names.
+Assessment endpoint only detects Next.js. Need: Remix, Astro, Nuxt, SvelteKit detection (check config files). Detect non-Neon databases (Supabase, PlanetScale) from DATABASE_URL patterns. Detect non-Resend email providers.
 
-### 🟢 P2 — PR auto-merge for company repos
-Engineer creates PRs on company repos but nobody merges them. Add a workflow that auto-merges PRs from `hive/*` branches after build passes. Or have the Engineer merge directly to main (simpler, since these are AI-managed repos).
+### 🟢 P2 — Venture Brain activation
+Requires 2+ active companies with data. Portfolio analysis, resource allocation, cross-company pattern matching. Should create directives like "VerdeDesk solved Portuguese tax compliance, apply pattern to Senhorio." Currently a stub.
+
+### 🟢 P2 — Performance-driven model routing
+Track per-agent success rates by model. If Gemini Flash has >90% success on Growth tasks, keep it. If Groq starts failing Ops checks, auto-escalate to Claude. The routing table should be dynamic, not static.
 
 ---
 
 ## Future Vision
 
-### 🟢 P3 — Capability diff alerting
-When an assessment shows a capability regression (something that existed now doesn't), create an automatic escalation. Catches cases where a deploy accidentally removed a webhook route or a migration dropped a table.
-
-### ⚪ P3 — Neon Data API for lightweight agent access
-Enable Neon Data API (PostgREST) on company projects for schema discovery via OpenAPI spec, simple agent CRUD (Growth writing email sequences, Ops reading metrics), and future client-side access with RLS. Hybrid: Data API for simple frequent ops, direct SQL for complex/DDL. Full design doc from brainstorm session available. Revisit after 5-10 successful cycles prove DB access is a bottleneck. See brainstorm notes for full 10-part implementation plan (migration, client lib, neon-api helpers, assessment integration, agent prompts, provisioner update, boilerplate changes).
+### ⚪ P3 — Claude Agent SDK migration
+Replace GitHub Actions with Agent SDK for unlimited turns, streaming, and parallel company processing. Current limit: 40 turns per agent per run. Agent SDK: unlimited. Major architecture change but eliminates the biggest scaling constraint.
 
 ### ⚪ P3 — Portfolio-level charts and analytics
-Time-series visualization of MRR, traffic, and customer growth across all companies. Recharts or similar. Useful at 5+ companies, overkill at 2.
+Time-series visualization of MRR, traffic, customer growth across all companies. Recharts or similar. Company comparison charts. Useful at 5+ companies.
 
 ### ⚪ P3 — Telegram/WhatsApp bot for approvals
-Approve/reject gates from your phone without opening the dashboard. Telegram Bot API is free and simple.
+Approve/reject gates from phone. Telegram Bot API is free. Push notification when new gate created. Reply "approve" or "reject [reason]".
 
 ### ⚪ P3 — Multi-framework boilerplate support
-Current boilerplate is Next.js only. Some companies might be better served by Astro (content/SEO), SvelteKit (lightweight SaaS), or plain static sites (landing pages). Boilerplate selection should be a CEO agent decision based on the company's needs.
+Not every business needs Next.js. Astro for content/SEO sites, SvelteKit for lightweight SaaS, static sites for landing pages, Express for API-only businesses. CEO agent picks framework based on business model.
 
-### ⚪ P3 — Autonomous Hive self-improvement
-The orchestrator should be able to propose and implement improvements to its own codebase. Read BACKLOG.md, pick a P2 item, implement it in a branch, run tests, create a PR, and submit for your approval. This is the ultimate dogfooding.
+### ⚪ P3 — Autonomous self-improvement
+Orchestrator reads BACKLOG.md, picks a P2 item, implements it in a branch, runs tests, creates PR, submits for approval. The ultimate dogfooding: Hive improves Hive.
+
+### ⚪ P3 — Business model diversity beyond SaaS
+Content/affiliate sites (ad revenue), faceless YouTube channels (ad revenue), newsletter businesses (sponsorship), API/tool businesses (usage-based). Each needs different boilerplate, metrics, and growth strategies.
+
+### ⚪ P3 — Neon Data API for lightweight agent access
+PostgREST on company Neon projects. Simple CRUD via REST for agents (Growth writing email sequences, Ops reading metrics). Hybrid: Data API for frequent simple ops, SQL for complex queries.
+
+### ⚪ P3 — Capability diff alerting
+When assessment shows regression (feature removed accidentally), auto-escalate. Catches deploy-time schema drops or webhook route deletions.
+
+### ⚪ P3 — Customer support automation
+Companies should handle support autonomously: FAQ bot from product spec, email auto-replies, issue triage. Growth agent manages knowledge base.
+
+### ⚪ P3 — LTV/CAC tracking per company
+Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition starts). Unit economics dashboard. Kill decisions based on LTV/CAC ratio.
 
 ---
 
 ## Done
 <!-- Move completed items here with date -->
 
+### ✅ 2026-03-21 — Task tracking system (P1)
+`company_tasks` table with category filtering (engineering/growth/research/qa/ops/strategy), status lifecycle (proposed → approved → in_progress → done), priority levels (P0-P3), acceptance criteria, and cycle linking. Dashboard Tasks tab with company and category filters. Tasks API with category/status/include_done params. Company-side hive-build.yml and hive-growth.yml read tasks from backlog, mark in_progress before starting, done after completing. Acceptance criteria verified before marking done. Pushed to all 3 company repos.
+
+### ✅ 2026-03-21 — Engineer dispatch 422 fix (P0)
+Company repo hive-build.yml was never triggered because the payload JSON wasn't properly escaped in the workflow_dispatch request. `jq -c` output contained raw JSON objects where strings were expected. Fixed by using `jq -n` to build the entire request body with proper string escaping. All 6 prior Engineer dispatch attempts failed with "Invalid value for input 'payload'" (HTTP 422).
+
 ### ✅ 2026-03-21 — Company-side workflow expansion: Growth + Fix (P2)
-Two new boilerplate workflows for company repos (free on public repos): `hive-growth.yml` (content creation, SEO, blog posts via Claude Sonnet, 25 turns) and `hive-fix.yml` (bug fixes via Claude Sonnet, 20 turns). Both load full context from Hive DB (CEO plan, research, playbook, errors) and execute directly on company code. Sentinel dispatches Growth to company repo with Vercel serverless fallback. CEO chain dispatch routes Growth to company repo. Healer dispatches company-specific fixes to `hive-fix.yml` instead of Hive's ops_escalation. Ops escalation routes to company `hive-fix.yml` with Hive Engineer fallback. Boilerplate manifest updated with 2 new workflow entries. CLAUDE.md model routing table updated.
+Two new boilerplate workflows for company repos (free on public repos): `hive-growth.yml` and `hive-fix.yml`. Both load full context from Hive DB.
 
 ### ✅ 2026-03-21 — Automatic boilerplate migration for existing companies (P2)
-Sentinel check 20 compares company capabilities against `templates/boilerplate-manifest.json`. Detects missing features (waitlist, sitemap, email sequences, etc.) respecting company_type compatibility and capability prerequisites. Creates `capability_migration` approval gates. On approve, dispatches to company repo's `hive-build.yml` with migration tasks (files to add, SQL to run). `getBoilerplateGaps()` in capabilities.ts handles the comparison logic.
+Sentinel check 20 compares company capabilities against boilerplate manifest. Detects missing features, creates migration approval gates.
 
 ### ✅ 2026-03-21 — Content performance feedback loop (P2)
-Visibility route now computes per-URL trend analysis: compares last 7 days vs prior 7 days for impressions, position, and CTR. Flags URLs needing refresh with 3 priority levels: high (impressions dropped >30% or position dropped >3), medium (CTR dropped >40% or high impressions with <2% CTR), low (striking distance position 4-10). Writes `content_performance` report to `research_reports` with `refresh_items`, `top_performers`, and full URL list. Growth dispatch route injects content_performance into agent context. Growth prompt updated with "Content refresh" section — refresh before create rule (at least 1 refresh task per cycle if any exist). Output format includes `content_refreshed` array. Closes the loop: GSC data → trend analysis → refresh recommendations → Growth action → improved rankings.
+GSC data → trend analysis → refresh recommendations → Growth action → improved rankings.
 
 ### ✅ 2026-03-21 — Anomaly detection + event-driven cadences (P2)
-**Anomaly detection:** Sentinel check 18 computes 14-day rolling average + standard deviation for 5 key metrics (MRR, page_views, signups, customers, waitlist_signups) per company. Any metric moving >2 std dev flags an anomaly, logged to `agent_actions` as `anomaly_detected`, and dispatches CEO to review. CEO prompt updated to explicitly address anomalies when triggered by `sentinel_anomaly`.
-**Event-driven cadences:** Removed Evolver's Wednesday cron schedule. Evolver now triggered exclusively by data conditions via Sentinel: >10 cycles since last evolve, failure rate >20%, max_turns exhaustion, or success rate dropping >15 percentage points week-over-week (with 48h debounce). Research refresh was already data-staleness-driven (14-day check). Vercel crons (metrics, sentinel, digest) kept — time-based monitoring is appropriate for those.
+Sentinel check 18: 2σ rolling avg anomaly detection. Evolver triggered by data conditions only.
 
 ### ✅ 2026-03-21 — Healer workflow + legacy cleanup (P1)
-Created `hive-healer.yml` workflow triggered by `repository_dispatch: healer_trigger`. Healer reads `prompts/healer.md`, queries errors from last 48h, classifies systemic vs company-specific, fixes code in Hive repo, writes to MISTAKES.md + playbook, dispatches company-specific fixes to Engineer. Vercel Sentinel now dispatches Healer on high failure rate (alongside Evolver) and when 3+ errors exist in 48h (with 24h debounce). Research Analyst prompt was already handled by Scout's `research_request` mode — no orphan. Deleted deprecated `hive-sentinel.yml` and `worker-agents.yml` (both marked legacy, Vercel cron is production).
+`hive-healer.yml` triggered by repository_dispatch. Classifies systemic vs company-specific errors.
 
-### ✅ 2026-03-21 — Product specification system (Engineer context + CEO product spec)
-CEO now outputs an accumulating `product_spec` (vision, personas, pricing model, competitive positioning, feature roadmap, monetization status) saved to `research_reports` table as `product_spec` type. Engineer prompt updated with product-aware engineering section (naming, monetization path, competitive gaps, revenue model architecture). Company repo `hive-build.yml` now loads product context from Hive DB before running the build agent (research reports, original proposal, playbook, product spec). Engineer sees WHY they're building, not just WHAT.
-
-### ✅ 2026-03-21 — Worker agent prompt files loaded in dispatch route
-Created `src/lib/prompts.ts` that loads prompt files from `/prompts/` at module init. Dispatch route fallback chain: DB prompt (Evolver) → file prompt (207/103/88 lines) → inline stub (1 line). Growth, Outreach, Ops now use their full prompt files instead of 1-line stubs.
-
-### ✅ 2026-03-21 — Boilerplate build fix + placeholder replacement (P0)
-Added `postcss.config.mjs` (Tailwind v4 PostCSS plugin) and `.gitignore` to boilerplate. Normalized placeholder names (`{{COMPANY_SLUG}}` → `{{SLUG}}`). Updated Engineer provision prompt with complete placeholder list (SLUG, COMPANY_NAME, DESCRIPTION, COMPANY_URL, TARGET_AUDIENCE, VALUE_PROPOSITION). Sed excludes `.github/` (Actions syntax) and `{{POSITION}}` (runtime template). Verification grep confirms no unresolved templates after replacement.
+### ✅ 2026-03-21 — Product specification system (P2)
+CEO outputs accumulating product_spec. Engineer builds with product context.
 
 ### ✅ 2026-03-21 — Public company repos + build dispatch (ADR-021)
-Company repos created as PUBLIC (unlimited GitHub Actions minutes). Boilerplate includes `hive-build.yml` workflow accepting `workflow_dispatch`. Engineer build job on Hive is now a lightweight dispatcher (5 min) that triggers the company repo workflow. Provisioning sets GitHub Actions secrets (DATABASE_URL, GH_PAT, CLAUDE_CODE_OAUTH_TOKEN) on company repos. Hive stays private. Fallback `build-hive` job for Hive-internal work when no company repo exists.
-
-### ✅ 2026-03-21 — GitHub Actions optimization + Vercel cron migration (ADR-020)
-Reduced max-turns (Scout 50→35, Engineer provision 25→15, build 50→35). Moved Sentinel + Digest to Vercel crons. Eliminated worker-agents.yml proxy — chain dispatch calls Vercel directly. ~10-12 fewer Actions runs/day.
+Company repos public for free Actions. Engineer dispatches to company repo workflows.
 
 ### ✅ 2026-03-20 — Self-improving feedback loops
-Scout semantic deduplication (word-overlap check against all companies, not just slug). Rejection feedback loop (kill_reasons + rejection notes fed to Scout prompt). Process gap detection in Evolver (Scout duplicate rate, stale approvals, stuck companies, cycle gaps). Rich proposal cards in dashboard (market flag, confidence badge, structured fields). Rejection-to-Evolver pipeline (Scout prompt evolution includes rejection pattern analysis).
+Scout deduplication, rejection feedback, Evolver gap detection.
 
-### ✅ 2026-03-18 — Auth on dashboard
-NextAuth v5 + GitHub OAuth + single-user lockdown. Every API route and page protected.
-
-### ✅ 2026-03-18 — Settings page with encrypted storage
-AES-256-GCM encryption for API keys. Masked display. Grouped by category.
-
-### ✅ 2026-03-18 — All API routes
-15 route files: companies, cycles, actions, approvals (with side effects), metrics, playbook, settings, portfolio, directives, imports, webhooks (Stripe + GitHub), cron.
-
-### ✅ 2026-03-18 — Dashboard wired to Neon
-Portfolio overview, agent activity feed with filtering, approval gates with approve/reject, playbook, command bar, import dialog.
-
-### ✅ 2026-03-18 — Company boilerplate template
-Next.js starter with Stripe checkout, webhook handler, customer schema, CLAUDE.md template.
-
-### ✅ 2026-03-18 — Two-tier event architecture
-Vercel webhooks (Stripe, GitHub, cron) for real-time. Nightly loop for strategic decisions.
-
-### ✅ 2026-03-18 — Directive system
-Dashboard command bar → GitHub Issues → orchestrator reads at cycle start → CEO incorporates → auto-closes.
-
-### ✅ 2026-03-18 — Project import with pattern extraction
-Scan GitHub repos, detect tech stack, generate CLAUDE.md, extract learnings to playbook.
-
-### ✅ 2026-03-18 — Idea Scout agent
-Generates business ideas weekly or when portfolio has capacity. Uses web search autonomously to research market pain points (Phase 1: discovery → Phase 2: competition analysis → Phase 3: demand validation → Phase 4: scoring). At least 1 of 3 niches must target a Portuguese market challenge. Proposes one idea with TAM, competition, MVP scope, confidence score, and full research trail. Creates approval gate. CLI flags: `--scout` (force), `--scout-only` (ideas without company cycles). 25 max turns, 15 min timeout.
-
-### ✅ 2026-03-18 — Production agent prompt files
-4 prompt files in `/prompts/`: ceo.md, engineer.md, growth.md, ops.md. Each has full role context, decision frameworks, output JSON schemas, rules, and playbook integration. Template variables `{{COMPANY_NAME}}` and `{{COMPANY_SLUG}}` auto-replaced. Loader falls back to inline prompts if files missing. DB-stored prompts (from Prompt Evolver) take priority over files.
-
-### ✅ 2026-03-18 — Digest email template + Resend lib
-`src/lib/resend.ts` with `sendEmail()` and `renderDigestHtml()`. Dark HTML email template with portfolio MRR/customers/company count, per-company cycle results with scores, pending approvals list, Idea Scout proposals, error summary, and dashboard link. Orchestrator sends digest directly via Resend API (no longer dispatches to Claude for this).
-
-### ✅ 2026-03-18 — Error handling in dispatch()
-Replaced `execSync` with `spawn`-based async dispatch. Proper timeout with SIGTERM → 5s grace → SIGKILL. Configurable `timeoutMs` per call (default 5min, Idea Scout gets 15min). Company loop wrapped in try/catch — one failed company logs to DB and continues to next instead of crashing the whole run.
-
-### ✅ 2026-03-18 — Vercel Pro auto-upgrade trigger
-Approval side effects for `first_revenue` gate → auto-creates `vercel_pro_upgrade` approval. On upgrade approval → logs manual action with direct Vercel dashboard URL. Vercel has no plan upgrade API, so the flow is: Stripe webhook detects first payment → approval gate → Carlos approves → action logged with upgrade instructions.
-
-### ✅ 2026-03-18 — Dashboard real-time refresh
-30-second auto-polling via `setInterval`. Last refresh timestamp shown in header (clickable for manual refresh). All data sources (portfolio, companies, actions, approvals, playbook) refresh together.
-
-### ✅ 2026-03-18 — Health check endpoint
-`/api/health` verifies: Neon connection, all required settings configured, schema tables present. Returns overall status (healthy/degraded/unhealthy) with per-check detail. Auth-guarded.
-
-### ✅ 2026-03-18 — Bug fix: orchestrator can't import Next.js modules
-`require("./src/lib/resend")` broke because of `@/lib/*` path aliases. Digest email logic inlined in orchestrator.ts with direct Neon + fetch. Rule: orchestrator shares DATA via Neon, never CODE via imports.
-
-### ✅ 2026-03-18 — Bug fix: dispatch() rewritten with spawn
-Replaced `execSync` with proper `spawn` import. Removed dead `require("child_process")` inside function body.
-
-### ✅ 2026-03-18 — Playbook learning loop
-CEO review step now parses playbook_entry from output JSON and writes to the playbook table with source_company_id and evidence. Also extracts cycle score into ceo_review JSONB. Kill flag auto-creates kill_company approval gate. Non-critical: if parsing fails, cycle continues.
-
-### ✅ 2026-03-18 — Company detail page
-`/company/[slug]` — full deep-dive per company with: directive input, pending approvals with approve/reject, latest metrics grid, expandable cycle history with CEO plan/review and score, agent activity feed. 30s auto-refresh. Dashboard company names and activity feed slugs link to detail pages.
-
-### ✅ 2026-03-18 — Prompt Evolver
-Runs weekly on Wednesdays. For each agent (ceo, engineer, growth, ops): calculates 14-day success rate from agent_actions, evolves prompt if <70% success or 30+ days since last evolution. Dispatches Claude to analyze failure patterns and generate improved prompt. Stores new version in agent_prompts (inactive), creates approval gate. On approval, new version activates and old deactivates.
-
-### ✅ 2026-03-18 — Social media posting integration
-`src/lib/social.ts` with X API v2 OAuth 1.0a posting via `postToSocial()`. Social accounts tracked in `social_accounts` table with encrypted auth tokens. `proposeSocialAccount()` creates pending accounts + approval gates for manual setup. `/api/social` route for listing accounts and posting. Growth agent can propose account creation when a company gets its first customer.
-
-### ✅ 2026-03-18 — Resend transactional email templates
-`src/lib/resend.ts` extended with `renderWelcomeEmail()`, `renderReceiptEmail()`, `renderPasswordResetEmail()`. Clean light-themed templates for company boilerplates. All use `emailShell()` wrapper with configurable accent color.
-
-### ✅ 2026-03-18 — Outreach agent wired into nightly cycle
-Runs after Growth, before Ops. Builds lead lists via web search, drafts cold emails, sends via Resend API. First batch requires approval gate; subsequent batches auto-send (max 10/day). Pipeline tracked in research_reports table (lead_list + outreach_log).
-
-### ✅ 2026-03-18 — Periodic research refresh
-Competitive analysis refreshes every 7 cycles. Full research re-runs on "refresh research" directive. Existing reports fed as context for delta analysis. Reduced turns/timeout for refresh vs full Cycle 0 run.
-
-### ✅ 2026-03-18 — Research reports in company detail page
-`/company/[slug]` shows expandable research reports with per-type quick stats (competitor count, lead pipeline, keywords, outreach). Expandable JSON viewer for full content.
-
-### ✅ 2026-03-18 — Self-healing architecture
-Three layers: (1) Action-oriented retries — agents see their error + fix instructions on attempts 2-3, more time/turns per retry. (2) Healer agent — runs after company cycles, classifies systemic vs company-specific errors, dispatches fixes to Hive repo or company repos, max 3 company fixes/night. (3) Pre-flight health check — DB connection, recent errors summary, Claude CLI reachability, abort if broken. Error normalization groups duplicate errors into patterns.
-
-### ✅ 2026-03-19 — GSC + Bing Webmaster integration for Growth agent
-Google Search Console API client (`src/lib/gsc.ts`) with JWT service account auth. Pulls keyword positions, impressions, CTR. Stored in `visibility_metrics` table. Growth reads this data before content decisions. Bing Webmaster key added to settings (client stub for future).
-
-### ✅ 2026-03-19 — IndexNow integration for instant re-indexing
-`src/lib/indexnow.ts` — posts to IndexNow shared endpoint for Bing, Yandex, and 4 other engines. Key stored in settings. Boilerplate robots.txt includes Sitemap directive.
-
-### ✅ 2026-03-19 — DIY LLM citation tracker
-`src/lib/llm-tracker.ts` — uses Gemini free tier to check brand visibility in AI answers. 10 keywords per company, 2s rate limit. Parses brand mentions, competitor citations, source URLs. Runs every 3 cycles (>12h cooldown). Stored as `llm_visibility` report.
-
-### ✅ 2026-03-19 — llms.txt and structured data in boilerplate
-`public/llms.txt`, `public/robots.txt` (AI crawler allows), `src/app/sitemap.ts`, JSON-LD Organization + WebSite structured data in layout.tsx. All template-variable driven for auto-provisioning.
-
-### ✅ 2026-03-19 — Company capability inventory (ADR-018)
-`capabilities` JSONB on companies table. Assessment endpoint scans DB tables, Vercel env vars, repo files. All agents capability-aware — skip missing features, report gaps. Compatibility matrix gates proposals. Dashboard shows capabilities grid with re-assess button. Migration 007.
-
-### ✅ 2026-03-20 — Evolver proposal approval flow
-Closed 3 gaps: `prompt_update` sets `implemented_at` on approve; `setup_action` creates manual todo + dispatches CEO; `knowledge_gap` dispatches CEO. Stale approval detection (>48h) surfaces in dashboard todos. `dispatchEvent()` added to evolver API route.
-
-### ✅ 2026-03-19 — Waitlist system + email lifecycle framework (ADR-016)
-Waitlist-first launch: boilerplate schema (waitlist + email_sequences + email_log), API with referral mechanics, Resend webhook for email tracking, LAUNCH_MODE-driven landing page (waitlist/early_access/live). Growth owns all email sequences with A/B testing and open/click tracking. CEO monitors waitlist in build mode. Provisioner seeds default sequences. Hive metrics extended (migration 006).
+### ✅ 2026-03-18 — Full dashboard, API routes, auth, settings, boilerplate, agent prompts, error handling, directive system, import system, social media, email templates
+See ROADMAP.md for full changelog.
