@@ -36,16 +36,28 @@
 
 - **Blocked on:**
   - Resend domain verification (need a real domain for outreach emails)
-  - Stripe product creation per company (no company can accept payments yet)
 - **Known issues:**
   - 9 Scout proposals pending approval (auto-expiry planned)
 - **Recently fixed:**
-  - Engineer → company repo dispatch 422 bug (payload JSON escaping) — company builds should now work
-  - Task tracking system live (company_tasks + dashboard Tasks tab + agent integration)
+  - Full dispatch chain verified end-to-end: Hive Engineer → verdedesk hive-build → Claude agent merged waitlist branch
+  - Per-job OIDC token fetch (GitHub Actions strips masked secrets from cross-job outputs)
+  - OIDC API gateway: zero-secret company repos, all auth via OIDC token exchange
+  - Stripe product auto-creation wired into provisioning flow
+  - Task tracking + playbook writes via OIDC-authenticated API endpoints
+  - Claude Code OAuth token refreshed in settings
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-21 [code] OIDC gateway + zero-secret repos + dispatch chain verified
+**Architecture change:** Company repos no longer need ANY secrets (including DATABASE_URL). All auth via GitHub OIDC token exchange through `/api/agents/token`. All data access via Hive API gateway (`/api/agents/context`, `/api/agents/log`, `/api/agents/tasks/:id`, `/api/agents/playbook`). Shared OIDC validation extracted to `src/lib/oidc.ts`.
+**Critical fix:** GitHub Actions strips masked secrets from cross-job outputs (`::add-mask::` + job output = empty in downstream jobs). Engineer workflow restructured: each job (provision, build, build-hive) now fetches its own tokens via OIDC instead of relying on context job outputs. Also replaced DB logging in build jobs with Hive API calls.
+**Stripe wired up:** Provisioner now auto-creates Stripe Product + Price via OIDC-authenticated `/api/agents/stripe/product` endpoint.
+**OAuth token refreshed:** Claude Code OAuth token in settings had expired. Refreshed from local keychain credentials.
+**Dispatch chain verified:** First successful end-to-end dispatch: Hive Engineer → verdedesk hive-build → Claude agent → merged `feature/database-waitlist-storage` into main. All company workflows (build, growth, fix) now work.
+**Tasks moved:** Tasks tab removed from main dashboard, category filtering added to company detail pages.
+**Pushed to all 3 company repos:** Updated workflows (zero-secret + task tracking + playbook writes).
 
 ### 2026-03-21 [code] Task tracking + dispatch fix + roadmap overhaul
 **Critical fix:** Engineer → company repo dispatch returned 422 on EVERY attempt. Payload JSON was injected raw instead of string-escaped. Fixed with `jq -n --arg`. This means no company repo workflow (hive-build, hive-growth) has ever successfully run. Should now work.
@@ -172,11 +184,11 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Run CEO for VerdeDesk** — trigger CEO workflow, will enter BUILD mode (cycle 0), spec features from research data
-2. **Resolve email domain** — confirm Flolio's domain, add Resend DNS records, set `sending_domain`
-3. **Run Scout agent** — GitHub Actions → "Hive Scout" → Run workflow (mode: ideas)
-4. **Add VERCEL_TOKEN to GitHub secrets** — needed for sentinel deploy drift detection
-5. **Review Evolver proposals** — approve/reject in Inbox tab; prompt_update takes immediate effect, others route to CEO
+1. **Execute remaining approved company tasks** — verdedesk (P1 e2e test, P2 calculator, P3 analytics), senhorio (P2 e2e verify, P3 rent calculator), flolio (P1 onboarding)
+2. **Run CEO for VerdeDesk** — trigger CEO workflow, will enter BUILD mode, spec features from research data
+3. **Resolve email domain** — buy domain, add Resend DNS records, set `sending_domain` (outreach still blocked)
+4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
+5. **Review Evolver proposals** — approve/reject in Inbox tab
 
 ## Open Questions
 

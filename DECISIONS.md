@@ -265,3 +265,22 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Use self-hosted runners: free but requires infra maintenance
 - Make Hive public too: exposes orchestration logic and API patterns
 **Consequences:** Build minutes effectively unlimited. Hive private repo only uses Actions for CEO (25 turns), Scout (35 turns), Evolver (periodic), and Engineer provision (15 turns) — well within 2,000 min/month. Company code is public but contains no proprietary secrets. Provisioning now sets up GitHub Actions secrets on company repos and pushes the build workflow template.
+
+### ADR-022: OIDC API gateway — zero-secret company repos
+**Date:** 2026-03-21
+**Status:** Accepted (extends ADR-021)
+**Context:** After ADR-021, company repos still needed `DATABASE_URL` as a GitHub Actions secret for their workflows (hive-build, hive-growth, hive-fix) to load context and log results. This created three problems: (1) secrets management burden — every company repo needed DATABASE_URL configured, (2) direct DB access from untrusted repos — company workflows could run arbitrary SQL on the shared Neon database, (3) key rotation required updating every company repo.
+**Decision:** Replace all direct DB access from company workflows with OIDC-authenticated Hive API calls. Five new endpoints: `/api/agents/token` (OIDC → credential exchange), `/api/agents/context` (load agent-specific context), `/api/agents/log` (log actions), `/api/agents/tasks/:id` (update task status), `/api/agents/playbook` (write playbook entries). Company workflows use GitHub's native OIDC provider — request a JWT proving repo identity, exchange it at the Hive API for the specific token they need (Claude, GitHub PAT, Gemini, etc.). Shared OIDC validation in `src/lib/oidc.ts` validates issuer, audience, and repository owner across all endpoints.
+**Key design choices:**
+- Allowed workflows are whitelisted by filename (hive-build.yml, hive-fix.yml, etc.)
+- Repository owner must match `carloshmiranda` (prevents unauthorized repos from requesting tokens)
+- Token types are mapped to settings keys (claude → claude_code_oauth_token, github_pat → github_token, etc.)
+- Context endpoint returns agent-specific data bundles (build context ≠ growth context ≠ fix context)
+- Log endpoint resolves company_slug → company_id server-side (company workflows don't need to know IDs)
+- Playbook endpoint includes deduplication check
+- **Critical learning:** GitHub Actions strips masked secrets from cross-job outputs. Each job must fetch its own tokens via OIDC — never pass secrets between jobs via `needs.X.outputs`.
+**Alternatives considered:**
+- Keep DATABASE_URL on company repos with read-only role: still requires secret management, SQL injection risk
+- Neon Data API (HTTP/JSON): still requires API key secret on each repo, less control over authorization
+- GitHub repository environments with secrets: reduces blast radius but doesn't eliminate secret management
+**Consequences:** Company repos need ZERO secrets. All auth happens at runtime via OIDC (a free GitHub feature). Token rotation only requires updating Hive settings — company repos auto-get new tokens. The API gateway provides authorization (only allowed workflows from the right owner), rate limiting potential, and audit trail. Trade-off: company workflows are now coupled to Hive API availability — if Vercel is down, company builds can't load context.
