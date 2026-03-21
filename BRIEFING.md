@@ -6,11 +6,14 @@
 
 ## Current State
 
-- **Phase:** First company imported. Onboarding pending (blocked on Claude CLI install).
+- **Phase:** Two companies actively iterating. System operational.
 - **Architecture:** 7 agents, event-driven, 3 Vercel crons (metrics 2x/day, sentinel every 4h, digest daily 8am). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
-- **Active companies:** 1 (VerdeDesk — status: mvp, onboarded, 0 cycles)
-- **Companies to import:** Flolio (growth phase, import later)
+- **Active companies:** 2
+  - VerdeDesk — status: mvp, 18 cycles, last CEO score 5/10, building waitlist + IRS guide
+  - Senhorio — status: mvp, 3 cycles, last CEO score 3/10, built tax calculator at /calculadora
+- **Pipeline:** 9 idea-status companies (Scout proposals, pending approval)
+- **Companies to import:** Flolio (gate_approved routed 2026-03-21)
 
 ### Agent Architecture (7 agents)
 
@@ -33,10 +36,21 @@
 
 - **Blocked on:**
   - Resend domain verification (need a real domain — Flolio's domain could work)
+- **Known issues:**
+  - Engineer re-provisions companies that are already provisioned (4x for Senhorio)
+  - 9 Scout proposals pending approval (noise — need mass reject or auto-expire)
+  - Rate limit "0 turns" failures at quota window boundaries
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-21 [code] Iteration verification + naming standards + phantom run fix
+**Companies confirmed iterating:** Senhorio (3 cycles, built tax calculator), VerdeDesk (18 cycles, waitlist + IRS guide shipped). 49 successes vs 16 failures in 24h.
+**Phantom push runs fixed:** Literal `${{ }}` in Engineer prompt text caused GitHub to create failed runs on every push. Removed.
+**Naming standards added to CLAUDE.md:** Branches (`hive/<agent>-<company>-<desc>`), commits (conventional), PRs, dispatch events, action types, DB conventions, workflow YAML rules.
+**Secret architecture documented in MISTAKES.md:** Service keys in settings table only, infra secrets in GitHub Actions only. Prevents the "key exists in wrong environment" class of bugs.
+**Context files updated:** BRIEFING.md, MISTAKES.md, CLAUDE.md all brought current.
 
 ### 2026-03-21 [code] Company-side workflows + backlog clear (8 items)
 **Massive backlog clear session.** Completed 8 items across P0-P2:

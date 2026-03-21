@@ -499,6 +499,55 @@ Each company repo gets its own CLAUDE.md with:
 - Constraints (budget, time, features)
 - Playbook entries relevant to this company's domain
 
+## Naming Standards
+
+Consistent naming across all surfaces makes Hive scannable and debuggable. These rules apply to all agents, workflows, and code.
+
+### Git branches
+- Agent work: `hive/<agent>-<company>-<short-desc>` (e.g., `hive/engineer-senhorio-tax-calculator`)
+- Company builds: `hive/cycle-<N>-<task-id>` (e.g., `hive/cycle-3-eng-1`)
+- Hive improvements: `hive/improvement/<slug>` (e.g., `hive/improvement/naming-standards`)
+
+### Commit messages
+Conventional commits, always:
+- `feat: <what>` — new feature or capability
+- `fix: <what>` — bug fix
+- `refactor: <what>` — restructure without behavior change
+- `content: <what>` — blog posts, SEO pages, copy changes
+- `chore: <what>` — deps, CI, config
+- `docs: <what>` — documentation only
+- Initial scaffold: `feat: initial scaffold for <company>`
+
+### PR titles
+Same as commit messages. Body includes: `Cycle <N>, Task <task-id>: <description>` when applicable.
+
+### Workflow run names
+Format: `"Agent: trigger — context"` (e.g., `CEO: cycle_start — senhorio`, `Engineer: feature_request — verdedesk`)
+
+### Dispatch event types (repository_dispatch)
+snake_case, categorized by intent:
+- Lifecycle: `cycle_start`, `cycle_complete`, `gate_approved`
+- Agent triggers: `feature_request`, `research_request`, `ops_escalation`, `deploy_drift`
+- System: `stripe_payment`, `pipeline_low`, `company_killed`
+- Agent-specific: `evolve_trigger`, `healer_trigger`
+
+### Agent action types (agent_actions.action_type)
+snake_case, format: `verb_noun` (e.g., `scaffold_company`, `execute_task`, `cycle_plan`, `cycle_review`)
+
+### Database
+- Tables: snake_case plural (`companies`, `agent_actions`, `research_reports`)
+- Columns: snake_case (`started_at`, `company_id`, `gate_type`)
+- Timestamps: always `_at` suffix (`created_at`, `finished_at`, `decided_at`)
+- Enums: lowercase snake_case (`new_company`, `feature_request`, `market_research`)
+
+### Log messages
+Format: `[agent] action: result (context)` in structured logs. Keep consistent so Sentinel can parse.
+
+### Workflow YAML
+- NEVER put literal `${{ }}` expressions in prompt text or comments — GitHub evaluates ALL expressions in workflow files, even inside multi-line strings. Use natural language descriptions instead.
+- File names: `hive-<agent>.yml` (e.g., `hive-ceo.yml`, `hive-engineer.yml`)
+- Company workflows: `hive-<function>.yml` (e.g., `hive-build.yml`, `hive-growth.yml`, `hive-fix.yml`)
+
 ## Code Standards
 
 - TypeScript everywhere

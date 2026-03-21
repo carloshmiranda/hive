@@ -226,6 +226,26 @@
 **Prevention:** Template systems must have: (a) a canonical list of ALL placeholders in one place, (b) a replacement step that covers ALL files (not just one), (c) a verification step that confirms no templates remain. When adding a new placeholder to any template file, add it to the canonical list AND the replacement step in the same commit.
 **Affects:** both (boilerplate, company repos)
 
+### 2026-03-21 Literal ${{ }} in workflow prompt caused phantom runs on every push
+**What happened:** Every push to main created a failed 0s run for `hive-engineer.yml`. GitHub showed "This run likely failed because of a workflow file issue." Runs had 0 jobs.
+**Root cause:** Line 133 of the Engineer workflow had a comment inside a `prompt: |` block containing literal `${{ }}` (empty GitHub Actions expression). GitHub Actions evaluates ALL `${{ }}` expressions in workflow files, even inside multi-line YAML strings. An empty expression is a parse error, which makes GitHub create phantom failed runs for every push.
+**Fix applied:** Replaced `${{ }}` with natural language ("GitHub Actions expression syntax").
+**Prevention:** NEVER put literal `${{ }}` in workflow file content outside of actual expressions — not in comments, not in prompt text, not in strings. GitHub has no concept of "this is just text" — it evaluates everything. This rule is now in CLAUDE.md under Naming Standards > Workflow YAML.
+**Affects:** hive (all workflows)
+
+### 2026-03-21 Engineer re-provisioned Senhorio 4 times instead of building features
+**What happened:** 4 `scaffold_company` successes logged for Senhorio in one session. Each cycle, the Engineer re-ran provisioning instead of executing the CEO's feature plan.
+**Root cause:** The `new_company` dispatch event was being sent alongside `feature_request` from chain dispatch. The `new_company` job has `if: trigger == 'new_company'` but if both events arrive simultaneously, both jobs run. The idempotency check ("already provisioned") catches this but wastes a workflow run.
+**Prevention:** Chain dispatch should NEVER send `new_company` for companies that already have `github_repo IS NOT NULL`. Sentinel check 9b already handles orphaned MVPs — chain dispatch should trust that and only send `feature_request` for provisioned companies.
+**Affects:** hive (Engineer workflow, Actions budget)
+
+### 2026-03-21 Secret consolidation — agents couldn't find keys in both environments
+**What happened:** Service keys (Gemini, GSC, Resend) were stored as GitHub Actions secrets but dashboard/Vercel code read from the encrypted settings table. Keys existed in one place but were needed in the other.
+**Root cause:** No single source of truth for service keys. GitHub Actions secrets are invisible to Vercel code, and vice versa.
+**Fix applied:** Service keys live in the settings table only (encrypted with AES-256-GCM). Agents read them via DATABASE_URL at runtime. GitHub Actions secrets reserved for infra-only: DATABASE_URL, GH_PAT, CLAUDE_CODE_OAUTH_TOKEN, VERCEL_TOKEN, CRON_SECRET.
+**Prevention:** When adding a new API key or service credential: (1) Store it in the settings table via the dashboard, (2) Access it via `getSettingValue()` in code, (3) NEVER add it as a GitHub Actions secret unless it's needed for workflow infrastructure. Rule: if an agent needs it, it goes in the DB. If GitHub Actions needs it to bootstrap, it goes in secrets.
+**Affects:** both
+
 ### 2026-03-21 Context files went stale — caused wrong recommendations in next session
 **What happened:** `project_infra.md` said `waitlist_total column missing` (already fixed), senhorio status was wrong, and `project_model_routing.md` claimed `claude-code-action@v1 only works with PR/issue triggers` (false — v1 works with all triggers including repository_dispatch). CLAUDE.md said "13 tables" (actually 17).
 **Root cause:** Architecture changes were implemented in code but documentation wasn't updated in the same session. No automated check or reminder to update context files after significant changes.
