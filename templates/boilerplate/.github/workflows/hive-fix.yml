@@ -110,11 +110,10 @@ jobs:
             ERROR_CTX=$(cat /tmp/error-context.json | head -c 8000)
           fi
 
-          claude -p \
-            --model claude-sonnet-4-20250514 \
-            --max-turns 20 \
-            --allowedTools 'Bash,Read,Write,Edit' \
-            "You are the Healer agent of Hive, fixing a bug in this company's codebase.
+          # Write prompt to file (avoids --allowedTools variadic flag consuming the prompt)
+          export ERROR_CTX
+          envsubst '${ERROR_CTX}' > /tmp/fix-prompt.txt <<'FIXPROMPT'
+          You are the Healer agent of Hive, fixing a bug in this company's codebase.
 
           ERROR: ${{ github.event.inputs.error_summary }}
           COMPANY: ${{ github.event.inputs.company_slug }}
@@ -128,35 +127,41 @@ jobs:
           1. Read the error details above. Understand what failed and why.
           2. Check CROSS-COMPANY PATTERNS — if a similar error was fixed in another company, apply the same approach.
           3. Search the codebase for the root cause:
-             - Check recent git log: \`git log --oneline -10\`
-             - Search for the error: \`grep -r 'error text' src/\`
+             - Check recent git log: `git log --oneline -10`
+             - Search for the error: `grep -r 'error text' src/`
              - Read the relevant file(s)
           4. Fix the minimal set of files needed. Do NOT refactor.
-          5. Build to verify: \`npx next build\`
+          5. Build to verify: `npx next build`
           6. Commit and push:
-             \`\`\`bash
-             git add -A && git commit -m \"fix: <what was broken>\"
+             ```bash
+             git add -A && git commit -m "fix: <what was broken>"
              git push origin main
-             \`\`\`
+             ```
           7. Log to Hive DB:
-             \`\`\`sql
+             ```sql
              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
              VALUES ('healer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
                'error_fix', 'success', '<what was fixed>', NOW(), NOW())
-             \`\`\`
+             ```
           8. Write a playbook entry if this could help other companies:
-             \`\`\`sql
+             ```sql
              INSERT INTO playbook (domain, insight, evidence, confidence)
              VALUES ('engineering', '<what to do when this happens>', '<the error>', 0.7)
-             \`\`\`
+             ```
 
           RULES:
           - Fix, don't refactor. Minimum change to resolve the error.
           - Max 3 files per fix. If more needed, log an escalation and add to BACKLOG.md.
-          - Always run \`npx next build\` before committing.
+          - Always run `npx next build` before committing.
           - Push directly to main (fixes don't need PR review).
           - If you find deeper issues you can't fix now, add them to BACKLOG.md with priority and evidence.
-          " 2>&1 | tee /tmp/claude-output.txt
+          FIXPROMPT
+
+          cat /tmp/fix-prompt.txt | claude -p \
+            --model claude-sonnet-4-20250514 \
+            --max-turns 20 \
+            --allowedTools 'Bash,Read,Write,Edit' \
+            2>&1 | tee /tmp/claude-output.txt
 
       - name: Log results to Hive DB
         if: always()

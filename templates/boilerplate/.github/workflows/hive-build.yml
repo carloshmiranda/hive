@@ -123,11 +123,12 @@ jobs:
             PRODUCT_CTX=$(cat /tmp/product-context.json | head -c 8000)
           fi
 
-          claude -p \
-            --model claude-sonnet-4-20250514 \
-            --max-turns 35 \
-            --allowedTools 'Bash,Read,Write,Edit' \
-            "You are the Engineer agent of Hive. You build features and fix bugs.
+          # Write prompt to file (avoids quoting issues with --allowedTools variadic flag)
+          # Note: ${{ }} expressions are replaced by GitHub Actions before bash runs
+          # Using envsubst to inject PRODUCT_CTX into the prompt
+          export PRODUCT_CTX
+          envsubst '${PRODUCT_CTX}' > /tmp/build-prompt.txt <<'BUILDPROMPT'
+          You are the Engineer agent of Hive. You build features and fix bugs.
 
           TRIGGER: ${{ github.event.inputs.trigger }}
           COMPANY: ${{ github.event.inputs.company_slug }}
@@ -142,52 +143,52 @@ jobs:
 
           ## feature_request — Build features from CEO plan
           1. Get the active cycle plan from Hive DB:
-             \`\`\`sql
+             ```sql
              SELECT id, cycle_number, ceo_plan FROM cycles
              WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}')
              AND status = 'running' ORDER BY created_at DESC LIMIT 1
-             \`\`\`
+             ```
           2. Check for existing work:
-             - \`git branch -r | grep hive/\` — existing feature branches
-             - \`GH_TOKEN=\"\$GH_PAT\" gh pr list --state open --json number,title,headRefName\`
-          3. Read \`ceo_plan.engineering_tasks\`. ALSO check \`engineering_tasks\` from PRODUCT CONTEXT — these are from the company_tasks backlog.
+             - `git branch -r | grep hive/` — existing feature branches
+             - `GH_TOKEN="$GH_PAT" gh pr list --state open --json number,title,headRefName`
+          3. Read `ceo_plan.engineering_tasks`. ALSO check `engineering_tasks` from PRODUCT CONTEXT — these are from the company_tasks backlog.
              If ceo_plan has no engineering_tasks, use the backlog tasks instead. Pick the FIRST uncompleted task.
              IMPORTANT: Implement ONE task per run. You have limited turns.
-          3b. If the task has an \`id\` from company_tasks, mark it in_progress before starting:
-              \`\`\`sql
+          3b. If the task has an `id` from company_tasks, mark it in_progress before starting:
+              ```sql
               UPDATE company_tasks SET status = 'in_progress', updated_at = NOW() WHERE id = '<task_id>'
-              \`\`\`
+              ```
           4. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
              - Check competitive_analysis for what competitors do (match or beat them)
              - Check the pricing model to build the right tier-gating structure
              - Check target_audience to get naming and UX right
-          5. Create a feature branch: \`git checkout -b hive/cycle-<N>-<task-id>\`
+          5. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
           6. Implement the task following acceptance criteria
-          7. Install dependencies if needed: \`npm install\`
-          8. Build to verify: \`npx next build\` — fix any errors
+          7. Install dependencies if needed: `npm install`
+          8. Build to verify: `npx next build` — fix any errors
           9. Commit and push:
-             \`\`\`bash
-             git add -A && git commit -m \"feat: <task summary>\"
+             ```bash
+             git add -A && git commit -m "feat: <task summary>"
              git push -u origin hive/cycle-<N>-<task-id>
-             \`\`\`
+             ```
           10. Open a PR:
-             \`GH_TOKEN=\"\$GH_PAT\" gh pr create --title \"feat: <task summary>\" --body \"Cycle <N>, Task <task-id>: <description>\"\`
+             `GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"`
           11. If the task has acceptance criteria, verify them before marking done.
           12. Mark the task done in company_tasks (if it has an id):
-              \`\`\`sql
+              ```sql
               UPDATE company_tasks SET status = 'done', updated_at = NOW() WHERE id = '<task_id>'
-              \`\`\`
+              ```
           13. Log to Hive DB:
-              \`\`\`sql
+              ```sql
               INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
               VALUES ('engineer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
                 'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
-              \`\`\`
-          14. Output: { \"pr_opened\": true, \"pr_number\": N, \"company\": \"${{ github.event.inputs.company_slug }}\" }
+              ```
+          14. Output: { "pr_opened": true, "pr_number": N, "company": "${{ github.event.inputs.company_slug }}" }
 
           ## ops_escalation — Fix errors
           1. Query recent errors from Hive DB:
-             \`SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3\`
+             `SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3`
           2. Diagnose and fix the issue in the current directory
           3. Build, commit, push, log to agent_actions
 
@@ -196,12 +197,18 @@ jobs:
 
           RULES:
           - Implement ONE task per run, create a branch and open a PR
-          - Always use \`GH_TOKEN=\"\$GH_PAT\"\` for gh commands
+          - Always use `GH_TOKEN="$GH_PAT"` for gh commands
           - Write to agent_actions table: what you did, status, any errors
-          - If you open a PR, output: { \"pr_opened\": true, \"pr_number\": N }
+          - If you open a PR, output: { "pr_opened": true, "pr_number": N }
           - If you discover issues you can't fix in this run, add them to BACKLOG.md (read it first to avoid duplicates)
           - After completing work, move the relevant BACKLOG.md item to Done with today's date
-          " 2>&1 | tee /tmp/claude-output.txt
+          BUILDPROMPT
+
+          cat /tmp/build-prompt.txt | claude -p \
+            --model claude-sonnet-4-20250514 \
+            --max-turns 35 \
+            --allowedTools 'Bash,Read,Write,Edit' \
+            2>&1 | tee /tmp/claude-output.txt
 
       - name: Log failure to Hive DB
         if: failure()
