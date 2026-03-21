@@ -91,6 +91,9 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 ## Done
 <!-- Move completed items here with date -->
 
+### ✅ 2026-03-21 — Engineer MVP quality bar + stack detection (P2)
+Engineer build workflow now includes: pre-flight stack detection (Tailwind v3/v4, framework, dependencies), MVP design quality bar (business-domain-specific colors/language, conversion-optimized landing page structure, consistent design tokens), SEO baseline (meta, OG, JSON-LD, sitemap, robots), accessibility baseline (semantic HTML, contrast, keyboard nav, ARIA), and performance rules (Server Components default, Image component, next/font). Company CLAUDE.md template updated with design/UX requirements.
+
 ### ✅ 2026-03-21 — PR review quality criteria for CEO agent (P1)
 CEO agent now uses a 6-step structured review: hard gates (CI, secrets, destructive migrations, diff size), task alignment (maps to cycle plan, acceptance criteria met, no scope creep), code quality (error handling, SQL safety, auth checks), and risk scoring (0-3 auto-merge, 4-6 merge+log, 7+ escalate to Carlos). Based on CodeRabbit/Qodo/Copilot best practices research.
 

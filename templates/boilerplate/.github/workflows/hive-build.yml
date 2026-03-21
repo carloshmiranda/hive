@@ -128,37 +128,115 @@ jobs:
             Make architectural decisions informed by this context (naming, pricing tiers, feature gating, competitive gaps).
             ${{ steps.context.outputs.product_ctx }}
 
+            ## PRE-FLIGHT: Stack Detection (ALWAYS run before writing code)
+            Before implementing anything, detect the repo's stack:
+            1. Read `package.json` — know framework (next/vite/remix/astro), Tailwind version (v3 vs v4), all dependencies
+            2. Read `CLAUDE.md` if it exists — it overrides all defaults
+            3. Check Tailwind version:
+               - v3 (`^3.x`): uses `tailwind.config.js` with `content: [...]`, CSS uses `@tailwind base/components/utilities`
+               - v4 (`^4.x`): no config file needed, CSS uses `@import "tailwindcss"`, requires `postcss.config.mjs` with `@tailwindcss/postcss`
+            4. Check build command: `npm run build` (or check scripts in package.json)
+            5. Match existing code style: semicolons, quotes, indent, naming patterns
+            6. NEVER install packages that overlap existing deps (e.g. don't add axios if fetch is used)
+
+            ## MVP QUALITY BAR — Design & UX
+            Every page you build must be visually professional and allusive to the business domain:
+
+            **Business-specific design:**
+            - Use colors, imagery, and visual metaphors that evoke the business area (e.g. greens for agriculture, blues for finance, warm tones for hospitality)
+            - Use domain-specific language in headings and CTAs — not generic "Get started" but action words from the industry
+            - Feature icons should be relevant SVGs, not emoji characters
+            - The page should feel like it was designed by someone who understands the industry
+
+            **Design tokens (use consistently — never mix):**
+            - ONE brand color for buttons/links/highlights + a darker hover shade
+            - Text: near-black for headings (gray-900), muted for body (gray-500/600). Never use gray-400 on white (fails contrast)
+            - Spacing: pick `py-16` OR `py-20` for sections — never mix. Cards always `p-6`
+            - Border radius: `rounded-lg` for buttons/inputs, `rounded-xl` for cards, `rounded-full` for badges — never mix
+            - Typography: h1 `text-4xl md:text-5xl font-bold`, h2 `text-3xl font-bold`, h3 `font-semibold`, body `text-base`/`text-sm`
+
+            **Landing page structure (conversion-optimized):**
+            1. Nav — logo + 3-4 anchor links + single CTA button
+            2. Hero — specific headline (passes "so what?" test), subheadline for WHO + HOW, primary CTA
+            3. Social proof — ONLY real data (waitlist count, actual metrics). Skip this section entirely if no real data exists. Never use fake metrics
+            4. Problem/pain — name the exact pain the audience has, be specific to them
+            5. Features — max 3 for MVP, describe BENEFITS not features. Use SVG icons, not emoji
+            6. How it works — 3 specific steps for THIS product (not generic "sign up, set up, get results")
+            7. FAQ — 3-5 questions addressing real objections from research/competitive analysis. Add FAQPage JSON-LD structured data
+            8. Final CTA — repeat hero CTA with slight variation
+            9. Footer — company name, nav links, copyright
+
+            **Copy rules:**
+            - Headlines: specific outcomes > generic claims. "Reduce rent admin by 5 hours/month" beats "Save time"
+            - Subheadline pattern: "[Product] helps [audience] [achieve outcome] by [mechanism]"
+            - CTAs: action + benefit. "Start managing properties" not "Submit". Include no-credit-card line if applicable
+            - Single conversion goal: ONE primary CTA repeated throughout. All paths lead to the same action
+
+            **Responsive design:**
+            - Mobile-first: all layouts work on 320px. Use `flex-col md:flex-row` for stacking
+            - Padding: always `px-4 sm:px-6` on containers. Never let content touch screen edges
+            - Touch targets: minimum `py-3 px-6` (48px) on buttons and interactive elements
+            - Grids: `grid-cols-1 md:grid-cols-3` pattern. Never fixed widths on content
+
+            ## SEO BASELINE (every page must have)
+            - Unique title per page via Next.js `metadata` export: `{Page} | {CompanyName}` (max 60 chars)
+            - Meta description per page (max 155 chars, include primary keyword)
+            - `metadataBase` in root layout (without it, OG images break)
+            - Open Graph tags: og:title, og:description, og:image, og:type
+            - JSON-LD structured data: Organization + WebSite on layout, FAQPage if FAQ exists
+            - `sitemap.ts` with all public routes. `robots.ts` blocking /api/* and auth pages
+            - `<html lang="...">` matching target audience language (e.g. "pt" for Portuguese products)
+            - One `<h1>` per page, logical heading hierarchy
+
+            ## ACCESSIBILITY BASELINE
+            - Semantic HTML: use `<nav>`, `<main>`, `<section>`, `<footer>`, `<button>`, `<a>` — never `<div onClick>`
+            - Color contrast: minimum 4.5:1 for text. gray-500 on white is the floor — never lighter
+            - Keyboard navigation: all interactive elements focusable, visible focus indicators
+            - Form labels: every input has an associated `<label>` (htmlFor). Placeholder is NOT a label
+            - Alt text: every `<img>` has meaningful alt. Decorative images use `alt=""`
+            - ARIA: `aria-label` on icon-only buttons, `aria-expanded` on accordions
+
+            ## PERFORMANCE
+            - Use Server Components by default. Only add "use client" for components that need useState/useEffect/onClick
+            - Use Next.js `<Image>` for all images with `sizes` prop. `priority` on above-fold images
+            - Specify `width` and `height` on all images/media to prevent CLS
+            - Use `next/font` for custom fonts (prevents FOUT and layout shift)
+            - Keep client JS bundle minimal — no heavy libraries without justification
+
             ## feature_request — Build features from CEO plan
-            1. The active cycle plan is in PRODUCT CONTEXT above (cycle.ceo_plan).
-            2. Check for existing work:
+            1. Run PRE-FLIGHT stack detection (above)
+            2. The active cycle plan is in PRODUCT CONTEXT above (cycle.ceo_plan).
+            3. Check for existing work:
                - `git branch -r | grep hive/` — existing feature branches
                - `GH_TOKEN="$GH_PAT" gh pr list --state open --json number,title,headRefName`
-            3. Read `ceo_plan.engineering_tasks`. ALSO check `engineering_tasks` from PRODUCT CONTEXT — these are from the company_tasks backlog.
+            4. Read `ceo_plan.engineering_tasks`. ALSO check `engineering_tasks` from PRODUCT CONTEXT — these are from the company_tasks backlog.
                If ceo_plan has no engineering_tasks, use the backlog tasks instead. Pick the FIRST uncompleted task.
                IMPORTANT: Implement ONE task per run. You have limited turns.
-            3b. If the task has an `id` from company_tasks, note it for tracking.
-            4. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
+            4b. If the task has an `id` from company_tasks, note it for tracking.
+            5. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
                - Check competitive_analysis for what competitors do (match or beat them)
                - Check the pricing model to build the right tier-gating structure
                - Check target_audience to get naming and UX right
-            5. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
-            6. Implement the task following acceptance criteria
-            7. Install dependencies if needed: `npm install`
-            8. Build to verify: `npx next build` — fix any errors
-            9. Commit and push:
+               - Use the business domain to inform visual design choices (colors, language, metaphors)
+            6. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
+            7. Implement the task following acceptance criteria AND the quality bars above
+            8. Install dependencies if needed: `npm install`
+            9. Build to verify — fix any errors. Use the correct build command from package.json
+            10. Commit and push:
                ```bash
                git add -A && git commit -m "feat: <task summary>"
                git push -u origin hive/cycle-<N>-<task-id>
                ```
-            10. Open a PR:
+            11. Open a PR:
                `GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"`
-            11. If the task has acceptance criteria, verify them before marking done.
-            12. Output: { "pr_opened": true, "pr_number": N, "task_id": "<task_id>", "company": "${{ github.event.inputs.company_slug }}" }
+            12. If the task has acceptance criteria, verify them before marking done.
+            13. Output: { "pr_opened": true, "pr_number": N, "task_id": "<task_id>", "company": "${{ github.event.inputs.company_slug }}" }
 
             ## ops_escalation — Fix errors
-            1. Check error details in the PAYLOAD above.
-            2. Diagnose and fix the issue in the current directory
-            3. Build, commit, push
+            1. Run PRE-FLIGHT stack detection
+            2. Check error details in the PAYLOAD above
+            3. Diagnose and fix the issue in the current directory
+            4. Build, commit, push
 
             ## deploy_drift — Fix stale deployments
             Check Vercel deployment status, trigger a redeploy if needed.

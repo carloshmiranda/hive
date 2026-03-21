@@ -316,6 +316,13 @@
 **Prevention:** NEVER pass secrets between GitHub Actions jobs via outputs. Each job must fetch its own secrets independently. The `::add-mask::` + job output pattern is fundamentally broken for secrets. Use OIDC token exchange per-job instead.
 **Affects:** hive (any multi-job workflow passing secrets via outputs)
 
+### 2026-03-21 Vercel build cache served stale CSS — Tailwind v4 utility classes never compiled
+**What happened:** Senhorio's landing page rendered as unstyled white text despite having correct HTML with Tailwind classes. The CSS file (`496c7420d56a886f.css`) contained only Tailwind v4 theme variables (color, spacing, typography tokens) but zero compiled utility classes (no `.bg-blue-600`, `.flex`, `.rounded-xl`, etc.).
+**Root cause:** The `postcss.config.mjs` file was missing from the repo (Tailwind v4 requires it to compile utility classes). When we added it and pushed, Vercel's build log showed "Restored build cache from previous deployment" — Next.js reused the cached CSS output from the previous build (which had no PostCSS plugin configured). The CSS file hash stayed identical, confirming the cache was served instead of a fresh compilation.
+**Fix applied:** Pushed a change to `globals.css` (added CSS custom properties) to invalidate the CSS cache and force a fresh Tailwind v4 compilation.
+**Prevention:** (1) When adding PostCSS config to an existing project, always make a concurrent change to the CSS entry point to bust the build cache. (2) The boilerplate must ship with `postcss.config.mjs` from day one — never rely on it being added later. (3) After any CSS infrastructure change, verify the compiled CSS file contains actual utility classes, not just theme tokens.
+**Affects:** both (senhorio, boilerplate)
+
 ### 2026-03-21 Shell injection from ${{ }} in workflow run scripts
 **What happened:** Engineer build job crashed with `syntax error near unexpected token '('` when the task description contained parentheses. The dispatch step for Vercel Analytics task never ran.
 **Root cause:** `PAYLOAD='${{ needs.context.outputs.payload }}'` injects the JSON directly into the shell script. If the payload contains shell metacharacters (`(`, `)`, `$`, backticks, etc.), bash interprets them as syntax. This is the same class of bug as the 422 JSON escaping issue — user-provided strings must never be injected raw into shell scripts.
