@@ -108,10 +108,19 @@ jobs:
           ## CONTEXT
           ${GROWTH_CTX}
 
+          ## TASK TRACKING
+          To update task status, get an OIDC token and call the Hive API:
+          \`\`\`bash
+          OIDC=\$(curl -s -H \"Authorization: bearer \$ACTIONS_ID_TOKEN_REQUEST_TOKEN\" \"\${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app\" | jq -r '.value')
+          curl -s -X PATCH \"https://hive-phi.vercel.app/api/agents/tasks/<task_id>\" -H \"Authorization: Bearer \$OIDC\" -H \"Content-Type: application/json\" -d '{\"status\":\"in_progress\"}'
+          \`\`\`
+          Use status \"in_progress\" when starting a task, \"done\" when finished.
+
           ## YOUR PROCESS
           1. Read the CEO plan from context. Identify your growth_tasks.
              ALSO check growth_tasks from CONTEXT — these are from the company_tasks backlog.
              If CEO plan has no growth_tasks, use the backlog tasks instead.
+             If a task has an id, mark it in_progress before starting (see TASK TRACKING above).
           2. Read research reports (market_research, competitive_analysis, seo_keywords, content_performance).
           3. If CONTENT PERFORMANCE data exists with refresh_items, prioritize refreshing declining content BEFORE creating new content.
           4. Read the codebase to understand the current site structure (pages, blog, meta tags).
@@ -125,6 +134,7 @@ jobs:
           7. Commit and push:
              git add -A && git commit -m 'content: <summary>'
              git push origin main
+          8. Mark completed tasks as done (see TASK TRACKING above).
 
           ## RULES
           - Write content in the language of the target audience (Portuguese companies → Portuguese content).

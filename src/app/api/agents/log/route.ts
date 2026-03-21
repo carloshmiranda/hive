@@ -1,37 +1,12 @@
 import { NextRequest } from "next/server";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
-
-const GITHUB_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
-const GITHUB_ISSUER = "https://token.actions.githubusercontent.com";
-const EXPECTED_AUDIENCE = "https://hive-phi.vercel.app";
-const EXPECTED_OWNER = "carloshmiranda";
-
-let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-function getJWKS() {
-  if (!jwks) jwks = createRemoteJWKSet(new URL(GITHUB_JWKS_URL));
-  return jwks;
-}
 
 // POST /api/agents/log — log agent action via OIDC auth
 // Body: { company_slug, agent, action_type, status, description?, error? }
 export async function POST(req: NextRequest) {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
-    return err("Missing Authorization header", 401);
-  }
-  try {
-    const result = await jwtVerify(authHeader.slice(7), getJWKS(), {
-      issuer: GITHUB_ISSUER,
-      audience: EXPECTED_AUDIENCE,
-    });
-    const claims = result.payload as Record<string, unknown>;
-    if (claims.repository_owner !== EXPECTED_OWNER) {
-      return err("Repository owner not authorized", 403);
-    }
-  } catch (e) {
-    return err(`OIDC validation failed: ${e instanceof Error ? e.message : "unknown"}`, 401);
-  }
+  const claims = await validateOIDC(req);
+  if (claims instanceof Response) return claims;
 
   let body;
   try {

@@ -116,6 +116,13 @@ jobs:
                git add -A && git commit -m "fix: <what was broken>"
                git push origin main
                ```
+            7. If this fix could help other companies, write a playbook entry:
+               ```bash
+               OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" | jq -r '.value')
+               curl -s -X POST "https://hive-phi.vercel.app/api/agents/playbook" \
+                 -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" \
+                 -d '{"domain":"engineering","insight":"<what to do when this happens>","evidence":"<the error>","confidence":0.7}'
+               ```
 
             RULES:
             - Fix, don't refactor. Minimum change to resolve the error.

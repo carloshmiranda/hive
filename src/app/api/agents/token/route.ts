@@ -1,12 +1,7 @@
 import { NextRequest } from "next/server";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
-
-const GITHUB_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
-const GITHUB_ISSUER = "https://token.actions.githubusercontent.com";
-const EXPECTED_AUDIENCE = "https://hive-phi.vercel.app";
-const EXPECTED_OWNER = "carloshmiranda";
 
 // The Hive orchestrator repo (not in companies table — special case)
 const HIVE_REPO = "carloshmiranda/hive";
@@ -26,36 +21,9 @@ const ALLOWED_WORKFLOWS = [
   "hive-sentinel.yml",
 ];
 
-let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-function getJWKS() {
-  if (!jwks) jwks = createRemoteJWKSet(new URL(GITHUB_JWKS_URL));
-  return jwks;
-}
-
 export async function POST(req: NextRequest) {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
-    return err("Missing Authorization header", 401);
-  }
-
-  const oidcToken = authHeader.slice(7);
-
-  // Validate GitHub OIDC JWT
-  let claims;
-  try {
-    const result = await jwtVerify(oidcToken, getJWKS(), {
-      issuer: GITHUB_ISSUER,
-      audience: EXPECTED_AUDIENCE,
-    });
-    claims = result.payload as Record<string, unknown>;
-  } catch (e) {
-    return err(`OIDC validation failed: ${e instanceof Error ? e.message : "unknown"}`, 401);
-  }
-
-  // Verify repo owner
-  if (claims.repository_owner !== EXPECTED_OWNER) {
-    return err("Repository owner not authorized", 403);
-  }
+  const claims = await validateOIDC(req);
+  if (claims instanceof Response) return claims;
 
   // Verify workflow is allowed
   // workflow_ref looks like: "owner/repo/.github/workflows/hive-build.yml@refs/heads/main"
