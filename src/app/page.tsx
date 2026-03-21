@@ -9,6 +9,7 @@ type Company = {
   vercel_url: string | null; created_at: string; killed_at: string | null; kill_reason: string | null;
   latest_metrics: any; pending_approvals: number;
   pending_approval_details: Array<{ gate_type: string; title: string }>;
+  tasks_done: number; tasks_total: number;
 };
 type Action = {
   id: string; company_id: string; company_slug: string; agent: string; action_type: string;
@@ -549,6 +550,25 @@ export default function DashboardPage() {
                           <div style={{ fontSize: 12, color: "var(--hive-amber)", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
                             <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
                             Provisioning...
+                          </div>
+                        )}
+
+                        {/* Task progress */}
+                        {Number(c.tasks_total) > 0 && (
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                              <span style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Tasks</span>
+                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)" }}>
+                                {Number(c.tasks_done)}/{Number(c.tasks_total)}
+                              </span>
+                            </div>
+                            <div style={{ height: 4, borderRadius: 2, background: "var(--hive-border)", overflow: "hidden" }}>
+                              <div style={{
+                                height: "100%", borderRadius: 2, transition: "width 0.3s",
+                                width: `${Math.round((Number(c.tasks_done) / Number(c.tasks_total)) * 100)}%`,
+                                background: Number(c.tasks_done) === Number(c.tasks_total) ? "var(--hive-green)" : "var(--hive-amber)",
+                              }} />
+                            </div>
                           </div>
                         )}
 

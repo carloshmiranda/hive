@@ -46,11 +46,14 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
         FROM agent_actions WHERE started_at >= CURRENT_DATE
       `.then(r => r[0]),
       sql`SELECT started_at FROM cycles ORDER BY started_at DESC LIMIT 1`.then(r => r[0] || null),
-      // Companies with latest metrics + pending approvals
+      // Companies with latest metrics + pending approvals + task stats
       sql`
         SELECT c.*,
           (SELECT row_to_json(m) FROM metrics m WHERE m.company_id = c.id ORDER BY m.date DESC LIMIT 1) as latest_metrics,
-          (SELECT count(*) FROM approvals a WHERE a.company_id = c.id AND a.status = 'pending') as pending_approvals
+          (SELECT count(*) FROM approvals a WHERE a.company_id = c.id AND a.status = 'pending') as pending_approvals,
+          (SELECT coalesce(json_agg(json_build_object('gate_type', a.gate_type, 'title', a.title) ORDER BY a.created_at), '[]'::json) FROM approvals a WHERE a.company_id = c.id AND a.status = 'pending') as pending_approval_details,
+          (SELECT count(*) FROM company_tasks t WHERE t.company_id = c.id AND t.status = 'done') as tasks_done,
+          (SELECT count(*) FROM company_tasks t WHERE t.company_id = c.id AND t.status NOT IN ('dismissed')) as tasks_total
         FROM companies c
         ORDER BY
           CASE c.status
