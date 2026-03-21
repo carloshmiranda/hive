@@ -258,12 +258,13 @@ export async function GET(req: Request) {
 
   // 11. Chain dispatch gaps
   const chainGaps = await sql`
-    SELECT aa.agent as source_agent, c.slug
+    SELECT aa.agent as source_agent, c.slug, c.github_repo
     FROM agent_actions aa
     JOIN companies c ON c.id = aa.company_id
     WHERE aa.status = 'success' AND aa.agent = 'ceo'
     AND aa.output::text ILIKE '%needs_feature%true%'
     AND aa.finished_at > NOW() - INTERVAL '48 hours'
+    AND c.github_repo IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM agent_actions aa2
       WHERE aa2.agent = 'engineer' AND aa2.company_id = aa.company_id
@@ -336,7 +337,7 @@ export async function GET(req: Request) {
 
   // 14. Rate-limited agents (0 turns)
   const rateLimited = await sql`
-    SELECT aa.agent, aa.action_type, aa.company_id, c.slug
+    SELECT aa.agent, aa.action_type, aa.company_id, c.slug, c.github_repo
     FROM agent_actions aa
     INNER JOIN companies c ON c.id = aa.company_id
     WHERE aa.status = 'failed'
@@ -751,16 +752,33 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "new_company", payload: { company: r.slug, reason: "orphaned_mvp" } });
   }
 
-  // 13c. Failed agent tasks → re-dispatch with context preservation
+  // 13c. Failed agent tasks → re-dispatch directly to company repo (free Actions)
   for (const r of failedWithPlanWork) {
-    const eventType = r.agent === "engineer" ? "feature_request" : "growth_trigger";
-    await dispatchToActions(eventType, {
-      source: "sentinel_retry",
-      company: r.slug,
-      company_id: r.company_id,
-      reason: "failed_task_recovery",
-      original_agent: r.agent,
-    });
+    if (r.github_repo && r.agent === "engineer") {
+      await dispatchToCompanyWorkflow(r.github_repo as string, "hive-build.yml", {
+        company_slug: r.slug as string,
+        trigger: "feature_request",
+        task_summary: "Retry — previous build failed",
+      });
+      dispatches.push({ type: "company_actions", target: "feature_request", payload: { company: r.slug, reason: "failed_task_recovery" } });
+    } else if (r.github_repo && r.agent === "growth") {
+      await dispatchToCompanyWorkflow(r.github_repo as string, "hive-growth.yml", {
+        company_slug: r.slug as string,
+        trigger: "sentinel_retry",
+        task_summary: "Retry — previous growth run failed",
+      });
+      dispatches.push({ type: "company_actions", target: "growth", payload: { company: r.slug, reason: "failed_task_recovery" } });
+    } else {
+      // Fallback to Hive repo dispatch if no company repo
+      const eventType = r.agent === "engineer" ? "feature_request" : "growth_trigger";
+      await dispatchToActions(eventType, {
+        source: "sentinel_retry",
+        company: r.slug,
+        company_id: r.company_id,
+        reason: "failed_task_recovery",
+      });
+      dispatches.push({ type: "brain", target: eventType, payload: { company: r.slug, reason: "failed_task_recovery" } });
+    }
     // Log the retry so we don't re-dispatch again for 6h
     await sql`
       INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
@@ -768,7 +786,6 @@ export async function GET(req: Request) {
         ${"Sentinel re-dispatched " + r.agent + " for " + r.slug + " after failed task (plan work preserved in cycles table)"},
         NOW(), NOW())
     `;
-    dispatches.push({ type: "brain", target: eventType, payload: { company: r.slug, reason: "failed_task_recovery" } });
   }
 
   // 10. Max turns exhaustion → Evolver
@@ -781,10 +798,19 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { reason: "max_turns_exhaustion", agents } });
   }
 
-  // 11. Chain dispatch gaps → re-dispatch engineer
+  // 11. Chain dispatch gaps → dispatch directly to company repo (free Actions)
   for (const r of chainGaps) {
-    await dispatchToActions("feature_request", { source: "sentinel_recovery", company: r.slug });
-    dispatches.push({ type: "brain", target: "feature_request", payload: { company: r.slug } });
+    if (r.github_repo) {
+      await dispatchToCompanyWorkflow(r.github_repo as string, "hive-build.yml", {
+        company_slug: r.slug as string,
+        trigger: "feature_request",
+        task_summary: "Chain gap recovery — CEO planned features not yet built",
+      });
+      dispatches.push({ type: "company_actions", target: "feature_request", payload: { company: r.slug, repo: r.github_repo } });
+    } else {
+      await dispatchToActions("feature_request", { source: "sentinel_recovery", company: r.slug });
+      dispatches.push({ type: "brain", target: "feature_request", payload: { company: r.slug } });
+    }
   }
 
   // 12. Stalled companies → escalation approval + force cycle
@@ -820,40 +846,63 @@ export async function GET(req: Request) {
     cycleDispatches++;
   }
 
-  // 14. Rate-limited agents → re-dispatch
+  // 14. Rate-limited agents → re-dispatch (company-scoped work goes direct to company repo)
   for (const r of rateLimited) {
     let eventType = "feature_request";
-    if (r.agent === "engineer" && ["scaffold_company", "provision_company"].includes(r.action_type)) {
+    if (r.agent === "engineer" && ["scaffold_company", "provision_company"].includes(r.action_type as string)) {
       eventType = "new_company";
     } else if (r.agent === "scout") {
       eventType = "research_request";
     } else if (r.agent === "ceo") {
       eventType = "cycle_start";
     }
-    await dispatchToActions(eventType, {
-      source: "sentinel_retry",
-      company: r.slug,
-      company_id: r.company_id,
-    });
-    dispatches.push({ type: "brain", target: eventType, payload: { company: r.slug, reason: "rate_limited_retry" } });
+
+    // Engineer feature_request/ops_escalation → direct to company repo (free Actions)
+    if (r.github_repo && r.agent === "engineer" && eventType === "feature_request") {
+      await dispatchToCompanyWorkflow(r.github_repo as string, "hive-build.yml", {
+        company_slug: r.slug as string,
+        trigger: "feature_request",
+        task_summary: "Retry — previous run was rate-limited",
+      });
+      dispatches.push({ type: "company_actions", target: "feature_request", payload: { company: r.slug, reason: "rate_limited_retry" } });
+    } else {
+      // Brain agents (CEO, Scout, provision) must stay on Hive repo
+      await dispatchToActions(eventType, {
+        source: "sentinel_retry",
+        company: r.slug,
+        company_id: r.company_id,
+      });
+      dispatches.push({ type: "brain", target: eventType, payload: { company: r.slug, reason: "rate_limited_retry" } });
+    }
   }
 
   // 15. Unverified provisions → HTTP check
   for (const r of unverifiedProvisions) {
     if (r.vercel_url) {
       try {
-        const res = await fetch(r.vercel_url, {
+        const res = await fetch(r.vercel_url as string, {
           redirect: "follow",
           signal: AbortSignal.timeout(10000),
         });
         if (res.status >= 400) {
-          await dispatchToActions("ops_escalation", {
-            source: "sentinel",
-            company: r.slug,
-            reason: "post_provision_deploy_broken",
-            http_status: res.status,
-          });
-          dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: r.slug, status: res.status } });
+          // Dispatch fix directly to company repo if available
+          const [co] = await sql`SELECT github_repo FROM companies WHERE slug = ${r.slug} LIMIT 1`;
+          if (co?.github_repo) {
+            await dispatchToCompanyWorkflow(co.github_repo as string, "hive-fix.yml", {
+              company_slug: r.slug as string,
+              error_summary: `Deploy broken after provision (HTTP ${res.status})`,
+              source: "sentinel",
+            });
+            dispatches.push({ type: "company_actions", target: "ops_escalation", payload: { company: r.slug, status: res.status } });
+          } else {
+            await dispatchToActions("ops_escalation", {
+              source: "sentinel",
+              company: r.slug,
+              reason: "post_provision_deploy_broken",
+              http_status: res.status,
+            });
+            dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: r.slug, status: res.status } });
+          }
         }
       } catch {
         await dispatchToActions("ops_escalation", {
@@ -903,13 +952,24 @@ export async function GET(req: Request) {
     companiesWithUrls.map((r) => ({ slug: r.slug as string, vercel_url: r.vercel_url as string }))
   );
   for (const b of brokenDeploys) {
-    await dispatchToActions("ops_escalation", {
-      source: "sentinel",
-      company: b.slug,
-      reason: "deploy_broken",
-      http_status: b.status,
-    });
-    dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
+    // Dispatch fix directly to company repo (free Actions)
+    const [co] = await sql`SELECT github_repo FROM companies WHERE slug = ${b.slug} LIMIT 1`;
+    if (co?.github_repo) {
+      await dispatchToCompanyWorkflow(co.github_repo as string, "hive-fix.yml", {
+        company_slug: b.slug,
+        error_summary: `Deploy broken (HTTP ${b.status})`,
+        source: "sentinel",
+      });
+      dispatches.push({ type: "company_actions", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
+    } else {
+      await dispatchToActions("ops_escalation", {
+        source: "sentinel",
+        company: b.slug,
+        reason: "deploy_broken",
+        http_status: b.status,
+      });
+      dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
+    }
   }
 
   // --- Deploy drift check ---

@@ -160,6 +160,7 @@ jobs:
           if [ -z "$COMPANY_ID" ]; then
             COMPANY_ID=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company_id // ""' 2>/dev/null || echo "")
           fi
+          GITHUB_REPO=""
           echo "Company: $COMPANY | Company ID: $COMPANY_ID"
 
           # Guard: if no company found, skip all dispatches
@@ -193,10 +194,7 @@ jobs:
               dispatch "research_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
             fi
 
-            # Chain to Engineer for features
-            dispatch "feature_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-
-            # Chain to workers — Growth on company repo (free), Outreach on Vercel serverless
+            # Define dispatch helpers (must be before first call)
             dispatch_worker() {
               curl -s -X POST "$HIVE_URL/api/agents/dispatch" \
                 -H "Authorization: Bearer $CRON_SECRET" \
@@ -206,14 +204,16 @@ jobs:
             }
             dispatch_to_company_repo() {
               local WORKFLOW="$1" SUMMARY="$2"
-              # Get company's github_repo from DB
-              GITHUB_REPO=$(node -e "
-                const postgres = require('postgres');
-                const sql = postgres(process.env.DATABASE_URL);
-                sql\`SELECT github_repo FROM companies WHERE slug = '${COMPANY}' LIMIT 1\`
-                  .then(r => { console.log(r[0]?.github_repo || ''); sql.end(); })
-                  .catch(() => { console.log(''); process.exit(0); });
-              " 2>/dev/null)
+              # Get company's github_repo from DB (cached after first call)
+              if [ -z "$GITHUB_REPO" ]; then
+                GITHUB_REPO=$(node -e "
+                  const postgres = require('postgres');
+                  const sql = postgres(process.env.DATABASE_URL);
+                  sql\`SELECT github_repo FROM companies WHERE slug = '${COMPANY}' LIMIT 1\`
+                    .then(r => { console.log(r[0]?.github_repo || ''); sql.end(); })
+                    .catch(() => { console.log(''); process.exit(0); });
+                " 2>/dev/null)
+              fi
               if [ -n "$GITHUB_REPO" ]; then
                 curl -s -X POST "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${WORKFLOW}/dispatches" \
                   -H "Authorization: token $GH_PAT" \
@@ -225,6 +225,14 @@ jobs:
                 dispatch_worker "$3"
               fi
             }
+
+            # Chain to Engineer → dispatch directly to company repo (free Actions)
+            # Falls back to Hive Engineer only if no company repo exists
+            dispatch_to_company_repo "hive-build.yml" "Feature build for $COMPANY" ""
+            if [ -z "$GITHUB_REPO" ]; then
+              dispatch "feature_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+            fi
+
             # Growth → company repo (Claude, free) with Vercel fallback
             echo "$RESULT" | grep -qiP "growth_tasks|growth_strategy|content.?calendar" && \
               dispatch_to_company_repo "hive-growth.yml" "Growth cycle for $COMPANY" "growth"
