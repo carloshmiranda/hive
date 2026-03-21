@@ -107,7 +107,7 @@ jobs:
             | jq -r '.value')
 
           fetch_token() {
-            local TYPE="$1" OUTPUT_KEY="$2"
+            local TYPE="$1" OUTPUT_KEY="$2" CRITICAL="${3:-false}"
             RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
@@ -117,14 +117,18 @@ jobs:
               echo "::add-mask::$VALUE"
               echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
             else
-              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+              if [ "$CRITICAL" = "true" ]; then
+                echo "FATAL: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+                exit 1
+              else
+                echo "WARNING: Failed to get $TYPE token (non-critical, continuing)"
+              fi
             fi
           }
 
-          fetch_token "claude" "claude_token"
-          fetch_token "github_pat" "gh_pat"
-          fetch_token "vercel_token" "vercel_token"
-          fetch_token "neon_api_key" "neon_api_key"
+          fetch_token "claude" "claude_token" "true"
+          fetch_token "github_pat" "gh_pat" "true"
+          fetch_token "vercel_token" "vercel_token" "true"
 
       - name: Run provision agent
         id: agent
@@ -132,7 +136,6 @@ jobs:
           GH_PAT: ${{ steps.auth.outputs.gh_pat }}
           GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
           VERCEL_TOKEN: ${{ steps.auth.outputs.vercel_token }}
-          NEON_API_KEY: ${{ steps.auth.outputs.neon_api_key }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
@@ -469,7 +472,7 @@ jobs:
             | jq -r '.value')
 
           fetch_token() {
-            local TYPE="$1" OUTPUT_KEY="$2"
+            local TYPE="$1" OUTPUT_KEY="$2" CRITICAL="${3:-false}"
             RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
@@ -479,12 +482,17 @@ jobs:
               echo "::add-mask::$VALUE"
               echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
             else
-              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+              if [ "$CRITICAL" = "true" ]; then
+                echo "FATAL: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+                exit 1
+              else
+                echo "WARNING: Failed to get $TYPE token (non-critical, continuing)"
+              fi
             fi
           }
 
-          fetch_token "claude" "claude_token"
-          fetch_token "github_pat" "gh_pat"
+          fetch_token "claude" "claude_token" "true"
+          fetch_token "github_pat" "gh_pat" "true"
 
       - name: Run build agent (Hive-internal only)
         id: agent

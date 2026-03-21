@@ -4,7 +4,10 @@ import { err } from "@/lib/db";
 
 const GITHUB_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
 const GITHUB_ISSUER = "https://token.actions.githubusercontent.com";
-const EXPECTED_AUDIENCE = "https://hive-phi.vercel.app";
+const EXPECTED_AUDIENCE =
+  process.env.NEXT_PUBLIC_URL ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined) ||
+  "https://hive-phi.vercel.app";
 const EXPECTED_OWNER = "carloshmiranda";
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;

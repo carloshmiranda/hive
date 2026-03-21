@@ -3,6 +3,7 @@ import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { capabilitiesSummary } from "@/lib/capabilities";
 import { getFilePrompt } from "@/lib/prompts";
+import { canSendOutreach } from "@/lib/resend";
 
 // Agents that can run on Vercel serverless (Gemini/Groq HTTP calls only)
 const WORKER_AGENTS = ["growth", "outreach", "ops"] as const;
@@ -64,6 +65,21 @@ export async function POST(req: NextRequest) {
       SELECT id, cycle_number, ceo_plan FROM cycles
       WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 1
     `;
+
+    // Outreach requires a verified sending domain — skip if not configured
+    if (agentName === "outreach") {
+      const outreachAllowed = await canSendOutreach();
+      if (!outreachAllowed) {
+        console.warn(`Outreach dispatch skipped for ${company.slug}: canSendOutreach() returned false (no verified sending_domain)`);
+        return json({
+          ok: true,
+          skipped: true,
+          reason: `Outreach skipped for ${company.slug}: no verified sending domain configured. Set sending_domain in /settings.`,
+          agent: agentName,
+          company: company.slug,
+        });
+      }
+    }
 
     // Growth and Outreach must wait for a CEO plan — without one, they'd run blind
     if ((agentName === "growth" || agentName === "outreach") && !latestCycle?.ceo_plan) {

@@ -50,7 +50,7 @@ jobs:
             | jq -r '.value')
 
           fetch_token() {
-            local TYPE="$1" OUTPUT_KEY="$2"
+            local TYPE="$1" OUTPUT_KEY="$2" CRITICAL="${3:-false}"
             RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
@@ -60,11 +60,16 @@ jobs:
               echo "::add-mask::$VALUE"
               echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
             else
-              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+              if [ "$CRITICAL" = "true" ]; then
+                echo "FATAL: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+                exit 1
+              else
+                echo "WARNING: Failed to get $TYPE token (non-critical, continuing)"
+              fi
             fi
           }
 
-          fetch_token "claude" "claude_token"
+          fetch_token "claude" "claude_token" "true"
           fetch_token "github_pat" "gh_pat"
           fetch_token "cron_secret" "cron_secret"
 

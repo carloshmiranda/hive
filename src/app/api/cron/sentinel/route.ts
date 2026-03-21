@@ -129,6 +129,27 @@ export async function GET(req: Request) {
   const dispatches: Dispatch[] = [];
   let cycleDispatches = 0;
 
+  // --- Auto-expire stale approvals ---
+  // new_company proposals older than 14 days, growth_strategy older than 7 days
+  const expiredApprovals = await sql`
+    UPDATE approvals
+    SET status = 'expired',
+        decision_note = CASE
+          WHEN gate_type = 'new_company' THEN 'Auto-expired: not reviewed within 14 days'
+          WHEN gate_type = 'growth_strategy' THEN 'Auto-expired: not reviewed within 7 days'
+        END,
+        decided_at = NOW()
+    WHERE status = 'pending'
+    AND (
+      (gate_type = 'new_company' AND created_at < NOW() - INTERVAL '14 days')
+      OR (gate_type = 'growth_strategy' AND created_at < NOW() - INTERVAL '7 days')
+    )
+    RETURNING id, gate_type, title
+  `;
+  if (expiredApprovals.length > 0) {
+    console.log(`Auto-expired ${expiredApprovals.length} stale approvals: ${expiredApprovals.map((a: any) => `${a.gate_type}:${a.id}`).join(", ")}`);
+  }
+
   // --- Run all DB health checks ---
   // NOTE: Many checks below query companies with status IN ('mvp','active').
   // Companies without infra (github_repo IS NULL) should be EXCLUDED from dispatch-triggering
@@ -1047,6 +1068,7 @@ export async function GET(req: Request) {
   return Response.json({
     ok: true,
     dispatches: dispatches.length,
+    approvals_expired: expiredApprovals.length,
     stuck_cycles_cleaned: stuckCycles.length,
     deploy_drift: drift.drifted,
     broken_deploys: brokenDeploys.length,
