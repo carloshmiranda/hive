@@ -64,7 +64,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--model claude-opus-4-20250514 --max-turns 25 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-opus-4-20250514 --max-turns 40 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the CEO agent of Hive, an autonomous venture orchestrator.
 
@@ -102,7 +102,11 @@ jobs:
         if: always() && steps.agent.outcome == 'failure'
         run: |
           npm install --no-save postgres 2>/dev/null
+          # Try action output first, then known fallback path
           EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          if [ ! -f "$EXEC_FILE" ] || [ -z "$EXEC_FILE" ]; then
+            EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+          fi
           SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
           TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
           COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")

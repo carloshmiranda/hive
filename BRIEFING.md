@@ -9,11 +9,11 @@
 - **Phase:** Two companies actively iterating. System operational.
 - **Architecture:** 7 agents, event-driven, 3 Vercel crons (metrics 2x/day, sentinel every 4h, digest daily 8am). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
-- **Active companies:** 2
-  - VerdeDesk — status: mvp, 18 cycles, last CEO score 5/10, building waitlist + IRS guide
-  - Senhorio — status: mvp, 3 cycles, last CEO score 3/10, built tax calculator at /calculadora
+- **Active companies:** 3
+  - VerdeDesk — status: mvp, 18+ cycles, last CEO score 5/10, building waitlist + IRS guide
+  - Senhorio — status: mvp, 4 cycles, last CEO score 3/10, built tax calculator at /calculadora
+  - Flolio — status: mvp, 4 cycles (imported, iterating autonomously)
 - **Pipeline:** 9 idea-status companies (Scout proposals, pending approval)
-- **Companies to import:** Flolio (gate_approved routed 2026-03-21)
 
 ### Agent Architecture (7 agents)
 
@@ -37,13 +37,18 @@
 - **Blocked on:**
   - Resend domain verification (need a real domain — Flolio's domain could work)
 - **Known issues:**
-  - Engineer re-provisions companies that are already provisioned (4x for Senhorio)
   - 9 Scout proposals pending approval (noise — need mass reject or auto-expire)
-  - Rate limit "0 turns" failures at quota window boundaries
+  - GH_PAT may lack `workflow` scope — causes Engineer 404 when dispatching to company repos (Carlos to verify)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-21 [code] Dashboard approval details + failure fixes + secret cleanup
+**Dashboard:** Company cards now show pending approval details (gate type + title) instead of just a count. Digest email includes per-company approvals in the portfolio table.
+**Failures fixed:** CEO max-turns increased 25→40 (Opus needs more), execution_file fallback path added, NEON_API_KEY added to Engineer env, GH_TOKEN set as job-level env on provision job, 404 error message improved.
+**Secrets:** Removed 2 exposed API keys from Flolio's agent-queue (Gemini + Resend), documented in MISTAKES.md. Keys rotated by Carlos.
+**Learnings:** 2 new MISTAKES.md entries (CEO turn budget, Engineer 404 dispatch).
 
 ### 2026-03-21 [code] Iteration verification + naming standards + phantom run fix
 **Companies confirmed iterating:** Senhorio (3 cycles, built tax calculator), VerdeDesk (18 cycles, waitlist + IRS guide shipped). 49 successes vs 16 failures in 24h.

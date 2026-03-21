@@ -49,11 +49,13 @@ export async function GET(req: Request) {
     ORDER BY agent
   `;
 
-  // Pending approvals
+  // Pending approvals (with company slug for grouping)
   const approvals = await sql`
-    SELECT gate_type, title FROM approvals
-    WHERE status = 'pending'
-    ORDER BY created_at
+    SELECT a.gate_type, a.title, c.slug as company_slug
+    FROM approvals a
+    LEFT JOIN companies c ON c.id = a.company_id
+    WHERE a.status = 'pending'
+    ORDER BY a.created_at
   `;
 
   // Recent errors
@@ -157,7 +159,7 @@ interface DigestData {
     customers: number;
   }>;
   actions: Array<{ agent: string; status: string; cnt: number }>;
-  approvals: Array<{ gate_type: string; title: string }>;
+  approvals: Array<{ gate_type: string; title: string; company_slug: string | null }>;
   errors: Array<{
     agent: string;
     error: string | null;
@@ -176,15 +178,21 @@ function buildDigestHtml(d: DigestData): string {
   const now = new Date().toISOString();
 
   const companyRows = d.companies
-    .map(
-      (c) =>
-        `<tr>
+    .map((c) => {
+      const companyApprovals = d.approvals.filter((a) => a.company_slug === c.slug);
+      const approvalCell = companyApprovals.length
+        ? companyApprovals
+            .map((a) => `<span style="display:inline-block;font-size:11px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;margin:1px 2px">${a.gate_type.replace(/_/g, " ")}</span>`)
+            .join("")
+        : "—";
+      return `<tr>
       <td style="padding:4px 12px">${c.slug}</td>
       <td style="padding:4px 12px">${c.status}</td>
       <td style="padding:4px 12px;text-align:right">EUR ${Number(c.mrr).toFixed(2)}</td>
       <td style="padding:4px 12px;text-align:right">${c.customers}</td>
-    </tr>`
-    )
+      <td style="padding:4px 12px">${approvalCell}</td>
+    </tr>`;
+    })
     .join("");
 
   const activityRows = d.actions.length
@@ -264,6 +272,7 @@ function buildDigestHtml(d: DigestData): string {
       <th style="padding:4px 12px;text-align:left">Status</th>
       <th style="padding:4px 12px;text-align:right">MRR</th>
       <th style="padding:4px 12px;text-align:right">Customers</th>
+      <th style="padding:4px 12px;text-align:left">Pending</th>
     </tr>
     ${companyRows}
   </table>

@@ -252,3 +252,24 @@
 **Fix applied:** (1) Fixed all stale memory files. (2) Created `/context` skill that reviews all 7 context files and updates stale ones. (3) Added PreCompact hook that reminds to save context before compaction. (4) Added SessionStart (compact) hook that re-injects BRIEFING.md after compaction. (5) Updated CLAUDE.md "Self-Improvement Rules" with mandatory 8-point checklist.
 **Prevention:** After ANY architecture, infrastructure, or workflow change: update BRIEFING.md, project_infra.md, DECISIONS.md, and CLAUDE.md in the same session. The PreCompact hook now fires automatically when context is about to compress, forcing a context save. Run `/context` when in doubt.
 **Affects:** hive (all future sessions)
+
+### 2026-03-21 Imported company (Flolio) had plaintext API keys in committed JSON files
+**What happened:** Flolio's legacy agent-queue system stored API keys (Gemini, Resend) as plaintext in `.github/agent-queue/*.json` files. When repos were made public for unlimited GitHub Actions minutes, these keys became exposed. Google and GitGuardian flagged them.
+**Root cause:** Flolio was built before Hive's secret architecture. Its agents committed task files containing raw secret values. No secret scanning was enabled on the repo.
+**Fix applied:** Deleted both files from the repo. Keys must be rotated (git history retains the values).
+**Prevention:** (1) When importing a company, scan for committed secrets before making the repo public. (2) NEVER commit API keys, tokens, or secrets to any file in a repo — use environment variables or encrypted DB storage only. (3) Enable GitHub secret scanning on all repos. (4) The Onboarding agent should include a secret scan step in Phase 1.
+**Affects:** both (imported companies especially)
+
+### 2026-03-21 CEO agent exhausting max-turns budget (25 turns for Opus)
+**What happened:** CEO on Opus consistently hit the 25-turn limit, producing `error_max_turns` failures. Each failed run cost ~$1.56 with no usable output. Failure logging also reported "0 turns" because `execution_file` output was empty.
+**Root cause:** (1) Opus is slower and more thorough than Sonnet — 25 turns is insufficient for the CEO's full cycle (read 3 files, query multiple tables, determine lifecycle mode, write plan, save product spec). (2) The `execution_file` output variable from `claude-code-action` was empty, so the fallback `jq` commands returned defaults.
+**Fix applied:** Increased CEO max-turns from 25 to 40. Added fallback path `/home/runner/work/_temp/claude-execution-output.json` for execution file when the output variable is empty.
+**Prevention:** When setting `--max-turns` for Opus agents, use 35-40 minimum (Opus uses ~1.5x more turns than Sonnet for equivalent work). Always test with a manual workflow_dispatch before relying on automated triggers. Add fallback paths for action outputs — don't assume output variables are always populated.
+**Affects:** hive (CEO workflow)
+
+### 2026-03-21 Engineer 404 dispatching workflow_dispatch to company repos
+**What happened:** Engineer build job returned HTTP 404 when trying to trigger `hive-build.yml` on company repos via the GitHub API `workflow_dispatch` endpoint.
+**Root cause:** The `GH_PAT` (fine-grained PAT) requires explicit `workflow` scope to trigger `workflow_dispatch` on other repos. Without it, the API returns 404 (not 403) to avoid leaking repo existence. Also, the provision job relied on the Claude agent following prompt instructions to use `GH_TOKEN="$GH_PAT"` — fragile since agents don't always follow env var instructions.
+**Fix applied:** (1) Added `GH_TOKEN: secrets.GH_PAT` as env var directly on the provision job (agents inherit it automatically). (2) Added `NEON_API_KEY` to Engineer env block. (3) Added descriptive error message for 404 failures pointing to PAT scope check.
+**Prevention:** When a GitHub API call returns 404, first check PAT scopes — GitHub returns 404 instead of 403 for security. Always set `GH_TOKEN` as a job-level env var, never rely on prompts to instruct agents to export it. Required PAT scopes for Hive: `repo`, `workflow`, `admin:org` (for secrets).
+**Affects:** hive (Engineer workflow, all company builds)

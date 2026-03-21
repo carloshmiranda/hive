@@ -8,29 +8,33 @@
       "Write",
       "WebFetch",
       "WebSearch",
-      "Bash(npm run *)",
-      "Bash(npm install *)",
-      "Bash(npx *)",
-      "Bash(git add *)",
-      "Bash(git commit *)",
-      "Bash(git push)",
-      "Bash(git push *)",
-      "Bash(git pull)",
-      "Bash(git status)",
-      "Bash(git stash *)",
-      "Bash(git diff *)",
-      "Bash(git log *)",
-      "Bash(git branch *)",
-      "Bash(git checkout *)",
-      "Bash(node -e *)",
-      "Bash(export *)",
-      "Bash(ls *)",
-      "Bash(cat *)",
-      "Bash(wc *)",
-      "Bash(head *)",
-      "Bash(tail *)",
-      "Bash(which *)",
-      "Bash(gh *)"
+      "Bash"
+    ]
+  },
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/pre-compact-save.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/context-on-compact.sh",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

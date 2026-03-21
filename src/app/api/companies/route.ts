@@ -9,7 +9,8 @@ export async function GET() {
   const companies = await sql`
     SELECT c.*, 
       (SELECT row_to_json(m) FROM metrics m WHERE m.company_id = c.id ORDER BY m.date DESC LIMIT 1) as latest_metrics,
-      (SELECT count(*) FROM approvals a WHERE a.company_id = c.id AND a.status = 'pending') as pending_approvals
+      (SELECT count(*) FROM approvals a WHERE a.company_id = c.id AND a.status = 'pending') as pending_approvals,
+      (SELECT coalesce(json_agg(json_build_object('gate_type', a.gate_type, 'title', a.title) ORDER BY a.created_at), '[]'::json) FROM approvals a WHERE a.company_id = c.id AND a.status = 'pending') as pending_approval_details
     FROM companies c
     ORDER BY 
       CASE c.status 

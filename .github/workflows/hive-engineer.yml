@@ -30,6 +30,7 @@ env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
   GH_PAT: ${{ secrets.GH_PAT }}
   VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
 
 jobs:
   # ─── Resolve context for all jobs ───
@@ -96,6 +97,7 @@ jobs:
     timeout-minutes: 15
     env:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
 
     steps:
       - name: Checkout Hive (for templates)
@@ -331,6 +333,12 @@ jobs:
 
           if [ "$HTTP_CODE" = "204" ]; then
             echo "Build dispatched to ${COMPANY_REPO} (HTTP ${HTTP_CODE})"
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "Dispatch failed (HTTP 404) — GH_PAT likely missing 'workflow' scope, or workflow not found."
+            echo "Check: GitHub Settings → Developer settings → PAT → ensure 'workflow' scope is enabled."
+            echo "Also verify hive-build.yml exists: gh api repos/${COMPANY_REPO}/actions/workflows"
+            cat /tmp/dispatch-response.txt
+            exit 1
           else
             echo "Dispatch failed (HTTP ${HTTP_CODE}):"
             cat /tmp/dispatch-response.txt

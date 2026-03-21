@@ -8,6 +8,7 @@ type Company = {
   id: string; name: string; slug: string; description: string; status: string;
   vercel_url: string | null; created_at: string; killed_at: string | null; kill_reason: string | null;
   latest_metrics: any; pending_approvals: number;
+  pending_approval_details: Array<{ gate_type: string; title: string }>;
 };
 type Action = {
   id: string; company_id: string; company_slug: string; agent: string; action_type: string;
@@ -551,17 +552,37 @@ export default function DashboardPage() {
                           </div>
                         )}
 
-                        {/* Footer: cycles + pending */}
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 10, borderTop: "1px solid var(--hive-border-subtle)" }}>
-                          <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
-                            {cycleCount} cycle{cycleCount !== 1 ? "s" : ""}
+                        {/* Footer: cycles + pending approvals */}
+                        <div style={{ paddingTop: 10, borderTop: "1px solid var(--hive-border-subtle)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                              {cycleCount} cycle{cycleCount !== 1 ? "s" : ""}
+                            </div>
+                            {(c.pending_approvals || 0) > 0 && (
+                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                                padding: "2px 8px", borderRadius: 8,
+                                background: "var(--hive-amber-bg)", color: "var(--hive-amber)", border: "1px solid var(--hive-amber-border)" }}>
+                                {c.pending_approvals} pending
+                              </span>
+                            )}
                           </div>
-                          {(c.pending_approvals || 0) > 0 && (
-                            <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                              padding: "2px 8px", borderRadius: 8,
-                              background: "var(--hive-amber-bg)", color: "var(--hive-amber)", border: "1px solid var(--hive-amber-border)" }}>
-                              {c.pending_approvals} pending
-                            </span>
+                          {(c.pending_approval_details?.length || 0) > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+                              {c.pending_approval_details.map((a, i) => (
+                                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                                  <span style={{
+                                    fontSize: 9, fontFamily: "var(--hive-mono)", fontWeight: 600, textTransform: "uppercase",
+                                    padding: "1px 5px", borderRadius: 4, letterSpacing: "0.03em",
+                                    background: a.gate_type === "kill_company" ? "var(--hive-red-bg, rgba(239,68,68,0.1))" : "var(--hive-surface-hover)",
+                                    color: a.gate_type === "kill_company" ? "var(--hive-red)" : "var(--hive-text-secondary)",
+                                    border: `1px solid ${a.gate_type === "kill_company" ? "var(--hive-red-border, rgba(239,68,68,0.2))" : "var(--hive-border)"}`,
+                                  }}>{a.gate_type.replace(/_/g, " ")}</span>
+                                  <span style={{ color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {a.title}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
                       </div>

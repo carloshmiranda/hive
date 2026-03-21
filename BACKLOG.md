@@ -16,7 +16,9 @@
 ---
 
 ## Up Next
-<!-- No P1 items remaining -->
+
+### 🟡 P1 — Email domain for Resend (outreach blocked)
+Outreach emails are skipped because `sending_domain` is not set. Need a real domain (e.g. `hivehq.io`, `usehive.co`) to add DNS records for Resend verification. Flolio's domain could also work with a `hive.` subdomain. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. See CLAUDE.md "Email (Resend)" section for full setup guide. ~10 min task once domain is chosen.
 
 ---
 
