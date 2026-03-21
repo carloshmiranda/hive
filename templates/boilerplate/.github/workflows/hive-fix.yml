@@ -25,9 +25,6 @@ permissions:
   pull-requests: write
   id-token: write
 
-env:
-  DATABASE_URL: ${{ secrets.DATABASE_URL }}
-
 jobs:
   fix:
     runs-on: ubuntu-latest
@@ -72,52 +69,21 @@ jobs:
             echo "gh_pat=$GH_PAT_TOKEN" >> $GITHUB_OUTPUT
           fi
 
-      - name: Load error context from Hive DB
+      - name: Load error context from Hive API
         id: context
         run: |
-          npm install --no-save postgres 2>/dev/null
           SLUG="${{ github.event.inputs.company_slug }}"
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
 
-          node -e "
-          const postgres = require('postgres');
-          const fs = require('fs');
-          const sql = postgres(process.env.DATABASE_URL);
+          CTX=$(curl -s "https://hive-phi.vercel.app/api/agents/context?agent=fix&company_slug=$SLUG" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            | jq -r '.data // {}' | head -c 8000)
 
-          async function load() {
-            const [co] = await sql\`SELECT id FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
-            if (!co) { await sql.end(); return; }
-
-            const errors = await sql\`
-              SELECT agent, error, description, action_type, finished_at
-              FROM agent_actions WHERE company_id = \${co.id} AND status = 'failed'
-              AND finished_at > NOW() - INTERVAL '48 hours'
-              ORDER BY finished_at DESC LIMIT 10
-            \`;
-            const fixes = await sql\`
-              SELECT description FROM agent_actions
-              WHERE company_id = \${co.id} AND action_type IN ('error_fix', 'ops_escalation')
-              AND status = 'success' AND finished_at > NOW() - INTERVAL '30 days'
-              ORDER BY finished_at DESC LIMIT 5
-            \`;
-            const patterns = await sql\`
-              SELECT description FROM agent_actions
-              WHERE action_type = 'error_fix' AND status = 'success'
-              AND company_id != \${co.id}
-              AND finished_at > NOW() - INTERVAL '60 days'
-              ORDER BY finished_at DESC LIMIT 5
-            \`;
-
-            const ctx = {
-              errors: errors,
-              previous_fixes: fixes.map(f => f.description),
-              cross_company_patterns: patterns.map(p => p.description),
-            };
-            const json = JSON.stringify(ctx, null, 2).slice(0, 8000);
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'error_ctx<<CTXEOF\n' + json + '\nCTXEOF\n');
-            await sql.end();
-          }
-          load().catch(e => { console.error(e.message); process.exit(0); });
-          "
+          echo "error_ctx<<CTXEOF" >> $GITHUB_OUTPUT
+          echo "$CTX" >> $GITHUB_OUTPUT
+          echo "CTXEOF" >> $GITHUB_OUTPUT
 
       - name: Run fix agent
         id: agent
@@ -150,17 +116,6 @@ jobs:
                git add -A && git commit -m "fix: <what was broken>"
                git push origin main
                ```
-            7. Log to Hive DB:
-               ```sql
-               INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-               VALUES ('healer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
-                 'error_fix', 'success', '<what was fixed>', NOW(), NOW())
-               ```
-            8. Write a playbook entry if this could help other companies:
-               ```sql
-               INSERT INTO playbook (domain, insight, evidence, confidence)
-               VALUES ('engineering', '<what to do when this happens>', '<the error>', 0.7)
-               ```
 
             RULES:
             - Fix, don't refactor. Minimum change to resolve the error.
@@ -169,25 +124,17 @@ jobs:
             - Push directly to main (fixes don't need PR review).
             - If you find deeper issues you can't fix now, add them to BACKLOG.md with priority and evidence.
 
-      - name: Log results to Hive DB
+      - name: Log result to Hive
         if: always()
         run: |
-          npm install --no-save postgres 2>/dev/null
-          STATUS="${{ steps.agent.outcome }}"
-          node -e "
-          const postgres = require('postgres');
-          const sql = postgres(process.env.DATABASE_URL);
-          async function log() {
-            const [c] = await sql\`SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}' LIMIT 1\`;
-            await sql\`
-              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-              VALUES ('healer', \${c?.id || null}, 'error_fix', '${STATUS === 'success' ? 'success' : 'failed'}',
-                'Fix workflow on company repo (${STATUS})', NOW() - INTERVAL '20 minutes', NOW())
-            \`;
-            await sql.end();
-          }
-          log().catch(e => console.error(e.message));
-          "
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+          STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
+          curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"company_slug\":\"${{ github.event.inputs.company_slug }}\",\"agent\":\"healer\",\"action_type\":\"error_fix\",\"status\":\"$STATUS\",\"description\":\"Fix workflow on company repo ($STATUS)\"}" || true
 
       - name: Notify Hive on completion
         if: always() && steps.agent.outcome == 'success'

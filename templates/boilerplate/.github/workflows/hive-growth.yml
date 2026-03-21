@@ -26,9 +26,6 @@ permissions:
   pull-requests: write
   id-token: write
 
-env:
-  DATABASE_URL: ${{ secrets.DATABASE_URL }}
-
 jobs:
   growth:
     runs-on: ubuntu-latest
@@ -78,79 +75,17 @@ jobs:
             echo "gh_pat=$GH_PAT_TOKEN" >> $GITHUB_OUTPUT
           fi
 
-      - name: Load growth context from Hive DB
+      - name: Load growth context from Hive API
         id: context
         run: |
-          npm install --no-save postgres 2>/dev/null
           SLUG="${{ github.event.inputs.company_slug }}"
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
 
-          node -e "
-          const postgres = require('postgres');
-          const fs = require('fs');
-          const sql = postgres(process.env.DATABASE_URL);
-
-          async function load() {
-            const [co] = await sql\`SELECT id, name, slug, description, capabilities, company_type FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
-            if (!co) { require('fs').writeFileSync('/tmp/growth-context.json', '{}'); await sql.end(); return; }
-
-            // CEO plan (current cycle)
-            const [cycle] = await sql\`
-              SELECT ceo_plan FROM cycles WHERE company_id = \${co.id} ORDER BY started_at DESC LIMIT 1
-            \`;
-
-            // Research reports
-            const reports = await sql\`
-              SELECT report_type, summary, content FROM research_reports
-              WHERE company_id = \${co.id}
-              AND report_type IN ('market_research','competitive_analysis','seo_keywords','visibility_snapshot','llm_visibility','content_performance','product_spec')
-              ORDER BY updated_at DESC
-            \`;
-
-            // Metrics (last 7 days)
-            const metrics = await sql\`
-              SELECT date, mrr, customers, page_views, signups, waitlist_total, waitlist_signups
-              FROM metrics WHERE company_id = \${co.id} AND date >= CURRENT_DATE - INTERVAL '7 days'
-              ORDER BY date DESC LIMIT 14
-            \`;
-
-            // Playbook
-            const playbook = await sql\`
-              SELECT domain, insight FROM playbook WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 10
-            \`;
-
-            // Approved evolver proposals for growth
-            const proposals = await sql\`
-              SELECT proposed_fix FROM evolver_proposals
-              WHERE status = 'approved' AND (affected_agents @> ARRAY['growth'] OR affected_agents IS NULL)
-              AND implemented_at IS NULL LIMIT 3
-            \`;
-
-            // Growth tasks from company_tasks backlog
-            const growthTasks = await sql\`
-              SELECT id, title, description, priority, acceptance, status
-              FROM company_tasks
-              WHERE company_id = \${co.id} AND category = 'growth'
-              AND status IN ('proposed', 'approved')
-              ORDER BY priority ASC, created_at ASC LIMIT 5
-            \`.catch(() => []);
-
-            const ctx = {
-              company: { name: co.name, slug: co.slug, description: co.description, capabilities: co.capabilities },
-              ceo_plan: cycle?.ceo_plan || null,
-              research: {},
-              metrics: metrics.map(m => ({ date: m.date, mrr: m.mrr, customers: m.customers, page_views: m.page_views, signups: m.signups, waitlist: m.waitlist_total })),
-              playbook: playbook.map(p => p.domain + ': ' + p.insight),
-              evolver_proposals: proposals.map(p => p.proposed_fix),
-              growth_tasks: growthTasks,
-            };
-            for (const r of reports) {
-              ctx.research[r.report_type] = { summary: r.summary, content: r.content };
-            }
-            require('fs').writeFileSync('/tmp/growth-context.json', JSON.stringify(ctx, null, 2));
-            await sql.end();
-          }
-          load().catch(e => { console.error(e.message); require('fs').writeFileSync('/tmp/growth-context.json', '{}'); process.exit(0); });
-          "
+          curl -s "https://hive-phi.vercel.app/api/agents/context?agent=growth&company_slug=$SLUG" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            | jq -r '.data // {}' > /tmp/growth-context.json
 
       - name: Run Growth agent
         id: agent
@@ -177,14 +112,6 @@ jobs:
           1. Read the CEO plan from context. Identify your growth_tasks.
              ALSO check growth_tasks from CONTEXT — these are from the company_tasks backlog.
              If CEO plan has no growth_tasks, use the backlog tasks instead.
-             If a task has an id from company_tasks, mark it in_progress before starting:
-             \`\`\`bash
-             node -e \"const sql = require('postgres')(process.env.DATABASE_URL); sql\\\`UPDATE company_tasks SET status='in_progress', updated_at=NOW() WHERE id='<task_id>'\\\`.then(() => sql.end())\"
-             \`\`\`
-             After completing, mark it done:
-             \`\`\`bash
-             node -e \"const sql = require('postgres')(process.env.DATABASE_URL); sql\\\`UPDATE company_tasks SET status='done', updated_at=NOW() WHERE id='<task_id>'\\\`.then(() => sql.end())\"
-             \`\`\`
           2. Read research reports (market_research, competitive_analysis, seo_keywords, content_performance).
           3. If CONTENT PERFORMANCE data exists with refresh_items, prioritize refreshing declining content BEFORE creating new content.
           4. Read the codebase to understand the current site structure (pages, blog, meta tags).
@@ -198,17 +125,6 @@ jobs:
           7. Commit and push:
              git add -A && git commit -m 'content: <summary>'
              git push origin main
-          8. Log results to Hive DB:
-             Use the shell to run:
-             npm install --no-save postgres 2>/dev/null
-             node -e \"
-               const postgres = require('postgres');
-               const sql = postgres(process.env.DATABASE_URL);
-               sql\\\`INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-                 VALUES ('growth', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
-                 'content_creation', 'success', 'Growth content created', NOW(), NOW())\\\`
-               .then(() => sql.end());
-             \"
 
           ## RULES
           - Write content in the language of the target audience (Portuguese companies → Portuguese content).
@@ -221,22 +137,14 @@ jobs:
           - If you find SEO issues, missing pages, or broken links you can't fix now, add them to BACKLOG.md.
           " 2>&1 | tee /tmp/gemini-output.txt
 
-      - name: Log results to Hive DB
+      - name: Log result to Hive
         if: always()
         run: |
-          npm install --no-save postgres 2>/dev/null
-          STATUS="${{ steps.agent.outcome }}"
-          node -e "
-          const postgres = require('postgres');
-          const sql = postgres(process.env.DATABASE_URL);
-          async function log() {
-            const [c] = await sql\`SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}' LIMIT 1\`;
-            await sql\`
-              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-              VALUES ('growth', \${c?.id || null}, 'content_creation', '${STATUS === 'success' ? 'success' : 'failed'}',
-                'Growth workflow on company repo (${STATUS})', NOW() - INTERVAL '20 minutes', NOW())
-            \`;
-            await sql.end();
-          }
-          log().catch(e => console.error(e.message));
-          "
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+          STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
+          curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"company_slug\":\"${{ github.event.inputs.company_slug }}\",\"agent\":\"growth\",\"action_type\":\"content_creation\",\"status\":\"$STATUS\",\"description\":\"Growth workflow on company repo ($STATUS)\"}" || true

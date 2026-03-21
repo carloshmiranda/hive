@@ -71,6 +71,7 @@ export default function CompanyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [directive, setDirective] = useState("");
   const [sending, setSending] = useState(false);
+  const [taskCategoryFilter, setTaskCategoryFilter] = useState("all");
 
   const fetchData = useCallback(async () => {
     const res = await fetch(`/api/dashboard?slug=${slug}`);
@@ -367,16 +368,31 @@ export default function CompanyDetailPage() {
 
       {/* Task Backlog */}
       <div style={{ marginBottom: 24 }}>
-        <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: "0 0 12px", fontWeight: 500 }}>
-          Tasks ({tasks.length})
-        </h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: 0, fontWeight: 500 }}>
+            Tasks ({tasks.length})
+          </h3>
+          {tasks.length > 0 && (
+            <div style={{ display: "flex", gap: 6 }}>
+              {["all", ...Array.from(new Set(tasks.map(t => t.category))).sort()].map(cat => (
+                <button key={cat} onClick={() => setTaskCategoryFilter(cat)}
+                  style={{ fontSize: 11, fontFamily: "var(--hive-mono)", padding: "2px 8px", borderRadius: 4, cursor: "pointer",
+                    border: `1px solid ${taskCategoryFilter === cat ? "var(--hive-amber-border)" : "var(--hive-border-subtle, var(--hive-border))"}`,
+                    background: taskCategoryFilter === cat ? "var(--hive-amber-bg)" : "transparent",
+                    color: taskCategoryFilter === cat ? "var(--hive-amber)" : "var(--hive-text-secondary)" }}>
+                  {cat === "all" ? "All" : cat}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         {tasks.length === 0 ? (
           <div style={{ padding: 20, color: "var(--hive-text-tertiary)", fontSize: 13, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
             No tasks yet — CEO will propose tasks on next cycle
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {tasks.map(t => {
+            {tasks.filter(t => taskCategoryFilter === "all" || t.category === taskCategoryFilter).map(t => {
               const catColors: Record<string, string> = {
                 engineering: "var(--hive-green)", growth: "var(--hive-purple)", research: "var(--hive-blue, #60a5fa)",
                 qa: "var(--hive-amber)", ops: "var(--hive-pink, #f472b6)", strategy: "#38bdf8",

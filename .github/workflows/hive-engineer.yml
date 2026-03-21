@@ -189,12 +189,8 @@ jobs:
                  Use context.proposal for description, target audience, etc.
                  Query playbook for insights: `SELECT domain, insight FROM playbook WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5`
                  This CLAUDE.md is what gives agents context to work on the company repo — make it thorough.
-            2b. Set up GitHub Actions secrets on the new repo (only DATABASE_URL — all other tokens fetched via OIDC):
-               ```bash
-               GH_TOKEN="$GH_PAT" gh secret set DATABASE_URL --repo carloshmiranda/<slug> --body "$DATABASE_URL"
-               ```
-               Note: Auth tokens (Claude, GH PAT, Gemini, etc.) are fetched at runtime via OIDC token exchange.
-               Company repos are public — no secrets except DATABASE_URL.
+            2b. Company repos need ZERO secrets. All tokens are fetched at runtime via OIDC token exchange,
+               and context/logging use the Hive API (no direct DB access from company repos).
             3. Configure git and push to the new repo:
                ```bash
                cd /tmp/<slug>
@@ -214,13 +210,8 @@ jobs:
                  -d '{"name":"<slug>","framework":"nextjs","gitRepository":{"type":"github","repo":"carloshmiranda/<slug>"}}'
                ```
                If Vercel returns "project already exists", skip this step.
-            4b. Set environment variables on the Vercel project:
-               ```
-               curl -s -X POST "https://api.vercel.com/v10/projects/<slug>/env" \
-                 -H "Authorization: Bearer $VERCEL_TOKEN" \
-                 -H "Content-Type: application/json" \
-                 -d '[{"key":"DATABASE_URL","value":"placeholder_set_real_value_later","target":["production","preview"],"type":"plain"}]'
-               ```
+            4b. Company repos do not need any environment variables — all auth and data access
+               happens via OIDC token exchange and the Hive API.
             5. Record infra in DB:
                ```sql
                INSERT INTO infra (company_id, service, resource_id, config)
