@@ -179,38 +179,51 @@ jobs:
             exit 0
           fi
 
-          # Detect signals using flexible grep (handles JSON in code blocks, prose, etc.)
+          # Detect signals: strict JSON-only matching (no prose matching to avoid false positives)
           check_signal() {
-            echo "$RESULT" | grep -qiP "\"?${1}\"?\s*[:=]\s*\"?true" && return 0
-            echo "$RESULT" | grep -qi "$1" && return 0
+            echo "$RESULT" | grep -qP "\"${1}\"\s*:\s*true" && return 0
             return 1
           }
 
           # Build reusable payload with company + company_id
           BASE_PAYLOAD="\"company\":\"$COMPANY\",\"company_id\":\"$COMPANY_ID\""
 
-          # Chain to Engineer for provisioning
-          if check_signal "needs_provisioning"; then
-            dispatch "new_company" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-          fi
+          # Only dispatch downstream agents for cycle_start (not cycle_complete — avoids infinite loop)
+          IS_CYCLE_START=false
+          echo "$TRIGGER" | grep -q "cycle_start" && IS_CYCLE_START=true
 
-          # Chain to Scout if research needed
-          if check_signal "needs_research"; then
-            dispatch "research_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-          fi
+          if [ "$IS_CYCLE_START" = "true" ]; then
+            # Chain to Engineer for provisioning (only if explicitly flagged)
+            if check_signal "needs_provisioning"; then
+              dispatch "new_company" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+            fi
 
-          # Chain to Engineer if feature needed — always dispatch on cycle_start
-          if check_signal "needs_feature" || echo "$TRIGGER" | grep -q "cycle_start"; then
+            # Chain to Scout if research needed
+            if check_signal "needs_research"; then
+              dispatch "research_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+            fi
+
+            # Chain to Engineer for features
             dispatch "feature_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+
+            # Chain to workers if plan mentions growth/outreach tasks
+            echo "$RESULT" | grep -qiP "growth_tasks|growth_strategy|content.?calendar" && \
+              dispatch "growth_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+            echo "$RESULT" | grep -qiP "outreach_tasks|lead.?list|cold.?email" && \
+              dispatch "outreach_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+
+            # Dispatch cycle_complete ONCE (for review/reflection after agents finish)
+            dispatch "cycle_complete" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
           fi
 
-          # Chain to workers if plan mentions growth/outreach tasks
-          echo "$RESULT" | grep -qiP "growth_tasks|growth_strategy|content.?calendar" && \
-            dispatch "growth_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-          echo "$RESULT" | grep -qiP "outreach_tasks|lead.?list|cold.?email" && \
-            dispatch "outreach_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+          # For gate_approved: only dispatch the specific action needed
+          if echo "$TRIGGER" | grep -q "gate_approved"; then
+            if check_signal "needs_provisioning"; then
+              dispatch "new_company" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+            fi
+          fi
 
-          # Always dispatch cycle_complete so Evolver/reflection can run
-          dispatch "cycle_complete" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+          # cycle_complete: NO further dispatches (prevents infinite loop)
+          # The CEO reviews the cycle and writes to DB — no chaining needed
 
           echo "Chain dispatch complete"
