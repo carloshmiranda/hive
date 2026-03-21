@@ -17,16 +17,16 @@ Hive is an autonomous venture orchestrator that generates business ideas, builds
 - [x] Cross-company learning architecture
 - [x] Configure API keys (Gemini, Groq, Resend)
 - [ ] Verify email sending domain
-- [ ] Run Idea Scout → 3 proposals
+- [x] Run Idea Scout → 3 proposals (9 proposals generated, pending review)
 - [ ] Approve first company
-- [ ] First nightly cycle completes successfully
-- [ ] First company deployed to production with landing page
+- [x] First nightly cycle completes successfully (VerdeDesk 18+ cycles, Senhorio 4 cycles)
+- [x] First company deployed to production with landing page (VerdeDesk + Senhorio live on Vercel)
 
 ### Milestone: VerdeDesk imported
 - [x] Import via dashboard
-- [ ] Pattern extraction → playbook entries
-- [ ] First CEO cycle on VerdeDesk
-- [ ] Outreach pipeline active
+- [x] Pattern extraction → playbook entries (12 entries extracted)
+- [x] First CEO cycle on VerdeDesk (18+ cycles completed)
+- [ ] Outreach pipeline active (blocked on email domain)
 
 ### Milestone: First revenue
 - [ ] Any Hive company receives first Stripe payment
@@ -42,18 +42,18 @@ Hive is an autonomous venture orchestrator that generates business ideas, builds
 - [ ] Venture Brain successfully creates a cross-pollination directive
 
 ### Milestone: Data-driven organic growth
-- [ ] GSC API integrated, keyword positions tracked per cycle
-- [ ] Bing Webmaster Tools integrated
-- [ ] IndexNow fires on every content publish
-- [ ] LLM citation tracker running every 3 cycles
-- [ ] Growth agent never creates content without visibility data
-- [ ] llms.txt and structured data in all company sites
-- [ ] Content performance feedback loop (stale content auto-refreshed)
+- [x] GSC API integrated, keyword positions tracked per cycle
+- [x] Bing Webmaster Tools integrated
+- [x] IndexNow fires on every content publish
+- [x] LLM citation tracker running every 3 cycles
+- [x] Growth agent never creates content without visibility data
+- [x] llms.txt and structured data in all company sites
+- [x] Content performance feedback loop (stale content auto-refreshed)
 
 ### Milestone: Flolio import
-- [ ] Import Flolio (growth phase — more complex than fresh MVP)
+- [x] Import Flolio (growth phase — more complex than fresh MVP)
 - [ ] Extract pricing, onboarding, and growth patterns
-- [ ] Flolio's investment dashboard as a Hive company
+- [x] Flolio's investment dashboard as a Hive company (4 cycles completed)
 
 ### Milestone: Portfolio MRR targets
 - [ ] Combined MRR reaches €500/mo

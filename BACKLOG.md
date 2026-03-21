@@ -20,26 +20,43 @@
 ### 🟡 P1 — Email domain for Resend (outreach blocked)
 Outreach emails are skipped because `sending_domain` is not set. Need a real domain (e.g. `hivehq.io`, `usehive.co`) to add DNS records for Resend verification. Flolio's domain could also work with a `hive.` subdomain. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. See CLAUDE.md "Email (Resend)" section for full setup guide. ~10 min task once domain is chosen.
 
+### 🟡 P1 — Scout proposal auto-expiry
+9 pending proposals cluttering the inbox with no action for days. Add auto-expiry: proposals older than 7 days auto-reject with reason "expired — not reviewed". Sentinel can check this. Prevents proposal debt from accumulating.
+
+### 🟡 P1 — Secret scanning on company repos before making public
+Flolio had plaintext API keys in committed JSON files that got exposed when repos went public. The Onboarding/Provisioner agent should scan for common secret patterns (API keys, tokens, passwords) before making a repo public. Block if secrets found, create an approval gate with details.
+
 ---
 
 ## Planned
 
----
+### 🟢 P2 — Company Neon databases (per-company data isolation)
+Companies currently share the Hive Neon DB (no isolation). Each company should have its own Neon project for customer data (waitlist, email_log, customers). Provisioner creates via Neon API (free tier: 10 projects). Company boilerplate DATABASE_URL points to its own DB. Hive DB keeps orchestration tables only.
 
-## Future Vision
+### 🟢 P2 — Stripe products per company
+Provisioner should create Stripe Product + Price with `metadata.hive_company = slug`. Currently skipped in provisioning. Required before any company can accept payments (and trigger the mvp → active transition).
 
+### 🟢 P2 — Dashboard: batch approve/reject for Scout proposals
+Currently must click into each proposal individually. Add checkboxes + "Reject all" / "Approve selected" buttons on the Inbox tab. Saves time when 9+ proposals are pending.
+
+### 🟢 P2 — Cost tracking per agent run
+Agent actions log turns and cost but it's not surfaced. Add a daily/weekly cost summary to the digest email and dashboard. Track burn rate against Claude Max 5x quota limits. Alert when approaching window boundaries.
 
 ### 🟢 P2 — Stack detection for imported companies
 Extend the assessment endpoint to detect non-Next.js stacks: check for remix.config, astro.config, nuxt.config, etc. Detect non-Neon databases (Supabase, PlanetScale) from DATABASE_URL patterns. Detect non-Resend email providers from env var names.
+
+### 🟢 P2 — PR auto-merge for company repos
+Engineer creates PRs on company repos but nobody merges them. Add a workflow that auto-merges PRs from `hive/*` branches after build passes. Or have the Engineer merge directly to main (simpler, since these are AI-managed repos).
+
+---
+
+## Future Vision
 
 ### 🟢 P3 — Capability diff alerting
 When an assessment shows a capability regression (something that existed now doesn't), create an automatic escalation. Catches cases where a deploy accidentally removed a webhook route or a migration dropped a table.
 
 ### ⚪ P3 — Neon Data API for lightweight agent access
 Enable Neon Data API (PostgREST) on company projects for schema discovery via OpenAPI spec, simple agent CRUD (Growth writing email sequences, Ops reading metrics), and future client-side access with RLS. Hybrid: Data API for simple frequent ops, direct SQL for complex/DDL. Full design doc from brainstorm session available. Revisit after 5-10 successful cycles prove DB access is a bottleneck. See brainstorm notes for full 10-part implementation plan (migration, client lib, neon-api helpers, assessment integration, agent prompts, provisioner update, boilerplate changes).
-
-### ⚪ P3 — Cloud migration
-Move the intelligence layer from Mac to cloud. Swap `dispatch()` from `claude -p` to Claude Agent SDK `query()`. Run on GitHub Actions or a VPS. The abstraction layer is already designed for this.
 
 ### ⚪ P3 — Portfolio-level charts and analytics
 Time-series visualization of MRR, traffic, and customer growth across all companies. Recharts or similar. Useful at 5+ companies, overkill at 2.
