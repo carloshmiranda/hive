@@ -605,7 +605,7 @@ export default function DashboardPage() {
                     }}>
                       <div style={{ minWidth: 70 }}><AgentBadge agent={a.agent} /></div>
                       <div style={{ flex: 1, fontSize: 13, color: isFail ? "var(--hive-red)" : "var(--hive-text-secondary)", lineHeight: 1.5 }}>
-                        {a.description}
+                        {a.description || ''}
                       </div>
                       <div style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", minWidth: 60, textAlign: "right" }}>
                         {a.finished_at ? timeAgo(a.finished_at) : ""}
@@ -946,7 +946,7 @@ export default function DashboardPage() {
                             <span style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", marginLeft: "auto" }}>{timeAgo(a.created_at)}</span>
                           </div>
                           <div style={{ fontSize: 14, fontWeight: 500, color: "var(--hive-text)", marginBottom: 4 }}>{a.title}</div>
-                          <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6, marginBottom: 14 }}>{a.description}</div>
+                          <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6, marginBottom: 14 }}>{a.description || ''}</div>
                           <div style={{ display: "flex", gap: 8 }}>
                             <button onClick={() => handleApproval(a.id, "approved")} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
@@ -1018,7 +1018,7 @@ export default function DashboardPage() {
                           <div style={{ minWidth: 80 }}><AgentBadge agent={a.agent} /></div>
                           <div style={{ flex: 1 }}>
                             <div style={{ fontSize: 13, color: isFail ? "var(--hive-red)" : "var(--hive-text-secondary)", lineHeight: 1.5 }}>
-                              {a.description}
+                              {a.description || ''}
                             </div>
                             {isFail && a.error && (
                               <div style={{ fontSize: 12, color: "var(--hive-red)", marginTop: 4, fontFamily: "var(--hive-mono)", opacity: 0.8 }}>{a.error}</div>

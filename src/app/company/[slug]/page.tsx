@@ -184,7 +184,7 @@ export default function CompanyDetailPage() {
                   background: "var(--hive-purple-bg)", color: "var(--hive-purple)", border: "1px solid var(--hive-purple-border)", marginRight: 8 }}>{a.gate_type}</span>
                 {a.title}
               </div>
-              <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginBottom: 10, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{a.description.slice(0, 300)}</div>
+              <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginBottom: 10, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{(a.description || '').slice(0, 300)}</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => handleApproval(a.id, "approved")}
                   style={{ padding: "6px 16px", background: "var(--hive-green-bg)", border: "1px solid var(--hive-green-border)",
@@ -405,7 +405,7 @@ export default function CompanyDetailPage() {
                     </span>
                   </div>
                   <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.5, marginBottom: 6 }}>
-                    {t.description.slice(0, 200)}{t.description.length > 200 ? "..." : ""}
+                    {(t.description || '').slice(0, 200)}{(t.description || '').length > 200 ? "..." : ""}
                   </div>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     {t.status === "proposed" && (
@@ -572,7 +572,7 @@ export default function CompanyDetailPage() {
                   {agent.label}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ color: isFail ? "var(--hive-red)" : "var(--hive-text-secondary)", lineHeight: 1.5 }}>{a.description.slice(0, 200)}</div>
+                  <div style={{ color: isFail ? "var(--hive-red)" : "var(--hive-text-secondary)", lineHeight: 1.5 }}>{(a.description || '').slice(0, 200)}</div>
                   {a.error && <div style={{ color: "var(--hive-red)", fontSize: 12, marginTop: 4, fontFamily: "var(--hive-mono)" }}>{a.error.slice(0, 150)}</div>}
                   {a.reflection && <div style={{ color: "var(--hive-purple)", fontSize: 12, marginTop: 4, fontStyle: "italic" }}>{a.reflection.slice(0, 150)}</div>}
                 </div>
