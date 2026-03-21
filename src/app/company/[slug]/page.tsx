@@ -427,11 +427,11 @@ export default function CompanyDetailPage() {
                     {t.status === "proposed" && (
                       <>
                         <button onClick={async () => {
-                          await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "approved" }) });
+                          await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ priority: Math.max(0, t.priority - 1) }) });
                           fetchData();
                         }} style={{ padding: "4px 12px", fontSize: 11, fontFamily: "var(--hive-mono)", background: "var(--hive-green-bg)",
                           border: "1px solid var(--hive-green-border)", borderRadius: 6, color: "var(--hive-green)", cursor: "pointer" }}>
-                          Approve
+                          Prioritize
                         </button>
                         <button onClick={async () => {
                           await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "dismissed" }) });
