@@ -301,3 +301,10 @@
 **Fix applied:** Switched all company repo workflows from direct `claude -p` to `anthropics/claude-code-action@v1`. The action handles auth properly via its `claude_code_oauth_token` input.
 **Prevention:** Always use `claude-code-action` for GitHub Actions workflows, never call `claude -p` directly. The action handles authentication, CLI installation, and output capture. Direct CLI usage requires manual auth setup that's fragile in CI environments.
 **Affects:** both (any workflow calling claude CLI directly)
+
+### 2026-03-21 GitHub Actions strips masked secrets from cross-job outputs
+**What happened:** Engineer workflow's build job received empty `GH_TOKEN`. The context job fetched all tokens via OIDC and passed them as job outputs, but GitHub Actions logged `##[warning]Skip output 'gh_pat' since it may contain secret` and refused to pass the values.
+**Root cause:** GitHub Actions has a security feature: when a step uses `::add-mask::` on a value and then sets that value as a job output, GitHub detects the match and **strips the output** to prevent secret leakage between jobs. The logs show "Skip output X since it may contain secret" for ALL four token outputs.
+**Fix applied:** Removed all token outputs from the context job. Each job that needs tokens (provision, build, build-hive) now fetches its own tokens via its own OIDC exchange step. Context job only passes non-secret values (trigger, payload, company, company_repo).
+**Prevention:** NEVER pass secrets between GitHub Actions jobs via outputs. Each job must fetch its own secrets independently. The `::add-mask::` + job output pattern is fundamentally broken for secrets. Use OIDC token exchange per-job instead.
+**Affects:** hive (any multi-job workflow passing secrets via outputs)

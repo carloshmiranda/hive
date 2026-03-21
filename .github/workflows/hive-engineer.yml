@@ -30,7 +30,9 @@ env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
 jobs:
-  # ─── Resolve context for all jobs ───
+  # ─── Resolve context for all jobs (non-secret outputs only) ───
+  # NOTE: Tokens are NOT passed between jobs — GitHub Actions strips masked secrets from outputs.
+  # Each job that needs tokens fetches its own via OIDC.
   context:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -39,39 +41,8 @@ jobs:
       payload: ${{ steps.ctx.outputs.payload }}
       company: ${{ steps.resolve.outputs.company }}
       company_repo: ${{ steps.resolve.outputs.company_repo }}
-      claude_token: ${{ steps.auth.outputs.claude_token }}
-      gh_pat: ${{ steps.auth.outputs.gh_pat }}
-      vercel_token: ${{ steps.auth.outputs.vercel_token }}
-      neon_api_key: ${{ steps.auth.outputs.neon_api_key }}
 
     steps:
-      - name: Get tokens via OIDC
-        id: auth
-        run: |
-          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
-            | jq -r '.value')
-
-          fetch_token() {
-            local TYPE="$1" OUTPUT_KEY="$2"
-            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
-              -H "Authorization: Bearer $OIDC_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"token_type\":\"$TYPE\"}")
-            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
-            if [ -n "$VALUE" ]; then
-              echo "::add-mask::$VALUE"
-              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
-            else
-              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
-            fi
-          }
-
-          fetch_token "claude" "claude_token"
-          fetch_token "github_pat" "gh_pat"
-          fetch_token "vercel_token" "vercel_token"
-          fetch_token "neon_api_key" "neon_api_key"
-
       - name: Build context
         id: ctx
         run: |
@@ -123,21 +94,48 @@ jobs:
     if: needs.context.outputs.trigger == 'new_company'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      GH_PAT: ${{ needs.context.outputs.gh_pat }}
-      GH_TOKEN: ${{ needs.context.outputs.gh_pat }}
-      VERCEL_TOKEN: ${{ needs.context.outputs.vercel_token }}
-      NEON_API_KEY: ${{ needs.context.outputs.neon_api_key }}
 
     steps:
       - name: Checkout Hive (for templates)
         uses: actions/checkout@v4
 
+      - name: Get tokens via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          fetch_token() {
+            local TYPE="$1" OUTPUT_KEY="$2"
+            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"token_type\":\"$TYPE\"}")
+            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+            if [ -n "$VALUE" ]; then
+              echo "::add-mask::$VALUE"
+              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
+            else
+              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+            fi
+          }
+
+          fetch_token "claude" "claude_token"
+          fetch_token "github_pat" "gh_pat"
+          fetch_token "vercel_token" "vercel_token"
+          fetch_token "neon_api_key" "neon_api_key"
+
       - name: Run provision agent
         id: agent
+        env:
+          GH_PAT: ${{ steps.auth.outputs.gh_pat }}
+          GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
+          VERCEL_TOKEN: ${{ steps.auth.outputs.vercel_token }}
+          NEON_API_KEY: ${{ steps.auth.outputs.neon_api_key }}
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ needs.context.outputs.claude_token }}
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 20 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You provision infrastructure for new companies.
@@ -340,9 +338,27 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Get GitHub PAT via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+          RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"token_type":"github_pat"}')
+          GH_PAT=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+          if [ -z "$GH_PAT" ]; then
+            echo "Failed to get GitHub PAT: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+            exit 1
+          fi
+          echo "::add-mask::$GH_PAT"
+          echo "gh_pat=$GH_PAT" >> $GITHUB_OUTPUT
+
       - name: Dispatch build to company repo
         env:
-          GH_TOKEN: ${{ needs.context.outputs.gh_pat }}
+          GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
         run: |
           COMPANY="${{ needs.context.outputs.company }}"
           COMPANY_REPO="${{ needs.context.outputs.company_repo }}"
@@ -385,24 +401,16 @@ jobs:
             exit 1
           fi
 
-      - name: Log dispatch to DB
+      - name: Log dispatch to Hive API
         if: success()
         run: |
-          npm install --no-save postgres 2>/dev/null
-          node -e "
-          const postgres = require('postgres');
-          const sql = postgres(process.env.DATABASE_URL);
-          async function log() {
-            const [c] = await sql\`SELECT id FROM companies WHERE slug = '${{ needs.context.outputs.company }}' LIMIT 1\`;
-            await sql\`
-              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-              VALUES ('engineer', \${c?.id || null}, '${{ needs.context.outputs.trigger }}', 'success',
-                'Dispatched build to company repo ${{ needs.context.outputs.company_repo }}', NOW(), NOW())
-            \`;
-            await sql.end();
-          }
-          log().catch(e => console.error(e.message));
-          "
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+          curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"${{ needs.context.outputs.trigger }}\",\"status\":\"success\",\"description\":\"Dispatched build to company repo ${{ needs.context.outputs.company_repo }}\"}" || true
 
   # ─── Job 2b: Fallback — no company repo, run on Hive (Hive-internal work only) ───
   build-hive:
@@ -427,13 +435,38 @@ jobs:
           git config user.name "Hive Engineer"
           git config user.email "noreply@github.com"
 
+      - name: Get tokens via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          fetch_token() {
+            local TYPE="$1" OUTPUT_KEY="$2"
+            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"token_type\":\"$TYPE\"}")
+            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+            if [ -n "$VALUE" ]; then
+              echo "::add-mask::$VALUE"
+              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
+            else
+              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+            fi
+          }
+
+          fetch_token "claude" "claude_token"
+          fetch_token "github_pat" "gh_pat"
+
       - name: Run build agent (Hive-internal only)
         id: agent
         env:
-          GH_PAT: ${{ needs.context.outputs.gh_pat }}
+          GH_PAT: ${{ steps.auth.outputs.gh_pat }}
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ needs.context.outputs.claude_token }}
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You are working on the Hive repo itself.
@@ -456,21 +489,13 @@ jobs:
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
             - Write to agent_actions table: what you did, status, any errors
 
-      - name: Log failure to DB
+      - name: Log failure to Hive API
         if: always() && steps.agent.outcome == 'failure'
         run: |
-          npm install --no-save postgres 2>/dev/null
-          COMPANY="${{ needs.context.outputs.company }}"
-          node -e "
-          const postgres = require('postgres');
-          const sql = postgres(process.env.DATABASE_URL);
-          async function log() {
-            const companyId = '${COMPANY}' ? (await sql\`SELECT id FROM companies WHERE slug = '${COMPANY}' LIMIT 1\`)[0]?.id : null;
-            await sql\`
-              INSERT INTO agent_actions (agent, action_type, status, error, started_at, finished_at, company_id)
-              VALUES ('engineer', 'feature_request', 'failed', 'Hive-internal build failed', NOW() - INTERVAL '30 minutes', NOW(), \${companyId})
-            \`;
-            await sql.end();
-          }
-          log().catch(e => console.error(e.message));
-          "
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+          curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"failed\",\"description\":\"Hive-internal build failed\"}" || true
