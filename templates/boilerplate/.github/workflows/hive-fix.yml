@@ -27,7 +27,6 @@ permissions:
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
-  GH_PAT: ${{ secrets.GH_PAT }}
 
 jobs:
   fix:
@@ -43,38 +42,48 @@ jobs:
           git config user.name "Hive Healer"
           git config user.email "noreply@github.com"
 
-      - name: Load context and auth from Hive DB
+      - name: Get tokens via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"token_type":"claude"}')
+
+          CLAUDE_TOKEN=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+          if [ -z "$CLAUDE_TOKEN" ]; then
+            echo "Failed to get Claude token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+            exit 1
+          fi
+          echo "::add-mask::$CLAUDE_TOKEN"
+          echo "claude_token=$CLAUDE_TOKEN" >> $GITHUB_OUTPUT
+
+          RESPONSE2=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"token_type":"github_pat"}')
+          GH_PAT_TOKEN=$(echo "$RESPONSE2" | jq -r '.data.token // empty')
+          if [ -n "$GH_PAT_TOKEN" ]; then
+            echo "::add-mask::$GH_PAT_TOKEN"
+            echo "gh_pat=$GH_PAT_TOKEN" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Load error context from Hive DB
         id: context
-        env:
-          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           npm install --no-save postgres 2>/dev/null
           SLUG="${{ github.event.inputs.company_slug }}"
 
           node -e "
           const postgres = require('postgres');
-          const crypto = require('crypto');
           const fs = require('fs');
           const sql = postgres(process.env.DATABASE_URL);
 
-          function decrypt(payload) {
-            const key = process.env.ENCRYPTION_KEY;
-            if (!key || key.length !== 64) return payload;
-            const [ivHex, tagHex, encrypted] = payload.split(':');
-            if (!ivHex || !tagHex || !encrypted) return payload;
-            const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex'), Buffer.from(ivHex, 'hex'));
-            decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-            return decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8');
-          }
-
           async function load() {
-            // Fetch Claude OAuth token from settings
-            const [tokenRow] = await sql\`SELECT value, is_secret FROM settings WHERE key = 'claude_code_oauth_token'\`.catch(() => []);
-            if (tokenRow) {
-              const token = tokenRow.is_secret ? decrypt(tokenRow.value) : tokenRow.value;
-              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'claude_token<<TOKEOF\n' + token + '\nTOKEOF\n');
-            }
-
             const [co] = await sql\`SELECT id FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
             if (!co) { await sql.end(); return; }
 
@@ -114,7 +123,7 @@ jobs:
         id: agent
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ steps.context.outputs.claude_token }}
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 20 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Healer agent of Hive, fixing a bug in this company's codebase.
@@ -183,7 +192,7 @@ jobs:
       - name: Notify Hive on completion
         if: always() && steps.agent.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
         run: |
           curl -s -X POST "https://api.github.com/repos/carloshmiranda/hive/dispatches" \
             -H "Authorization: token $GH_TOKEN" \

@@ -28,7 +28,6 @@ permissions:
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
-  GH_PAT: ${{ secrets.GH_PAT }}
 
 jobs:
   growth:
@@ -52,38 +51,45 @@ jobs:
       - name: Install Gemini CLI
         run: npm install -g @google/gemini-cli
 
+      - name: Get tokens via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"token_type":"gemini"}')
+          GEMINI_KEY=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+          if [ -n "$GEMINI_KEY" ]; then
+            echo "::add-mask::$GEMINI_KEY"
+            echo "gemini_key=$GEMINI_KEY" >> $GITHUB_OUTPUT
+          fi
+
+          RESPONSE2=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"token_type":"github_pat"}')
+          GH_PAT_TOKEN=$(echo "$RESPONSE2" | jq -r '.data.token // empty')
+          if [ -n "$GH_PAT_TOKEN" ]; then
+            echo "::add-mask::$GH_PAT_TOKEN"
+            echo "gh_pat=$GH_PAT_TOKEN" >> $GITHUB_OUTPUT
+          fi
+
       - name: Load growth context from Hive DB
         id: context
-        env:
-          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           npm install --no-save postgres 2>/dev/null
           SLUG="${{ github.event.inputs.company_slug }}"
 
           node -e "
           const postgres = require('postgres');
-          const crypto = require('crypto');
           const fs = require('fs');
           const sql = postgres(process.env.DATABASE_URL);
 
-          function decrypt(payload) {
-            const key = process.env.ENCRYPTION_KEY;
-            if (!key || key.length !== 64) return payload;
-            const [ivHex, tagHex, encrypted] = payload.split(':');
-            if (!ivHex || !tagHex || !encrypted) return payload;
-            const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex'), Buffer.from(ivHex, 'hex'));
-            decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-            return decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8');
-          }
-
           async function load() {
-            // Fetch Gemini API key from settings
-            const [geminiRow] = await sql\`SELECT value, is_secret FROM settings WHERE key = 'gemini_api_key'\`.catch(() => []);
-            if (geminiRow) {
-              const apiKey = geminiRow.is_secret ? decrypt(geminiRow.value) : geminiRow.value;
-              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'gemini_key<<GKEOF\n' + apiKey + '\nGKEOF\n');
-            }
-
             const [co] = await sql\`SELECT id, name, slug, description, capabilities, company_type FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
             if (!co) { require('fs').writeFileSync('/tmp/growth-context.json', '{}'); await sql.end(); return; }
 
@@ -149,7 +155,7 @@ jobs:
       - name: Run Growth agent
         id: agent
         env:
-          GEMINI_API_KEY: ${{ steps.context.outputs.gemini_key }}
+          GEMINI_API_KEY: ${{ steps.auth.outputs.gemini_key }}
         run: |
           GROWTH_CTX=""
           if [ -f /tmp/growth-context.json ]; then
