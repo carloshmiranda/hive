@@ -253,3 +253,15 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Move brain agents to Vercel too: 60s timeout too short for Claude reasoning
 - Remove legacy workflows entirely: lose manual trigger capability for debugging
 **Consequences:** ~10-12 fewer Actions runs per day. Sentinel on Vercel can dispatch workers directly (no Actions proxy). Vercel cron is free on Hobby tier. Brain agent runs are shorter (fewer turns = less quota burn). Trade-off: Vercel Hobby has 60s function timeout — Sentinel must complete all 16 checks + HTTP health checks within that window (parallelized with Promise.all).
+
+### ADR-021: Public company repos + build dispatch for unlimited Actions minutes
+**Date:** 2026-03-21
+**Status:** Accepted (extends ADR-020)
+**Context:** After ADR-020, Hive's private repo still ran Engineer build jobs (30min timeout, 35 turns) for each company. At 3 companies with 2 builds/day each, that's ~180min/day from a 2,000 min/month budget (270%). Build jobs are the #1 consumer of Actions minutes.
+**Decision:** Three changes: (1) Company repos are created as PUBLIC — GitHub gives unlimited Actions minutes for public repos. No secrets in code (they live in Vercel env vars + GitHub Actions secrets). (2) Each company repo gets `hive-build.yml` — a workflow accepting `workflow_dispatch` with task payload. Hive Engineer dispatches build tasks to the company repo instead of running them on Hive. (3) Hive Engineer `build` job is now a lightweight 5-min dispatcher; `build-hive` fallback handles Hive-internal work when no company repo exists.
+**Alternatives considered:**
+- Keep company repos private, use GitHub Actions Cache: doesn't reduce minutes, just speeds up runs
+- Move Engineer to Vercel: 60s timeout too short for builds
+- Use self-hosted runners: free but requires infra maintenance
+- Make Hive public too: exposes orchestration logic and API patterns
+**Consequences:** Build minutes effectively unlimited. Hive private repo only uses Actions for CEO (25 turns), Scout (35 turns), Evolver (periodic), and Engineer provision (15 turns) — well within 2,000 min/month. Company code is public but contains no proprietary secrets. Provisioning now sets up GitHub Actions secrets on company repos and pushes the build workflow template.

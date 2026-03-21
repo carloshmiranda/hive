@@ -1,0 +1,156 @@
+name: Hive Healer
+run-name: "Healer: ${{ github.event.action || 'manual' }} — ${{ github.event.client_payload.scope || github.event.inputs.scope || 'systemic' }}"
+
+on:
+  repository_dispatch:
+    types:
+      - healer_trigger
+
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Scope: systemic (Hive repo) or company slug'
+        required: false
+        default: 'systemic'
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+
+jobs:
+  healer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Hive
+        uses: actions/checkout@v4
+
+      - name: Configure git
+        run: |
+          git config user.name "Hive Healer"
+          git config user.email "noreply@github.com"
+
+      - name: Build Healer context
+        id: context
+        run: |
+          set_output() {
+            local key="$1" value="$2"
+            echo "${key}<<GHEOF" >> $GITHUB_OUTPUT
+            echo "${value}" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+          }
+
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            PAYLOAD='${{ toJson(github.event.client_payload) }}'
+            set_output "trigger" "${{ github.event.action }}"
+            set_output "payload" "${PAYLOAD}"
+          else
+            set_output "trigger" "manual"
+            set_output "payload" "{\"scope\":\"${{ github.event.inputs.scope }}\"}"
+          fi
+
+      - name: Run Healer agent
+        id: agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 25 --allowedTools Bash,Read,Write,Edit"
+          prompt: |
+            You are the Healer agent of Hive, the autonomous venture orchestrator.
+
+            TRIGGER: ${{ steps.context.outputs.trigger }}
+            PAYLOAD: ${{ steps.context.outputs.payload }}
+
+            Read `prompts/healer.md` for your full prompt and process.
+            Read `MISTAKES.md` for known patterns — don't re-investigate what's already documented.
+
+            ## STEP 1: Query errors from last 48h
+            ```sql
+            SELECT agent, error, description, company_id, c.slug,
+              COUNT(*) as occurrences
+            FROM agent_actions aa
+            LEFT JOIN companies c ON c.id = aa.company_id
+            WHERE aa.status = 'failed'
+              AND aa.finished_at > NOW() - INTERVAL '48 hours'
+            GROUP BY aa.agent, aa.error, aa.description, aa.company_id, c.slug
+            ORDER BY occurrences DESC
+            LIMIT 15
+            ```
+
+            ## STEP 2: Classify errors
+            - **Systemic** (same error in 2+ companies OR 3+ occurrences): fix in the Hive repo
+            - **Company-specific** (only in one company): note for Engineer to fix (you're in the Hive repo)
+            - **Prompt issues** (agent output format wrong): note for Evolver, not a code fix
+
+            ## STEP 3: Fix systemic errors
+            For each systemic error:
+            1. Find the root cause in the Hive codebase
+            2. Fix the minimal set of files
+            3. Run `npx next build` to verify
+            4. Commit with message: `fix: [what was broken]`
+
+            ## STEP 4: Document learnings
+            - Write to MISTAKES.md (What happened / Root cause / Fix / Prevention / Affects)
+            - Write playbook entries for cross-company patterns:
+              ```sql
+              INSERT INTO playbook (domain, insight, evidence, confidence)
+              VALUES ('engineering', '<learning>', '<error that triggered>', 0.7)
+              ```
+
+            ## STEP 5: Log results
+            ```sql
+            INSERT INTO agent_actions (agent, action_type, status, description, output, started_at, finished_at)
+            VALUES ('healer', 'error_fix', 'success', '<summary>', '<output_json>'::jsonb, NOW(), NOW())
+            ```
+
+            ## STEP 6: Dispatch company-specific fixes to company repos
+            For each company-specific error (max 3), dispatch to the company's own hive-fix.yml workflow (runs free on public repos):
+            1. First, get the company's github_repo:
+               ```sql
+               SELECT github_repo FROM companies WHERE slug = '<slug>' LIMIT 1
+               ```
+            2. Then dispatch to the company repo's hive-fix.yml:
+               ```bash
+               curl -s -X POST "https://api.github.com/repos/<github_repo>/actions/workflows/hive-fix.yml/dispatches" \
+                 -H "Authorization: token $GH_PAT" \
+                 -H "Accept: application/vnd.github.v3+json" \
+                 -H "Content-Type: application/json" \
+                 -d '{"ref":"main","inputs":{"error_summary":"<error_summary>","company_slug":"<slug>","source":"healer"}}'
+               ```
+            If the company has no github_repo or the dispatch fails, fall back to Hive's ops_escalation:
+            ```bash
+            curl -s -X POST "https://api.github.com/repos/${{ github.repository }}/dispatches" \
+              -H "Authorization: token $GH_PAT" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d '{"event_type":"ops_escalation","client_payload":{"source":"healer","company":"<slug>","error":"<error_summary>"}}'
+            ```
+
+            RULES:
+            - Max 3 files per fix. If more needed, escalate.
+            - Always use `GH_TOKEN="$GH_PAT"` for gh commands.
+            - Fix, don't refactor. Minimum change to fix the error.
+            - Always run `npx next build` before committing.
+            - Push after committing: `git push origin main`
+
+      - name: Log failure to DB
+        if: always() && steps.agent.outcome == 'failure'
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function log() {
+            await sql\`
+              INSERT INTO agent_actions (agent, action_type, status, error, started_at, finished_at)
+              VALUES ('healer', 'error_fix', 'failed', 'Healer workflow failed', NOW() - INTERVAL '20 minutes', NOW())
+            \`;
+            await sql.end();
+          }
+          log().catch(e => console.error('DB log failed:', e.message));
+          "

@@ -1,5 +1,7 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { getBoilerplateGaps } from "@/lib/capabilities";
+import boilerplateManifest from "../../../../../templates/boilerplate-manifest.json";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -33,6 +35,24 @@ async function dispatchToWorker(agent: string, companySlug: string, trigger: str
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ company_slug: companySlug, agent, trigger }),
+  });
+}
+
+async function dispatchToCompanyWorkflow(
+  githubRepo: string,
+  workflow: string,
+  inputs: Record<string, string>
+) {
+  const ghPat = process.env.GH_PAT;
+  if (!ghPat) return;
+  await fetch(`https://api.github.com/repos/${githubRepo}/actions/workflows/${workflow}/dispatches`, {
+    method: "POST",
+    headers: {
+      Authorization: `token ${ghPat}`,
+      Accept: "application/vnd.github.v3+json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ref: "main", inputs }),
   });
 }
 
@@ -110,6 +130,9 @@ export async function GET(req: Request) {
   let cycleDispatches = 0;
 
   // --- Run all DB health checks ---
+  // NOTE: Many checks below query companies with status IN ('mvp','active').
+  // Companies without infra (github_repo IS NULL) should be EXCLUDED from dispatch-triggering
+  // checks. Only check 9b (orphaned MVPs) intentionally includes them to trigger provisioning.
 
   // 1. Pipeline count
   const [pipeline] = await sql`
@@ -123,8 +146,8 @@ export async function GET(req: Request) {
 
   // 2. Stale content (no growth success in 7 days)
   const staleContent = await sql`
-    SELECT c.slug FROM companies c
-    WHERE c.status IN ('mvp','active')
+    SELECT c.slug, c.github_repo FROM companies c
+    WHERE c.status IN ('mvp','active') AND c.github_repo IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM agent_actions aa
       WHERE aa.company_id = c.id AND aa.agent = 'growth'
@@ -135,7 +158,7 @@ export async function GET(req: Request) {
   // 3. Stale leads (lead_list >5 days, no outreach)
   const staleLeads = await sql`
     SELECT c.slug FROM companies c
-    WHERE c.status IN ('mvp','active')
+    WHERE c.status IN ('mvp','active') AND c.github_repo IS NOT NULL
     AND EXISTS (
       SELECT 1 FROM research_reports rr
       WHERE rr.company_id = c.id AND rr.report_type = 'lead_list'
@@ -151,7 +174,7 @@ export async function GET(req: Request) {
   // 4. No CEO review in 48h
   const noCeoReview = await sql`
     SELECT c.slug FROM companies c
-    WHERE c.status IN ('mvp','active')
+    WHERE c.status IN ('mvp','active') AND c.github_repo IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM agent_actions aa
       WHERE aa.company_id = c.id AND aa.agent = 'ceo'
@@ -162,7 +185,7 @@ export async function GET(req: Request) {
   // 5. Unverified deploys in 24h
   const unverifiedDeploys = await sql`
     SELECT c.slug FROM companies c
-    WHERE c.status IN ('mvp','active')
+    WHERE c.status IN ('mvp','active') AND c.github_repo IS NOT NULL
     AND EXISTS (
       SELECT 1 FROM agent_actions aa
       WHERE aa.company_id = c.id AND aa.action_type = 'deploy'
@@ -204,7 +227,7 @@ export async function GET(req: Request) {
   // 8. Stale research (no research in 14 days)
   const staleResearch = await sql`
     SELECT c.slug FROM companies c
-    WHERE c.status IN ('mvp','active')
+    WHERE c.status IN ('mvp','active') AND c.github_repo IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM research_reports rr
       WHERE rr.company_id = c.id AND rr.updated_at > NOW() - INTERVAL '14 days'
@@ -320,12 +343,292 @@ export async function GET(req: Request) {
   // 16. Missing metrics (no metrics row in 48h)
   const missingMetrics = await sql`
     SELECT c.slug FROM companies c
-    WHERE c.status IN ('mvp', 'active')
+    WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM metrics m
       WHERE m.company_id = c.id AND m.date > CURRENT_DATE - INTERVAL '2 days'
     )
   `;
+
+  // 18. Anomaly detection — flag metrics moving >2 std dev from 14-day rolling average
+  type Anomaly = { slug: string; company_id: string; metric: string; current: number; avg: number; stddev: number; direction: string };
+  const anomalies: Anomaly[] = [];
+  const anomalyRows = await sql`
+    WITH daily AS (
+      SELECT m.company_id, c.slug,
+        m.date,
+        m.mrr::float as mrr,
+        m.page_views::float as page_views,
+        m.signups::float as signups,
+        m.customers::float as customers,
+        m.waitlist_signups::float as waitlist_signups
+      FROM metrics m
+      JOIN companies c ON c.id = m.company_id
+      WHERE c.status IN ('mvp', 'active')
+        AND m.date >= CURRENT_DATE - INTERVAL '15 days'
+    ),
+    stats AS (
+      SELECT company_id, slug,
+        AVG(mrr) as avg_mrr, STDDEV_POP(mrr) as std_mrr,
+        AVG(page_views) as avg_pv, STDDEV_POP(page_views) as std_pv,
+        AVG(signups) as avg_signups, STDDEV_POP(signups) as std_signups,
+        AVG(customers) as avg_cust, STDDEV_POP(customers) as std_cust,
+        AVG(waitlist_signups) as avg_wl, STDDEV_POP(waitlist_signups) as std_wl,
+        COUNT(*) as data_points
+      FROM daily
+      WHERE date < CURRENT_DATE
+      GROUP BY company_id, slug
+      HAVING COUNT(*) >= 5
+    ),
+    latest AS (
+      SELECT DISTINCT ON (company_id)
+        company_id, mrr, page_views, signups, customers, waitlist_signups
+      FROM daily
+      ORDER BY company_id, date DESC
+    )
+    SELECT s.company_id, s.slug,
+      l.mrr as cur_mrr, s.avg_mrr, s.std_mrr,
+      l.page_views as cur_pv, s.avg_pv, s.std_pv,
+      l.signups as cur_signups, s.avg_signups, s.std_signups,
+      l.customers as cur_cust, s.avg_cust, s.std_cust,
+      l.waitlist_signups as cur_wl, s.avg_wl, s.std_wl
+    FROM stats s
+    JOIN latest l ON l.company_id = s.company_id
+  `;
+
+  for (const r of anomalyRows) {
+    const checks: Array<{ metric: string; cur: number; avg: number; std: number }> = [
+      { metric: "mrr", cur: r.cur_mrr, avg: r.avg_mrr, std: r.std_mrr },
+      { metric: "page_views", cur: r.cur_pv, avg: r.avg_pv, std: r.std_pv },
+      { metric: "signups", cur: r.cur_signups, avg: r.avg_signups, std: r.std_signups },
+      { metric: "customers", cur: r.cur_cust, avg: r.avg_cust, std: r.std_cust },
+      { metric: "waitlist_signups", cur: r.cur_wl, avg: r.avg_wl, std: r.std_wl },
+    ];
+    for (const c of checks) {
+      const std = Number(c.std) || 0;
+      const avg = Number(c.avg) || 0;
+      const cur = Number(c.cur) || 0;
+      // Skip if no variance or avg is 0 (no meaningful baseline)
+      if (std === 0 || avg === 0) continue;
+      const deviation = Math.abs(cur - avg) / std;
+      if (deviation > 2) {
+        anomalies.push({
+          slug: r.slug as string,
+          company_id: r.company_id as string,
+          metric: c.metric,
+          current: cur,
+          avg: Math.round(avg * 100) / 100,
+          stddev: Math.round(std * 100) / 100,
+          direction: cur > avg ? "spike" : "drop",
+        });
+      }
+    }
+  }
+
+  // Store anomalies for CEO to address
+  if (anomalies.length > 0) {
+    for (const a of anomalies) {
+      await sql`
+        INSERT INTO agent_actions (agent, company_id, action_type, status, description, output, started_at, finished_at)
+        VALUES ('sentinel', ${a.company_id}, 'anomaly_detected', 'success',
+          ${`Anomaly: ${a.metric} ${a.direction} for ${a.slug} (${a.current} vs avg ${a.avg}, ±${a.stddev})`},
+          ${JSON.stringify(a)}::jsonb, NOW(), NOW())
+      `;
+    }
+    // Dispatch CEO to review anomalies (pick the most affected company)
+    const topAnomaly = anomalies[0];
+    await dispatchToActions("ceo_review", {
+      source: "sentinel_anomaly",
+      company: topAnomaly.slug,
+      anomalies: anomalies.map(a => `${a.slug}:${a.metric}(${a.direction})`),
+    });
+    dispatches.push({
+      type: "brain",
+      target: "ceo_review",
+      payload: { reason: "anomaly_detected", count: anomalies.length, anomalies },
+    });
+  }
+
+  // 19. Evolver staleness — trigger when success rate drops or enough cycles completed
+  // (replaces the Wednesday calendar cron with data-driven conditions)
+  const evolverNeeded = evolveDue || highFailureRate || maxTurnsHits.length > 0;
+  if (!evolverNeeded) {
+    // Additional data condition: success rate dropped below 80% in last 7 days vs prior 7 days
+    const [recentStats] = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'success') as s,
+        COUNT(*) as t
+      FROM agent_actions WHERE finished_at > NOW() - INTERVAL '7 days'
+    `;
+    const [priorStats] = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'success') as s,
+        COUNT(*) as t
+      FROM agent_actions
+      WHERE finished_at BETWEEN NOW() - INTERVAL '14 days' AND NOW() - INTERVAL '7 days'
+    `;
+    const recentRate = parseInt(recentStats.t) > 5 ? parseInt(recentStats.s) / parseInt(recentStats.t) : 1;
+    const priorRate = parseInt(priorStats.t) > 5 ? parseInt(priorStats.s) / parseInt(priorStats.t) : 1;
+    // If success rate dropped >15 percentage points week-over-week, trigger Evolver
+    if (priorRate - recentRate > 0.15 && parseInt(recentStats.t) >= 10) {
+      const [lastEvolverRun] = await sql`
+        SELECT MAX(finished_at) as last_run FROM agent_actions
+        WHERE agent = 'evolver' AND finished_at > NOW() - INTERVAL '48 hours'
+      `;
+      if (!lastEvolverRun?.last_run) {
+        await dispatchToActions("evolve_trigger", {
+          source: "sentinel",
+          reason: "success_rate_drop",
+          recent_rate: Math.round(recentRate * 100),
+          prior_rate: Math.round(priorRate * 100),
+        });
+        dispatches.push({
+          type: "brain",
+          target: "evolve_trigger",
+          payload: { reason: "success_rate_drop", recent: Math.round(recentRate * 100), prior: Math.round(priorRate * 100) },
+        });
+      }
+    }
+  }
+
+  // 20. Boilerplate migration detection — compare company capabilities against manifest
+  // Runs on Vercel (free), dispatches to company repos (free Actions on public repos)
+  const companiesForMigration = await sql`
+    SELECT id, slug, capabilities, company_type, github_repo, last_assessed_at
+    FROM companies
+    WHERE status IN ('mvp', 'active')
+      AND github_repo IS NOT NULL
+      AND capabilities IS NOT NULL
+      AND capabilities != '{}'::jsonb
+      AND last_assessed_at IS NOT NULL
+  `;
+
+  for (const co of companiesForMigration) {
+    const gaps = getBoilerplateGaps(
+      co.capabilities as Record<string, unknown>,
+      (co.company_type as string) || "b2c_saas",
+      boilerplateManifest
+    );
+
+    if (gaps.length === 0) continue;
+
+    // Check if we already have a pending migration approval for this company
+    const [existingApproval] = await sql`
+      SELECT id FROM approvals
+      WHERE company_id = ${co.id}
+        AND gate_type = 'capability_migration'
+        AND status = 'pending'
+      LIMIT 1
+    `;
+    if (existingApproval) continue;
+
+    // Create approval gate with migration details
+    await sql`
+      INSERT INTO approvals (company_id, gate_type, title, description, context)
+      VALUES (
+        ${co.id},
+        'capability_migration',
+        ${"Boilerplate migration: " + gaps.length + " features available for " + co.slug},
+        ${gaps.map(g => `• ${g.description}`).join("\n")},
+        ${JSON.stringify({
+          company: co.slug,
+          github_repo: co.github_repo,
+          boilerplate_version: boilerplateManifest.version,
+          gaps: gaps,
+        })}::jsonb
+      )
+      ON CONFLICT DO NOTHING
+    `;
+
+    dispatches.push({
+      type: "approval",
+      target: "capability_migration",
+      payload: { company: co.slug as string, gaps: gaps.length },
+    });
+  }
+
+  // 21. Missing product spec — every active company needs mission/vision/what_we_build
+  const companiesMissingSpec = await sql`
+    SELECT c.id, c.slug FROM companies c
+    WHERE c.status IN ('mvp', 'active')
+    AND NOT EXISTS (
+      SELECT 1 FROM research_reports rr
+      WHERE rr.company_id = c.id AND rr.report_type = 'product_spec'
+    )
+  `;
+  for (const co of companiesMissingSpec) {
+    // Check debounce — don't dispatch if CEO already ran for this company in last 24h
+    const [recent] = await sql`
+      SELECT id FROM agent_actions
+      WHERE company_id = ${co.id} AND agent = 'ceo'
+      AND action_type = 'product_spec_generation'
+      AND started_at > NOW() - INTERVAL '24 hours'
+      LIMIT 1
+    `;
+    if (recent) continue;
+
+    await dispatchToActions("cycle_start", {
+      source: "sentinel",
+      company: co.slug,
+      directive: "Generate product_spec with mission, what_we_build, and vision. Use existing market_research and competitive_analysis reports as input. This is priority 1 for this cycle.",
+    });
+    dispatches.push({ type: "brain", target: "ceo_product_spec", payload: { company: co.slug } });
+  }
+
+  // 22. Empty task backlog — active companies with no proposed tasks need CEO to generate them
+  const companiesNoTasks = await sql`
+    SELECT c.id, c.slug FROM companies c
+    WHERE c.status IN ('mvp', 'active')
+    AND NOT EXISTS (
+      SELECT 1 FROM company_tasks ct
+      WHERE ct.company_id = c.id AND ct.status NOT IN ('done', 'dismissed')
+    )
+  `;
+  for (const co of companiesNoTasks) {
+    const [recent] = await sql`
+      SELECT id FROM agent_actions
+      WHERE company_id = ${co.id} AND agent = 'ceo'
+      AND action_type = 'task_generation'
+      AND started_at > NOW() - INTERVAL '48 hours'
+      LIMIT 1
+    `;
+    if (recent) continue;
+
+    await dispatchToActions("cycle_start", {
+      source: "sentinel",
+      company: co.slug,
+      directive: "Generate task backlog with proposed_tasks. Include 5-10 tasks across engineering, growth, research, qa, and ops categories based on company lifecycle stage.",
+    });
+    dispatches.push({ type: "brain", target: "ceo_task_backlog", payload: { company: co.slug } });
+  }
+
+  // 17. Dispatch loop detection (>5 same-agent actions in 30 min = likely loop)
+  const dispatchLoops = await sql`
+    SELECT agent, company_id, c.slug, COUNT(*) as cnt
+    FROM agent_actions aa
+    LEFT JOIN companies c ON c.id = aa.company_id
+    WHERE aa.started_at > NOW() - INTERVAL '30 minutes'
+    GROUP BY aa.agent, aa.company_id, c.slug
+    HAVING COUNT(*) >= 5
+  `;
+  if (dispatchLoops.length > 0) {
+    const loopDetails = dispatchLoops.map((r: any) => `${r.agent}/${r.slug}:${r.cnt}`).join(", ");
+    console.warn(`DISPATCH LOOP DETECTED: ${loopDetails}`);
+    // Log as escalation — don't dispatch more agents (that would feed the loop)
+    for (const r of dispatchLoops) {
+      await sql`
+        INSERT INTO approvals (company_id, gate_type, title, description, context)
+        VALUES (
+          ${r.company_id}, 'escalation',
+          ${"Dispatch loop: " + r.agent + " fired " + r.cnt + "x in 30min for " + r.slug},
+          'Possible infinite dispatch loop detected. Check chain dispatch logic for this agent/company pair.',
+          ${JSON.stringify({ agent: r.agent, company: r.slug, count: parseInt(r.cnt), detected_by: "sentinel" })}::jsonb
+        )
+        ON CONFLICT DO NOTHING
+      `;
+    }
+    dispatches.push({ type: "escalation", target: "dispatch_loop", payload: { loops: loopDetails } });
+  }
 
   // --- Dispatch logic ---
 
@@ -335,8 +638,21 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "pipeline_low", payload: { source: "sentinel" } });
   }
 
-  // 2. Stale content → Growth worker
+  // 2. Stale content → Growth on company repo (free Actions) with Vercel fallback
   for (const r of staleContent) {
+    if (r.github_repo) {
+      try {
+        await dispatchToCompanyWorkflow(r.github_repo, "hive-growth.yml", {
+          company_slug: r.slug,
+          trigger: "sentinel_stale_content",
+          task_summary: `Content refresh for ${r.slug}`,
+        });
+        dispatches.push({ type: "company_actions", target: "growth", payload: { company: r.slug, repo: r.github_repo } });
+        continue;
+      } catch {
+        // Fall through to Vercel serverless
+      }
+    }
     await dispatchToWorker("growth", r.slug, "sentinel_stale_content");
     dispatches.push({ type: "worker", target: "growth", payload: { company: r.slug } });
   }
@@ -366,10 +682,26 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { source: "sentinel" } });
   }
 
-  // 7. High failure rate → Evolver brain (urgent)
+  // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)
   if (highFailureRate) {
     await dispatchToActions("evolve_trigger", { source: "sentinel", reason: "high_failure_rate" });
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { reason: "high_failure_rate" } });
+    // Healer fixes code, Evolver proposes process improvements — both run
+    await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate" });
+    dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "high_failure_rate" } });
+  }
+
+  // 7b. Errors exist but below 20% threshold → Healer only (no Evolver)
+  if (!highFailureRate && parseInt(failureStats.failed) >= 3) {
+    // Check that Healer hasn't already run in last 24h
+    const [lastHeal] = await sql`
+      SELECT MAX(finished_at) as last_run FROM agent_actions
+      WHERE agent = 'healer' AND finished_at > NOW() - INTERVAL '24 hours'
+    `;
+    if (!lastHeal?.last_run) {
+      await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "errors_detected" });
+      dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "errors_detected" } });
+    }
   }
 
   // 8. Stale research → Scout research refresh
@@ -517,7 +849,7 @@ export async function GET(req: Request) {
   // --- HTTP health checks (parallel) ---
   const companiesWithUrls = await sql`
     SELECT slug, vercel_url FROM companies
-    WHERE status IN ('mvp', 'active') AND vercel_url IS NOT NULL
+    WHERE status IN ('mvp', 'active') AND vercel_url IS NOT NULL AND github_repo IS NOT NULL
   `;
   const brokenDeploys = await checkHttpHealth(
     companiesWithUrls.map((r) => ({ slug: r.slug as string, vercel_url: r.vercel_url as string }))
@@ -549,6 +881,7 @@ export async function GET(req: Request) {
     stuck_cycles_cleaned: stuckCycles.length,
     deploy_drift: drift.drifted,
     broken_deploys: brokenDeploys.length,
+    anomalies_detected: anomalies.length,
     details: dispatches,
   });
 }

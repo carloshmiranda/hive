@@ -111,6 +111,9 @@ jobs:
     if: needs.context.outputs.trigger == 'new_company'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
     steps:
       - name: Checkout Hive (for templates)
@@ -139,15 +142,36 @@ jobs:
             IMPORTANT: For ALL `gh` commands, you MUST set GH_TOKEN so it uses the personal access token:
             `export GH_TOKEN="$GH_PAT"`
 
-            1. Create GitHub repo: `GH_TOKEN="$GH_PAT" gh repo create carloshmiranda/<slug> --private --description "<description>"`
+            1. Create GitHub repo: `GH_TOKEN="$GH_PAT" gh repo create carloshmiranda/<slug> --public --description "<description>"`
                If the repo already exists, skip this step.
-            2. Copy templates/boilerplate/ into /tmp/<slug>, customize:
-               - package.json: set name to the company slug
+            2. Copy templates/boilerplate/ into /tmp/<slug>, then replace ALL template placeholders:
+               Run these sed commands (use -i for in-place, order matters):
+               ```bash
+               cd /tmp/<slug>
+               # IMPORTANT: Do NOT run sed on .github/workflows/ — those use ${{ }} (GitHub Actions syntax, not templates)
+               find . -path ./.github -prune -o -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' -o -name '*.txt' -o -name '*.md' -o -name '*.mjs' -o -name '*.example' \) -print | xargs sed -i '' \
+                 -e 's/{{SLUG}}/<slug>/g' \
+                 -e 's/{{COMPANY_NAME}}/<company_name>/g' \
+                 -e 's/{{DESCRIPTION}}/<description>/g' \
+                 -e 's/{{COMPANY_URL}}/https:\/\/<slug>.vercel.app/g' \
+                 -e 's/{{TARGET_AUDIENCE}}/<target_audience_from_proposal>/g' \
+                 -e 's/{{VALUE_PROPOSITION}}/<value_prop_from_proposal>/g'
+               ```
+               Get TARGET_AUDIENCE and VALUE_PROPOSITION from the proposal context (step below).
+               Do NOT replace `{{POSITION}}` in waitlist/route.ts — that's a runtime template.
+               Verify no template placeholders remain: `grep -r '{{[A-Z]' /tmp/<slug>/ --include='*.ts' --include='*.tsx' --include='*.json' --include='*.txt' --include='*.md' | grep -v POSITION | grep -v node_modules`
                - CLAUDE.md: Use templates/company-claude.md, replace ALL {{PLACEHOLDERS}} with real company data from the DB query.
                  Query the approval context for the full proposal: `SELECT context FROM approvals WHERE company_id = '<id>' AND gate_type = 'new_company' ORDER BY created_at DESC LIMIT 1`
                  Use context.proposal for description, target audience, etc.
                  Query playbook for insights: `SELECT domain, insight FROM playbook WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5`
                  This CLAUDE.md is what gives agents context to work on the company repo — make it thorough.
+            2b. Set up GitHub Actions secrets on the new repo (needed for hive-build.yml):
+               ```bash
+               GH_TOKEN="$GH_PAT" gh secret set DATABASE_URL --repo carloshmiranda/<slug> --body "$DATABASE_URL"
+               GH_TOKEN="$GH_PAT" gh secret set GH_PAT --repo carloshmiranda/<slug> --body "$GH_PAT"
+               GH_TOKEN="$GH_PAT" gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo carloshmiranda/<slug> --body "$CLAUDE_CODE_OAUTH_TOKEN"
+               GH_TOKEN="$GH_PAT" gh secret set GEMINI_API_KEY --repo carloshmiranda/<slug> --body "$GEMINI_API_KEY"
+               ```
             3. Configure git and push to the new repo:
                ```bash
                cd /tmp/<slug>
@@ -196,28 +220,92 @@ jobs:
             Do NOT create a Neon database or Stripe product — skip those for now.
             Output: { "company": "<slug>", "provisioned": true }
 
-  # ─── Job 2: Build features / fix errors (checks out COMPANY repo) ───
+  # ─── Job 2: Dispatch build to company repo (runs on their unlimited Actions minutes) ───
   build:
     needs: context
     if: >
-      needs.context.outputs.trigger == 'feature_request' ||
-      needs.context.outputs.trigger == 'ops_escalation' ||
-      needs.context.outputs.trigger == 'deploy_drift' ||
-      startsWith(needs.context.outputs.trigger, 'issue:') ||
-      needs.context.outputs.trigger == 'manual'
+      needs.context.outputs.company_repo != '' && (
+        needs.context.outputs.trigger == 'feature_request' ||
+        needs.context.outputs.trigger == 'ops_escalation' ||
+        needs.context.outputs.trigger == 'deploy_drift' ||
+        startsWith(needs.context.outputs.trigger, 'issue:') ||
+        needs.context.outputs.trigger == 'manual'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Dispatch build to company repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          COMPANY="${{ needs.context.outputs.company }}"
+          COMPANY_REPO="${{ needs.context.outputs.company_repo }}"
+          TRIGGER="${{ needs.context.outputs.trigger }}"
+          PAYLOAD='${{ needs.context.outputs.payload }}'
+          TASK_SUMMARY=$(echo "$PAYLOAD" | jq -r '.task // .title // "Build task"' 2>/dev/null | head -c 100)
+
+          echo "Dispatching build to ${COMPANY_REPO} (runs on company's unlimited Actions minutes)"
+
+          # Trigger workflow_dispatch on the company repo's hive-build.yml
+          HTTP_CODE=$(curl -s -o /tmp/dispatch-response.txt -w "%{http_code}" \
+            -X POST "https://api.github.com/repos/${COMPANY_REPO}/actions/workflows/hive-build.yml/dispatches" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"ref\": \"main\",
+              \"inputs\": {
+                \"task_summary\": \"${TASK_SUMMARY}\",
+                \"company_slug\": \"${COMPANY}\",
+                \"trigger\": \"${TRIGGER}\",
+                \"payload\": $(echo "$PAYLOAD" | jq -c '.' 2>/dev/null || echo '{}')
+              }
+            }")
+
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "Build dispatched to ${COMPANY_REPO} (HTTP ${HTTP_CODE})"
+          else
+            echo "Dispatch failed (HTTP ${HTTP_CODE}):"
+            cat /tmp/dispatch-response.txt
+            exit 1
+          fi
+
+      - name: Log dispatch to DB
+        if: success()
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function log() {
+            const [c] = await sql\`SELECT id FROM companies WHERE slug = '${{ needs.context.outputs.company }}' LIMIT 1\`;
+            await sql\`
+              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+              VALUES ('engineer', \${c?.id || null}, '${{ needs.context.outputs.trigger }}', 'success',
+                'Dispatched build to company repo ${{ needs.context.outputs.company_repo }}', NOW(), NOW())
+            \`;
+            await sql.end();
+          }
+          log().catch(e => console.error(e.message));
+          "
+
+  # ─── Job 2b: Fallback — no company repo, run on Hive (Hive-internal work only) ───
+  build-hive:
+    needs: context
+    if: >
+      needs.context.outputs.company_repo == '' && (
+        needs.context.outputs.trigger == 'feature_request' ||
+        needs.context.outputs.trigger == 'ops_escalation' ||
+        needs.context.outputs.trigger == 'deploy_drift' ||
+        startsWith(needs.context.outputs.trigger, 'issue:') ||
+        needs.context.outputs.trigger == 'manual'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: Checkout company repo
-        if: needs.context.outputs.company_repo != ''
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ needs.context.outputs.company_repo }}
-          token: ${{ secrets.GH_PAT }}
-
-      - name: Fallback checkout Hive
-        if: needs.context.outputs.company_repo == ''
+      - name: Checkout Hive
         uses: actions/checkout@v4
 
       - name: Configure git
@@ -225,133 +313,48 @@ jobs:
           git config user.name "Hive Engineer"
           git config user.email "noreply@github.com"
 
-      - name: Run build agent
+      - name: Run build agent (Hive-internal only)
         id: agent
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
           prompt: |
-            You are the Engineer agent of Hive. You build features and fix bugs.
+            You are the Engineer agent of Hive. You are working on the Hive repo itself.
 
             TRIGGER: ${{ needs.context.outputs.trigger }}
             PAYLOAD: ${{ needs.context.outputs.payload }}
             COMPANY: ${{ needs.context.outputs.company }}
-            COMPANY_REPO: ${{ needs.context.outputs.company_repo }}
 
-            You are already in the company's repo (checked out as your working directory).
-            Do NOT clone or checkout any repo — just work in the current directory.
+            WARNING: The company has no github_repo yet. You are in the Hive repo.
+            Only do Hive-internal work (templates, boilerplate, operational improvements).
+            If this is a feature_request for a company, log: "Company needs provisioning first" and exit.
 
-            IMPORTANT: If COMPANY_REPO is empty, you are in the Hive repo — only do Hive-internal work.
-            For feature_request/ops_escalation on a company: if the company has no github_repo in the DB,
-            first query it: `SELECT github_repo FROM companies WHERE slug = '<company>'`
-            If null, skip and log: "Company has no repo yet — needs provisioning first."
-
-            ## feature_request — Build features from CEO plan
-            1. Get the active cycle plan from Hive DB:
-               ```sql
-               SELECT id, cycle_number, ceo_plan FROM cycles
-               WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ needs.context.outputs.company }}')
-               AND status = 'running' ORDER BY created_at DESC LIMIT 1
-               ```
-            2. Check for existing work:
-               - `git branch -r | grep hive/` — existing feature branches
-               - `GH_TOKEN="$GH_PAT" gh pr list --state open --json number,title,headRefName`
-               - If an unmerged branch has no PR, create the PR first
-               - If a PR already covers a task, skip that task
-            3. Read `ceo_plan.engineering_tasks`. Pick the FIRST uncompleted task.
-               IMPORTANT: Implement ONE task per run. You have limited turns.
-            4. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
-            5. Implement the task following acceptance criteria
-            6. Install dependencies if needed: `npm install`
-            7. Build to verify: `npx next build` — fix any errors
-            8. Commit and push:
-               ```bash
-               git add -A && git commit -m "feat: <task summary>"
-               git push -u origin hive/cycle-<N>-<task-id>
-               ```
-            9. Open a PR:
-               `GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"`
-            10. Log to DB:
-                ```sql
-                INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
-                VALUES ('engineer', (SELECT id FROM companies WHERE slug = '${{ needs.context.outputs.company }}'),
-                  'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
-                ```
-            11. Output: { "pr_opened": true, "pr_number": N, "company": "${{ needs.context.outputs.company }}" }
-
-            ## ops_escalation — Fix errors
-            1. Query recent errors:
-               `SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ needs.context.outputs.company }}') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3`
-            2. Diagnose and fix the issue in the current directory
-            3. Build, commit, push, log to agent_actions
-
-            ## deploy_drift — Fix stale deployments
-            Check Vercel deployment status via API, trigger a redeploy if needed.
-
-            ## Other triggers
-            - issue (feature/bug): Implement the feature or fix, create PR
-            - pr_approved: Merge the PR using `GH_TOKEN="$GH_PAT" gh pr merge <N> --squash`
-            - manual: Execute the specified task
+            For Hive-internal issues/tasks:
+            1. Implement the change in the current directory
+            2. Build to verify: `npx next build` — fix any errors
+            3. Commit and push
+            4. Log to agent_actions
 
             RULES:
-            - For feature_request: implement ONE task per run, create a branch and open a PR
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
             - Write to agent_actions table: what you did, status, any errors
-            - If you open a PR, output: { "pr_opened": true, "pr_number": N, "company": "${{ needs.context.outputs.company }}" }
 
       - name: Log failure to DB
         if: always() && steps.agent.outcome == 'failure'
         run: |
           npm install --no-save postgres 2>/dev/null
-          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
-          SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
-          TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
-          COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
           COMPANY="${{ needs.context.outputs.company }}"
-
           node -e "
           const postgres = require('postgres');
           const sql = postgres(process.env.DATABASE_URL);
-          const SLUG = '${COMPANY}';
           async function log() {
-            const companyId = SLUG ? (await sql\`SELECT id FROM companies WHERE slug = \${SLUG} LIMIT 1\`)[0]?.id : null;
+            const companyId = '${COMPANY}' ? (await sql\`SELECT id FROM companies WHERE slug = '${COMPANY}' LIMIT 1\`)[0]?.id : null;
             await sql\`
-              INSERT INTO agent_actions (agent, action_type, status, error, output, started_at, finished_at, company_id)
-              VALUES ('engineer', 'feature_request', 'failed',
-                \${'error_' + '${SUBTYPE}' + ': exhausted after ${TURNS} turns (\$${COST} USD)'},
-                \${JSON.stringify({subtype: '${SUBTYPE}', turns: parseInt('${TURNS}'), cost: parseFloat('${COST}')})}::jsonb,
-                NOW() - INTERVAL '${TURNS} minutes', NOW(),
-                \${companyId})
+              INSERT INTO agent_actions (agent, action_type, status, error, started_at, finished_at, company_id)
+              VALUES ('engineer', 'feature_request', 'failed', 'Hive-internal build failed', NOW() - INTERVAL '30 minutes', NOW(), \${companyId})
             \`;
             await sql.end();
           }
-          log().catch(e => console.error('DB log failed:', e.message));
+          log().catch(e => console.error(e.message));
           "
-          echo "Logged failure: $SUBTYPE ($TURNS turns, \$$COST)"
-
-      - name: Chain dispatch
-        if: always() && steps.agent.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set +e
-          RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
-          REPO="${{ github.repository }}"
-          echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
-
-          dispatch() {
-            curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3+json" \
-              -d "{\"event_type\":\"$1\",\"client_payload\":$2}"
-            echo "  Dispatched: $1"
-          }
-
-          # Chain to CEO if PR opened
-          PR_NUM=$(echo "$RESULT" | grep -oP '"?pr_number"?\s*[:=]\s*"?\K\d+' | head -1 || echo "0")
-          if echo "$RESULT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true|opened.*pull.?request|created.*PR'; then
-            dispatch "ceo_review" "{\"source\":\"engineer\",\"company\":\"${{ needs.context.outputs.company }}\",\"pr_number\":${PR_NUM:-0}}"
-          fi
-
-          echo "Chain dispatch complete"

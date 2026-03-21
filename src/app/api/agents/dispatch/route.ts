@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { capabilitiesSummary } from "@/lib/capabilities";
+import { getFilePrompt } from "@/lib/prompts";
 
 // Agents that can run on Vercel serverless (Gemini/Groq HTTP calls only)
 const WORKER_AGENTS = ["growth", "outreach", "ops"] as const;
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
   try {
     // 1. Load company
     const [company] = await sql`
-      SELECT id, name, slug, status, description, capabilities, company_type, imported
+      SELECT id, name, slug, status, description, capabilities, company_type, imported, github_repo
       FROM companies WHERE slug = ${company_slug} AND status IN ('mvp', 'active')
     `;
     if (!company) return err(`Company ${company_slug} not found or not active`);
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
       SELECT prompt_text FROM agent_prompts 
       WHERE agent = ${agentName} AND is_active = true LIMIT 1
     `;
-    let agentPrompt = dbPrompt?.prompt_text || DEFAULT_PROMPTS[agentName];
+    let agentPrompt = dbPrompt?.prompt_text || getFilePrompt(agentName) || DEFAULT_PROMPTS[agentName];
     agentPrompt = agentPrompt
       .replace(/\{\{COMPANY_NAME\}\}/g, company.name)
       .replace(/\{\{COMPANY_SLUG\}\}/g, company.slug);
@@ -162,6 +163,12 @@ ${capabilitiesSummary(company.capabilities)}`;
       `;
       if (visSnapshot) fullPrompt += `\n\nVISIBILITY DATA (from GSC):\n${JSON.stringify(visSnapshot.content)}`;
       if (llmVis) fullPrompt += `\n\nLLM VISIBILITY:\n${JSON.stringify(llmVis.content)}`;
+
+      // Content performance report — per-URL trends and refresh recommendations
+      const [contentPerf] = await sql`
+        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'content_performance'
+      `;
+      if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${JSON.stringify(contentPerf.content)}`;
     }
 
     // 5. Call the LLM
@@ -193,12 +200,35 @@ ${capabilitiesSummary(company.capabilities)}`;
       await processOutreachResults(sql, company, output);
     }
 
-    // 8. Ops escalation → dispatch Engineer via repository_dispatch
+    // 8. Ops escalation → dispatch fix to company repo (free Actions) with Hive fallback
     if (agentName === "ops" && output.includes("needs_engineer")) {
       try {
         const ghPat = process.env.GH_PAT;
-        const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
-        if (ghPat) {
+        if (ghPat && company.github_repo) {
+          // Try company repo's hive-fix.yml first (free on public repos)
+          const fixRes = await fetch(
+            `https://api.github.com/repos/${company.github_repo}/actions/workflows/hive-fix.yml/dispatches`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `token ${ghPat}`,
+                Accept: "application/vnd.github.v3+json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                ref: "main",
+                inputs: {
+                  error_summary: `Ops detected issue for ${company.slug}`,
+                  company_slug: company.slug,
+                  source: "ops",
+                },
+              }),
+            }
+          );
+          if (!fixRes.ok) throw new Error("Company workflow dispatch failed");
+        } else if (ghPat) {
+          // Fallback: dispatch to Hive Engineer
+          const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
           await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
             method: "POST",
             headers: {

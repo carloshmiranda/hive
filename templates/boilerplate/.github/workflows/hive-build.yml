@@ -1,0 +1,217 @@
+name: Hive Build
+run-name: "Build: ${{ github.event.inputs.task_summary || 'feature' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_summary:
+        description: 'Brief task description'
+        required: true
+      cycle_id:
+        description: 'Hive cycle ID'
+        required: false
+      company_slug:
+        description: 'Company slug'
+        required: true
+      trigger:
+        description: 'Trigger type (feature_request, ops_escalation, deploy_drift)'
+        required: false
+        default: 'feature_request'
+      payload:
+        description: 'JSON payload with task details'
+        required: false
+        default: '{}'
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure git
+        run: |
+          git config user.name "Hive Engineer"
+          git config user.email "noreply@github.com"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest
+
+      - name: Load product context from Hive DB
+        id: context
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          SLUG="${{ github.event.inputs.company_slug }}"
+
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function load() {
+            const [co] = await sql\`SELECT id, description FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
+            if (!co) { console.log('{}'); await sql.end(); return; }
+
+            // Research reports (market research, competitive analysis, SEO keywords)
+            const reports = await sql\`
+              SELECT report_type, summary, content FROM research_reports
+              WHERE company_id = \${co.id} AND report_type IN ('market_research','competitive_analysis','seo_keywords','product_spec')
+              ORDER BY updated_at DESC
+            \`;
+
+            // Original Scout proposal
+            const [proposal] = await sql\`
+              SELECT context FROM approvals
+              WHERE company_id = \${co.id} AND gate_type = 'new_company'
+              ORDER BY created_at DESC LIMIT 1
+            \`;
+
+            // Playbook entries relevant to this company
+            const playbook = await sql\`
+              SELECT domain, insight FROM playbook
+              WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5
+            \`;
+
+            const ctx = {
+              description: co.description,
+              research: {},
+              proposal: proposal?.context?.proposal || null,
+              playbook: playbook.map(p => p.domain + ': ' + p.insight)
+            };
+            for (const r of reports) {
+              ctx.research[r.report_type] = { summary: r.summary, content: r.content };
+            }
+            require('fs').writeFileSync('/tmp/product-context.json', JSON.stringify(ctx, null, 2));
+            await sql.end();
+          }
+          load().catch(e => { console.error(e.message); process.exit(0); });
+          "
+
+      - name: Run build agent
+        id: agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          # Load product context if available
+          PRODUCT_CTX=""
+          if [ -f /tmp/product-context.json ]; then
+            PRODUCT_CTX=$(cat /tmp/product-context.json | head -c 8000)
+          fi
+
+          claude -p \
+            --model claude-sonnet-4-20250514 \
+            --max-turns 35 \
+            --allowedTools 'Bash,Read,Write,Edit' \
+            "You are the Engineer agent of Hive. You build features and fix bugs.
+
+          TRIGGER: ${{ github.event.inputs.trigger }}
+          COMPANY: ${{ github.event.inputs.company_slug }}
+          PAYLOAD: ${{ github.event.inputs.payload }}
+
+          You are in the company repo. Work in the current directory.
+
+          ## PRODUCT CONTEXT
+          Use this to understand WHY you're building, who the users are, and how the product makes money.
+          Make architectural decisions informed by this context (naming, pricing tiers, feature gating, competitive gaps).
+          ${PRODUCT_CTX}
+
+          ## feature_request — Build features from CEO plan
+          1. Get the active cycle plan from Hive DB:
+             \`\`\`sql
+             SELECT id, cycle_number, ceo_plan FROM cycles
+             WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}')
+             AND status = 'running' ORDER BY created_at DESC LIMIT 1
+             \`\`\`
+          2. Check for existing work:
+             - \`git branch -r | grep hive/\` — existing feature branches
+             - \`GH_TOKEN=\"\$GH_PAT\" gh pr list --state open --json number,title,headRefName\`
+          3. Read \`ceo_plan.engineering_tasks\`. Pick the FIRST uncompleted task.
+             IMPORTANT: Implement ONE task per run. You have limited turns.
+          4. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
+             - Check competitive_analysis for what competitors do (match or beat them)
+             - Check the pricing model to build the right tier-gating structure
+             - Check target_audience to get naming and UX right
+          5. Create a feature branch: \`git checkout -b hive/cycle-<N>-<task-id>\`
+          6. Implement the task following acceptance criteria
+          7. Install dependencies if needed: \`npm install\`
+          8. Build to verify: \`npx next build\` — fix any errors
+          9. Commit and push:
+             \`\`\`bash
+             git add -A && git commit -m \"feat: <task summary>\"
+             git push -u origin hive/cycle-<N>-<task-id>
+             \`\`\`
+          10. Open a PR:
+             \`GH_TOKEN=\"\$GH_PAT\" gh pr create --title \"feat: <task summary>\" --body \"Cycle <N>, Task <task-id>: <description>\"\`
+          11. Log to Hive DB:
+              \`\`\`sql
+              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+              VALUES ('engineer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
+                'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
+              \`\`\`
+          12. Output: { \"pr_opened\": true, \"pr_number\": N, \"company\": \"${{ github.event.inputs.company_slug }}\" }
+
+          ## ops_escalation — Fix errors
+          1. Query recent errors from Hive DB:
+             \`SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3\`
+          2. Diagnose and fix the issue in the current directory
+          3. Build, commit, push, log to agent_actions
+
+          ## deploy_drift — Fix stale deployments
+          Check Vercel deployment status, trigger a redeploy if needed.
+
+          RULES:
+          - Implement ONE task per run, create a branch and open a PR
+          - Always use \`GH_TOKEN=\"\$GH_PAT\"\` for gh commands
+          - Write to agent_actions table: what you did, status, any errors
+          - If you open a PR, output: { \"pr_opened\": true, \"pr_number\": N }
+          " 2>&1 | tee /tmp/claude-output.txt
+
+      - name: Log failure to Hive DB
+        if: failure()
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function log() {
+            const [c] = await sql\`SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}' LIMIT 1\`;
+            await sql\`
+              INSERT INTO agent_actions (agent, company_id, action_type, status, error, started_at, finished_at)
+              VALUES ('engineer', \${c?.id || null}, 'feature_request', 'failed',
+                'Build workflow failed on company repo', NOW() - INTERVAL '30 minutes', NOW())
+            \`;
+            await sql.end();
+          }
+          log().catch(e => console.error(e.message));
+          "
+
+      - name: Chain dispatch to CEO
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          OUTPUT=$(cat /tmp/claude-output.txt 2>/dev/null || echo "{}")
+          PR_NUM=$(echo "$OUTPUT" | grep -oP '"?pr_number"?\s*[:=]\s*"?\K\d+' | head -1 || echo "0")
+
+          if echo "$OUTPUT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true'; then
+            curl -s -X POST "https://api.github.com/repos/carloshmiranda/hive/dispatches" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"event_type\":\"ceo_review\",\"client_payload\":{\"source\":\"engineer\",\"company\":\"${{ github.event.inputs.company_slug }}\",\"pr_number\":${PR_NUM:-0}}}"
+            echo "Dispatched CEO review for PR #${PR_NUM}"
+          fi

@@ -2,9 +2,11 @@ name: Hive Evolver
 run-name: "Evolver: ${{ github.event.action || 'weekly' }} — ${{ github.event.inputs.focus || 'all' }}"
 
 on:
-  schedule:
-    - cron: '0 3 * * 3'  # Wednesdays at 3am UTC
-
+  # No calendar cron — Evolver is triggered by data conditions via Sentinel:
+  # - >10 completed cycles since last evolve
+  # - High failure rate (>20% in 48h)
+  # - Max turns exhaustion (2+ agents in 48h)
+  # - Success rate drop (>15pp week-over-week)
   repository_dispatch:
     types:
       - evolve_trigger

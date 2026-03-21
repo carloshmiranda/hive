@@ -156,12 +156,29 @@ This is your richest signal source. Visit actual communities where people expres
 - web_search: "negócios online Portugal"
 - web_fetch: https://www.reddit.com/r/literaciafinanceira/top/?t=month
 
-### Phase 3: Competition deep-dive (2-3 per niche)
+### Phase 3: Competition deep-dive (3-5 competitors per niche)
+For each competitor, gather ALL of the following:
 - web_search: "[niche] software/tool/site"
 - web_search: "[niche] alternative" or "[competitor] alternative"
-- web_fetch: visit competitor sites to check pricing, features, quality
-- web_search: "[competitor] review" (find weaknesses)
+- web_fetch: visit competitor sites — extract EXACT pricing tiers, feature lists, positioning
+- web_search: "[competitor] review" or "[competitor] site:trustpilot.com" — find ratings, review counts, user complaints
+- web_search: "[competitor] site:reddit.com" — find real user pain points and complaints
 - For content/affiliate: check if top Google results are low-quality — that's your opening
+
+**Per-competitor data required:**
+- Name, URL, founding year, team size (if findable), funding/revenue
+- Market position (one sentence: what they are)
+- EXACT pricing tiers (plan name, price, key features per tier)
+- Strengths (3-5 bullet points with evidence)
+- Critical gaps/weaknesses (3-5, citing user complaints where possible)
+- User quotes (positive and negative, from TrustPilot/Reddit/G2)
+- TrustPilot/G2 score and review count
+
+**Competitive positioning output required:**
+- Positioning matrix: which dimensions does each competitor win/lose on?
+- Key exploitable gaps: what can we do that nobody does?
+- Recommended pricing: where to position vs competitors
+- Go-to-market angle: how to reach dissatisfied competitor users
 
 ### Phase 4: Demand validation (2-3 per niche)
 - web_search: "how to [solve problem]" (search volume proxy)
@@ -199,7 +216,17 @@ Pick the top 3 respecting the mandatory mix above.
         "business_model": "saas/blog/newsletter/faceless_channel/affiliate/etc",
         "market": "Portugal or Global",
         "demand_evidence": "specific data points from communities, trends, search volume",
-        "competitors_found": ["name: pricing — gaps"],
+        "competitors_found": [
+          {
+            "name": "Competitor Name",
+            "url": "competitor.com",
+            "pricing": ["Plan: €X/mo — features"],
+            "strengths": ["what they do well"],
+            "weaknesses": ["user complaints, gaps"],
+            "trustpilot": "X.X/5 (N reviews) or unknown",
+            "user_quotes": ["real quote from Reddit/TrustPilot"]
+          }
+        ],
         "timing": "why now",
         "verdict": "pursue / pass — reason"
       }
@@ -210,6 +237,9 @@ Pick the top 3 respecting the mandatory mix above.
       "name": "Product/Feature Name",
       "slug": "product-slug",
       "description": "One-line pitch",
+      "mission": "One sentence: why this product exists, the change it creates",
+      "what_we_build": "One paragraph: what the product actually does, in plain user language",
+      "vision": "Where this heads when fully realized — the world it creates",
       "business_model": "saas | blog | digital_product | faceless_channel | virtual_influencer | affiliate_site | newsletter | dropshipping | api_service | marketplace",
       "revenue_streams": ["primary stream", "secondary stream"],
       "market": "Portugal or Global",

@@ -33,6 +33,10 @@ Common root causes in Hive:
 - Missing environment variables (check `.env.local` vs `vercel env ls`)
 - NextAuth beta API changes between versions
 - Agent prompts asking for output format that Claude can't reliably produce
+- **Dispatch without prerequisites**: Sentinel/CEO dispatching agents for companies that lack infra (no github_repo, no vercel_url). Always check `github_repo IS NOT NULL` before dispatching.
+- **Template placeholders not replaced**: Boilerplate `{{COMPANY_NAME}}` etc. shipped as literals. Verify with `grep -r '{{[A-Z]' /path/ | grep -v POSITION` after provisioning.
+- **Dispatch loops**: Event A triggers event B which triggers event A again. Every event type must be classified as TRIGGER (creates work) or TERMINAL (writes to DB, no chaining).
+- **Context files stale**: Memory files, BRIEFING.md, CLAUDE.md say one thing but code says another. Read MISTAKES.md for known patterns before fixing.
 
 ### 3. Fix the code
 - Edit the minimal set of files needed
@@ -42,8 +46,14 @@ Common root causes in Hive:
 
 ### 4. Verify and document
 - If the build passes, commit with message: `fix: [what was broken]`
-- If you can't fix it, write the analysis to `MISTAKES.md` so the next session can pick it up
-- Log what you fixed and what you couldn't
+- **Always write to MISTAKES.md** using the standard format (What happened / Root cause / Fix applied / Prevention / Affects). This is how the system learns permanently.
+- **Write a playbook entry** if the fix is a cross-company pattern:
+  ```sql
+  INSERT INTO playbook (domain, insight, evidence, confidence, source_company_id)
+  VALUES ('<domain>', '<what we learned>', '<what error triggered this>', 0.7, <company_id or NULL>)
+  ```
+  This feeds future companies via the Provisioner — they inherit the fix at creation time.
+- Log what you fixed and what you couldn't to `agent_actions`
 
 ## Fix priority
 1. **Database connection errors** — nothing works without Neon
@@ -70,7 +80,21 @@ Common root causes in Hive:
   "could_not_fix": [
     { "error": "Dispatch timed out after 300s", "reason": "Need to increase timeout or simplify the prompt — not a code bug" }
   ],
+  "learnings": [
+    {
+      "written_to": "MISTAKES.md",
+      "title": "SQL column referenced before migration",
+      "prevention": "Always check schema.sql before adding column references"
+    },
+    {
+      "written_to": "playbook",
+      "domain": "engineering",
+      "insight": "Run schema migration before deploying code that references new columns",
+      "cross_company": true
+    }
+  ],
   "mistakes_written": true,
+  "playbook_entries_written": 1,
   "committed": true,
   "build_passed": true
 }

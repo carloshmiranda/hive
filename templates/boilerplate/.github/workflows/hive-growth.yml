@@ -1,0 +1,192 @@
+name: Hive Growth
+run-name: "Growth: ${{ github.event.inputs.task_summary || 'content' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_summary:
+        description: 'Brief task description'
+        required: false
+        default: 'content cycle'
+      company_slug:
+        description: 'Company slug'
+        required: true
+      trigger:
+        description: 'Trigger type (sentinel_stale_content, ceo_plan, content_refresh)'
+        required: false
+        default: 'ceo_plan'
+      payload:
+        description: 'JSON payload with task details'
+        required: false
+        default: '{}'
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+jobs:
+  growth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure git
+        run: |
+          git config user.name "Hive Growth"
+          git config user.email "noreply@github.com"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Gemini CLI
+        run: npm install -g @google/gemini-cli
+
+      - name: Load growth context from Hive DB
+        id: context
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          SLUG="${{ github.event.inputs.company_slug }}"
+
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function load() {
+            const [co] = await sql\`SELECT id, name, slug, description, capabilities, company_type FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
+            if (!co) { require('fs').writeFileSync('/tmp/growth-context.json', '{}'); await sql.end(); return; }
+
+            // CEO plan (current cycle)
+            const [cycle] = await sql\`
+              SELECT ceo_plan FROM cycles WHERE company_id = \${co.id} ORDER BY started_at DESC LIMIT 1
+            \`;
+
+            // Research reports
+            const reports = await sql\`
+              SELECT report_type, summary, content FROM research_reports
+              WHERE company_id = \${co.id}
+              AND report_type IN ('market_research','competitive_analysis','seo_keywords','visibility_snapshot','llm_visibility','content_performance','product_spec')
+              ORDER BY updated_at DESC
+            \`;
+
+            // Metrics (last 7 days)
+            const metrics = await sql\`
+              SELECT date, mrr, customers, page_views, signups, waitlist_total, waitlist_signups
+              FROM metrics WHERE company_id = \${co.id} AND date >= CURRENT_DATE - INTERVAL '7 days'
+              ORDER BY date DESC LIMIT 14
+            \`;
+
+            // Playbook
+            const playbook = await sql\`
+              SELECT domain, insight FROM playbook WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 10
+            \`;
+
+            // Approved evolver proposals for growth
+            const proposals = await sql\`
+              SELECT proposed_fix FROM evolver_proposals
+              WHERE status = 'approved' AND (affected_agents @> ARRAY['growth'] OR affected_agents IS NULL)
+              AND implemented_at IS NULL LIMIT 3
+            \`;
+
+            const ctx = {
+              company: { name: co.name, slug: co.slug, description: co.description, capabilities: co.capabilities },
+              ceo_plan: cycle?.ceo_plan || null,
+              research: {},
+              metrics: metrics.map(m => ({ date: m.date, mrr: m.mrr, customers: m.customers, page_views: m.page_views, signups: m.signups, waitlist: m.waitlist_total })),
+              playbook: playbook.map(p => p.domain + ': ' + p.insight),
+              evolver_proposals: proposals.map(p => p.proposed_fix),
+            };
+            for (const r of reports) {
+              ctx.research[r.report_type] = { summary: r.summary, content: r.content };
+            }
+            require('fs').writeFileSync('/tmp/growth-context.json', JSON.stringify(ctx, null, 2));
+            await sql.end();
+          }
+          load().catch(e => { console.error(e.message); require('fs').writeFileSync('/tmp/growth-context.json', '{}'); process.exit(0); });
+          "
+
+      - name: Run Growth agent
+        id: agent
+        run: |
+          GROWTH_CTX=""
+          if [ -f /tmp/growth-context.json ]; then
+            GROWTH_CTX=$(cat /tmp/growth-context.json | head -c 12000)
+          fi
+
+          gemini -p --yolo \
+            -m gemini-2.5-flash \
+            "You are the Growth agent of Hive. You drive awareness, traffic, and conversions.
+          You are in the company repo. You can create and edit files directly (blog posts, SEO pages, meta tags, email sequences).
+
+          TRIGGER: ${{ github.event.inputs.trigger }}
+          COMPANY: ${{ github.event.inputs.company_slug }}
+
+          ## CONTEXT
+          ${GROWTH_CTX}
+
+          ## YOUR PROCESS
+          1. Read the CEO plan from context. Identify your growth_tasks.
+          2. Read research reports (market_research, competitive_analysis, seo_keywords, content_performance).
+          3. If CONTENT PERFORMANCE data exists with refresh_items, prioritize refreshing declining content BEFORE creating new content.
+          4. Read the codebase to understand the current site structure (pages, blog, meta tags).
+          5. Execute growth tasks:
+             - **Blog posts**: Create MDX/TSX files in the blog directory. Write real, useful content — no AI slop.
+             - **SEO pages**: Create comparison pages (/vs/competitor), landing pages, or feature pages.
+             - **Meta optimization**: Update page titles, descriptions, Open Graph tags for low-CTR pages.
+             - **Email sequences**: Write to the email_sequences table via SQL if the capability exists.
+             - **Sitemap/robots**: Update if needed.
+          6. After creating content, build to verify: npx next build
+          7. Commit and push:
+             git add -A && git commit -m 'content: <summary>'
+             git push origin main
+          8. Log results to Hive DB:
+             Use the shell to run:
+             npm install --no-save postgres 2>/dev/null
+             node -e \"
+               const postgres = require('postgres');
+               const sql = postgres(process.env.DATABASE_URL);
+               sql\\\`INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+                 VALUES ('growth', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
+                 'content_creation', 'success', 'Growth content created', NOW(), NOW())\\\`
+               .then(() => sql.end());
+             \"
+
+          ## RULES
+          - Write content in the language of the target audience (Portuguese companies → Portuguese content).
+          - Every blog post needs: keyword in title, H1, first paragraph, meta description <155 chars.
+          - No fluff. Every piece of content solves a specific problem.
+          - If the company has no blog directory, create one with a simple layout.
+          - Max 3 content pieces per run — quality over quantity.
+          - Push directly to main (content doesn't need PR review).
+          - Always run npx next build before pushing to catch errors.
+          " 2>&1 | tee /tmp/gemini-output.txt
+
+      - name: Log results to Hive DB
+        if: always()
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          STATUS="${{ steps.agent.outcome }}"
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function log() {
+            const [c] = await sql\`SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}' LIMIT 1\`;
+            await sql\`
+              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+              VALUES ('growth', \${c?.id || null}, 'content_creation', '${STATUS === 'success' ? 'success' : 'failed'}',
+                'Growth workflow on company repo (${STATUS})', NOW() - INTERVAL '20 minutes', NOW())
+            \`;
+            await sql.end();
+          }
+          log().catch(e => console.error(e.message));
+          "

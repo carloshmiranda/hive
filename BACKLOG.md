@@ -16,28 +16,16 @@
 ---
 
 ## Up Next
-
-<!-- All P1 items completed — next priority is P2 -->
+<!-- No P1 items remaining -->
 
 ---
 
 ## Planned
 
-### 🟢 P2 — Content performance feedback loop
-Automated content audit: flag pages older than 60 days with declining impressions for refresh. Growth updates stale content instead of always creating new. Track per-URL performance in research_reports type `content_performance`. Engineer adds internal cross-links between topically related pages automatically.
-
-### 🟢 P2 — Anomaly detection in Sentinel
-Add statistical anomaly detection to Sentinel's 4-hour checks. Flag any metric moving >2 standard deviations from its 14-day rolling average. CEO plan explicitly addresses flagged anomalies instead of relying on the agent to notice raw number changes.
-
-### 🟢 P2 — Event-driven cadences (remove all calendar assumptions)
-Audit all cycle triggers and remove calendar-based cadences. Evolver should run when success rate drops, not "on Wednesdays." Research refresh should run when competitive landscape changes, not "every 7 cycles." Sentinel conditions should be the only time-based checks, everything else is event-driven or data-staleness-driven.
-
 ---
 
 ## Future Vision
 
-### 🟢 P2 — Automatic boilerplate migration for existing companies
-When the boilerplate gains a new feature (new table, new route), detect which existing companies are missing it and auto-generate migration PRs. Gated by compatibility matrix — only propose migrations for features that make sense for the company. Requires capability inventory (ADR-018).
 
 ### 🟢 P2 — Stack detection for imported companies
 Extend the assessment endpoint to detect non-Next.js stacks: check for remix.config, astro.config, nuxt.config, etc. Detect non-Neon databases (Supabase, PlanetScale) from DATABASE_URL patterns. Detect non-Resend email providers from env var names.
@@ -67,6 +55,34 @@ The orchestrator should be able to propose and implement improvements to its own
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-21 — Company-side workflow expansion: Growth + Fix (P2)
+Two new boilerplate workflows for company repos (free on public repos): `hive-growth.yml` (content creation, SEO, blog posts via Claude Sonnet, 25 turns) and `hive-fix.yml` (bug fixes via Claude Sonnet, 20 turns). Both load full context from Hive DB (CEO plan, research, playbook, errors) and execute directly on company code. Sentinel dispatches Growth to company repo with Vercel serverless fallback. CEO chain dispatch routes Growth to company repo. Healer dispatches company-specific fixes to `hive-fix.yml` instead of Hive's ops_escalation. Ops escalation routes to company `hive-fix.yml` with Hive Engineer fallback. Boilerplate manifest updated with 2 new workflow entries. CLAUDE.md model routing table updated.
+
+### ✅ 2026-03-21 — Automatic boilerplate migration for existing companies (P2)
+Sentinel check 20 compares company capabilities against `templates/boilerplate-manifest.json`. Detects missing features (waitlist, sitemap, email sequences, etc.) respecting company_type compatibility and capability prerequisites. Creates `capability_migration` approval gates. On approve, dispatches to company repo's `hive-build.yml` with migration tasks (files to add, SQL to run). `getBoilerplateGaps()` in capabilities.ts handles the comparison logic.
+
+### ✅ 2026-03-21 — Content performance feedback loop (P2)
+Visibility route now computes per-URL trend analysis: compares last 7 days vs prior 7 days for impressions, position, and CTR. Flags URLs needing refresh with 3 priority levels: high (impressions dropped >30% or position dropped >3), medium (CTR dropped >40% or high impressions with <2% CTR), low (striking distance position 4-10). Writes `content_performance` report to `research_reports` with `refresh_items`, `top_performers`, and full URL list. Growth dispatch route injects content_performance into agent context. Growth prompt updated with "Content refresh" section — refresh before create rule (at least 1 refresh task per cycle if any exist). Output format includes `content_refreshed` array. Closes the loop: GSC data → trend analysis → refresh recommendations → Growth action → improved rankings.
+
+### ✅ 2026-03-21 — Anomaly detection + event-driven cadences (P2)
+**Anomaly detection:** Sentinel check 18 computes 14-day rolling average + standard deviation for 5 key metrics (MRR, page_views, signups, customers, waitlist_signups) per company. Any metric moving >2 std dev flags an anomaly, logged to `agent_actions` as `anomaly_detected`, and dispatches CEO to review. CEO prompt updated to explicitly address anomalies when triggered by `sentinel_anomaly`.
+**Event-driven cadences:** Removed Evolver's Wednesday cron schedule. Evolver now triggered exclusively by data conditions via Sentinel: >10 cycles since last evolve, failure rate >20%, max_turns exhaustion, or success rate dropping >15 percentage points week-over-week (with 48h debounce). Research refresh was already data-staleness-driven (14-day check). Vercel crons (metrics, sentinel, digest) kept — time-based monitoring is appropriate for those.
+
+### ✅ 2026-03-21 — Healer workflow + legacy cleanup (P1)
+Created `hive-healer.yml` workflow triggered by `repository_dispatch: healer_trigger`. Healer reads `prompts/healer.md`, queries errors from last 48h, classifies systemic vs company-specific, fixes code in Hive repo, writes to MISTAKES.md + playbook, dispatches company-specific fixes to Engineer. Vercel Sentinel now dispatches Healer on high failure rate (alongside Evolver) and when 3+ errors exist in 48h (with 24h debounce). Research Analyst prompt was already handled by Scout's `research_request` mode — no orphan. Deleted deprecated `hive-sentinel.yml` and `worker-agents.yml` (both marked legacy, Vercel cron is production).
+
+### ✅ 2026-03-21 — Product specification system (Engineer context + CEO product spec)
+CEO now outputs an accumulating `product_spec` (vision, personas, pricing model, competitive positioning, feature roadmap, monetization status) saved to `research_reports` table as `product_spec` type. Engineer prompt updated with product-aware engineering section (naming, monetization path, competitive gaps, revenue model architecture). Company repo `hive-build.yml` now loads product context from Hive DB before running the build agent (research reports, original proposal, playbook, product spec). Engineer sees WHY they're building, not just WHAT.
+
+### ✅ 2026-03-21 — Worker agent prompt files loaded in dispatch route
+Created `src/lib/prompts.ts` that loads prompt files from `/prompts/` at module init. Dispatch route fallback chain: DB prompt (Evolver) → file prompt (207/103/88 lines) → inline stub (1 line). Growth, Outreach, Ops now use their full prompt files instead of 1-line stubs.
+
+### ✅ 2026-03-21 — Boilerplate build fix + placeholder replacement (P0)
+Added `postcss.config.mjs` (Tailwind v4 PostCSS plugin) and `.gitignore` to boilerplate. Normalized placeholder names (`{{COMPANY_SLUG}}` → `{{SLUG}}`). Updated Engineer provision prompt with complete placeholder list (SLUG, COMPANY_NAME, DESCRIPTION, COMPANY_URL, TARGET_AUDIENCE, VALUE_PROPOSITION). Sed excludes `.github/` (Actions syntax) and `{{POSITION}}` (runtime template). Verification grep confirms no unresolved templates after replacement.
+
+### ✅ 2026-03-21 — Public company repos + build dispatch (ADR-021)
+Company repos created as PUBLIC (unlimited GitHub Actions minutes). Boilerplate includes `hive-build.yml` workflow accepting `workflow_dispatch`. Engineer build job on Hive is now a lightweight dispatcher (5 min) that triggers the company repo workflow. Provisioning sets GitHub Actions secrets (DATABASE_URL, GH_PAT, CLAUDE_CODE_OAUTH_TOKEN) on company repos. Hive stays private. Fallback `build-hive` job for Hive-internal work when no company repo exists.
 
 ### ✅ 2026-03-21 — GitHub Actions optimization + Vercel cron migration (ADR-020)
 Reduced max-turns (Scout 50→35, Engineer provision 25→15, build 50→35). Moved Sentinel + Digest to Vercel crons. Eliminated worker-agents.yml proxy — chain dispatch calls Vercel directly. ~10-12 fewer Actions runs/day.

@@ -1,0 +1,188 @@
+name: Hive Fix
+run-name: "Fix: ${{ github.event.inputs.error_summary || 'bug fix' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      error_summary:
+        description: 'Brief error description'
+        required: true
+      company_slug:
+        description: 'Company slug'
+        required: true
+      source:
+        description: 'Source agent (healer, ops, sentinel)'
+        required: false
+        default: 'healer'
+      payload:
+        description: 'JSON payload with error details'
+        required: false
+        default: '{}'
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure git
+        run: |
+          git config user.name "Hive Healer"
+          git config user.email "noreply@github.com"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@latest
+
+      - name: Load error context from Hive DB
+        id: context
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          SLUG="${{ github.event.inputs.company_slug }}"
+
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function load() {
+            const [co] = await sql\`SELECT id FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
+            if (!co) { require('fs').writeFileSync('/tmp/error-context.json', '{}'); await sql.end(); return; }
+
+            // Recent errors for this company
+            const errors = await sql\`
+              SELECT agent, error, description, action_type, finished_at
+              FROM agent_actions WHERE company_id = \${co.id} AND status = 'failed'
+              AND finished_at > NOW() - INTERVAL '48 hours'
+              ORDER BY finished_at DESC LIMIT 10
+            \`;
+
+            // Recent successful fixes (learn from them)
+            const fixes = await sql\`
+              SELECT description FROM agent_actions
+              WHERE company_id = \${co.id} AND action_type IN ('error_fix', 'ops_escalation')
+              AND status = 'success' AND finished_at > NOW() - INTERVAL '30 days'
+              ORDER BY finished_at DESC LIMIT 5
+            \`;
+
+            // Cross-company fix patterns
+            const patterns = await sql\`
+              SELECT description FROM agent_actions
+              WHERE action_type = 'error_fix' AND status = 'success'
+              AND company_id != \${co.id}
+              AND finished_at > NOW() - INTERVAL '60 days'
+              ORDER BY finished_at DESC LIMIT 5
+            \`;
+
+            const ctx = {
+              errors: errors,
+              previous_fixes: fixes.map(f => f.description),
+              cross_company_patterns: patterns.map(p => p.description),
+            };
+            require('fs').writeFileSync('/tmp/error-context.json', JSON.stringify(ctx, null, 2));
+            await sql.end();
+          }
+          load().catch(e => { console.error(e.message); require('fs').writeFileSync('/tmp/error-context.json', '{}'); process.exit(0); });
+          "
+
+      - name: Run fix agent
+        id: agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          ERROR_CTX=""
+          if [ -f /tmp/error-context.json ]; then
+            ERROR_CTX=$(cat /tmp/error-context.json | head -c 8000)
+          fi
+
+          claude -p \
+            --model claude-sonnet-4-20250514 \
+            --max-turns 20 \
+            --allowedTools 'Bash,Read,Write,Edit' \
+            "You are the Healer agent of Hive, fixing a bug in this company's codebase.
+
+          ERROR: ${{ github.event.inputs.error_summary }}
+          COMPANY: ${{ github.event.inputs.company_slug }}
+          SOURCE: ${{ github.event.inputs.source }}
+          PAYLOAD: ${{ github.event.inputs.payload }}
+
+          ## ERROR CONTEXT (from Hive DB)
+          ${ERROR_CTX}
+
+          ## YOUR PROCESS
+          1. Read the error details above. Understand what failed and why.
+          2. Check CROSS-COMPANY PATTERNS — if a similar error was fixed in another company, apply the same approach.
+          3. Search the codebase for the root cause:
+             - Check recent git log: \`git log --oneline -10\`
+             - Search for the error: \`grep -r 'error text' src/\`
+             - Read the relevant file(s)
+          4. Fix the minimal set of files needed. Do NOT refactor.
+          5. Build to verify: \`npx next build\`
+          6. Commit and push:
+             \`\`\`bash
+             git add -A && git commit -m \"fix: <what was broken>\"
+             git push origin main
+             \`\`\`
+          7. Log to Hive DB:
+             \`\`\`sql
+             INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+             VALUES ('healer', (SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}'),
+               'error_fix', 'success', '<what was fixed>', NOW(), NOW())
+             \`\`\`
+          8. Write a playbook entry if this could help other companies:
+             \`\`\`sql
+             INSERT INTO playbook (domain, insight, evidence, confidence)
+             VALUES ('engineering', '<what to do when this happens>', '<the error>', 0.7)
+             \`\`\`
+
+          RULES:
+          - Fix, don't refactor. Minimum change to resolve the error.
+          - Max 3 files per fix. If more needed, log an escalation.
+          - Always run \`npx next build\` before committing.
+          - Push directly to main (fixes don't need PR review).
+          " 2>&1 | tee /tmp/claude-output.txt
+
+      - name: Log results to Hive DB
+        if: always()
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          STATUS="${{ steps.agent.outcome }}"
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function log() {
+            const [c] = await sql\`SELECT id FROM companies WHERE slug = '${{ github.event.inputs.company_slug }}' LIMIT 1\`;
+            await sql\`
+              INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+              VALUES ('healer', \${c?.id || null}, 'error_fix', '${STATUS === 'success' ? 'success' : 'failed'}',
+                'Fix workflow on company repo (${STATUS})', NOW() - INTERVAL '20 minutes', NOW())
+            \`;
+            await sql.end();
+          }
+          log().catch(e => console.error(e.message));
+          "
+
+      - name: Notify Hive on completion
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          curl -s -X POST "https://api.github.com/repos/carloshmiranda/hive/dispatches" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d '{"event_type":"healer_complete","client_payload":{"company":"${{ github.event.inputs.company_slug }}","source":"company_fix"}}'

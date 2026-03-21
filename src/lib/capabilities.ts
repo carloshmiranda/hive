@@ -78,6 +78,76 @@ export function getUnconfiguredCapabilities(
 }
 
 /**
+ * Compare a company's capabilities against the boilerplate manifest.
+ * Returns features the company is missing that could be migrated.
+ */
+export interface BoilerplateGap {
+  id: string;
+  capability: string;
+  description: string;
+  files: string[];
+  sql?: string;
+  reason: string;
+}
+
+export function getBoilerplateGaps(
+  capabilities: Record<string, unknown> | null | undefined,
+  companyType: string,
+  manifest: { features: Array<{
+    id: string;
+    capability: string;
+    description: string;
+    files: string[];
+    sql?: string;
+    compatibility: Record<string, unknown>;
+  }> }
+): BoilerplateGap[] {
+  if (!capabilities) return [];
+
+  const gaps: BoilerplateGap[] = [];
+
+  for (const feature of manifest.features) {
+    const cap = hasCapability(capabilities, feature.capability);
+
+    // Skip if company already has this
+    if (cap.exists) continue;
+
+    // Skip if explicitly marked as not applicable
+    if (cap.makes_sense === false) continue;
+
+    const compat = feature.compatibility;
+
+    // Check company type compatibility
+    if (compat.company_types && !((compat.company_types as string[]).includes(companyType))) {
+      continue;
+    }
+
+    // Check prerequisite capability
+    if (compat.requires_capability) {
+      const prereq = hasCapability(capabilities, compat.requires_capability as string);
+      if (!prereq.exists) continue;
+    }
+
+    // Build reason
+    let reason = `Boilerplate includes ${feature.description} but company is missing it`;
+    if (compat.requires_setting) {
+      reason += ` (requires ${compat.requires_setting} setting to be configured)`;
+    }
+
+    gaps.push({
+      id: feature.id,
+      capability: feature.capability,
+      description: feature.description,
+      files: feature.files,
+      sql: feature.sql,
+      reason,
+    });
+  }
+
+  return gaps;
+}
+
+/**
  * Build a compact capabilities summary string for agent context injection.
  */
 export function capabilitiesSummary(

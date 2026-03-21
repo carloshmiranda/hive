@@ -69,11 +69,15 @@ Can edit any file directly or use the dashboard command bar for directives.
 
 Hive improves itself, not just sub-companies. The same patterns apply:
 
-### After every Claude Code session:
+### After every Claude Code session (mandatory — run `/context` or do manually):
 1. If something broke unexpectedly → write to MISTAKES.md
 2. If you discovered a better approach → write to MISTAKES.md or BACKLOG.md
 3. If you made an architectural decision → write to DECISIONS.md
-4. If the project state changed → update MEMORY.md (current state, changelog)
+4. If the project state changed → update memory files (project_infra.md, project_model_routing.md)
+5. If architecture, flows, or file structure changed → update CLAUDE.md
+6. Append a `[code]` entry to BRIEFING.md "Recent Context" summarizing changes
+7. Update BACKLOG.md — move completed items to Done, add newly discovered gaps
+8. **Do NOT skip this.** Context drift causes wrong recommendations in future sessions.
 
 ### During the orchestrator's weekly Retro Analyst cycle:
 1. Read MISTAKES.md for recurring patterns → extract prevention rules into CLAUDE.md
@@ -102,7 +106,10 @@ All orchestration runs in the cloud via GitHub Actions + Vercel serverless. No M
 - **Digest cron** (`/api/cron/digest`): Runs daily at 8am UTC, sends portfolio summary email via Resend
 
 ### Tier 2: GitHub Actions brain agents (event-driven, Claude Code)
-Brain agents (CEO, Scout, Engineer, Evolver) run on GitHub Actions via `anthropics/claude-code-action`. Triggered by `repository_dispatch` events — no scheduled crons, no Mac required. Chain dispatch calls worker agents directly on Vercel (no GitHub Actions proxy).
+Brain agents (CEO, Scout, Evolver) run on Hive's private repo via `anthropics/claude-code-action`. Engineer provision runs on Hive; Engineer build dispatches to company repos (public, unlimited minutes) via `workflow_dispatch`. Chain dispatch calls worker agents directly on Vercel (no GitHub Actions proxy).
+
+### Tier 2b: Company repo build workflows (unlimited minutes)
+Company repos are PUBLIC — GitHub gives unlimited Actions minutes. Each company repo has `hive-build.yml` which accepts `workflow_dispatch` with task payload. Engineer on Hive dispatches build tasks here instead of running them on Hive's private quota.
 
 ### Tier 3: Vercel serverless worker agents
 Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Called directly from brain agent chain dispatch steps or from Sentinel cron.
@@ -218,7 +225,8 @@ STEP 5: Self-healing (Healer agent)
 STEP 6: Venture Brain (requires 2+ active companies)
   - Portfolio analysis, resource allocation, kill switch evaluation
 
-STEP 7: Evolver (Wednesdays + event-driven)
+STEP 7: Evolver (data-driven, no calendar cron)
+  - Triggered by Sentinel when: >10 cycles since last evolve, failure rate >20%, max_turns exhaustion, or success rate drops >15pp week-over-week
   - Three-layer gap detection: outcome, capability, knowledge
   - Generates max 5 proposals per run → dashboard Inbox
   - On approval: prompt_update → immediate activation + implemented_at; setup_action → pending_manual todo + CEO dispatch; knowledge_gap → CEO dispatch
@@ -305,8 +313,9 @@ Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude
 | Engineer (provision) | Claude (GitHub Actions) | Sonnet | 15 | Scaffold infra — deterministic steps |
 | Engineer (build) | Claude (GitHub Actions) | Sonnet | 35 | Code execution, speed > reasoning |
 | Evolver | Claude (GitHub Actions) | Opus | 25 | Meta-cognitive prompt improvement |
-| Growth | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Content quality for SEO, within free quota |
-| Outreach | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Email personalization quality |
+| Growth | Company repo Actions (Gemini CLI) | 2.5 Flash | 25 | Can write files directly to company repo (blog posts, SEO pages). 1K RPD free tier. Fallback: Gemini API on Vercel |
+| Healer (company) | Company repo Actions (Claude Sonnet) | Sonnet | 20 | Fixes bugs in company code. Free on public repos. Fallback: Hive Engineer |
+| Outreach | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Email personalization quality — doesn't need repo access |
 | Ops | Groq API (Vercel serverless) | Llama 3.3 70B | N/A | Fast inference for health checks |
 | Sentinel | Vercel cron (Node.js) | None | N/A | Pure DB queries + HTTP checks, no LLM |
 | Digest | Vercel cron (Node.js) | None | N/A | Email assembly, no LLM |
@@ -322,10 +331,16 @@ Groq fails → fall back to Claude
 
 ### Required settings
 Add these in the Hive dashboard (/settings) to enable free-tier routing:
-- `gemini_api_key` — from https://aistudio.google.com/apikey (free, no credit card)
+- `gemini_api_key` — from https://aistudio.google.com/apikey (free, no credit card). Also set as `GEMINI_API_KEY` GitHub Actions secret on Hive repo (provisioner copies it to company repos for Growth workflow).
 - `groq_api_key` — from https://console.groq.com/keys (free)
 
 Without these keys, ALL agents fall back to Claude (works but burns quota faster).
+
+### Company repo secrets (set by provisioner)
+- `DATABASE_URL` — Hive Neon connection string (agents log results back)
+- `GH_PAT` — GitHub token for cross-repo dispatch
+- `CLAUDE_CODE_OAUTH_TOKEN` — for Engineer build + Healer fix workflows
+- `GEMINI_API_KEY` — for Growth content workflow (Gemini CLI)
 
 ## Self-Healing Architecture
 
@@ -421,16 +436,18 @@ Hive email works in two modes based on the `sending_domain` setting:
 
 When an approval with gate_type='new_company' is approved:
 
-1. Create GitHub repo via API (`carlos-miranda/{slug}`)
-2. Push Next.js boilerplate with CLAUDE.md, Stripe, auth scaffold
-3. Create Neon project via API (free tier, 0.5GB)
-4. Create Vercel project linked to GitHub repo (Hobby initially)
-5. Set env vars in Vercel (NEON connection string, Stripe keys, etc.)
-6. Create Stripe Product + Price with `metadata.hive_company = slug` (single account, no Connect)
+1. Create GitHub repo via API (`carloshmiranda/{slug}`) — **PUBLIC** (unlimited Actions minutes)
+2. Push Next.js boilerplate with CLAUDE.md, Stripe, auth scaffold, `hive-build.yml` workflow
+3. Replace ALL `{{PLACEHOLDER}}` strings in boilerplate files with real company data
+4. Set GitHub Actions secrets on company repo (DATABASE_URL, GH_PAT, CLAUDE_CODE_OAUTH_TOKEN)
+5. Create Vercel project linked to GitHub repo (Hobby initially)
+6. Set env vars in Vercel (NEON connection string, Stripe keys, etc.)
 7. Email sending uses the shared `sending_domain` setting — no per-company email setup needed
 8. Write all resource IDs to `infra` table
 9. Update company status to 'mvp'
 10. First CEO cycle runs on next nightly loop
+
+**Why public repos?** GitHub gives unlimited Actions minutes for public repos. Company repos contain no secrets (those live in Vercel env vars and GitHub Actions secrets). Hive (private) dispatches build tasks to company repos via `workflow_dispatch`, so build minutes come from the company's unlimited quota instead of Hive's 2,000 min/month.
 
 ## Importing Existing Projects
 
@@ -502,7 +519,7 @@ hive/
 ├── MISTAKES.md            ← production learnings log
 ├── BACKLOG.md             ← prioritised improvements
 ├── DECISIONS.md           ← architectural decision records
-├── schema.sql             ← Neon schema (13 tables)
+├── schema.sql             ← Neon schema (18 tables)
 ├── package.json
 ├── src/
 │   ├── middleware.ts       ← auth redirect
@@ -527,6 +544,8 @@ hive/
 │   │       ├── settings/            ← encrypted credential store
 │   │       ├── directives/          ← command bar → GitHub Issues
 │   │       ├── directives/[id]/close/ ← mark directive done
+│   │       ├── tasks/               ← per-company task backlog (CRUD + bulk)
+│   │       ├── tasks/[id]/          ← update task status/priority
 │   │       └── imports/             ← scan + onboard existing projects
 │   ├── lib/
 │   │   ├── db.ts           ← Neon connection + response helpers

@@ -100,6 +100,8 @@ jobs:
                - If cycles 6+ AND has customers: you are in OPTIMIZE mode — manage by metrics
                - Load the original Scout proposal from the approvals table (gate_type='new_company', status='approved')
                - Load ALL research reports for this company (market_research, competitive_analysis, seo_keywords)
+               - Load the previous product spec: `SELECT content FROM research_reports WHERE company_id = '<id>' AND report_type = 'product_spec'` — UPDATE it, don't rewrite from scratch
+               - After planning, ALWAYS save the updated product_spec to research_reports (UPSERT on company_id + report_type = 'product_spec')
             3. Based on the trigger:
                - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
                - cycle_complete: Score the cycle 1-10 using mode-specific criteria from prompts/ceo.md
@@ -208,7 +210,7 @@ jobs:
             # Chain to Engineer for features
             dispatch "feature_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
 
-            # Chain to workers DIRECTLY on Vercel (skips GitHub Actions proxy)
+            # Chain to workers — Growth on company repo (free), Outreach on Vercel serverless
             dispatch_worker() {
               curl -s -X POST "$HIVE_URL/api/agents/dispatch" \
                 -H "Authorization: Bearer $CRON_SECRET" \
@@ -216,8 +218,31 @@ jobs:
                 -d "{\"company_slug\":\"$COMPANY\",\"agent\":\"$1\",\"trigger\":\"ceo_plan\"}" \
                 -o /dev/null -w "  Worker $1: HTTP %{http_code}\n" || true
             }
+            dispatch_to_company_repo() {
+              local WORKFLOW="$1" SUMMARY="$2"
+              # Get company's github_repo from DB
+              GITHUB_REPO=$(node -e "
+                const postgres = require('postgres');
+                const sql = postgres(process.env.DATABASE_URL);
+                sql\`SELECT github_repo FROM companies WHERE slug = '${COMPANY}' LIMIT 1\`
+                  .then(r => { console.log(r[0]?.github_repo || ''); sql.end(); })
+                  .catch(() => { console.log(''); process.exit(0); });
+              " 2>/dev/null)
+              if [ -n "$GITHUB_REPO" ]; then
+                curl -s -X POST "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${WORKFLOW}/dispatches" \
+                  -H "Authorization: token $GH_PAT" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"ref\":\"main\",\"inputs\":{\"company_slug\":\"$COMPANY\",\"trigger\":\"ceo_plan\",\"task_summary\":\"$SUMMARY\"}}" \
+                  -o /dev/null -w "  Company $WORKFLOW: HTTP %{http_code}\n" || dispatch_worker "$3"
+              else
+                dispatch_worker "$3"
+              fi
+            }
+            # Growth → company repo (Claude, free) with Vercel fallback
             echo "$RESULT" | grep -qiP "growth_tasks|growth_strategy|content.?calendar" && \
-              dispatch_worker "growth"
+              dispatch_to_company_repo "hive-growth.yml" "Growth cycle for $COMPANY" "growth"
+            # Outreach → Vercel serverless (Gemini, doesn't need repo access)
             echo "$RESULT" | grep -qiP "outreach_tasks|lead.?list|cold.?email" && \
               dispatch_worker "outreach"
 

@@ -51,13 +51,16 @@ export async function POST(req: Request) {
   const sql = getDb();
 
   // Upsert: one report per type per company
+  // Content is JSONB — pass stringified JSON so Neon stores it as JSONB, not as a text string
+  const contentStr = typeof content === "string" ? content : JSON.stringify(content);
+  const sourcesStr = sources ? (typeof sources === "string" ? sources : JSON.stringify(sources)) : null;
   const [report] = await sql`
     INSERT INTO research_reports (company_id, report_type, content, summary, sources)
-    VALUES (${company_id}, ${report_type}, ${JSON.stringify(content)}, ${summary || null}, ${sources ? JSON.stringify(sources) : null})
+    VALUES (${company_id}, ${report_type}, ${contentStr}::jsonb, ${summary || null}, ${sourcesStr}::jsonb)
     ON CONFLICT (company_id, report_type) DO UPDATE SET
-      content = ${JSON.stringify(content)},
+      content = ${contentStr}::jsonb,
       summary = ${summary || null},
-      sources = ${sources ? JSON.stringify(sources) : null},
+      sources = ${sourcesStr}::jsonb,
       updated_at = now()
     RETURNING *
   `;

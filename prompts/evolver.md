@@ -12,6 +12,7 @@ Query `agent_actions` from the last 14 days. Calculate:
 - Per-company cycle scores from `cycles.ceo_review` (extract `score` field)
 - Agents below 70% success rate → outcome gap
 - Companies with declining cycle scores (3+ cycles trending down) → outcome gap
+- **CEO error_patterns**: Query `cycles.ceo_review` for `error_patterns` arrays — these are pre-diagnosed issues the CEO surfaced during cycle review. High-confidence signals because the CEO already analyzed them.
 
 ### Layer 2: Capability gaps (agent logs → what agents tried but couldn't do)
 Search `agent_actions` for:
@@ -19,6 +20,9 @@ Search `agent_actions` for:
 - `status = 'failed'` with similar `error` text appearing 3+ times → systemic gap
 - Agent output containing `missing_capabilities` or `capabilities_updated` → infrastructure gap
 - Companies where capabilities show `exists: false` for features the company should have
+- **Infra prerequisite failures**: agents dispatched for companies with `github_repo IS NULL` or `vercel_url IS NULL` — indicates Sentinel or CEO dispatching without checking prerequisites
+- **Template/placeholder failures**: company sites showing literal `{{COMPANY_NAME}}` — provisioning didn't replace templates
+- **Dispatch loop patterns**: same event type appearing 5+ times in 30 minutes for the same company — indicates a chain dispatch loop
 
 ### Layer 3: Knowledge gaps (playbook → what's known vs what's needed)
 Query `playbook` table:

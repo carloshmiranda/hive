@@ -211,3 +211,24 @@
 **Fix applied:** Sentinel now detects 0-turn failures from the last 6h, maps them back to the correct dispatch event type, and re-dispatches automatically.
 **Prevention:** Transient failures (rate limits, network timeouts) need retry logic distinct from permanent failures (code bugs, missing permissions). The system should classify errors and handle each category differently.
 **Affects:** both
+
+### 2026-03-21 Sentinel dispatched agents for companies without infrastructure
+**What happened:** Sentinel dispatched CEO, Engineer, Scout, Growth, Outreach for senhorio every 4 hours (~36 wasted Actions runs/day). All runs either failed or were cancelled because senhorio has status 'mvp' but no GitHub repo, no Vercel project, no Neon DB.
+**Root cause:** Sentinel queries filtered on `status IN ('mvp','active')` but never checked for actual infrastructure. A company can have status 'mvp' without infra if provisioning was interrupted or manual. Only checks 12 (stalled) and 13 (needs cycle) had `EXISTS (SELECT 1 FROM infra ...)` guards.
+**Fix applied:** Added `github_repo IS NOT NULL` to 8 Sentinel queries (checks 2-5, 8, 16, HTTP health, missing metrics). Check 9b (orphaned MVPs) intentionally keeps companies without infra — it dispatches `new_company` to trigger provisioning.
+**Prevention:** Any system that dispatches work for entities must verify the entity has the prerequisites to receive that work. Status fields alone are not sufficient — check for actual infrastructure (repo, project, DB). Rule: `status = 'mvp'` means "ready to build" but only if `github_repo IS NOT NULL AND vercel_url IS NOT NULL`.
+**Affects:** hive (Sentinel, Actions budget)
+
+### 2026-03-21 Boilerplate template placeholders never replaced — shipped literal {{COMPANY_NAME}}
+**What happened:** Company repos provisioned from the boilerplate contained literal `{{COMPANY_NAME}}`, `{{SLUG}}`, `{{COMPANY_URL}}` strings in page.tsx, layout.tsx, robots.txt, llms.txt, sitemap.ts, and package.json. The site would display "{{COMPANY_NAME}}" as the title.
+**Root cause:** The Engineer provision prompt only replaced placeholders in CLAUDE.md (via the template file). The boilerplate source files were copied verbatim with no sed/replace step. Also, placeholder names were inconsistent (`{{SLUG}}` vs `{{COMPANY_SLUG}}`). Also, `{{TARGET_AUDIENCE}}` and `{{VALUE_PROPOSITION}}` in llms.txt were undocumented.
+**Fix applied:** (1) Provisioning prompt now runs `find + xargs sed` to replace all 6 placeholder types across all boilerplate files. (2) `.github/` excluded from sed (GitHub Actions `${{ }}` syntax). (3) `{{POSITION}}` excluded (runtime template in waitlist route). (4) `{{COMPANY_SLUG}}` normalized to `{{SLUG}}` in sitemap.ts. (5) Verification grep added to confirm no unresolved templates.
+**Prevention:** Template systems must have: (a) a canonical list of ALL placeholders in one place, (b) a replacement step that covers ALL files (not just one), (c) a verification step that confirms no templates remain. When adding a new placeholder to any template file, add it to the canonical list AND the replacement step in the same commit.
+**Affects:** both (boilerplate, company repos)
+
+### 2026-03-21 Context files went stale — caused wrong recommendations in next session
+**What happened:** `project_infra.md` said `waitlist_total column missing` (already fixed), senhorio status was wrong, and `project_model_routing.md` claimed `claude-code-action@v1 only works with PR/issue triggers` (false — v1 works with all triggers including repository_dispatch). CLAUDE.md said "13 tables" (actually 17).
+**Root cause:** Architecture changes were implemented in code but documentation wasn't updated in the same session. No automated check or reminder to update context files after significant changes.
+**Fix applied:** (1) Fixed all stale memory files. (2) Created `/context` skill that reviews all 7 context files and updates stale ones. (3) Added PreCompact hook that reminds to save context before compaction. (4) Added SessionStart (compact) hook that re-injects BRIEFING.md after compaction. (5) Updated CLAUDE.md "Self-Improvement Rules" with mandatory 8-point checklist.
+**Prevention:** After ANY architecture, infrastructure, or workflow change: update BRIEFING.md, project_infra.md, DECISIONS.md, and CLAUDE.md in the same session. The PreCompact hook now fires automatically when context is about to compress, forcing a context save. Run `/context` when in doubt.
+**Affects:** hive (all future sessions)

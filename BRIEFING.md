@@ -21,7 +21,7 @@
 | Engineer | GitHub Actions + Claude | Features, bugs, Ops escalation, new companies | Code, deploy, scaffold, fix |
 | Evolver | GitHub Actions + Claude | Cycle threshold, failure rate | Prompt analysis + improvement |
 | Ops | Vercel serverless + Groq | Deploys, sentinel, agent failures | Health check, metrics, error detect |
-| Growth | Vercel serverless + Gemini | Scout research delivered, sentinel (stale content) | Blog, SEO, social content |
+| Growth | Company repo Actions + Claude (fallback: Vercel + Gemini) | Scout research delivered, sentinel (stale content) | Blog, SEO, social content |
 | Outreach | Vercel serverless + Gemini | Scout leads found, sentinel (stale leads) | Prospects, cold email, follow-up |
 
 ### Execution Model
@@ -37,6 +37,18 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-21 [code] Company-side workflows + backlog clear (8 items)
+**Massive backlog clear session.** Completed 8 items across P0-P2:
+1. **Product specification system** — CEO outputs accumulating product_spec, Engineer sees WHY they're building.
+2. **Healer workflow + legacy cleanup** — Created hive-healer.yml, deleted deprecated sentinel/worker-agents workflows.
+3. **Anomaly detection** — Sentinel check 18: 14-day rolling avg+stddev, >2σ → CEO alert.
+4. **Event-driven cadences** — Removed Evolver Wednesday cron, all data-condition-driven now.
+5. **Content performance feedback loop** — Per-URL trend analysis, refresh recommendations, Growth acts on them.
+6. **Automatic boilerplate migration** — Sentinel detects missing features, creates `capability_migration` gates, dispatches to company repo.
+7. **Company-side Growth workflow** — `hive-growth.yml` runs on company repos (free), creates content/SEO pages directly. CEO chain dispatch + Sentinel route Growth to company repo with Vercel serverless fallback.
+8. **Company-side Fix workflow** — `hive-fix.yml` runs on company repos (free). Healer + Ops escalation dispatch fixes to company repo instead of Hive Engineer.
+Architecture shift: Growth agent moves from Vercel serverless (Gemini, limited output) to company repo Actions (Claude Sonnet, can write files). Outreach stays on Vercel (doesn't need repo access). All dispatches have fallback chains.
 
 ### 2026-03-21 [code] GitHub Actions optimization + Vercel cron migration (ADR-020)
 Implemented two-part optimization to reduce GitHub Actions usage by ~10-12 runs/day:

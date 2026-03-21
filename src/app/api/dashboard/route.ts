@@ -126,7 +126,7 @@ async function companyDetail(sql: ReturnType<typeof getDb>, slug: string) {
   `;
   if (!company) return err("Company not found", 404);
 
-  const [cycles, actions, metrics, approvals, research] = await Promise.all([
+  const [cycles, actions, metrics, approvals, research, tasks] = await Promise.all([
     sql`SELECT * FROM cycles WHERE company_id = ${company.id} ORDER BY cycle_number DESC LIMIT 20`,
     sql`
       SELECT a.*, c.slug as company_slug FROM agent_actions a
@@ -151,7 +151,12 @@ async function companyDetail(sql: ReturnType<typeof getDb>, slug: string) {
       WHERE r.company_id = ${company.id}
       ORDER BY r.created_at DESC
     `,
+    sql`
+      SELECT * FROM company_tasks
+      WHERE company_id = ${company.id} AND status NOT IN ('done', 'dismissed')
+      ORDER BY priority ASC, created_at DESC
+    `.catch(() => []),
   ]);
 
-  return json({ company, cycles, actions, metrics, approvals, research });
+  return json({ company, cycles, actions, metrics, approvals, research, tasks });
 }

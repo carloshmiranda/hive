@@ -16,6 +16,7 @@ type Cycle = {
 type Action = {
   id: string; agent: string; action_type: string; description: string; status: string;
   error: string | null; reflection: string | null; tokens_used: number; finished_at: string;
+  output: Record<string, unknown> | null;
 };
 type Metric = {
   date: string; revenue: number; mrr: number; customers: number;
@@ -23,6 +24,10 @@ type Metric = {
 };
 type Approval = {
   id: string; gate_type: string; title: string; description: string; status: string; created_at: string;
+};
+type Task = {
+  id: string; category: string; title: string; description: string; priority: number;
+  status: string; source: string; prerequisites: string[]; acceptance: string | null; created_at: string;
 };
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -62,6 +67,7 @@ export default function CompanyDetailPage() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [research, setResearch] = useState<Array<{ id: string; report_type: string; summary: string | null; content: any; updated_at: string }>>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [directive, setDirective] = useState("");
   const [sending, setSending] = useState(false);
@@ -77,6 +83,7 @@ export default function CompanyDetailPage() {
     setMetrics(data.metrics || []);
     setApprovals(data.approvals || []);
     setResearch(data.research || []);
+    setTasks(data.tasks || []);
     setLoading(false);
   }, [slug]);
 
@@ -224,6 +231,66 @@ export default function CompanyDetailPage() {
         </div>
       )}
 
+      {/* Latest CEO Briefing */}
+      {(() => {
+        const briefingAction = actions.find(a => a.agent === "ceo" && (a.action_type === "ceo_briefing" || a.action_type === "execute_task") && a.status === "success" && a.output);
+        if (!briefingAction) return null;
+        const raw = briefingAction.output;
+        const o = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : raw;
+        if (!o) return null;
+        const review = o.review || o;
+        const briefing = review.briefing || review;
+        const whatIDid = briefing.what_i_did as string[] | undefined;
+        const findings = (briefing.key_findings || {}) as Record<string, string>;
+        const maturity = (briefing.product_maturity || {}) as Record<string, string[]>;
+        const planTomorrow = briefing.plan_tomorrow as string | undefined;
+        const score = review.score as number | undefined;
+        const scoreColor = score != null ? (score >= 7 ? "var(--hive-green)" : score >= 4 ? "var(--hive-amber)" : "var(--hive-red)") : undefined;
+
+        return (
+          <div style={{ marginBottom: 24, padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: 0, fontWeight: 500 }}>Latest CEO Briefing</h3>
+              {score != null && <span style={{ fontSize: 13, fontFamily: "var(--hive-mono)", fontWeight: 600, color: scoreColor }}>{score}/10</span>}
+              <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                {briefingAction.finished_at ? timeAgo(briefingAction.finished_at) : ""}
+              </span>
+            </div>
+            {whatIDid && whatIDid.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", marginBottom: 4 }}>Actions</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6 }}>
+                  {whatIDid.map((item, i) => <li key={i}>{item}</li>)}
+                </ul>
+              </div>
+            )}
+            {(findings.product_state || findings.critical_gap || findings.opportunity) && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", marginBottom: 4 }}>Findings</div>
+                {findings.product_state && <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginBottom: 4 }}>{findings.product_state}</div>}
+                {findings.critical_gap && <div style={{ fontSize: 13, color: "var(--hive-red)", marginBottom: 4 }}>Gap: {findings.critical_gap}</div>}
+                {findings.opportunity && <div style={{ fontSize: 13, color: "var(--hive-green)", marginBottom: 4 }}>Opportunity: {findings.opportunity}</div>}
+              </div>
+            )}
+            {maturity.done && maturity.done.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-mono)", marginBottom: 4 }}>Product maturity</div>
+                <div style={{ fontSize: 13, color: "var(--hive-text-secondary)" }}>
+                  <span style={{ color: "var(--hive-green)" }}>Done:</span> {maturity.done.join(", ")}
+                  {maturity.building && maturity.building.length > 0 && <> · <span style={{ color: "var(--hive-amber)" }}>Building:</span> {maturity.building.join(", ")}</>}
+                  {maturity.planned && maturity.planned.length > 0 && <> · <span style={{ color: "var(--hive-text-tertiary)" }}>Planned:</span> {maturity.planned.join(", ")}</>}
+                </div>
+              </div>
+            )}
+            {planTomorrow && (
+              <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", padding: "8px 0 0", borderTop: "1px solid var(--hive-border)" }}>
+                <span style={{ fontFamily: "var(--hive-mono)", fontSize: 12, color: "var(--hive-text-tertiary)" }}>Next: </span>{planTomorrow}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Capabilities */}
       {company && (
         <div style={{ marginBottom: 24 }}>
@@ -297,6 +364,83 @@ export default function CompanyDetailPage() {
           })()}
         </div>
       )}
+
+      {/* Task Backlog */}
+      <div style={{ marginBottom: 24 }}>
+        <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: "0 0 12px", fontWeight: 500 }}>
+          Tasks ({tasks.length})
+        </h3>
+        {tasks.length === 0 ? (
+          <div style={{ padding: 20, color: "var(--hive-text-tertiary)", fontSize: 13, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
+            No tasks yet — CEO will propose tasks on next cycle
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {tasks.map(t => {
+              const catColors: Record<string, string> = {
+                engineering: "var(--hive-green)", growth: "var(--hive-purple)", research: "var(--hive-blue, #60a5fa)",
+                qa: "var(--hive-amber)", ops: "var(--hive-pink, #f472b6)", strategy: "#38bdf8",
+              };
+              const prioLabels = ["P0", "P1", "P2", "P3"];
+              const prioColors = ["var(--hive-red)", "var(--hive-amber)", "var(--hive-text-secondary)", "var(--hive-text-dim)"];
+              const catColor = catColors[t.category] || "var(--hive-text-secondary)";
+              const statusColors: Record<string, string> = {
+                proposed: "var(--hive-text-tertiary)", approved: "var(--hive-blue, #60a5fa)",
+                in_progress: "var(--hive-amber)",
+              };
+
+              return (
+                <div key={t.id} style={{ padding: "12px 14px", background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500, padding: "1px 6px", borderRadius: 4,
+                      color: catColor, background: catColor + "14", border: `1px solid ${catColor}2a` }}>
+                      {t.category}
+                    </span>
+                    <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 600, color: prioColors[t.priority] || prioColors[2] }}>
+                      {prioLabels[t.priority] || "P2"}
+                    </span>
+                    <span style={{ fontSize: 13, color: "var(--hive-text)", fontWeight: 500, flex: 1 }}>{t.title}</span>
+                    <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: statusColors[t.status] || "var(--hive-text-dim)" }}>
+                      {t.status}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.5, marginBottom: 6 }}>
+                    {t.description.slice(0, 200)}{t.description.length > 200 ? "..." : ""}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {t.status === "proposed" && (
+                      <>
+                        <button onClick={async () => {
+                          await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "approved" }) });
+                          fetchData();
+                        }} style={{ padding: "4px 12px", fontSize: 11, fontFamily: "var(--hive-mono)", background: "var(--hive-green-bg)",
+                          border: "1px solid var(--hive-green-border)", borderRadius: 6, color: "var(--hive-green)", cursor: "pointer" }}>
+                          Approve
+                        </button>
+                        <button onClick={async () => {
+                          await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "dismissed" }) });
+                          fetchData();
+                        }} style={{ padding: "4px 12px", fontSize: 11, fontFamily: "var(--hive-mono)", background: "var(--hive-surface)",
+                          border: "1px solid var(--hive-border)", borderRadius: 6, color: "var(--hive-text-dim)", cursor: "pointer" }}>
+                          Dismiss
+                        </button>
+                      </>
+                    )}
+                    {t.prerequisites && t.prerequisites.length > 0 && (
+                      <span style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", marginLeft: "auto" }}>
+                        prereq: {t.prerequisites.join(", ")}
+                      </span>
+                    )}
+                    <span style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", marginLeft: t.prerequisites?.length ? 0 : "auto" }}>
+                      {t.source} · {timeAgo(t.created_at)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Research Reports */}
       {research.length > 0 && (

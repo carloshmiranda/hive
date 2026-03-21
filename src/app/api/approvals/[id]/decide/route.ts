@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { dispatchEvent } from "@/lib/dispatch";
+import { getSettingValue } from "@/lib/settings";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -109,6 +110,65 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
               'pending_manual', now(), now()
             )
           `;
+        }
+        break;
+      }
+
+      case "capability_migration": {
+        // Boilerplate migration approved — dispatch to company repo's hive-build.yml (free Actions)
+        const migCtx = approval.context as {
+          company?: string;
+          github_repo?: string;
+          boilerplate_version?: string;
+          gaps?: Array<{ id: string; capability: string; description: string; files: string[]; sql?: string }>;
+        } | null;
+
+        if (migCtx?.github_repo && migCtx?.gaps?.length) {
+          const ghPat = await getSettingValue("github_token") || process.env.GH_PAT;
+          if (ghPat) {
+            // Build migration task description for the Engineer
+            const migrationTasks = migCtx.gaps.map(g => {
+              let task = `Add ${g.description}`;
+              if (g.sql) task += `\nSQL: ${g.sql}`;
+              task += `\nFiles: ${g.files.join(", ")}`;
+              return task;
+            }).join("\n\n");
+
+            const taskSummary = `Boilerplate migration: add ${migCtx.gaps.length} features (${migCtx.gaps.map(g => g.id).join(", ")})`;
+
+            // Dispatch to company repo's hive-build.yml
+            await fetch(`https://api.github.com/repos/${migCtx.github_repo}/actions/workflows/hive-build.yml/dispatches`, {
+              method: "POST",
+              headers: {
+                Authorization: `token ${ghPat}`,
+                Accept: "application/vnd.github.v3+json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                ref: "main",
+                inputs: {
+                  task_summary: taskSummary,
+                  company_slug: migCtx.company || "",
+                  trigger: "boilerplate_migration",
+                  payload: JSON.stringify({
+                    migration_tasks: migrationTasks,
+                    gaps: migCtx.gaps,
+                    boilerplate_version: migCtx.boilerplate_version,
+                  }),
+                },
+              }),
+            });
+
+            // Log the dispatch
+            if (approval.company_id) {
+              await sql`
+                INSERT INTO agent_actions (company_id, agent, action_type, status, description, started_at, finished_at)
+                VALUES (${approval.company_id}, 'engineer', 'boilerplate_migration', 'success',
+                  ${`Dispatched migration to ${migCtx.github_repo}: ${migCtx.gaps.map(g => g.id).join(", ")}`},
+                  now(), now())
+              `;
+            }
+          }
         }
         break;
       }
