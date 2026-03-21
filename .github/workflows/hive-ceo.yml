@@ -10,12 +10,6 @@ on:
       - ceo_review
       - cycle_start
 
-  issues:
-    types: [opened, labeled]
-
-  pull_request:
-    types: [opened]
-
   workflow_dispatch:
     inputs:
       task:
@@ -36,12 +30,6 @@ jobs:
   ceo:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
-    # Only run on issues with directive/research labels
-    if: >
-      github.event_name != 'issues' ||
-      contains(github.event.issue.labels.*.name, 'directive') ||
-      contains(github.event.issue.labels.*.name, 'hive-directive')
 
     steps:
       - name: Checkout
@@ -66,12 +54,6 @@ jobs:
             PAYLOAD='${{ toJson(github.event.client_payload) }}'
             set_output "trigger" "repository_dispatch:${ACTION}"
             set_output "payload" "${PAYLOAD}"
-          elif [ "$EVENT" = "issues" ]; then
-            set_output "trigger" "issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}"
-            set_output "payload" "{\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}"
-          elif [ "$EVENT" = "pull_request" ]; then
-            set_output "trigger" "pr:#${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}"
-            set_output "payload" "{\"pr_number\":${{ github.event.pull_request.number }}}"
           else
             set_output "trigger" "manual${TASK:+: $TASK}"
             set_output "payload" "{\"task\":\"${TASK}\"}"

@@ -9,9 +9,6 @@ on:
       - new_company
       - research_request
 
-  issues:
-    types: [opened, labeled]
-
   workflow_dispatch:
     inputs:
       mode:
@@ -36,9 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
-    # Only run on issues with research label; skip new_company if it's a provisioning dispatch (those go to Engineer)
+    # Skip new_company if it's a provisioning dispatch (those go to Engineer)
     if: >
-      (github.event_name != 'issues' || contains(github.event.issue.labels.*.name, 'research')) &&
       (github.event.action != 'new_company' || github.event.client_payload.source != 'ceo') &&
       (github.event.action != 'new_company' || github.event.client_payload.source != 'sentinel')
 
@@ -63,9 +59,6 @@ jobs:
             PAYLOAD='${{ toJson(github.event.client_payload) }}'
             set_output "trigger" "${ACTION}"
             set_output "payload" "${PAYLOAD}"
-          elif [ "$EVENT" = "issues" ]; then
-            set_output "trigger" "research_issue"
-            set_output "payload" "{\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\"}"
           else
             set_output "trigger" "${{ github.event.inputs.mode }}"
             set_output "payload" "{\"mode\":\"${{ github.event.inputs.mode }}\",\"company\":\"${{ github.event.inputs.company }}\"}"

@@ -9,12 +9,6 @@ on:
       - ops_escalation
       - deploy_drift
 
-  issues:
-    types: [opened, labeled]
-
-  pull_request_review:
-    types: [submitted]
-
   workflow_dispatch:
     inputs:
       task:
@@ -48,11 +42,6 @@ jobs:
       company: ${{ steps.ctx.outputs.company }}
       company_repo: ${{ steps.ctx.outputs.company_repo }}
 
-    if: >
-      github.event_name != 'issues' ||
-      contains(github.event.issue.labels.*.name, 'feature') ||
-      contains(github.event.issue.labels.*.name, 'bug')
-
     steps:
       - name: Build context
         id: ctx
@@ -70,12 +59,6 @@ jobs:
             PAYLOAD='${{ toJson(github.event.client_payload) }}'
             set_output "trigger" "${ACTION}"
             set_output "payload" "${PAYLOAD}"
-          elif [ "$EVENT" = "issues" ]; then
-            set_output "trigger" "issue:#${{ github.event.issue.number }} ${{ github.event.issue.title }}"
-            set_output "payload" "{\"issue_number\":${{ github.event.issue.number }},\"title\":\"${{ github.event.issue.title }}\",\"body\":$(echo '${{ github.event.issue.body }}' | jq -Rs .)}"
-          elif [ "$EVENT" = "pull_request_review" ]; then
-            set_output "trigger" "pr_approved:#${{ github.event.pull_request.number }}"
-            set_output "payload" "{\"pr_number\":${{ github.event.pull_request.number }},\"state\":\"${{ github.event.review.state }}\"}"
           else
             set_output "trigger" "manual"
             set_output "payload" "{\"task\":\"${{ github.event.inputs.task }}\",\"company\":\"${{ github.event.inputs.company }}\"}"
