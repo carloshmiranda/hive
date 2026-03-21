@@ -28,14 +28,14 @@ Hive is a **fully AI-centric autonomous venture orchestrator**. It spawns busine
 ### Milestone: Dispatch chain working end-to-end
 - [x] CEO → Engineer dispatch (repository_dispatch)
 - [x] Engineer → company repo dispatch (workflow_dispatch) — fixed 422 payload bug
-- [ ] Company repo hive-build.yml completes a real feature build
+- [x] Company repo hive-build.yml completes a real feature build
 - [ ] Company repo hive-growth.yml creates real content
 - [ ] Growth dispatches to company repo with Vercel fallback
 - [ ] Full chain verified: CEO plan → Engineer build → Growth content → Ops verify
 
 ### Milestone: First revenue
 - [ ] Email sending domain verified (Resend)
-- [ ] Stripe products created per company (auto-provision)
+- [x] Stripe products created per company (auto-provision)
 - [ ] Outreach pipeline sending real emails
 - [ ] Any Hive company receives first Stripe payment
 - [ ] MVP → active transition triggers (first_revenue approval)

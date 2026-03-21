@@ -50,6 +50,9 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-21 [code] Full system audit + critical fixes + priority-scored dispatch (ADR-023)
+- [code] 2026-03-21: Full system audit + fixes: hasCapability bug, schema constraints, OIDC dynamic audience, token error handling, approval auto-expiry, outreach guard, priority-scored dispatch (ADR-023), boilerplate quality (semantic HTML, SVG icons, template placeholders, 404 page), Engineer content integrity + language consistency rules
+
 ### 2026-03-21 [code] OIDC gateway + zero-secret repos + dispatch chain verified
 **Architecture change:** Company repos no longer need ANY secrets (including DATABASE_URL). All auth via GitHub OIDC token exchange through `/api/agents/token`. All data access via Hive API gateway (`/api/agents/context`, `/api/agents/log`, `/api/agents/tasks/:id`, `/api/agents/playbook`). Shared OIDC validation extracted to `src/lib/oidc.ts`.
 **Critical fix:** GitHub Actions strips masked secrets from cross-job outputs (`::add-mask::` + job output = empty in downstream jobs). Engineer workflow restructured: each job (provision, build, build-hive) now fetches its own tokens via OIDC instead of relying on context job outputs. Also replaced DB logging in build jobs with Hive API calls.
@@ -184,11 +187,11 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Execute remaining approved company tasks** — verdedesk (P1 e2e test, P2 calculator, P3 analytics), senhorio (P2 e2e verify, P3 rent calculator), flolio (P1 onboarding)
-2. **Run CEO for VerdeDesk** — trigger CEO workflow, will enter BUILD mode, spec features from research data
-3. **Resolve email domain** — buy domain, add Resend DNS records, set `sending_domain` (outreach still blocked)
+1. **First real nightly cycle run** — trigger full orchestrator dispatch end-to-end, verify CEO → Engineer → Growth chain works with all audit fixes applied
+2. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
+3. **Test full dispatch chain end-to-end** — verify priority-scored dispatch, OIDC dynamic audience, token error handling, approval auto-expiry all work in production
 4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
-5. **Review Evolver proposals** — approve/reject in Inbox tab
+5. **Review Evolver proposals + pending approvals** — approve/reject in Inbox tab, clear the 9 stale Scout proposals
 
 ## Open Questions
 

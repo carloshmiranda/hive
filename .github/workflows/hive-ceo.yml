@@ -224,8 +224,10 @@ jobs:
           RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
           TRIGGER="${{ steps.context.outputs.trigger }}"
+          TRACE_ID=$(echo '${{ toJSON(github.event.client_payload) }}' | jq -r '.trace_id // empty')
           echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
           echo "Trigger: $TRIGGER"
+          echo "Trace ID: $TRACE_ID"
 
           dispatch() {
             curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
@@ -261,8 +263,11 @@ jobs:
             return 1
           }
 
-          # Build reusable payload with company + company_id
+          # Build reusable payload with company + company_id + trace_id
           BASE_PAYLOAD="\"company\":\"$COMPANY\",\"company_id\":\"$COMPANY_ID\""
+          if [ -n "$TRACE_ID" ]; then
+            BASE_PAYLOAD="$BASE_PAYLOAD,\"trace_id\":\"$TRACE_ID\""
+          fi
 
           # Only dispatch downstream agents for cycle_start (not cycle_complete — avoids infinite loop)
           IS_CYCLE_START=false
@@ -281,10 +286,15 @@ jobs:
 
             # Define dispatch helpers (must be before first call)
             dispatch_worker() {
+              local WORKER_PAYLOAD="{\"company_slug\":\"$COMPANY\",\"agent\":\"$1\",\"trigger\":\"ceo_plan\""
+              if [ -n "$TRACE_ID" ]; then
+                WORKER_PAYLOAD="$WORKER_PAYLOAD,\"trace_id\":\"$TRACE_ID\""
+              fi
+              WORKER_PAYLOAD="$WORKER_PAYLOAD}"
               curl -s -X POST "$HIVE_URL/api/agents/dispatch" \
                 -H "Authorization: Bearer $CRON_SECRET" \
                 -H "Content-Type: application/json" \
-                -d "{\"company_slug\":\"$COMPANY\",\"agent\":\"$1\",\"trigger\":\"ceo_plan\"}" \
+                -d "$WORKER_PAYLOAD" \
                 -o /dev/null -w "  Worker $1: HTTP %{http_code}\n" || true
             }
             dispatch_to_company_repo() {

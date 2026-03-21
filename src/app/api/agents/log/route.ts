@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { company_slug, agent, action_type, status, description, error: errorMsg } = body;
+  const { company_slug, agent, action_type, status, description, error: errorMsg, trace_id, metadata: bodyMetadata } = body;
   if (!agent || !action_type || !status) {
     return err("Missing required fields: agent, action_type, status", 400);
   }
@@ -30,10 +30,19 @@ export async function POST(req: NextRequest) {
     companyId = company?.id || null;
   }
 
+  // Merge trace_id into metadata for correlation across dispatch chains
+  const metadata = {
+    ...(typeof bodyMetadata === "object" && bodyMetadata ? bodyMetadata : {}),
+    ...(trace_id ? { trace_id } : {}),
+  };
+  const hasMetadata = Object.keys(metadata).length > 0;
+
   await sql`
-    INSERT INTO agent_actions (agent, company_id, action_type, status, description, error, started_at, finished_at)
+    INSERT INTO agent_actions (agent, company_id, action_type, status, description, error, metadata, started_at, finished_at)
     VALUES (${agent}, ${companyId}, ${action_type}, ${status},
-      ${description || null}, ${errorMsg || null}, NOW() - INTERVAL '20 minutes', NOW())
+      ${description || null}, ${errorMsg || null},
+      ${hasMetadata ? JSON.stringify(metadata) : null}::jsonb,
+      NOW() - INTERVAL '20 minutes', NOW())
   `;
 
   return json({ logged: true });

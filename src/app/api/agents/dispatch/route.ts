@@ -5,6 +5,27 @@ import { capabilitiesSummary } from "@/lib/capabilities";
 import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
 
+// Retry wrapper for transient LLM API failures (429, 5xx, network errors)
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok || [400, 401, 403, 404].includes(res.status)) return res;
+      if (attempt < maxRetries) {
+        const delay = attempt === 0 ? 1000 : 3000;
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+      const delay = attempt === 0 ? 1000 : 3000;
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw new Error("fetchWithRetry: unreachable");
+}
+
 // Agents that can run on Vercel serverless (Gemini/Groq HTTP calls only)
 const WORKER_AGENTS = ["growth", "outreach", "ops"] as const;
 type WorkerAgent = typeof WORKER_AGENTS[number];
@@ -300,7 +321,7 @@ async function callGemini(prompt: string, model: string): Promise<string> {
   if (!apiKey) throw new Error("gemini_api_key not configured in settings");
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -329,7 +350,7 @@ async function callGroq(prompt: string, model: string): Promise<string> {
   const apiKey = await getSettingValue("groq_api_key");
   if (!apiKey) throw new Error("groq_api_key not configured in settings");
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
