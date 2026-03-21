@@ -172,27 +172,32 @@ jobs:
                git config user.email "noreply@github.com"
                git remote set-url origin https://x-access-token:${GH_PAT}@github.com/<github_repo>.git
                ```
-            5. Read the cycle's `ceo_plan` → `engineering_tasks` array. Pick the FIRST task that hasn't been completed yet.
+            5. Check for existing work before starting:
+               - List open PRs: `GH_TOKEN="$GH_PAT" gh pr list --repo <github_repo> --state open --json number,title,headRefName`
+               - List branches: `git branch -r | grep hive/`
+               - If there's an open PR for a task, skip that task (it's already done)
+               - If there's an unmerged branch matching `hive/cycle-*` with no PR, create the PR for it first, then move to the next task
+            6. Read the cycle's `ceo_plan` → `engineering_tasks` array. Pick the FIRST task that hasn't been completed yet.
                IMPORTANT: Implement ONE engineering task per run. Do NOT try to do all tasks — you have limited turns.
-            6. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
-            7. Implement the task following the acceptance criteria in `ceo_plan.engineering_tasks[].acceptance`
-            8. Install dependencies if needed: `npm install`
-            9. Build to verify: `npx next build` — fix any errors before proceeding
-            10. Commit and push:
+            7. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
+            8. Implement the task following the acceptance criteria in `ceo_plan.engineering_tasks[].acceptance`
+            9. Install dependencies if needed: `npm install`
+            10. Build to verify: `npx next build` — fix any errors before proceeding
+            11. Commit and push:
                 ```bash
                 git add -A && git commit -m "feat: <task summary>"
                 git push -u origin hive/cycle-<N>-<task-id>
                 ```
-            11. Open a PR:
+            12. Open a PR:
                 ```bash
                 GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"
                 ```
-            12. Log success to DB:
+            13. Log success to DB:
                 ```sql
                 INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
                 VALUES ('engineer', '<company_id>', 'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
                 ```
-            13. Output: { "pr_opened": true, "pr_number": N, "company": "<slug>" }
+            14. Output: { "pr_opened": true, "pr_number": N, "company": "<slug>" }
 
             ## ops_escalation — Fix errors
             1. Extract company slug from PAYLOAD
