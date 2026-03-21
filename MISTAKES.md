@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-21 CEO agent never merged PRs — open PRs piled up across all companies
+**What happened:** Engineer agent opened PRs and dispatched `ceo_review`, but PRs sat open unmerged. Senhorio had 3 open PRs (redesign, calculator, blog), VerdeDesk had 2, Flolio had 2. Senhorio was still showing a white boilerplate page because the redesign PR was never merged.
+**Root cause:** The CEO prompt's `ceo_review` handler said "Do portfolio analysis across all companies" — it had no instructions to review or merge the PR from the payload. Also, `GH_PAT` was not passed as an env var to the CEO agent step.
+**Fix applied:** Updated `hive-ceo.yml`: (1) `ceo_review` now has explicit PR review/merge instructions using `gh pr view`, `gh pr diff`, and `gh pr merge`. (2) Added `GH_PAT` env var to the agent step. (3) Manually merged all 7 open PRs across 3 companies.
+**Prevention:** When adding chain dispatch between agents, always verify the receiving agent's prompt handles the dispatched event with concrete actions, not generic descriptions. Every dispatch must have a matching handler that does something actionable.
+**Affects:** both
+
 ### 2026-03-18 next-auth v5 is still beta
 **What happened:** `npm install` failed — `next-auth@^5.0.0` doesn't exist as a stable release.
 **Root cause:** Assumed v5 was GA. It's still in beta (5.0.0-beta.30 as of March 2026).
