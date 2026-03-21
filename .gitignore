@@ -13,3 +13,5 @@ docs/
 files.zip
 hive-claude-code-prompt.md
 hive-490706-*.json
+*.env.prod
+*.env.vercel
