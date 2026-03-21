@@ -87,12 +87,15 @@ jobs:
 
       - name: Run CEO agent
         id: agent
+        env:
+          GH_PAT: ${{ steps.auth.outputs.gh_pat }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
           claude_args: "--model claude-opus-4-20250514 --max-turns 40 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the CEO agent of Hive, an autonomous venture orchestrator.
+            GH_PAT is available as $GH_PAT env var — use it for all gh commands: `GH_TOKEN="$GH_PAT" gh ...`
 
             TRIGGER: ${{ steps.context.outputs.trigger }}
             PAYLOAD: ${{ steps.context.outputs.payload }}
@@ -115,7 +118,14 @@ jobs:
                - cycle_complete: Score the cycle 1-10 using mode-specific criteria from prompts/ceo.md
                - gate_approved: Route the approval. If gate_type is 'new_company', output needs_provisioning: true so Engineer can scaffold the repo, Vercel project, Neon DB, and Stripe product. Include the company slug.
                - cycle_start: Start a new cycle for the specified company. Load research reports, determine lifecycle mode, create a cycle plan with engineering_tasks and growth_tasks.
-               - ceo_review: Do portfolio analysis across all companies
+               - ceo_review: Review the PR from the Engineer agent. The payload contains `company` and `pr_number`.
+                 1. Read the PR diff: `GH_TOKEN="$GH_PAT" gh pr view <pr_number> --repo carloshmiranda/<company> --json title,body,additions,deletions,changedFiles`
+                 2. Read the actual code changes: `GH_TOKEN="$GH_PAT" gh pr diff <pr_number> --repo carloshmiranda/<company>`
+                 3. Check strategic alignment with the company's product spec and current cycle plan
+                 4. If the PR looks good (builds, implements what was asked, no security issues): MERGE it with `GH_TOKEN="$GH_PAT" gh pr merge <pr_number> --repo carloshmiranda/<company> --merge`
+                 5. If the PR has issues: leave a review comment explaining what needs fixing
+                 6. After merging, check if there are more open PRs for this company and review those too
+                 7. Output: { "pr_merged": true/false, "pr_number": N, "company": "<slug>" }
                - issue/directive: Decompose into tasks, assign to agents
                - PR opened: Review for strategic alignment
                - manual: Execute the specified task
