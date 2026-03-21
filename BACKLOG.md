@@ -21,8 +21,8 @@
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
 
-### 🟡 P1 — PR auto-merge for company repos
-Engineer creates PRs on company repos but nobody merges them. Stale PRs accumulate. Options: (a) Add a workflow that auto-merges `hive/*` branches after build passes, (b) Have Engineer push directly to main (simpler for AI-managed repos). Decision needed.
+### 🟡 P1 — PR review quality criteria for CEO agent
+CEO agent now reviews and merges PRs (fixed 2026-03-21), but review criteria are vague ("strategic alignment"). Need concrete review checklist: build passes, no regressions, matches acceptance criteria, no security issues. Research in progress.
 
 ### 🟡 P1 — Scout proposal auto-expiry
 9 pending proposals cluttering the inbox. Add auto-expiry: proposals older than 7 days auto-reject with reason "expired — not reviewed". Sentinel check. Prevents approval debt.
