@@ -21,6 +21,7 @@ const SECRET_KEYS = new Set([
   "neon_api_key", "vercel_token", "github_token",
   "stripe_secret_key", "resend_api_key", "google_search_console_key",
   "gemini_api_key", "groq_api_key", "bing_webmaster_key",
+  "claude_code_oauth_token", "cron_secret",
 ]);
 
 // All valid setting keys
@@ -32,6 +33,7 @@ const VALID_KEYS = [
   "google_search_console_key",
   "gemini_api_key", "groq_api_key",
   "bing_webmaster_key", "indexnow_key",
+  "claude_code_oauth_token", "cron_secret",
   "digest_email", "notification_email",
 ];
 
