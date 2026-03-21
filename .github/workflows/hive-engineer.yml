@@ -126,7 +126,9 @@ jobs:
 
             1. Create GitHub repo: `GH_TOKEN="$GH_PAT" gh repo create carloshmiranda/<slug> --public --description "<description>"`
                If the repo already exists, skip this step.
-            2. Copy templates/boilerplate/ into /tmp/<slug>, then replace ALL template placeholders:
+            2. Copy templates/boilerplate/ into /tmp/<slug> (INCLUDE hidden dirs like .github/):
+               `cp -a templates/boilerplate/. /tmp/<slug>/` (the `-a` flag preserves structure, the `/.` copies hidden dirs)
+               Then replace ALL template placeholders:
                Run these sed commands (use `sed -i` WITHOUT quotes after -i — this runs on Ubuntu):
                ```bash
                cd /tmp/<slug>
@@ -169,7 +171,7 @@ jobs:
                git init && git add -A
                git config user.name "Hive Engineer"
                git config user.email "noreply@github.com"
-               git commit -m "Initial scaffold"
+               git commit -m "feat: initial scaffold for <slug>"
                git remote add origin https://x-access-token:${GH_PAT}@github.com/carloshmiranda/<slug>.git
                git push -u origin main
                ```
@@ -205,6 +207,30 @@ jobs:
                  github_repo = 'carloshmiranda/<slug>',
                  updated_at = NOW()
                WHERE id = '<id>'
+               ```
+            6b. Ensure company repo has Hive agent workflows (for both new and imported repos):
+               Check if `.github/workflows/hive-build.yml` exists in the company repo:
+               ```bash
+               HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                 -H "Authorization: token $GH_PAT" \
+                 "https://api.github.com/repos/carloshmiranda/<slug>/contents/.github/workflows/hive-build.yml")
+               if [ "$HTTP_CODE" != "200" ]; then
+                 echo "Pushing Hive workflow files to company repo..."
+                 for file in hive-build.yml hive-growth.yml hive-fix.yml; do
+                   CONTENT=$(base64 -w0 templates/boilerplate/.github/workflows/$file)
+                   curl -s -X PUT "https://api.github.com/repos/carloshmiranda/<slug>/contents/.github/workflows/$file" \
+                     -H "Authorization: token $GH_PAT" \
+                     -H "Accept: application/vnd.github.v3+json" \
+                     -d "{\"message\":\"chore: add Hive agent workflows\",\"content\":\"$CONTENT\"}"
+                 done
+               fi
+               ```
+            6c. Make company repo public (unlimited Actions minutes):
+               ```bash
+               curl -s -X PATCH "https://api.github.com/repos/carloshmiranda/<slug>" \
+                 -H "Authorization: token $GH_PAT" \
+                 -H "Accept: application/vnd.github.v3+json" \
+                 -d '{"visibility":"public"}'
                ```
             7. Log success: `INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at) VALUES ('engineer', '<id>', 'scaffold_company', 'success', 'Provisioned: GitHub repo + Vercel project', NOW(), NOW())`
             8. Generate initial product spec from the Scout proposal:
