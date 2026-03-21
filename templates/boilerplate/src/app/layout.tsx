@@ -4,10 +4,28 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "{{COMPANY_NAME}}",
   description: "{{DESCRIPTION}}",
+  metadataBase: new URL("{{COMPANY_URL}}"),
+  verification: {
+    google: "{{GSC_VERIFICATION}}", // Google Search Console
+  },
   openGraph: {
     title: "{{COMPANY_NAME}}",
     description: "{{DESCRIPTION}}",
     type: "website",
+    images: [
+      {
+        url: "/api/og",
+        width: 1200,
+        height: 630,
+        alt: "{{COMPANY_NAME}}",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "{{COMPANY_NAME}}",
+    description: "{{DESCRIPTION}}",
+    images: ["/api/og"],
   },
 };
 

@@ -46,6 +46,7 @@
 - JSON-LD structured data on layout (Organization + WebSite) and FAQ sections
 
 ## Constraints
+- Landing page MUST include visual product previews (CSS/SVG mockups in browser frames). Never ship a landing page with text-only feature descriptions. Customize the generic dashboard mockup to match the product domain.
 - Budget: minimal — free tier infrastructure until revenue justifies upgrades
 - No external dependencies unless absolutely necessary
 - Mobile-responsive from day one — `flex-col md:flex-row` for stacking, `px-4 sm:px-6` on containers
@@ -59,6 +60,15 @@
 - **GitHub repo**: {{GITHUB_REPO}}
 - **Stripe account**: {{STRIPE_ACCOUNT_ID}}
 - **URL**: {{VERCEL_URL}}
+
+## Search Engine Discovery (Day 1 Requirements)
+- sitemap.xml must list ALL pages (landing, tools, blog posts, legal)
+- robots.txt must reference sitemap URL and allow all crawlers (including AI bots)
+- llms.txt must exist in public/ for AI crawler optimization
+- IndexNow key must exist in public/ for instant Bing/Yandex indexing
+- Google Search Console: add verification meta tag to layout (Carlos verifies ownership)
+- After every deploy with new pages: ping IndexNow with new URLs
+- Every page needs: unique title, meta description, canonical URL, OG image
 
 ## Do NOT
 - Install packages without justification

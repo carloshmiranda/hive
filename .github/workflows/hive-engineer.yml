@@ -192,7 +192,12 @@ jobs:
                  -e 's/{{STEP_2_DESC}}/<step_2_desc>/g' \
                  -e 's/{{STEP_3_TITLE}}/<step_3_title>/g' \
                  -e 's/{{STEP_3_DESC}}/<step_3_desc>/g' \
-                 -e "s/{{LAUNCH_DATE}}/$(date +%Y-%m-%d)/g"
+                 -e 's/{{METRIC_1}}/<metric_1_label>/g' \
+                 -e 's/{{METRIC_2}}/<metric_2_label>/g' \
+                 -e 's/{{METRIC_3}}/<metric_3_label>/g' \
+                 -e "s/{{LAUNCH_DATE}}/$(date +%Y-%m-%d)/g" \
+                 -e "s/{{INDEXNOW_KEY}}/$(openssl rand -hex 16)/g" \
+                 -e 's/{{GSC_VERIFICATION}}//g'
                ```
                Get ALL placeholder values from the proposal context (step below):
                - TARGET_AUDIENCE, VALUE_PROPOSITION: from the proposal description
@@ -200,6 +205,8 @@ jobs:
                - FEATURE_1/2/3_TITLE and FEATURE_1/2/3_DESC: Extract 3 key product features from the proposal. These appear on the landing page as feature cards. Write in the LANG language.
                - FAQ_1/2/3_Q and FAQ_1/2/3_A: Generate 3 relevant FAQs based on the product, target audience, and business model from the proposal. Write in the LANG language.
                - STEP_1/2/3_TITLE and STEP_1/2/3_DESC: 3 concrete steps showing how THIS product works (not generic "sign up, set up, get results"). Write in the LANG language. Each title 2-4 words, each desc under 80 chars.
+               - METRIC_1/2/3: 3 domain-specific metric labels for the dashboard preview (e.g., "Active Users", "Revenue", "Uptime"). Write in the LANG language. Keep under 15 chars each.
+               When building the landing page, customize the product preview mockups to show the actual product UI. Replace the generic dashboard mockup with a domain-specific preview (e.g., for a tax tool show tax calculations, for a portfolio tracker show holdings). The mockup should be built with CSS/SVG, not images.
                IMPORTANT: sed values must NOT contain `/` or `&` — escape them or use simple text. Keep feature titles short (3-5 words) and descriptions under 100 chars.
                Do NOT replace `{{POSITION}}` in waitlist/route.ts — that's a runtime template.
                CRITICAL verification — fail if placeholders remain:
