@@ -53,6 +53,8 @@ Common root causes in Hive:
   VALUES ('<domain>', '<what we learned>', '<what error triggered this>', 0.7, <company_id or NULL>)
   ```
   This feeds future companies via the Provisioner — they inherit the fix at creation time.
+- **Write to BACKLOG.md** if you discover a deeper issue you can't fix in this session (needs design work, touches too many files, or requires a new feature). Append under "## Planned" with P1/P2 priority and evidence.
+- **Update ROADMAP.md** if a milestone is now complete (check it off).
 - Log what you fixed and what you couldn't to `agent_actions`
 
 ## Fix priority

@@ -179,6 +179,8 @@ jobs:
           - Always use \`GH_TOKEN=\"\$GH_PAT\"\` for gh commands
           - Write to agent_actions table: what you did, status, any errors
           - If you open a PR, output: { \"pr_opened\": true, \"pr_number\": N }
+          - If you discover issues you can't fix in this run, add them to BACKLOG.md (read it first to avoid duplicates)
+          - After completing work, move the relevant BACKLOG.md item to Done with today's date
           " 2>&1 | tee /tmp/claude-output.txt
 
       - name: Log failure to Hive DB

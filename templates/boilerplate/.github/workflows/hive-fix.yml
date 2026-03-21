@@ -152,9 +152,10 @@ jobs:
 
           RULES:
           - Fix, don't refactor. Minimum change to resolve the error.
-          - Max 3 files per fix. If more needed, log an escalation.
+          - Max 3 files per fix. If more needed, log an escalation and add to BACKLOG.md.
           - Always run \`npx next build\` before committing.
           - Push directly to main (fixes don't need PR review).
+          - If you find deeper issues you can't fix now, add them to BACKLOG.md with priority and evidence.
           " 2>&1 | tee /tmp/claude-output.txt
 
       - name: Log results to Hive DB

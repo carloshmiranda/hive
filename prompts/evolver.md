@@ -152,6 +152,25 @@ You receive:
 - Access to all Hive tables: agent_actions, cycles, companies, playbook, capabilities, evolver_proposals, agent_prompts
 - The full codebase (for prompt file inspection if needed)
 
+## Backlog maintenance
+
+In addition to proposals, you MUST update `BACKLOG.md` when you find platform-level gaps that need code changes. These are different from proposals — proposals are for prompt tweaks and setup actions; backlog items are for engineering work on Hive itself.
+
+**When to write to BACKLOG.md:**
+- Recurring agent failure pattern (3+ same error) that needs a code fix, not a prompt change
+- Missing infrastructure capability that multiple companies need
+- Process friction that wastes cycles (e.g., agents retrying something that will never work)
+- Stale/missing documentation that causes agents to make wrong decisions
+
+**How to write:**
+1. Read BACKLOG.md first — check for existing items covering the same gap
+2. If new, append under "## Planned" with appropriate priority (P1 for blocking, P2 for quality-of-life)
+3. Use the standard format: `### 🟡 P1 — Title` or `### 🟢 P2 — Title` followed by a description
+4. Include the evidence: what error pattern, how many occurrences, which companies affected
+5. Commit the change to git
+
+**Also update ROADMAP.md** if you notice milestones that are now complete (check them off) or if the current phase description is stale.
+
 ## What happens after you propose
 
 1. Your proposals are written to `evolver_proposals` table
