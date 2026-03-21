@@ -273,3 +273,10 @@
 **Fix applied:** (1) Added `GH_TOKEN: secrets.GH_PAT` as env var directly on the provision job (agents inherit it automatically). (2) Added `NEON_API_KEY` to Engineer env block. (3) Added descriptive error message for 404 failures pointing to PAT scope check.
 **Prevention:** When a GitHub API call returns 404, first check PAT scopes — GitHub returns 404 instead of 403 for security. Always set `GH_TOKEN` as a job-level env var, never rely on prompts to instruct agents to export it. Required PAT scopes for Hive: `repo`, `workflow`, `admin:org` (for secrets).
 **Affects:** hive (Engineer workflow, all company builds)
+
+### 2026-03-21 Boilerplate updates not retroactively applied to existing companies
+**What happened:** Updated workflow files (hive-build.yml, hive-growth.yml, hive-fix.yml) and added BACKLOG.md to the boilerplate, but existing companies (VerdeDesk, Senhorio, Flolio) still had the old versions. Changes only affected future provisioning.
+**Root cause:** No mechanism to propagate boilerplate updates to existing repos. The Sentinel's capability migration (check #20) handles DB schema and code features, but not workflow files or documentation templates.
+**Fix applied:** Manually pushed updated files to all 3 company repos via GitHub Contents API.
+**Prevention:** When updating templates/boilerplate/ workflow files or adding new boilerplate docs, ALWAYS push changes to all existing company repos in the same session. Use `gh api` to iterate over active companies. The Sentinel should also detect stale workflow files (compare SHA against boilerplate) and auto-update them.
+**Affects:** both (any boilerplate change)
