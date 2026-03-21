@@ -144,6 +144,8 @@ jobs:
         if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          HIVE_URL: https://hive-phi.vercel.app
         run: |
           set +e  # Prevent grep/jq exit codes from crashing the step
           RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
@@ -206,11 +208,18 @@ jobs:
             # Chain to Engineer for features
             dispatch "feature_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
 
-            # Chain to workers if plan mentions growth/outreach tasks
+            # Chain to workers DIRECTLY on Vercel (skips GitHub Actions proxy)
+            dispatch_worker() {
+              curl -s -X POST "$HIVE_URL/api/agents/dispatch" \
+                -H "Authorization: Bearer $CRON_SECRET" \
+                -H "Content-Type: application/json" \
+                -d "{\"company_slug\":\"$COMPANY\",\"agent\":\"$1\",\"trigger\":\"ceo_plan\"}" \
+                -o /dev/null -w "  Worker $1: HTTP %{http_code}\n" || true
+            }
             echo "$RESULT" | grep -qiP "growth_tasks|growth_strategy|content.?calendar" && \
-              dispatch "growth_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+              dispatch_worker "growth"
             echo "$RESULT" | grep -qiP "outreach_tasks|lead.?list|cold.?email" && \
-              dispatch "outreach_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+              dispatch_worker "outreach"
 
             # Dispatch cycle_complete ONCE (for review/reflection after agents finish)
             dispatch "cycle_complete" "{\"source\":\"ceo\",$BASE_PAYLOAD}"

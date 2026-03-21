@@ -68,6 +68,9 @@ The orchestrator should be able to propose and implement improvements to its own
 ## Done
 <!-- Move completed items here with date -->
 
+### ✅ 2026-03-21 — GitHub Actions optimization + Vercel cron migration (ADR-020)
+Reduced max-turns (Scout 50→35, Engineer provision 25→15, build 50→35). Moved Sentinel + Digest to Vercel crons. Eliminated worker-agents.yml proxy — chain dispatch calls Vercel directly. ~10-12 fewer Actions runs/day.
+
 ### ✅ 2026-03-20 — Self-improving feedback loops
 Scout semantic deduplication (word-overlap check against all companies, not just slug). Rejection feedback loop (kill_reasons + rejection notes fed to Scout prompt). Process gap detection in Evolver (Scout duplicate rate, stale approvals, stuck companies, cycle gaps). Rich proposal cards in dashboard (market flag, confidence badge, structured fields). Rejection-to-Evolver pipeline (Scout prompt evolution includes rejection pattern analysis).
 

@@ -1,10 +1,9 @@
-name: Hive Sentinel
-run-name: "Sentinel: health check"
+name: Hive Sentinel (legacy)
+run-name: "Sentinel: health check (legacy)"
 
+# DEPRECATED: Sentinel now runs on Vercel cron at /api/cron/sentinel (every 4h)
+# This workflow is kept as a manual fallback only
 on:
-  schedule:
-    - cron: '0 */4 * * *'  # Every 4 hours
-
   workflow_dispatch: {}
 
 env:

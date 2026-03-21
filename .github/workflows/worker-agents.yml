@@ -1,14 +1,10 @@
-name: Hive Workers
-run-name: "Workers: ${{ github.event.action || github.event.inputs.agent || 'dispatch' }} — ${{ github.event.client_payload.company || github.event.inputs.company || 'all' }}"
+name: Hive Workers (legacy)
+run-name: "Workers: ${{ github.event.inputs.agent || 'dispatch' }} — ${{ github.event.inputs.company || 'all' }}"
 
+# DEPRECATED: Brain agents now dispatch workers directly to Vercel /api/agents/dispatch
+# Sentinel also dispatches workers directly from Vercel cron
+# This workflow is kept as a manual fallback only
 on:
-  repository_dispatch:
-    types:
-      - growth_trigger
-      - outreach_trigger
-      - health_check
-      - agent_dispatch
-
   workflow_dispatch:
     inputs:
       agent:

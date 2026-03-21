@@ -242,3 +242,14 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Keep as reference: actively harmful — its presence implies it's used, causing context confusion
 - Extract useful patterns to a doc: the patterns (retry logic, structured handoffs, agent dispatch) are already implemented in GitHub Actions workflows and documented in ARCHITECTURE.md
 **Consequences:** Single source of truth for orchestration is now `.github/workflows/`. No risk of future sessions confusing the fallback with the actual system. One fewer 2000-line file to maintain. `ts-node` dependency removed.
+
+### ADR-020: Sentinel + Digest on Vercel cron, direct worker dispatch
+**Date:** 2026-03-21
+**Status:** Accepted (extends ADR-011 event-driven architecture)
+**Context:** GitHub Actions free tier gives 2,000 min/month for private repos. Sentinel (every 4h = 6 runs/day), Digest (daily = 1 run/day), and worker-agents.yml (proxy to Vercel = ~3-5 runs/day) were burning ~10-12 Actions runs daily on pure Node.js work that doesn't need Claude. Meanwhile, brain agent turns were set generously (Scout 50, Engineer 50), often exhausting quota on ambiguous tasks.
+**Decision:** Three changes: (1) Move Sentinel and Digest to Vercel cron (`/api/cron/sentinel`, `/api/cron/digest`) — both are pure Node.js, no Claude dependency. (2) Eliminate worker-agents.yml proxy — CEO and Scout chain dispatch call Vercel `/api/agents/dispatch` directly via curl for Growth/Outreach/Ops. (3) Reduce max-turns on brain agents: Scout 50→35, Engineer provision 25→15, Engineer build 50→35. Legacy GitHub Actions workflows kept as manual-only fallback.
+**Alternatives considered:**
+- Keep everything on GitHub Actions: works but burns 10+ unnecessary runs/day, approaching quota limit at scale
+- Move brain agents to Vercel too: 60s timeout too short for Claude reasoning
+- Remove legacy workflows entirely: lose manual trigger capability for debugging
+**Consequences:** ~10-12 fewer Actions runs per day. Sentinel on Vercel can dispatch workers directly (no Actions proxy). Vercel cron is free on Hobby tier. Brain agent runs are shorter (fewer turns = less quota burn). Trade-off: Vercel Hobby has 60s function timeout — Sentinel must complete all 16 checks + HTTP health checks within that window (parallelized with Promise.all).

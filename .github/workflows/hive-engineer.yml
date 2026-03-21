@@ -121,7 +121,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 25 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 15 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You provision infrastructure for new companies.
 
@@ -141,7 +141,13 @@ jobs:
 
             1. Create GitHub repo: `GH_TOKEN="$GH_PAT" gh repo create carloshmiranda/<slug> --private --description "<description>"`
                If the repo already exists, skip this step.
-            2. Copy templates/boilerplate/ into /tmp/<slug>, customize package.json name and CLAUDE.md with company details
+            2. Copy templates/boilerplate/ into /tmp/<slug>, customize:
+               - package.json: set name to the company slug
+               - CLAUDE.md: Use templates/company-claude.md, replace ALL {{PLACEHOLDERS}} with real company data from the DB query.
+                 Query the approval context for the full proposal: `SELECT context FROM approvals WHERE company_id = '<id>' AND gate_type = 'new_company' ORDER BY created_at DESC LIMIT 1`
+                 Use context.proposal for description, target audience, etc.
+                 Query playbook for insights: `SELECT domain, insight FROM playbook WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5`
+                 This CLAUDE.md is what gives agents context to work on the company repo — make it thorough.
             3. Configure git and push to the new repo:
                ```bash
                cd /tmp/<slug>
@@ -224,7 +230,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 50 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You build features and fix bugs.
 
@@ -235,6 +241,11 @@ jobs:
 
             You are already in the company's repo (checked out as your working directory).
             Do NOT clone or checkout any repo — just work in the current directory.
+
+            IMPORTANT: If COMPANY_REPO is empty, you are in the Hive repo — only do Hive-internal work.
+            For feature_request/ops_escalation on a company: if the company has no github_repo in the DB,
+            first query it: `SELECT github_repo FROM companies WHERE slug = '<company>'`
+            If null, skip and log: "Company has no repo yet — needs provisioning first."
 
             ## feature_request — Build features from CEO plan
             1. Get the active cycle plan from Hive DB:

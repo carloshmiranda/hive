@@ -7,7 +7,7 @@
 ## Current State
 
 - **Phase:** First company imported. Onboarding pending (blocked on Claude CLI install).
-- **Architecture:** 7 agents, event-driven, zero crons (except sentinel every 4h). Mac not required.
+- **Architecture:** 7 agents, event-driven, 3 Vercel crons (metrics 2x/day, sentinel every 4h, digest daily 8am). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 1 (VerdeDesk — status: mvp, onboarded, 0 cycles)
 - **Companies to import:** Flolio (growth phase, import later)
@@ -27,8 +27,9 @@
 ### Execution Model
 
 - **Events**: Stripe payments, deploys, GitHub issues/PRs → trigger agents directly
-- **Chains**: Agent A finishes → dispatches Agent B via `repository_dispatch`
-- **Data conditions**: Sentinel queries Neon every 4h → dispatches agents whose work conditions are met
+- **Chains**: Agent A finishes → dispatches Agent B (brain agents via `repository_dispatch`, worker agents directly to Vercel `/api/agents/dispatch`)
+- **Data conditions**: Sentinel runs as Vercel cron every 4h → dispatches agents whose work conditions are met
+- **Worker dispatch**: Growth/Outreach/Ops called directly from chain dispatch steps (no GitHub Actions proxy)
 
 - **Blocked on:**
   - Resend domain verification (need a real domain — Flolio's domain could work)
@@ -36,6 +37,13 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-21 [code] GitHub Actions optimization + Vercel cron migration (ADR-020)
+Implemented two-part optimization to reduce GitHub Actions usage by ~10-12 runs/day:
+**Option 1 — Optimize Actions:** Reduced max-turns (Scout 50→35, Engineer provision 25→15, Engineer build 50→35). Worker-agents.yml deprecated — CEO and Scout chain dispatch now call Vercel `/api/agents/dispatch` directly for Growth/Outreach/Ops (eliminates proxy workflow run).
+**Option 2 — Move to Vercel serverless:** Created `/api/cron/sentinel` (all 16 health checks ported to TypeScript, runs every 4h). Created `/api/cron/digest` (daily digest email, runs at 8am UTC). Both added to vercel.json crons. Legacy GitHub Actions workflows kept as manual-only fallback.
+Sentinel on Vercel dispatches brain agents via GitHub API `repository_dispatch`, worker agents directly to `/api/agents/dispatch`. HTTP health checks run in parallel with Promise.all + 10s timeout.
+Also hardened Engineer workflow: added guard against working in Hive repo when company has no `github_repo`. Enhanced provisioning to populate CLAUDE.md with full proposal data + playbook insights from DB.
 
 ### 2026-03-20 [code] Self-improving feedback loops — 5 autonomous improvements
 Implemented 5 feedback loop enhancements: (1) Scout semantic deduplication — word-overlap similarity check against ALL existing companies (not just slug match), prevents proposals like Senhorio/RentaPT from both passing. (2) Rejection feedback loop — Scout now sees kill_reasons and rejection notes from last 90 days, learns from Carlos's past decisions. (3) Process gap detection in Evolver — checks Scout duplicate rate, stale approvals (>48h), stuck approved companies (>3d), cycle gaps (>7d), creates evolver_proposals directly. (4) Rich proposal cards in dashboard — Scout ideas render with market flag, color-coded confidence, Problem/Solution/Revenue/MVP/TAM fields, research stats. (5) Rejection-to-Evolver pipeline — Scout prompt evolution includes rejection pattern analysis so the prompt itself improves based on what Carlos keeps rejecting.

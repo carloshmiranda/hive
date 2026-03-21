@@ -94,19 +94,18 @@ Hive improves itself, not just sub-companies. The same patterns apply:
 
 All orchestration runs in the cloud via GitHub Actions + Vercel serverless. No Mac dependency.
 
-### Tier 1: Vercel webhooks (real-time, deterministic, no AI, $0)
+### Tier 1: Vercel webhooks + crons (real-time, deterministic, no AI, $0)
 - **Stripe webhook** (`/api/webhooks/stripe`): Logs payments, updates MRR, counts customers, detects first revenue → dispatches CEO via `repository_dispatch`
 - **GitHub webhook** (`/api/webhooks/github`): Logs deploys, detects failures → escalates after 3 failures in 24h, captures GitHub Issues with `hive-directive` label as directives
 - **Metrics cron** (`/api/cron/metrics`): Runs at 8am + 6pm, scrapes Vercel Analytics for page views
+- **Sentinel cron** (`/api/cron/sentinel`): Runs every 4h, 16 health checks, dispatches brain agents via GitHub API and workers directly to `/api/agents/dispatch`
+- **Digest cron** (`/api/cron/digest`): Runs daily at 8am UTC, sends portfolio summary email via Resend
 
 ### Tier 2: GitHub Actions brain agents (event-driven, Claude Code)
-Brain agents (CEO, Scout, Engineer, Evolver) run on GitHub Actions via `anthropics/claude-code-action`. Triggered by `repository_dispatch` events — no scheduled crons, no Mac required.
+Brain agents (CEO, Scout, Engineer, Evolver) run on GitHub Actions via `anthropics/claude-code-action`. Triggered by `repository_dispatch` events — no scheduled crons, no Mac required. Chain dispatch calls worker agents directly on Vercel (no GitHub Actions proxy).
 
 ### Tier 3: Vercel serverless worker agents
-Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Triggered by brain agent chain dispatch.
-
-### Sentinel (health monitor, every 4h)
-`hive-sentinel.yml` runs on GitHub Actions cron, queries Neon for 12 health conditions, and dispatches the appropriate agent for any condition that's met. This is the only scheduled workflow.
+Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Called directly from brain agent chain dispatch steps or from Sentinel cron.
 
 ## Learning from Imports
 
@@ -299,15 +298,18 @@ Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude
 
 ### Provider mapping
 
-| Agent | Provider | Model | Why |
-|-------|----------|-------|-----|
-| CEO | Claude (GitHub Actions) | Opus | Strategic decisions, plan quality cascades |
-| Scout | Claude (GitHub Actions) | Opus | Research synthesis, idea quality |
-| Engineer | Claude (GitHub Actions) | Sonnet | Code execution, speed > reasoning |
-| Evolver | Claude (GitHub Actions) | Opus | Meta-cognitive prompt improvement |
-| Growth | Gemini API (Vercel serverless) | 2.5 Flash | Content quality for SEO, within free quota |
-| Outreach | Gemini API (Vercel serverless) | 2.5 Flash | Email personalization quality |
-| Ops | Groq API (Vercel serverless) | Llama 3.3 70B | Fast inference for health checks |
+| Agent | Provider | Model | Max Turns | Why |
+|-------|----------|-------|-----------|-----|
+| CEO | Claude (GitHub Actions) | Opus | 25 | Strategic decisions, plan quality cascades |
+| Scout | Claude (GitHub Actions) | Opus | 35 | Research synthesis, idea quality |
+| Engineer (provision) | Claude (GitHub Actions) | Sonnet | 15 | Scaffold infra — deterministic steps |
+| Engineer (build) | Claude (GitHub Actions) | Sonnet | 35 | Code execution, speed > reasoning |
+| Evolver | Claude (GitHub Actions) | Opus | 25 | Meta-cognitive prompt improvement |
+| Growth | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Content quality for SEO, within free quota |
+| Outreach | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Email personalization quality |
+| Ops | Groq API (Vercel serverless) | Llama 3.3 70B | N/A | Fast inference for health checks |
+| Sentinel | Vercel cron (Node.js) | None | N/A | Pure DB queries + HTTP checks, no LLM |
+| Digest | Vercel cron (Node.js) | None | N/A | Email assembly, no LLM |
 
 ### Fallback chain
 Gemini Flash fails → try Flash-Lite → try Groq → fall back to Claude (logs warning about quota burn)
