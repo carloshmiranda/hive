@@ -273,12 +273,39 @@ jobs:
                  done
                fi
                ```
-            6c. Make company repo public (unlimited Actions minutes):
+            6c. Secret scan BEFORE making repo public.
+               Scan the repo for leaked secrets. If any are found, DO NOT make the repo public.
+               Instead, log an escalation and skip the visibility toggle.
                ```bash
-               curl -s -X PATCH "https://api.github.com/repos/carloshmiranda/<slug>" \
-                 -H "Authorization: token $GH_PAT" \
-                 -H "Accept: application/vnd.github.v3+json" \
-                 -d '{"visibility":"public"}'
+               # Scan for common secret patterns in the pushed code
+               SECRETS_FOUND=0
+               cd /tmp/<slug> 2>/dev/null && {
+                 # Check for hardcoded API keys, tokens, private keys
+                 if grep -rIl --include='*.ts' --include='*.js' --include='*.json' --include='*.yml' --include='*.env' \
+                   -E '(sk_live|sk_test|ghp_|AKIA|xox[bposa]-|-----BEGIN (RSA |EC )?PRIVATE KEY-----)' . 2>/dev/null; then
+                   SECRETS_FOUND=1
+                 fi
+                 # Check for .env files with actual values (not .env.example)
+                 if ls .env .env.local .env.production 2>/dev/null; then
+                   SECRETS_FOUND=1
+                 fi
+                 cd -
+               }
+               if [ "$SECRETS_FOUND" = "1" ]; then
+                 echo "FATAL: Secrets detected in repo. Keeping repo PRIVATE."
+                 echo "Create an escalation approval gate and SKIP the visibility toggle."
+                 # Insert escalation into approvals table via Hive API
+                 # DO NOT proceed to make public
+               fi
+               ```
+               Only if no secrets found, make company repo public (unlimited Actions minutes):
+               ```bash
+               if [ "$SECRETS_FOUND" = "0" ]; then
+                 curl -s -X PATCH "https://api.github.com/repos/carloshmiranda/<slug>" \
+                   -H "Authorization: token $GH_PAT" \
+                   -H "Accept: application/vnd.github.v3+json" \
+                   -d '{"visibility":"public"}'
+               fi
                ```
             7. Log success: `INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at) VALUES ('engineer', '<id>', 'scaffold_company', 'success', 'Provisioned: GitHub repo + Vercel project', NOW(), NOW())`
             8. Generate initial product spec from the Scout proposal:

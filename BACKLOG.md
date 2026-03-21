@@ -21,15 +21,6 @@
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
 
-### 🟡 P1 — Scout proposal auto-expiry
-9 pending proposals cluttering the inbox. Add auto-expiry: proposals older than 7 days auto-reject with reason "expired — not reviewed". Sentinel check. Prevents approval debt.
-
-### 🟡 P1 — Secret scanning before repos go public
-Flolio had plaintext API keys in committed JSON. Onboarding/Provisioner should scan for common secret patterns (regex: API keys, tokens, passwords, connection strings) BEFORE making a repo public. Block if secrets found, create approval gate. Elevated importance now that all company repos are public with zero secrets.
-
-### 🟡 P1 — Refund and churn handling in Stripe webhook
-`charge.refunded` and `customer.subscription.deleted` events not handled. Revenue metrics could be wrong if a customer churns or requests a refund. Add handlers that decrement MRR/customers and log the event.
-
 ---
 
 ## Planned
@@ -90,6 +81,15 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-21 — Scout proposal auto-expiry (P1)
+All approval gate types now auto-expire: new_company/growth_strategy/spend_approval/outreach_batch at 7 days, prompt_upgrade/social_account/capability_migration at 14 days, escalations at 3 days. Orphaned 'idea' companies with no pending approval are auto-killed. Prevents approval debt.
+
+### ✅ 2026-03-21 — Secret scanning before repos go public (P1)
+Two-layer secret scanning: (1) Import scanner checks file names for .env/.pem/.key patterns and scans up to 20 source files for hardcoded API keys, Stripe keys, GitHub PATs, AWS keys, Slack tokens, and private keys. Results surfaced in scan report. (2) Engineer provisioning workflow runs grep-based scan before toggling repo visibility — keeps repo private if secrets found.
+
+### ✅ 2026-03-21 — Refund and churn handling in Stripe webhook (P1)
+Added charge.refunded handler (decrements revenue metrics, logs refund amount) and invoice.payment_failed handler (logs warning with attempt count). customer.subscription.deleted was already handled. CEO dispatch now triggers on churn/refund events too, not just payments.
 
 ### ✅ 2026-03-21 — Engineer MVP quality bar + stack detection (P2)
 Engineer build workflow now includes: pre-flight stack detection (Tailwind v3/v4, framework, dependencies), MVP design quality bar (business-domain-specific colors/language, conversion-optimized landing page structure, consistent design tokens), SEO baseline (meta, OG, JSON-LD, sitemap, robots), accessibility baseline (semantic HTML, contrast, keyboard nav, ARIA), and performance rules (Server Components default, Image component, next/font). Company CLAUDE.md template updated with design/UX requirements.

@@ -131,24 +131,41 @@ export async function GET(req: Request) {
   let cycleDispatches = 0;
 
   // --- Auto-expire stale approvals ---
-  // new_company proposals older than 14 days, growth_strategy older than 7 days
+  // Different gate types get different expiry windows based on urgency
   const expiredApprovals = await sql`
     UPDATE approvals
     SET status = 'expired',
-        decision_note = CASE
-          WHEN gate_type = 'new_company' THEN 'Auto-expired: not reviewed within 14 days'
-          WHEN gate_type = 'growth_strategy' THEN 'Auto-expired: not reviewed within 7 days'
-        END,
+        decision_note = 'Auto-expired: not reviewed within expiry window',
         decided_at = NOW()
     WHERE status = 'pending'
     AND (
-      (gate_type = 'new_company' AND created_at < NOW() - INTERVAL '14 days')
+      (gate_type = 'new_company' AND created_at < NOW() - INTERVAL '7 days')
       OR (gate_type = 'growth_strategy' AND created_at < NOW() - INTERVAL '7 days')
+      OR (gate_type = 'spend_approval' AND created_at < NOW() - INTERVAL '7 days')
+      OR (gate_type = 'outreach_batch' AND created_at < NOW() - INTERVAL '7 days')
+      OR (gate_type = 'prompt_upgrade' AND created_at < NOW() - INTERVAL '14 days')
+      OR (gate_type = 'social_account' AND created_at < NOW() - INTERVAL '14 days')
+      OR (gate_type = 'capability_migration' AND created_at < NOW() - INTERVAL '14 days')
+      OR (gate_type = 'escalation' AND created_at < NOW() - INTERVAL '3 days')
     )
     RETURNING id, gate_type, title
   `;
   if (expiredApprovals.length > 0) {
     console.log(`Auto-expired ${expiredApprovals.length} stale approvals: ${expiredApprovals.map((a: any) => `${a.gate_type}:${a.id}`).join(", ")}`);
+  }
+
+  // Clean up orphaned companies from expired new_company approvals
+  // (companies stuck in 'idea' status with no pending approval)
+  const cleanedCompanies = await sql`
+    UPDATE companies SET status = 'killed', updated_at = NOW()
+    WHERE status = 'idea'
+    AND id NOT IN (
+      SELECT company_id FROM approvals WHERE gate_type = 'new_company' AND status = 'pending' AND company_id IS NOT NULL
+    )
+    RETURNING id, slug
+  `;
+  if (cleanedCompanies.length > 0) {
+    console.log(`Cleaned ${cleanedCompanies.length} orphaned idea companies: ${cleanedCompanies.map((c: any) => c.slug).join(", ")}`);
   }
 
   // --- Run all DB health checks ---

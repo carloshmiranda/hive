@@ -138,12 +138,56 @@ export async function POST(req: Request) {
       `;
       break;
     }
+
+    case "charge.refunded": {
+      const charge = event.data.object as Stripe.Charge;
+      const companySlug = charge.metadata?.hive_company;
+      if (!companySlug) break;
+
+      const [company] = await sql`SELECT id FROM companies WHERE slug = ${companySlug}`;
+      if (!company) break;
+
+      const refundedAmount = (charge.amount_refunded || 0) / 100;
+
+      // Decrement revenue for today
+      await sql`
+        INSERT INTO metrics (company_id, date, revenue)
+        VALUES (${company.id}, ${today}, ${-refundedAmount})
+        ON CONFLICT (company_id, date) DO UPDATE SET
+          revenue = metrics.revenue - ${refundedAmount}
+      `;
+
+      await sql`
+        INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+        VALUES (${company.id}, 'ops', 'stripe_event', ${`Refund processed: -€${refundedAmount.toFixed(2)}`}, 'success', now(), now())
+      `;
+
+      // If it's a full refund on a subscription charge, this likely means churn
+      // The customer.subscription.deleted event will handle MRR separately
+      break;
+    }
+
+    case "invoice.payment_failed": {
+      const invoice = event.data.object as Stripe.Invoice;
+      const companySlug = (invoice as any).subscription_details?.metadata?.hive_company
+        || invoice.metadata?.hive_company;
+      if (!companySlug) break;
+
+      const [company] = await sql`SELECT id FROM companies WHERE slug = ${companySlug}`;
+      if (!company) break;
+
+      await sql`
+        INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+        VALUES (${company.id}, 'ops', 'stripe_event', ${`Payment failed: €${((invoice.amount_due || 0) / 100).toFixed(2)} — attempt ${invoice.attempt_count}`}, 'warning', now(), now())
+      `;
+      break;
+    }
   }
 
   // Dispatch repository_dispatch for brain agents to react to payment events
   const ghPat = process.env.GH_PAT;
   const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
-  if (ghPat && ["charge.succeeded", "customer.subscription.created"].includes(event.type)) {
+  if (ghPat && ["charge.succeeded", "customer.subscription.created", "customer.subscription.deleted", "charge.refunded"].includes(event.type)) {
     try {
       const metadata = (event.data.object as any).metadata || {};
       await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {

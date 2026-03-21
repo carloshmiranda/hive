@@ -159,8 +159,62 @@ async function scanGitHubRepo(repoUrl: string): Promise<Record<string, any>> {
     }
   } catch { /* ignore */ }
 
+  // Scan for potential secrets in file paths and names
+  const secretPatterns = [
+    /\.env$/,
+    /\.env\.local$/,
+    /\.env\.production$/,
+    /\.env\.development$/,
+    /credentials\.json$/,
+    /service[_-]?account.*\.json$/,
+    /\.pem$/,
+    /\.key$/,
+    /id_rsa/,
+    /\.p12$/,
+    /\.pfx$/,
+    /secrets?\.(ya?ml|json|toml)$/,
+  ];
+  const suspiciousFiles = files.filter((f: string) =>
+    secretPatterns.some(p => p.test(f.split("/").pop() || ""))
+  );
+
+  // Scan select files for hardcoded secrets (check up to 5 small source files)
+  const secretContentPatterns = [
+    /(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=]\s*["'][a-zA-Z0-9_\-]{20,}/i,
+    /(?:sk_live|sk_test|pk_live|pk_test)_[a-zA-Z0-9]{20,}/,
+    /ghp_[a-zA-Z0-9]{36}/,
+    /(?:AKIA|ASIA)[A-Z0-9]{16}/,
+    /xox[bposa]-[a-zA-Z0-9\-]{10,}/,
+    /-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/,
+  ];
+  let secretsFound: string[] = [];
+
+  // Check a few key files for embedded secrets
+  const filesToScan = files
+    .filter((f: string) => /\.(ts|js|tsx|jsx|json|yml|yaml|env|cfg|conf|ini)$/.test(f))
+    .slice(0, 20);
+
+  for (const filePath of filesToScan) {
+    try {
+      const fileRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, { headers });
+      if (!fileRes.ok) continue;
+      const fileData = await fileRes.json();
+      if (fileData.size > 50000) continue; // skip large files
+      const content = Buffer.from(fileData.content, "base64").toString();
+      for (const pattern of secretContentPatterns) {
+        if (pattern.test(content)) {
+          secretsFound.push(`${filePath}: matches ${pattern.source.slice(0, 40)}...`);
+          break; // one match per file is enough
+        }
+      }
+    } catch { /* skip unreadable files */ }
+  }
+
+  const hasSecrets = suspiciousFiles.length > 0 || secretsFound.length > 0;
+
   // Suggested actions based on what's missing
   const suggestedActions: string[] = [];
+  if (hasSecrets) suggestedActions.push(`SECRET RISK: ${suspiciousFiles.length} suspicious files, ${secretsFound.length} embedded secrets found — review before making public`);
   if (!hasClaudeMd) suggestedActions.push("Generate CLAUDE.md for agent context");
   if (!hasEnvExample) suggestedActions.push("Create .env.example for env var documentation");
   if (!hasTests) suggestedActions.push("Add test infrastructure");
@@ -182,6 +236,9 @@ async function scanGitHubRepo(repoUrl: string): Promise<Record<string, any>> {
     has_tests: hasTests,
     has_ci: hasCI,
     has_stripe: hasStripe,
+    has_secrets: hasSecrets,
+    suspicious_files: suspiciousFiles,
+    secrets_found: secretsFound,
     vercel_url: vercelUrl,
     package_name: packageJson?.name,
     dependencies: packageJson ? Object.keys(packageJson.dependencies || {}).length : null,
