@@ -11,7 +11,6 @@ function WaitlistForm() {
   const [state, setState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [result, setResult] = useState<{ referral_code?: string; position?: number; already_signed_up?: boolean } | null>(null);
 
-  // Get referral code from URL
   const ref = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("ref") : null;
 
   async function handleSubmit(e: React.FormEvent) {
@@ -106,60 +105,218 @@ function WaitlistForm() {
   );
 }
 
+function CTAButtons() {
+  const href = LAUNCH_MODE === "early_access" ? "/checkout" : "/checkout";
+  const label = LAUNCH_MODE === "early_access" ? "Get early access" : "Get started";
+  return (
+    <div className="flex gap-4 justify-center">
+      <Link href={href} className="px-6 py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition">
+        {label}
+      </Link>
+      <a href="#features" className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition">
+        Learn more
+      </a>
+    </div>
+  );
+}
+
+/* ─── Template placeholders (replaced by Provisioner) ─── */
+const COMPANY_NAME = "{{COMPANY_NAME}}";
+const DESCRIPTION = "{{DESCRIPTION}}";
+const VALUE_PROPOSITION = "{{VALUE_PROPOSITION}}";
+
+/* Features — Provisioner replaces these with real product features from the Scout proposal */
+const FEATURES = [
+  {
+    icon: "📊",
+    title: "{{FEATURE_1_TITLE}}",
+    description: "{{FEATURE_1_DESC}}",
+  },
+  {
+    icon: "⚡",
+    title: "{{FEATURE_2_TITLE}}",
+    description: "{{FEATURE_2_DESC}}",
+  },
+  {
+    icon: "🔒",
+    title: "{{FEATURE_3_TITLE}}",
+    description: "{{FEATURE_3_DESC}}",
+  },
+];
+
+/* FAQ — Provisioner replaces with real questions from target audience research */
+const FAQS = [
+  {
+    q: "{{FAQ_1_Q}}",
+    a: "{{FAQ_1_A}}",
+  },
+  {
+    q: "{{FAQ_2_Q}}",
+    a: "{{FAQ_2_A}}",
+  },
+  {
+    q: "{{FAQ_3_Q}}",
+    a: "{{FAQ_3_A}}",
+  },
+];
+
 export default function HomePage() {
   return (
     <div className="min-h-screen bg-white">
+      {/* Navigation */}
+      <nav className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+        <span className="text-lg font-bold text-gray-900">{COMPANY_NAME}</span>
+        <div className="flex items-center gap-6 text-sm text-gray-600">
+          <a href="#features" className="hover:text-gray-900 transition">Features</a>
+          <a href="#how-it-works" className="hover:text-gray-900 transition">How it works</a>
+          <a href="#faq" className="hover:text-gray-900 transition">FAQ</a>
+        </div>
+      </nav>
+
       {/* Hero */}
-      <header className="max-w-3xl mx-auto px-6 py-20 text-center">
-        <h1 className="text-4xl font-bold tracking-tight text-gray-900 mb-4">
-          {"{{COMPANY_NAME}}"}
+      <header className="max-w-3xl mx-auto px-6 pt-16 pb-20 text-center">
+        <div className="inline-block px-3 py-1 mb-6 text-xs font-medium text-gray-600 bg-gray-100 rounded-full">
+          Now in early access
+        </div>
+        <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-gray-900 mb-6 leading-tight">
+          {DESCRIPTION}
         </h1>
-        <p className="text-lg text-gray-600 mb-8 max-w-xl mx-auto">
-          {"{{DESCRIPTION}}"}
+        <p className="text-lg text-gray-500 mb-10 max-w-xl mx-auto leading-relaxed">
+          {VALUE_PROPOSITION}
         </p>
 
-        {LAUNCH_MODE === "waitlist" && (
-          <WaitlistForm />
-        )}
+        {LAUNCH_MODE === "waitlist" && <WaitlistForm />}
+        {LAUNCH_MODE !== "waitlist" && <CTAButtons />}
 
-        {LAUNCH_MODE === "early_access" && (
-          <div className="flex gap-4 justify-center">
-            <Link href="/checkout" className="px-6 py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition">
-              Get early access
-            </Link>
-            <a href="#features" className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition">
-              Learn more
-            </a>
-          </div>
-        )}
-
-        {LAUNCH_MODE === "live" && (
-          <div className="flex gap-4 justify-center">
-            <Link href="/checkout" className="px-6 py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition">
-              Get started
-            </Link>
-            <a href="#features" className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition">
-              Learn more
-            </a>
-          </div>
-        )}
+        <p className="mt-4 text-xs text-gray-400">Free to try. No credit card required.</p>
       </header>
 
-      {/* Features placeholder */}
-      <section id="features" className="max-w-4xl mx-auto px-6 py-16">
+      {/* Product preview */}
+      <section className="max-w-4xl mx-auto px-6 pb-20">
+        <div className="bg-gradient-to-b from-gray-50 to-gray-100 rounded-2xl border border-gray-200 p-8 md:p-12">
+          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6 md:p-8">
+            <div className="flex items-center gap-2 mb-6">
+              <div className="w-3 h-3 rounded-full bg-red-400" />
+              <div className="w-3 h-3 rounded-full bg-yellow-400" />
+              <div className="w-3 h-3 rounded-full bg-green-400" />
+              <span className="ml-2 text-xs text-gray-400 font-mono">{COMPANY_NAME.toLowerCase()}.app</span>
+            </div>
+            <div className="space-y-4">
+              <div className="h-8 bg-gray-100 rounded-lg w-2/3" />
+              <div className="grid grid-cols-3 gap-4">
+                <div className="h-24 bg-gray-50 rounded-lg border border-gray-100" />
+                <div className="h-24 bg-gray-50 rounded-lg border border-gray-100" />
+                <div className="h-24 bg-gray-50 rounded-lg border border-gray-100" />
+              </div>
+              <div className="h-32 bg-gray-50 rounded-lg border border-gray-100" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section id="features" className="max-w-4xl mx-auto px-6 py-20">
+        <div className="text-center mb-12">
+          <h2 className="text-3xl font-bold text-gray-900 mb-4">Everything you need</h2>
+          <p className="text-gray-500 max-w-lg mx-auto">
+            Built for people who want results, not complexity.
+          </p>
+        </div>
         <div className="grid md:grid-cols-3 gap-8">
-          {["Fast", "Simple", "Reliable"].map((feature, i) => (
-            <div key={i} className="p-6 border border-gray-200 rounded-xl">
-              <h3 className="font-semibold text-gray-900 mb-2">{feature}</h3>
-              <p className="text-sm text-gray-500">Description of this feature and why it matters to the user.</p>
+          {FEATURES.map((feature, i) => (
+            <div key={i} className="p-6 rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-sm transition">
+              <div className="text-2xl mb-3">{feature.icon}</div>
+              <h3 className="font-semibold text-gray-900 mb-2">{feature.title}</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">{feature.description}</p>
             </div>
           ))}
         </div>
       </section>
 
+      {/* How it works */}
+      <section id="how-it-works" className="bg-gray-50 py-20">
+        <div className="max-w-4xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold text-gray-900 mb-4">How it works</h2>
+            <p className="text-gray-500">Get started in minutes, not hours.</p>
+          </div>
+          <div className="grid md:grid-cols-3 gap-8">
+            {[
+              { step: "1", title: "Sign up", desc: "Create your account in seconds. No credit card required." },
+              { step: "2", title: "Set up", desc: "Connect your data and configure your preferences." },
+              { step: "3", title: "Get results", desc: "Start seeing insights and saving time immediately." },
+            ].map((item, i) => (
+              <div key={i} className="text-center">
+                <div className="w-10 h-10 rounded-full bg-gray-900 text-white flex items-center justify-center text-sm font-bold mx-auto mb-4">
+                  {item.step}
+                </div>
+                <h3 className="font-semibold text-gray-900 mb-2">{item.title}</h3>
+                <p className="text-sm text-gray-500">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Social proof / trust */}
+      <section className="max-w-4xl mx-auto px-6 py-20">
+        <div className="text-center">
+          <p className="text-sm text-gray-400 uppercase tracking-wider mb-8">Trusted by early adopters</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+            {[
+              { metric: "100%", label: "Free tier" },
+              { metric: "< 2min", label: "Setup time" },
+              { metric: "24/7", label: "Available" },
+              { metric: "€0", label: "To start" },
+            ].map((item, i) => (
+              <div key={i}>
+                <div className="text-2xl font-bold text-gray-900">{item.metric}</div>
+                <div className="text-sm text-gray-500">{item.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section id="faq" className="bg-gray-50 py-20">
+        <div className="max-w-2xl mx-auto px-6">
+          <h2 className="text-3xl font-bold text-gray-900 mb-12 text-center">Frequently asked questions</h2>
+          <div className="space-y-6">
+            {FAQS.map((faq, i) => (
+              <details key={i} className="group bg-white rounded-xl border border-gray-200 px-6 py-4">
+                <summary className="cursor-pointer font-medium text-gray-900 flex items-center justify-between">
+                  {faq.q}
+                  <span className="text-gray-400 group-open:rotate-45 transition-transform text-lg">+</span>
+                </summary>
+                <p className="mt-3 text-sm text-gray-500 leading-relaxed">{faq.a}</p>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Final CTA */}
+      <section className="max-w-3xl mx-auto px-6 py-20 text-center">
+        <h2 className="text-3xl font-bold text-gray-900 mb-4">Ready to get started?</h2>
+        <p className="text-gray-500 mb-8 max-w-md mx-auto">
+          Join hundreds of early adopters who are already saving time.
+        </p>
+        {LAUNCH_MODE === "waitlist" && <WaitlistForm />}
+        {LAUNCH_MODE !== "waitlist" && <CTAButtons />}
+      </section>
+
       {/* Footer */}
-      <footer className="max-w-3xl mx-auto px-6 py-12 text-center text-sm text-gray-400">
-        {"{{COMPANY_NAME}}"} · Built with care
+      <footer className="border-t border-gray-200 py-12">
+        <div className="max-w-4xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+          <span className="font-bold text-gray-900">{COMPANY_NAME}</span>
+          <div className="flex gap-6 text-sm text-gray-500">
+            <a href="#features" className="hover:text-gray-900 transition">Features</a>
+            <a href="#how-it-works" className="hover:text-gray-900 transition">How it works</a>
+            <a href="#faq" className="hover:text-gray-900 transition">FAQ</a>
+          </div>
+          <p className="text-sm text-gray-400">&copy; {new Date().getFullYear()} {COMPANY_NAME}</p>
+        </div>
       </footer>
     </div>
   );
