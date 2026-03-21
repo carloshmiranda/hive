@@ -46,40 +46,55 @@ jobs:
           git config user.name "Hive Engineer"
           git config user.email "noreply@github.com"
 
-      - name: Load product context from Hive DB
+      - name: Load context and auth from Hive DB
         id: context
+        env:
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           npm install --no-save postgres 2>/dev/null
           SLUG="${{ github.event.inputs.company_slug }}"
 
           node -e "
           const postgres = require('postgres');
+          const crypto = require('crypto');
+          const fs = require('fs');
           const sql = postgres(process.env.DATABASE_URL);
+
+          function decrypt(payload) {
+            const key = process.env.ENCRYPTION_KEY;
+            if (!key || key.length !== 64) return payload;
+            const [ivHex, tagHex, encrypted] = payload.split(':');
+            if (!ivHex || !tagHex || !encrypted) return payload;
+            const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex'), Buffer.from(ivHex, 'hex'));
+            decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+            return decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8');
+          }
+
           async function load() {
+            // Fetch Claude OAuth token from settings
+            const [tokenRow] = await sql\`SELECT value, is_secret FROM settings WHERE key = 'claude_code_oauth_token'\`.catch(() => []);
+            if (tokenRow) {
+              const token = tokenRow.is_secret ? decrypt(tokenRow.value) : tokenRow.value;
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'claude_token<<TOKEOF\n' + token + '\nTOKEOF\n');
+            }
+
             const [co] = await sql\`SELECT id, description FROM companies WHERE slug = '${SLUG}' LIMIT 1\`;
             if (!co) { console.log('{}'); await sql.end(); return; }
 
-            // Research reports (market research, competitive analysis, SEO keywords)
             const reports = await sql\`
               SELECT report_type, summary, content FROM research_reports
               WHERE company_id = \${co.id} AND report_type IN ('market_research','competitive_analysis','seo_keywords','product_spec')
               ORDER BY updated_at DESC
             \`;
-
-            // Original Scout proposal
             const [proposal] = await sql\`
               SELECT context FROM approvals
               WHERE company_id = \${co.id} AND gate_type = 'new_company'
               ORDER BY created_at DESC LIMIT 1
             \`;
-
-            // Playbook entries relevant to this company
             const playbook = await sql\`
               SELECT domain, insight FROM playbook
               WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5
             \`;
-
-            // Engineering tasks from company_tasks backlog
             const engineeringTasks = await sql\`
               SELECT id, title, description, priority, acceptance, status
               FROM company_tasks
@@ -98,11 +113,7 @@ jobs:
             for (const r of reports) {
               ctx.research[r.report_type] = { summary: r.summary, content: r.content };
             }
-            // Write to file for step output (truncate to 8000 chars)
             const json = JSON.stringify(ctx, null, 2).slice(0, 8000);
-            require('fs').writeFileSync('/tmp/product-context.json', json);
-            // Also write as step output
-            const fs = require('fs');
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'product_ctx<<CTXEOF\n' + json + '\nCTXEOF\n');
             await sql.end();
           }
@@ -113,7 +124,7 @@ jobs:
         id: agent
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ steps.context.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You build features and fix bugs.
