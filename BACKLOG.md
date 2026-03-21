@@ -23,9 +23,6 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 ### 🔴 P0 — Stripe product creation on provision (payments blocked)
 Provisioner scaffolds everything BUT doesn't create Stripe Product + Price with `metadata.hive_company = slug`. Without this, companies cannot accept payments. The mvp → active transition depends on first_revenue which can never trigger. Fix: add Stripe API call in hive-engineer.yml provision job. One API call.
 
-### 🟡 P1 — Verify dispatch chain end-to-end
-The 422 payload bug on Engineer → company repo dispatch is fixed but never tested in production. Need to trigger a real CEO cycle and verify: CEO plan → Engineer dispatch → company hive-build.yml runs → PR created → Growth dispatch → company hive-growth.yml runs. If any link breaks, the whole system is fire-and-forget.
-
 ### 🟡 P1 — PR auto-merge for company repos
 Engineer creates PRs on company repos but nobody merges them. Stale PRs accumulate. Options: (a) Add a workflow that auto-merges `hive/*` branches after build passes, (b) Have Engineer push directly to main (simpler for AI-managed repos). Decision needed.
 
@@ -33,7 +30,7 @@ Engineer creates PRs on company repos but nobody merges them. Stale PRs accumula
 9 pending proposals cluttering the inbox. Add auto-expiry: proposals older than 7 days auto-reject with reason "expired — not reviewed". Sentinel check. Prevents approval debt.
 
 ### 🟡 P1 — Secret scanning before repos go public
-Flolio had plaintext API keys in committed JSON. Onboarding/Provisioner should scan for common secret patterns (regex: API keys, tokens, passwords, connection strings) BEFORE making a repo public. Block if secrets found, create approval gate.
+Flolio had plaintext API keys in committed JSON. Onboarding/Provisioner should scan for common secret patterns (regex: API keys, tokens, passwords, connection strings) BEFORE making a repo public. Block if secrets found, create approval gate. Elevated importance now that all company repos are public with zero secrets.
 
 ### 🟡 P1 — Refund and churn handling in Stripe webhook
 `charge.refunded` and `customer.subscription.deleted` events not handled. Revenue metrics could be wrong if a customer churns or requests a refund. Add handlers that decrement MRR/customers and log the event.
@@ -41,9 +38,6 @@ Flolio had plaintext API keys in committed JSON. Onboarding/Provisioner should s
 ---
 
 ## Planned
-
-### 🟢 P2 — Per-company Neon databases (data isolation)
-Companies share Hive's Neon DB. Each company should have its own Neon project (free tier: 10 projects). Provisioner creates via Neon API, sets DATABASE_URL per company. Hive DB keeps orchestration tables only. Critical at 5+ companies.
 
 ### 🟢 P2 — Cost tracking per agent run
 Agent actions log turns but cost isn't surfaced. Add daily/weekly cost summary to digest email and dashboard. Track Claude quota burn rate. Alert when approaching 225 messages/5h window. Essential for scaling decisions.
@@ -58,7 +52,7 @@ No single metric tells you if a company is healthy. Create a composite: revenue 
 When CEO scores a cycle 3/10, which agent failed? Correlate cycle scores with agent grades and task completion rates. Surface "Engineer has completed 0/5 tasks in last 3 cycles" patterns. Feed to Evolver for targeted improvements.
 
 ### 🟢 P2 — Stack detection for imported companies
-Assessment endpoint only detects Next.js. Need: Remix, Astro, Nuxt, SvelteKit detection (check config files). Detect non-Neon databases (Supabase, PlanetScale) from DATABASE_URL patterns. Detect non-Resend email providers.
+Assessment endpoint only detects Next.js. Need: Remix, Astro, Nuxt, SvelteKit detection (check config files). Detect non-Neon databases (Supabase, PlanetScale) from env patterns. Detect non-Resend email providers.
 
 ### 🟢 P2 — Venture Brain activation
 Requires 2+ active companies with data. Portfolio analysis, resource allocation, cross-company pattern matching. Should create directives like "VerdeDesk solved Portuguese tax compliance, apply pattern to Senhorio." Currently a stub.
@@ -88,9 +82,6 @@ Orchestrator reads BACKLOG.md, picks a P2 item, implements it in a branch, runs 
 ### ⚪ P3 — Business model diversity beyond SaaS
 Content/affiliate sites (ad revenue), faceless YouTube channels (ad revenue), newsletter businesses (sponsorship), API/tool businesses (usage-based). Each needs different boilerplate, metrics, and growth strategies.
 
-### ⚪ P3 — Neon Data API for lightweight agent access
-PostgREST on company Neon projects. Simple CRUD via REST for agents (Growth writing email sequences, Ops reading metrics). Hybrid: Data API for frequent simple ops, SQL for complex queries.
-
 ### ⚪ P3 — Capability diff alerting
 When assessment shows regression (feature removed accidentally), auto-escalate. Catches deploy-time schema drops or webhook route deletions.
 
@@ -105,14 +96,23 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 ## Done
 <!-- Move completed items here with date -->
 
+### ✅ 2026-03-21 — Zero-secret company repos + OIDC gateway (P1)
+Company repos no longer need ANY secrets (including DATABASE_URL). All auth via GitHub OIDC token exchange, all data via Hive API gateway (`/api/agents/context`, `/api/agents/log`, `/api/agents/tasks/:id`, `/api/agents/playbook`). Shared OIDC validation extracted to `src/lib/oidc.ts`. DATABASE_URL secrets removed from all 3 company repos. Workflows reduced by ~200 lines each.
+
+### ✅ 2026-03-21 — OIDC token exchange for Hive repo workflows (P1)
+Extended `/api/agents/token` to support Hive repo workflows (not just company repos). All 6 Hive workflows (CEO, Scout, Engineer, Evolver, Healer, Sentinel) now fetch tokens via OIDC instead of GitHub secrets. Hive repo made public — unlimited Actions minutes.
+
+### ✅ 2026-03-21 — Dispatch chain verification (P1)
+Triggered Engineer workflow for verdedesk waitlist merge — first real end-to-end test of the dispatch chain after the 422 fix. Tests OIDC token exchange → context API → agent execution → company repo.
+
 ### ✅ 2026-03-21 — Task tracking system (P1)
-`company_tasks` table with category filtering (engineering/growth/research/qa/ops/strategy), status lifecycle (proposed → approved → in_progress → done), priority levels (P0-P3), acceptance criteria, and cycle linking. Dashboard Tasks tab with company and category filters. Tasks API with category/status/include_done params. Company-side hive-build.yml and hive-growth.yml read tasks from backlog, mark in_progress before starting, done after completing. Acceptance criteria verified before marking done. Pushed to all 3 company repos.
+`company_tasks` table with category filtering (engineering/growth/research/qa/ops/strategy), status lifecycle (proposed → approved → in_progress → done), priority levels (P0-P3), acceptance criteria, and cycle linking. Task filtering moved to company detail pages. Tasks API with OIDC-authenticated endpoints for agent updates (`PATCH /api/agents/tasks/:id`). Playbook writes via `POST /api/agents/playbook`. Pushed to all 3 company repos.
 
 ### ✅ 2026-03-21 — Engineer dispatch 422 fix (P0)
 Company repo hive-build.yml was never triggered because the payload JSON wasn't properly escaped in the workflow_dispatch request. `jq -c` output contained raw JSON objects where strings were expected. Fixed by using `jq -n` to build the entire request body with proper string escaping. All 6 prior Engineer dispatch attempts failed with "Invalid value for input 'payload'" (HTTP 422).
 
 ### ✅ 2026-03-21 — Company-side workflow expansion: Growth + Fix (P2)
-Two new boilerplate workflows for company repos (free on public repos): `hive-growth.yml` and `hive-fix.yml`. Both load full context from Hive DB.
+Two new boilerplate workflows for company repos (free on public repos): `hive-growth.yml` and `hive-fix.yml`. Context loaded via OIDC-authenticated Hive API.
 
 ### ✅ 2026-03-21 — Automatic boilerplate migration for existing companies (P2)
 Sentinel check 20 compares company capabilities against boilerplate manifest. Detects missing features, creates migration approval gates.
