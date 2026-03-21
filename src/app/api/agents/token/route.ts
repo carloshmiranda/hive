@@ -8,11 +8,22 @@ const GITHUB_ISSUER = "https://token.actions.githubusercontent.com";
 const EXPECTED_AUDIENCE = "https://hive-phi.vercel.app";
 const EXPECTED_OWNER = "carloshmiranda";
 
+// The Hive orchestrator repo (not in companies table — special case)
+const HIVE_REPO = "carloshmiranda/hive";
+
 // Workflows allowed to request tokens
 const ALLOWED_WORKFLOWS = [
+  // Company repo workflows
   "hive-build.yml",
   "hive-fix.yml",
   "hive-growth.yml",
+  // Hive repo brain agent workflows
+  "hive-ceo.yml",
+  "hive-engineer.yml",
+  "hive-scout.yml",
+  "hive-evolver.yml",
+  "hive-healer.yml",
+  "hive-sentinel.yml",
 ];
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -53,17 +64,6 @@ export async function POST(req: NextRequest) {
     return err(`Workflow ${workflowFile} not authorized`, 403);
   }
 
-  // Verify repo is a known company in the DB
-  const sql = getDb();
-  const repo = String(claims.repository || "");
-  const [company] = await sql`
-    SELECT id, slug FROM companies WHERE github_repo = ${repo} LIMIT 1
-  `.catch(() => []);
-
-  if (!company) {
-    return err(`Repository ${repo} not registered in Hive`, 404);
-  }
-
   // Determine which token to return based on request
   let tokenType: string;
   try {
@@ -73,22 +73,47 @@ export async function POST(req: NextRequest) {
     tokenType = "claude";
   }
 
-  let tokenValue: string | null = null;
-  if (tokenType === "claude") {
-    tokenValue = await getSettingValue("claude_code_oauth_token");
-  } else if (tokenType === "gemini") {
-    tokenValue = await getSettingValue("gemini_api_key");
-  } else if (tokenType === "github_pat") {
-    tokenValue = await getSettingValue("github_token");
+  // Check if this is the Hive orchestrator repo (not in companies table)
+  const repo = String(claims.repository || "");
+  let responseMeta: { company: string; company_id: string | null };
+
+  if (repo === HIVE_REPO) {
+    responseMeta = { company: "hive", company_id: null };
+  } else {
+    // Verify repo is a known company in the DB
+    const sql = getDb();
+    const [company] = await sql`
+      SELECT id, slug FROM companies WHERE github_repo = ${repo} LIMIT 1
+    `.catch(() => []);
+
+    if (!company) {
+      return err(`Repository ${repo} not registered in Hive`, 404);
+    }
+    responseMeta = { company: company.slug, company_id: company.id };
   }
 
+  // Token type → settings key mapping
+  const tokenMap: Record<string, string> = {
+    claude: "claude_code_oauth_token",
+    gemini: "gemini_api_key",
+    github_pat: "github_token",
+    vercel_token: "vercel_token",
+    neon_api_key: "neon_api_key",
+    cron_secret: "cron_secret",
+  };
+
+  const settingsKey = tokenMap[tokenType];
+  if (!settingsKey) {
+    return err(`Unknown token type '${tokenType}'`, 400);
+  }
+
+  const tokenValue = await getSettingValue(settingsKey);
   if (!tokenValue) {
     return err(`Token type '${tokenType}' not configured in settings`, 500);
   }
 
   return json({
     token: tokenValue,
-    company: company.slug,
-    company_id: company.id,
+    ...responseMeta,
   });
 }

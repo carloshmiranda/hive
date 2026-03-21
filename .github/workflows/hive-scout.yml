@@ -42,6 +42,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Get tokens via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          fetch_token() {
+            local TYPE="$1" OUTPUT_KEY="$2"
+            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"token_type\":\"$TYPE\"}")
+            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+            if [ -n "$VALUE" ]; then
+              echo "::add-mask::$VALUE"
+              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
+            else
+              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+            fi
+          }
+
+          fetch_token "claude" "claude_token"
+          fetch_token "github_pat" "gh_pat"
+          fetch_token "cron_secret" "cron_secret"
+
       - name: Build Scout context
         id: context
         run: |
@@ -68,7 +94,7 @@ jobs:
         id: agent
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
           claude_args: "--model claude-opus-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit,WebSearch,WebFetch"
           prompt: |
             You are the Scout agent of Hive. You find new business ideas AND do market research.
@@ -145,8 +171,8 @@ jobs:
       - name: Chain dispatch
         if: always() && steps.agent.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
+          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
           HIVE_URL: https://hive-phi.vercel.app
         run: |
           set +e  # Prevent grep/jq exit codes from crashing the step

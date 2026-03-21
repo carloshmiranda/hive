@@ -28,9 +28,6 @@ permissions:
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
-  GH_PAT: ${{ secrets.GH_PAT }}
-  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-  NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
 
 jobs:
   # ─── Resolve context for all jobs ───
@@ -42,8 +39,39 @@ jobs:
       payload: ${{ steps.ctx.outputs.payload }}
       company: ${{ steps.resolve.outputs.company }}
       company_repo: ${{ steps.resolve.outputs.company_repo }}
+      claude_token: ${{ steps.auth.outputs.claude_token }}
+      gh_pat: ${{ steps.auth.outputs.gh_pat }}
+      vercel_token: ${{ steps.auth.outputs.vercel_token }}
+      neon_api_key: ${{ steps.auth.outputs.neon_api_key }}
 
     steps:
+      - name: Get tokens via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          fetch_token() {
+            local TYPE="$1" OUTPUT_KEY="$2"
+            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"token_type\":\"$TYPE\"}")
+            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+            if [ -n "$VALUE" ]; then
+              echo "::add-mask::$VALUE"
+              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
+            else
+              echo "WARNING: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+            fi
+          }
+
+          fetch_token "claude" "claude_token"
+          fetch_token "github_pat" "gh_pat"
+          fetch_token "vercel_token" "vercel_token"
+          fetch_token "neon_api_key" "neon_api_key"
+
       - name: Build context
         id: ctx
         run: |
@@ -96,8 +124,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GH_PAT: ${{ needs.context.outputs.gh_pat }}
+      GH_TOKEN: ${{ needs.context.outputs.gh_pat }}
+      VERCEL_TOKEN: ${{ needs.context.outputs.vercel_token }}
+      NEON_API_KEY: ${{ needs.context.outputs.neon_api_key }}
 
     steps:
       - name: Checkout Hive (for templates)
@@ -107,7 +137,7 @@ jobs:
         id: agent
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ needs.context.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 20 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You provision infrastructure for new companies.
@@ -159,14 +189,12 @@ jobs:
                  Use context.proposal for description, target audience, etc.
                  Query playbook for insights: `SELECT domain, insight FROM playbook WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5`
                  This CLAUDE.md is what gives agents context to work on the company repo — make it thorough.
-            2b. Set up GitHub Actions secrets on the new repo (needed for hive-build.yml):
+            2b. Set up GitHub Actions secrets on the new repo (only DATABASE_URL — all other tokens fetched via OIDC):
                ```bash
                GH_TOKEN="$GH_PAT" gh secret set DATABASE_URL --repo carloshmiranda/<slug> --body "$DATABASE_URL"
-               GH_TOKEN="$GH_PAT" gh secret set GH_PAT --repo carloshmiranda/<slug> --body "$GH_PAT"
-               GH_TOKEN="$GH_PAT" gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo carloshmiranda/<slug> --body "$CLAUDE_CODE_OAUTH_TOKEN"
                ```
-               Note: Service keys (Gemini, GSC, Resend, etc.) are NOT propagated as repo secrets.
-               Agents read them from the Hive settings table at runtime via DATABASE_URL.
+               Note: Auth tokens (Claude, GH PAT, Gemini, etc.) are fetched at runtime via OIDC token exchange.
+               Company repos are public — no secrets except DATABASE_URL.
             3. Configure git and push to the new repo:
                ```bash
                cd /tmp/<slug>
@@ -305,7 +333,7 @@ jobs:
     steps:
       - name: Dispatch build to company repo
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ needs.context.outputs.gh_pat }}
         run: |
           COMPANY="${{ needs.context.outputs.company }}"
           COMPANY_REPO="${{ needs.context.outputs.company_repo }}"
@@ -392,9 +420,11 @@ jobs:
 
       - name: Run build agent (Hive-internal only)
         id: agent
+        env:
+          GH_PAT: ${{ needs.context.outputs.gh_pat }}
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ needs.context.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You are working on the Hive repo itself.
