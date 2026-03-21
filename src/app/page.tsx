@@ -169,6 +169,8 @@ export default function DashboardPage() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [showAllTodos, setShowAllTodos] = useState(false);
+  const [selectedApprovals, setSelectedApprovals] = useState<Set<string>>(new Set());
+  const [batchProcessing, setBatchProcessing] = useState(false);
 
   const fetchAll = useCallback(async () => {
     const res = await fetch("/api/dashboard");
@@ -254,6 +256,42 @@ export default function DashboardPage() {
       body: JSON.stringify({ id, decision }),
     });
     if (res.ok) fetchAll();
+  };
+
+  const toggleApprovalSelection = (id: string) => {
+    setSelectedApprovals(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const allIds = approvals.map(a => a.id);
+    setSelectedApprovals(prev => {
+      if (prev.size === allIds.length) return new Set();
+      return new Set(allIds);
+    });
+  };
+
+  const handleBatchReject = async () => {
+    if (selectedApprovals.size === 0) return;
+    const input = prompt(`Reject ${selectedApprovals.size} selected approval(s)? Enter rejection reason:`);
+    if (input === null) return;
+    setBatchProcessing(true);
+    try {
+      const res = await fetch("/api/approvals/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedApprovals), decision: "rejected", note: input || undefined }),
+      });
+      if (res.ok) {
+        setSelectedApprovals(new Set());
+        fetchAll();
+      }
+    } finally {
+      setBatchProcessing(false);
+    }
   };
 
   // Derived data
@@ -651,6 +689,32 @@ export default function DashboardPage() {
       {/* ==================== INBOX TAB ==================== */}
       {activeTab === "inbox" && (
         <div className="animate-in">
+          {/* Batch action bar */}
+          {approvals.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16,
+              padding: "10px 14px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12,
+                fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)" }}>
+                <input type="checkbox" checked={selectedApprovals.size === approvals.length && approvals.length > 0}
+                  onChange={toggleSelectAll}
+                  style={{ accentColor: "var(--hive-amber)", width: 14, height: 14, cursor: "pointer" }} />
+                Select all ({approvals.length})
+              </label>
+              {selectedApprovals.size > 0 && (
+                <>
+                  <span style={{ fontSize: 12, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)" }}>
+                    {selectedApprovals.size} selected
+                  </span>
+                  <button onClick={handleBatchReject} disabled={batchProcessing} style={{
+                    marginLeft: "auto", padding: "6px 16px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                    borderRadius: 6, cursor: batchProcessing ? "wait" : "pointer",
+                    border: "1px solid var(--hive-red-border)", background: "var(--hive-red-bg)", color: "var(--hive-red)",
+                    opacity: batchProcessing ? 0.6 : 1,
+                  }}>{batchProcessing ? "Rejecting..." : "Reject Selected"}</button>
+                </>
+              )}
+            </div>
+          )}
           {approvals.length === 0 && evolverProposals.length === 0 ? (
             <div style={{ padding: 64, textAlign: "center" }}>
               <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
@@ -719,11 +783,14 @@ export default function DashboardPage() {
                       return (
                         <div key={a.id} style={{
                           padding: 20, borderRadius: 10,
-                          background: "var(--hive-amber-bg)", border: "1px solid var(--hive-amber-border)",
+                          background: "var(--hive-amber-bg)", border: `1px solid ${selectedApprovals.has(a.id) ? "var(--hive-amber)" : "var(--hive-amber-border)"}`,
                         }}>
                           {/* Header: name + badges */}
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <input type="checkbox" checked={selectedApprovals.has(a.id)}
+                                onChange={() => toggleApprovalSelection(a.id)}
+                                style={{ accentColor: "var(--hive-amber)", width: 14, height: 14, cursor: "pointer", flexShrink: 0 }} />
                               <span style={{ fontSize: 16 }}>{isPortuguese ? "🇵🇹" : "🌍"}</span>
                               <span style={{ fontSize: 15, fontWeight: 600, color: "var(--hive-text)" }}>
                                 {proposal.name || a.title}
@@ -961,8 +1028,11 @@ export default function DashboardPage() {
                     {otherApprovals.map(a => {
                       const gc = GATE_COLORS[a.gate_type] || { color: "var(--hive-text-secondary)", bg: "var(--hive-surface)", border: "var(--hive-border)" };
                       return (
-                        <div key={a.id} style={{ padding: 20, borderRadius: 10, background: gc.bg, border: `1px solid ${gc.border}` }}>
+                        <div key={a.id} style={{ padding: 20, borderRadius: 10, background: gc.bg, border: `1px solid ${selectedApprovals.has(a.id) ? gc.color : gc.border}` }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                            <input type="checkbox" checked={selectedApprovals.has(a.id)}
+                              onChange={() => toggleApprovalSelection(a.id)}
+                              style={{ accentColor: gc.color, width: 14, height: 14, cursor: "pointer", flexShrink: 0 }} />
                             <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
                               padding: "2px 8px", borderRadius: 4, color: gc.color, background: gc.bg, border: `1px solid ${gc.border}` }}>
                               {a.gate_type.replace(/_/g, " ")}

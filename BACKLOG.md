@@ -25,21 +25,6 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 
 ## Planned
 
-### 🟢 P2 — Cost tracking per agent run
-Agent actions log turns but cost isn't surfaced. Add daily/weekly cost summary to digest email and dashboard. Track Claude quota burn rate. Alert when approaching 225 messages/5h window. Essential for scaling decisions.
-
-### 🟢 P2 — Dashboard: batch approve/reject for Scout proposals
-Currently must click into each proposal individually. Add checkboxes + "Reject all" / "Approve selected" buttons on Inbox tab. Saves time with 9+ proposals pending.
-
-### 🟢 P2 — Company health score (composite metric)
-No single metric tells you if a company is healthy. Create a composite: revenue trend (30%), traffic trend (20%), error rate (20%), cycle scores (20%), task completion rate (10%). Show in dashboard, feed to Venture Brain for kill decisions.
-
-### 🟢 P2 — Cycle score → agent performance correlation
-When CEO scores a cycle 3/10, which agent failed? Correlate cycle scores with agent grades and task completion rates. Surface "Engineer has completed 0/5 tasks in last 3 cycles" patterns. Feed to Evolver for targeted improvements.
-
-### 🟢 P2 — Stack detection for imported companies
-Assessment endpoint only detects Next.js. Need: Remix, Astro, Nuxt, SvelteKit detection (check config files). Detect non-Neon databases (Supabase, PlanetScale) from env patterns. Detect non-Resend email providers.
-
 ### 🟢 P2 — Venture Brain activation
 Requires 2+ active companies with data. Portfolio analysis, resource allocation, cross-company pattern matching. Should create directives like "VerdeDesk solved Portuguese tax compliance, apply pattern to Senhorio." Currently a stub.
 
@@ -81,6 +66,21 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-21 — Cost tracking per agent run (P2)
+New `/api/agents/costs` endpoint with per-agent cost estimates (Opus $0.15/turn, Sonnet $0.03/turn, free-tier $0). Portfolio endpoint now includes `est_cost_24h` and `budget_utilization_pct` (turns in last 5h / 225 max). Dashboard can surface burn rate.
+
+### ✅ 2026-03-21 — Dashboard batch approve/reject (P2)
+New `/api/approvals/batch` endpoint for bulk reject (blocks batch approve on new_company gates needing provisioning). Dashboard Inbox tab has checkboxes, select-all, and "Reject Selected" button with reason prompt.
+
+### ✅ 2026-03-21 — Company health score (P2)
+New `src/lib/health-score.ts` with weighted composite: revenue trend 30%, traffic trend 20%, error rate 20%, cycle scores 20%, task completion 10%. Returns 0-100 score with A-F grade. Included in company detail API response.
+
+### ✅ 2026-03-21 — Cycle score → agent performance correlation (P2)
+New `/api/agents/performance` endpoint. Per-agent: avg grade from CEO reviews, task completion rate, error rate, avg turns. Generates insight strings like "Engineer has high error rate" or "Growth completed 0 tasks". Portfolio-level correlation of low cycle scores with agent grades.
+
+### ✅ 2026-03-21 — Stack detection for imports (P2)
+Import scanner now detects: Remix, Astro, Nuxt, SvelteKit, Vite (config files), Prisma, Drizzle, Supabase, PlanetScale (files + deps), Resend, SendGrid, Postmark, Mailgun (deps).
 
 ### ✅ 2026-03-21 — Scout proposal auto-expiry (P1)
 All approval gate types now auto-expire: new_company/growth_strategy/spend_approval/outreach_batch at 7 days, prompt_upgrade/social_account/capability_migration at 14 days, escalations at 3 days. Orphaned 'idea' companies with no pending approval are auto-killed. Prevents approval debt.

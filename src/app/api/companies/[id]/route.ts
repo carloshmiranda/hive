@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { calculateHealthScore } from "@/lib/health-score";
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -15,7 +16,9 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const recentActions = await sql`SELECT * FROM agent_actions WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 20`;
   const cycles = await sql`SELECT * FROM cycles WHERE company_id = ${company.id} ORDER BY cycle_number DESC LIMIT 10`;
 
-  return json({ ...company, metrics, infra, recentActions, cycles });
+  const health = await calculateHealthScore(company.id, sql);
+
+  return json({ ...company, metrics, infra, recentActions, cycles, health });
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {

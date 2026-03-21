@@ -137,6 +137,17 @@ async function scanGitHubRepo(repoUrl: string): Promise<Record<string, any>> {
   if (hasFile("docker-compose.yml") || hasFile("Dockerfile")) techStack.push("Docker");
   if (hasFile("vercel.json")) techStack.push("Vercel");
 
+  // Frameworks
+  if (hasFile("remix.config.js") || hasFile("remix.config.ts")) techStack.push("Remix");
+  if (hasFile("astro.config.mjs") || hasFile("astro.config.ts")) techStack.push("Astro");
+  if (hasFile("nuxt.config.ts") || hasFile("nuxt.config.js")) techStack.push("Nuxt");
+  if (hasFile("svelte.config.js")) techStack.push("SvelteKit");
+  if (hasFile("vite.config.ts") || hasFile("vite.config.js")) techStack.push("Vite");
+
+  // Databases (from config files)
+  if (hasFile("prisma/schema.prisma")) techStack.push("Prisma");
+  if (hasFile("drizzle.config.ts")) techStack.push("Drizzle");
+
   // Check for key files
   const hasClaudeMd = hasFile("CLAUDE.md");
   const hasReadme = hasFile("README.md");
@@ -158,6 +169,37 @@ async function scanGitHubRepo(repoUrl: string): Promise<Record<string, any>> {
       packageJson = JSON.parse(Buffer.from(pkgData.content, "base64").toString());
     }
   } catch { /* ignore */ }
+
+  // Dependency-based detection (databases + email providers)
+  const allDeps: Record<string, string> = packageJson
+    ? { ...(packageJson.dependencies || {}), ...(packageJson.devDependencies || {}) }
+    : {};
+  const hasDep = (name: string) => name in allDeps;
+
+  // Databases from dependencies
+  if (hasDep("@supabase/supabase-js") || hasDep("supabase")) techStack.push("Supabase");
+  if (hasDep("@planetscale/database") || hasDep("planetscale")) techStack.push("PlanetScale");
+  if (!techStack.includes("Prisma") && hasDep("prisma")) techStack.push("Prisma");
+  if (!techStack.includes("Drizzle") && (hasDep("drizzle-orm") || hasDep("drizzle-kit"))) techStack.push("Drizzle");
+
+  // Email providers from dependencies
+  if (hasDep("resend")) techStack.push("Resend");
+  if (hasDep("@sendgrid/mail") || hasDep("@sendgrid/client")) techStack.push("SendGrid");
+  if (hasDep("postmark") || hasDep("postmark-js")) techStack.push("Postmark");
+  if (hasDep("mailgun-js") || hasDep("mailgun.js")) techStack.push("Mailgun");
+
+  // Supabase from .env.example (SUPABASE_URL)
+  if (!techStack.includes("Supabase") && hasEnvExample) {
+    try {
+      const envFile = hasFile(".env.example") ? ".env.example" : ".env.local.example";
+      const envRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${envFile}`, { headers });
+      if (envRes.ok) {
+        const envData = await envRes.json();
+        const envContent = Buffer.from(envData.content, "base64").toString();
+        if (/SUPABASE_URL/i.test(envContent)) techStack.push("Supabase");
+      }
+    } catch { /* ignore */ }
+  }
 
   // Scan for potential secrets in file paths and names
   const secretPatterns = [

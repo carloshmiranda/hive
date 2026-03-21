@@ -35,6 +35,28 @@ export async function GET() {
     FROM agent_actions WHERE started_at >= CURRENT_DATE
   `;
 
+  // Cost estimate: count actions per agent in last 24h, apply model cost rates
+  const costByAgent = await sql`
+    SELECT agent, COUNT(*) as actions
+    FROM agent_actions
+    WHERE started_at >= NOW() - INTERVAL '24 hours'
+    GROUP BY agent
+  `;
+  const COST_PER_ACTION: Record<string, number> = {
+    ceo: 0.15, scout: 0.15, evolver: 0.15, engineer: 0.03,
+    growth: 0, outreach: 0, ops: 0,
+  };
+  const estCost24h = costByAgent.reduce((sum: number, row: any) =>
+    sum + Number(row.actions) * (COST_PER_ACTION[row.agent] ?? 0.03), 0
+  );
+
+  // Budget utilization: turns in last 5h vs 225 max
+  const [turns5h] = await sql`
+    SELECT COUNT(*) as cnt FROM agent_actions
+    WHERE started_at >= NOW() - INTERVAL '5 hours'
+    AND agent IN ('ceo', 'scout', 'engineer', 'evolver')
+  `;
+
   const [lastCycle] = await sql`
     SELECT started_at FROM cycles ORDER BY started_at DESC LIMIT 1
   `;
@@ -49,6 +71,8 @@ export async function GET() {
     total_waitlist: Number(revenue.total_waitlist),
     pending_approvals: Number(pendingCount.count),
     tokens_today: Number(todayTokens.total),
+    est_cost_24h: Math.round(estCost24h * 100) / 100,
+    budget_utilization_pct: Math.round((Number(turns5h.cnt) / 225) * 100),
     last_cycle_at: lastCycle?.started_at || null,
   });
 }
