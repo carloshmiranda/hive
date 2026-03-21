@@ -181,12 +181,14 @@ jobs:
                  -e 's/{{FAQ_2_Q}}/<faq_2_question>/g' \
                  -e 's/{{FAQ_2_A}}/<faq_2_answer>/g' \
                  -e 's/{{FAQ_3_Q}}/<faq_3_question>/g' \
-                 -e 's/{{FAQ_3_A}}/<faq_3_answer>/g'
+                 -e 's/{{FAQ_3_A}}/<faq_3_answer>/g' \
+                 -e 's/{{LANG}}/<lang_code>/g'
                ```
                Get ALL placeholder values from the proposal context (step below):
                - TARGET_AUDIENCE, VALUE_PROPOSITION: from the proposal description
-               - FEATURE_1/2/3_TITLE and FEATURE_1/2/3_DESC: Extract 3 key product features from the proposal. These appear on the landing page as feature cards.
-               - FAQ_1/2/3_Q and FAQ_1/2/3_A: Generate 3 relevant FAQs based on the product, target audience, and business model from the proposal.
+               - LANG: Set based on target audience language. Portuguese audience → "pt", English → "en", Spanish → "es", etc. This sets `<html lang="...">`. ALL landing page copy must be written in this language.
+               - FEATURE_1/2/3_TITLE and FEATURE_1/2/3_DESC: Extract 3 key product features from the proposal. These appear on the landing page as feature cards. Write in the LANG language.
+               - FAQ_1/2/3_Q and FAQ_1/2/3_A: Generate 3 relevant FAQs based on the product, target audience, and business model from the proposal. Write in the LANG language.
                IMPORTANT: sed values must NOT contain `/` or `&` — escape them or use simple text. Keep feature titles short (3-5 words) and descriptions under 100 chars.
                Do NOT replace `{{POSITION}}` in waitlist/route.ts — that's a runtime template.
                CRITICAL verification — fail if placeholders remain:

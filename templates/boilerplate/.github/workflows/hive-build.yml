@@ -172,6 +172,22 @@ jobs:
             - CTAs: action + benefit. "Start managing properties" not "Submit". Include no-credit-card line if applicable
             - Single conversion goal: ONE primary CTA repeated throughout. All paths lead to the same action
 
+            **Content integrity (CRITICAL — no false claims):**
+            - NEVER claim compliance, certification, or legal guarantees the product cannot deliver
+            - NEVER state features as existing if they are not yet built — use "coming soon" or describe the roadmap honestly
+            - Social proof metrics must be verifiable facts (e.g. "4 tax regimes" is fine, "100% compliant" is not unless audited)
+            - FAQ answers must honestly reflect what IS built vs what is PLANNED. If a feature is on the roadmap, say so
+            - Pricing CTAs must respect LAUNCH_MODE: in waitlist mode, ALL CTAs should say "Join Waitlist" and link to the waitlist form (#waitlist), never "Start Free Trial" or link to /checkout
+            - Add a disclaimer near tax/legal/financial tools: "informational tool, not professional advice"
+
+            **Language consistency:**
+            - The ENTIRE page must be in ONE language matching the target audience (from CLAUDE.md or product context)
+            - If target audience speaks Portuguese → ALL copy in Portuguese (headings, CTAs, descriptions, FAQ, pricing, footer)
+            - If target audience speaks English → ALL copy in English
+            - NEVER mix languages on the same page — this looks unprofessional and confuses users
+            - `<html lang="...">` MUST match the page content language (e.g. "pt" if Portuguese, "en" if English)
+            - CTA buttons, form labels, error messages, and footer text must ALL match the chosen language
+
             **Responsive design:**
             - Mobile-first: all layouts work on 320px. Use `flex-col md:flex-row` for stacking
             - Padding: always `px-4 sm:px-6` on containers. Never let content touch screen edges

@@ -174,7 +174,7 @@ export default function HomePage() {
       </nav>
 
       {/* Hero */}
-      <header className="max-w-3xl mx-auto px-6 pt-16 pb-20 text-center">
+      <header id="waitlist" className="max-w-3xl mx-auto px-6 pt-16 pb-20 text-center">
         <div className="inline-block px-3 py-1 mb-6 text-xs font-medium text-gray-600 bg-gray-100 rounded-full">
           Now in early access
         </div>
@@ -258,25 +258,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Social proof / trust */}
-      <section className="max-w-4xl mx-auto px-6 py-20">
-        <div className="text-center">
-          <p className="text-sm text-gray-400 uppercase tracking-wider mb-8">Trusted by early adopters</p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            {[
-              { metric: "100%", label: "Free tier" },
-              { metric: "< 2min", label: "Setup time" },
-              { metric: "24/7", label: "Available" },
-              { metric: "€0", label: "To start" },
-            ].map((item, i) => (
-              <div key={i}>
-                <div className="text-2xl font-bold text-gray-900">{item.metric}</div>
-                <div className="text-sm text-gray-500">{item.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      {/* Social proof — only shown when real data exists (e.g. waitlist count). Skip entirely for MVP launch. */}
 
       {/* FAQ */}
       <section id="faq" className="bg-gray-50 py-20">

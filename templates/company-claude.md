@@ -66,3 +66,7 @@
 - Make breaking API changes without updating the frontend
 - Deploy without running `npm run build` successfully
 - Ignore TypeScript errors
+- Claim legal compliance, certifications, or guarantees the product cannot deliver
+- State features as existing when they are not yet built — be honest about roadmap vs reality
+- Mix languages on the same page — ALL copy must match the target audience language
+- Show "Start Free Trial" or checkout CTAs when LAUNCH_MODE is "waitlist" — all CTAs should lead to the waitlist

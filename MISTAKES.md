@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-21 Engineer generates false compliance claims and mixes languages
+**What happened:** Senhorio's landing page claimed "100% Compliant with Portuguese tax law" and "all receipts meet Portuguese legal requirements" — but there's no receipt generation, no compliance engine, no audit. FAQ answers described features as existing when they're not built. The page also mixed Portuguese and English randomly (IRS section in PT, everything else in EN), and pricing showed "Start Free Trial" buttons in waitlist mode linking to a non-functional checkout.
+**Root cause:** The Engineer's build prompt had no rules against (1) making legal/compliance claims the product can't deliver, (2) describing unbuilt features as existing, (3) mixing languages, or (4) showing checkout CTAs in waitlist mode. The boilerplate's `<html lang>` was hardcoded to "en" regardless of target audience.
+**Fix applied:** (1) Added "Content integrity" rules to Engineer prompt: no false claims, no stating unbuilt features as existing, social proof must be verifiable, FAQs must be honest about roadmap vs reality, pricing CTAs must respect LAUNCH_MODE. (2) Added "Language consistency" rules: entire page in one language matching target audience. (3) Boilerplate layout.tsx now uses `{{LANG}}` template variable. (4) Provisioner sed commands now include LANG replacement. (5) Company CLAUDE.md template updated with "Do NOT" rules.
+**Prevention:** Engineer prompt now has explicit content integrity and language consistency sections. Boilerplate `lang` attribute is parameterized. LAUNCH_MODE is enforced in all CTA contexts.
+**Affects:** both
+
 ### 2026-03-21 CEO agent never merged PRs — open PRs piled up across all companies
 **What happened:** Engineer agent opened PRs and dispatched `ceo_review`, but PRs sat open unmerged. Senhorio had 3 open PRs (redesign, calculator, blog), VerdeDesk had 2, Flolio had 2. Senhorio was still showing a white boilerplate page because the redesign PR was never merged.
 **Root cause:** The CEO prompt's `ceo_review` handler said "Do portfolio analysis across all companies" — it had no instructions to review or merge the PR from the payload. Also, `GH_PAT` was not passed as an env var to the CEO agent step.
