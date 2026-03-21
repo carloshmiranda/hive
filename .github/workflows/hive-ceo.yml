@@ -118,14 +118,58 @@ jobs:
                - cycle_complete: Score the cycle 1-10 using mode-specific criteria from prompts/ceo.md
                - gate_approved: Route the approval. If gate_type is 'new_company', output needs_provisioning: true so Engineer can scaffold the repo, Vercel project, Neon DB, and Stripe product. Include the company slug.
                - cycle_start: Start a new cycle for the specified company. Load research reports, determine lifecycle mode, create a cycle plan with engineering_tasks and growth_tasks.
-               - ceo_review: Review the PR from the Engineer agent. The payload contains `company` and `pr_number`.
-                 1. Read the PR diff: `GH_TOKEN="$GH_PAT" gh pr view <pr_number> --repo carloshmiranda/<company> --json title,body,additions,deletions,changedFiles`
-                 2. Read the actual code changes: `GH_TOKEN="$GH_PAT" gh pr diff <pr_number> --repo carloshmiranda/<company>`
-                 3. Check strategic alignment with the company's product spec and current cycle plan
-                 4. If the PR looks good (builds, implements what was asked, no security issues): MERGE it with `GH_TOKEN="$GH_PAT" gh pr merge <pr_number> --repo carloshmiranda/<company> --merge`
-                 5. If the PR has issues: leave a review comment explaining what needs fixing
-                 6. After merging, check if there are more open PRs for this company and review those too
-                 7. Output: { "pr_merged": true/false, "pr_number": N, "company": "<slug>" }
+               - ceo_review: Review and merge the PR from the Engineer agent. Payload has `company` and `pr_number`.
+
+                 STEP 1 — Gather context:
+                 ```bash
+                 GH_TOKEN="$GH_PAT" gh pr view <pr_number> --repo carloshmiranda/<company> --json title,body,additions,deletions,changedFiles,mergeable
+                 GH_TOKEN="$GH_PAT" gh pr diff <pr_number> --repo carloshmiranda/<company>
+                 GH_TOKEN="$GH_PAT" gh pr checks <pr_number> --repo carloshmiranda/<company>
+                 ```
+
+                 STEP 2 — Hard gates (reject immediately if any fail):
+                 - CI/build checks pass (from gh pr checks)
+                 - No secrets in diff (API_KEY, SECRET, PASSWORD, Bearer, hardcoded tokens, .env values)
+                 - No destructive DB migrations without rollback plan
+                 - Diff size reasonable (>1000 lines or >20 files = flag as high-risk)
+
+                 STEP 3 — Task alignment:
+                 - PR maps to a planned engineering_task from the current cycle plan
+                 - Acceptance criteria from the task are met
+                 - No scope creep (changes unrelated to the assigned task)
+
+                 STEP 4 — Code quality scan (focus on new files + modified API routes):
+                 - API routes have error handling (try/catch) and return { ok, data?, error? }
+                 - SQL uses parameterized queries (no string interpolation)
+                 - No console.log/debug artifacts left behind
+                 - No hardcoded values (URLs, prices, emails should come from config/DB)
+                 - New API routes call requireAuth() or have documented reason not to
+
+                 STEP 5 — Risk score:
+                 | Factor | Points |
+                 | Touches auth/payments/user data | +3 |
+                 | Changes DB schema | +3 |
+                 | Adds new dependencies | +2 |
+                 | >500 lines changed | +2 |
+                 | >10 files changed | +2 |
+                 | New API routes | +1 |
+                 | Only UI/styling changes | -2 |
+                 | Only content/copy changes | -3 |
+
+                 Score 0-3: Auto-merge. Score 4-6: Merge + log detailed summary. Score 7+: Do NOT merge, create approval gate for Carlos.
+
+                 STEP 6 — Decision:
+                 - MERGE: `GH_TOKEN="$GH_PAT" gh pr merge <pr_number> --repo carloshmiranda/<company> --merge`
+                 - REJECT: `GH_TOKEN="$GH_PAT" gh pr review <pr_number> --repo carloshmiranda/<company> --request-changes --body "<issues>"`
+                 - After merging, check for more open PRs: `GH_TOKEN="$GH_PAT" gh pr list --repo carloshmiranda/<company> --state open --json number,title`
+
+                 STEP 7 — Output structured review:
+                 ```json
+                 { "pr_review": { "pr_number": N, "company": "<slug>", "task_id": "<id>",
+                   "hard_gates_passed": true, "task_aligned": true, "risk_score": 3,
+                   "decision": "merge|reject|escalate", "summary": "<one line>" },
+                   "pr_merged": true/false }
+                 ```
                - issue/directive: Decompose into tasks, assign to agents
                - PR opened: Review for strategic alignment
                - manual: Execute the specified task

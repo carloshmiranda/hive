@@ -21,9 +21,6 @@
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
 
-### 🟡 P1 — PR review quality criteria for CEO agent
-CEO agent now reviews and merges PRs (fixed 2026-03-21), but review criteria are vague ("strategic alignment"). Need concrete review checklist: build passes, no regressions, matches acceptance criteria, no security issues. Research in progress.
-
 ### 🟡 P1 — Scout proposal auto-expiry
 9 pending proposals cluttering the inbox. Add auto-expiry: proposals older than 7 days auto-reject with reason "expired — not reviewed". Sentinel check. Prevents approval debt.
 
@@ -93,6 +90,12 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-21 — PR review quality criteria for CEO agent (P1)
+CEO agent now uses a 6-step structured review: hard gates (CI, secrets, destructive migrations, diff size), task alignment (maps to cycle plan, acceptance criteria met, no scope creep), code quality (error handling, SQL safety, auth checks), and risk scoring (0-3 auto-merge, 4-6 merge+log, 7+ escalate to Carlos). Based on CodeRabbit/Qodo/Copilot best practices research.
+
+### ✅ 2026-03-21 — CEO PR merge + task progress dashboard (P1)
+CEO agent now reviews and merges PRs on `ceo_review` dispatch (was a no-op). Task progress bars added to company cards on dashboard. Misleading Approve/Dismiss buttons replaced with Prioritize/Dismiss.
 
 ### ✅ 2026-03-21 — Stripe product creation on provision (P0)
 Provisioner now auto-creates Stripe Product + Price during company setup via OIDC-authenticated `/api/agents/stripe/product` endpoint. Uses pricing from Scout proposal, defaults to €9.99/month. Stores IDs in infra table. Companies can now accept payments from day one.
