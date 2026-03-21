@@ -20,8 +20,6 @@
 ### 🔴 P0 — Email domain for Resend (outreach fully blocked)
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
-### 🔴 P0 — Stripe product creation on provision (payments blocked)
-Provisioner scaffolds everything BUT doesn't create Stripe Product + Price with `metadata.hive_company = slug`. Without this, companies cannot accept payments. The mvp → active transition depends on first_revenue which can never trigger. Fix: add Stripe API call in hive-engineer.yml provision job. One API call.
 
 ### 🟡 P1 — PR auto-merge for company repos
 Engineer creates PRs on company repos but nobody merges them. Stale PRs accumulate. Options: (a) Add a workflow that auto-merges `hive/*` branches after build passes, (b) Have Engineer push directly to main (simpler for AI-managed repos). Decision needed.
@@ -95,6 +93,9 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-21 — Stripe product creation on provision (P0)
+Provisioner now auto-creates Stripe Product + Price during company setup via OIDC-authenticated `/api/agents/stripe/product` endpoint. Uses pricing from Scout proposal, defaults to €9.99/month. Stores IDs in infra table. Companies can now accept payments from day one.
 
 ### ✅ 2026-03-21 — Zero-secret company repos + OIDC gateway (P1)
 Company repos no longer need ANY secrets (including DATABASE_URL). All auth via GitHub OIDC token exchange, all data via Hive API gateway (`/api/agents/context`, `/api/agents/log`, `/api/agents/tasks/:id`, `/api/agents/playbook`). Shared OIDC validation extracted to `src/lib/oidc.ts`. DATABASE_URL secrets removed from all 3 company repos. Workflows reduced by ~200 lines each.
