@@ -157,7 +157,9 @@ jobs:
           set +e  # Prevent grep/jq exit codes from crashing the step
           RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
+          TRIGGER="${{ steps.context.outputs.trigger }}"
           echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
+          echo "Trigger: $TRIGGER"
 
           dispatch() {
             curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
@@ -167,24 +169,42 @@ jobs:
             echo "  Dispatched: $1"
           }
 
-          COMPANY=$(echo "$RESULT" | jq -r '.company // ""' 2>/dev/null || echo "")
-          PAYLOAD='${{ toJson(github.event.client_payload) }}'
-          # Fallback: extract company from payload if jq couldn't parse agent output
+          # Extract company from agent output (handles JSON in code blocks, prose, or raw)
+          COMPANY=$(echo "$RESULT" | grep -oP '"company"\s*:\s*"\K[^"]+' | head -1 || echo "")
           if [ -z "$COMPANY" ]; then
             COMPANY=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company // ""' 2>/dev/null || echo "")
           fi
+          # Also extract company_id
+          COMPANY_ID=$(echo "$RESULT" | grep -oP '"company_id"\s*:\s*"\K[^"]+' | head -1 || echo "")
+          if [ -z "$COMPANY_ID" ]; then
+            COMPANY_ID=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company_id // ""' 2>/dev/null || echo "")
+          fi
+          echo "Company: $COMPANY | Company ID: $COMPANY_ID"
+
+          # Detect research_delivered: check multiple patterns (JSON, prose, code blocks)
+          RESEARCH_DELIVERED=false
+          echo "$RESULT" | grep -qiP '"?research_delivered"?\s*[:=]\s*"?true' && RESEARCH_DELIVERED=true
+          echo "$RESULT" | grep -qi "research.*delivered\|delivered.*research\|wrote.*research_reports\|inserted.*research" && RESEARCH_DELIVERED=true
+          # If trigger was research_request and Scout succeeded, research was delivered
+          if [ "$TRIGGER" = "research_request" ]; then
+            RESEARCH_DELIVERED=true
+          fi
+          echo "Research delivered: $RESEARCH_DELIVERED"
+
+          # Build reusable payload
+          BASE_PAYLOAD="\"company\":\"$COMPANY\",\"company_id\":\"$COMPANY_ID\""
 
           # Chain to CEO for cycle planning when research is delivered
-          if echo "$RESULT" | grep -q "research_delivered.*true"; then
-            dispatch "cycle_start" "{\"source\":\"scout_research\",\"company\":\"$COMPANY\"}"
-
-            # Also chain to Growth for content
-            dispatch "growth_trigger" "{\"source\":\"scout\",\"company\":\"$COMPANY\"}"
+          if [ "$RESEARCH_DELIVERED" = "true" ] && [ -n "$COMPANY" ]; then
+            dispatch "cycle_start" "{\"source\":\"scout_research\",$BASE_PAYLOAD}"
+            dispatch "growth_trigger" "{\"source\":\"scout\",$BASE_PAYLOAD}"
           fi
 
           # Chain to Outreach if leads found
-          if echo "$RESULT" | grep -q "leads_found.*true"; then
-            dispatch "outreach_trigger" "{\"source\":\"scout\",\"company\":\"$COMPANY\"}"
+          LEADS_FOUND=false
+          echo "$RESULT" | grep -qiP '"?leads_found"?\s*[:=]\s*"?true' && LEADS_FOUND=true
+          if [ "$LEADS_FOUND" = "true" ] && [ -n "$COMPANY" ]; then
+            dispatch "outreach_trigger" "{\"source\":\"scout\",$BASE_PAYLOAD}"
           fi
 
           echo "Chain dispatch complete"

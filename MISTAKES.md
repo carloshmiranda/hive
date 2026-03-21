@@ -184,6 +184,20 @@
 **Prevention:** Provisioning checklists must include post-creation configuration, not just resource creation. Every resource that needs env vars should have a verification step.
 **Affects:** hive
 
+### 2026-03-21 Engineer feature_request prompt was 1 line — caused 100% failure rate
+**What happened:** Every `feature_request` dispatch to Engineer failed with `error_max_turns` (51 turns, $1.49 each). Senhorio's cycle 1 CEO plan (tax calculator + landing page) was never built despite multiple attempts.
+**Root cause:** Four compounding failures: (1) CEO chain dispatch sent `company: ""` — the Engineer had no idea which company to work on. (2) The `feature_request` prompt was literally one sentence: "Read the CEO plan from cycles table, implement the code changes in the company's repo, commit + push." No instructions on HOW to clone the company repo, authenticate git, query the cycle, or scope work. (3) The Engineer runs on the hive repo checkout — for `feature_request` it needs to clone the company's repo, but had no instructions. (4) CEO plan had 2 medium tasks; no instruction to limit scope.
+**Fix applied:** (a) CEO chain dispatch now always includes `company` + `company_id` in payloads, with guard to skip all dispatches if company is empty. (b) `feature_request` prompt expanded to 14 detailed steps: extract company, query cycle plan, clone company repo with GH_PAT auth, implement ONE task per run, build, branch, PR, log. (c) Explicit `GH_TOKEN="$GH_PAT"` auth instructions for all git/gh commands. (d) `cycle_start` trigger always dispatches `feature_request`.
+**Prevention:** Every trigger handler in a workflow prompt needs step-by-step instructions proportional to its complexity. If a handler needs repo switching, DB queries, and git operations, one sentence is not enough. Compare each handler against `new_company` (the gold standard) and ensure similar detail level.
+**Affects:** hive (Engineer workflow, CEO chain dispatch, full ideation→MVP loop)
+
+### 2026-03-20 Chain dispatch grep patterns don't match agent output format
+**What happened:** Scout completed research_request successfully (794 chars output) but chain dispatch never fired CEO. The grep pattern `research_delivered.*true` didn't match because the agent's output was in a markdown code block, prose, or mixed format — not raw JSON on a single line.
+**Root cause:** Chain dispatch relied on exact `grep -q "key.*true"` patterns against the agent's last assistant message. Claude's output format varies: sometimes raw JSON, sometimes JSON in code blocks, sometimes prose mentioning the key. The grep was too brittle.
+**Fix applied:** Three-layer matching: (1) Perl-compatible regex for JSON-like patterns (`"?key"?\s*[:=]\s*"?true`), (2) semantic grep for natural language mentions, (3) trigger-based fallback (if trigger was `research_request` and agent succeeded, research was delivered). Applied to Scout, CEO, and Engineer chain dispatches.
+**Prevention:** Never use exact string matching on LLM output. LLMs produce varied formats. Use multi-pattern matching with fallbacks. Best approach: infer intent from the trigger type + success status, not from parsing the output text.
+**Affects:** hive (all chain dispatches)
+
 ### 2026-03-20 Rate-limited agents fail silently with 0 turns — never retried
 **What happened:** When Max 5x quota is exhausted, agents fail with "exhausted after 0 turns ($0 USD)". These failures are logged but never retried after the quota window resets. Work is silently dropped.
 **Root cause:** No distinction between "code bug" failures and "quota exhaustion" failures. Both are logged identically and neither triggers automatic retry.

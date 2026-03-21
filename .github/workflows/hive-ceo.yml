@@ -146,21 +146,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set +e  # Prevent grep/jq exit codes from crashing the step
-          # Extract last assistant text from claude-code-action execution file
-          # Format: array of {type: "assistant", message: {content: [{type: "text", text: "..."}]}}
           RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
           REPO="${{ github.repository }}"
+          TRIGGER="${{ steps.context.outputs.trigger }}"
           echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
-
-          # Extract JSON object from text (may be multiline, in a code block)
-          # Collapse to single line, then extract the JSON containing our signal keys
-          ONELINE=$(echo "$RESULT" | tr '\n' ' ')
-          RESULT_JSON=$(echo "$ONELINE" | sed -n 's/.*\({[^}]*"company"[^}]*}\).*/\1/p' | head -1)
-          if [ -z "$RESULT_JSON" ]; then
-            # Fallback: try to extract company from "company": "slug" pattern
-            COMPANY=$(echo "$ONELINE" | sed -n 's/.*"company"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-          fi
-          echo "Extracted JSON: ${RESULT_JSON:-none} | Company: ${COMPANY:-from-json}"
+          echo "Trigger: $TRIGGER"
 
           dispatch() {
             curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
@@ -170,33 +160,57 @@ jobs:
             echo "  Dispatched: $1"
           }
 
-          # Extract company slug from the JSON (if not already set by fallback)
+          # Extract company: try output first, then input payload (multiple fallbacks)
+          COMPANY=$(echo "$RESULT" | grep -oP '"company"\s*:\s*"\K[^"]+' | head -1 || echo "")
           if [ -z "$COMPANY" ]; then
-            COMPANY=$(echo "$RESULT_JSON" | jq -r '.company // ""' 2>/dev/null || echo "")
+            COMPANY=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company // ""' 2>/dev/null || echo "")
           fi
-          echo "Company: $COMPANY"
+          # Also extract company_id for downstream agents
+          COMPANY_ID=$(echo "$RESULT" | grep -oP '"company_id"\s*:\s*"\K[^"]+' | head -1 || echo "")
+          if [ -z "$COMPANY_ID" ]; then
+            COMPANY_ID=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company_id // ""' 2>/dev/null || echo "")
+          fi
+          echo "Company: $COMPANY | Company ID: $COMPANY_ID"
 
-          # Chain to Engineer for provisioning (gate_approved with new_company)
-          echo "$RESULT" | grep -q "needs_provisioning.*true" && \
-            dispatch "new_company" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
+          # Guard: if no company found, skip all dispatches
+          if [ -z "$COMPANY" ]; then
+            echo "WARNING: No company slug found in output or payload — skipping dispatches"
+            echo "Chain dispatch complete (no company)"
+            exit 0
+          fi
+
+          # Detect signals using flexible grep (handles JSON in code blocks, prose, etc.)
+          check_signal() {
+            echo "$RESULT" | grep -qiP "\"?${1}\"?\s*[:=]\s*\"?true" && return 0
+            echo "$RESULT" | grep -qi "$1" && return 0
+            return 1
+          }
+
+          # Build reusable payload with company + company_id
+          BASE_PAYLOAD="\"company\":\"$COMPANY\",\"company_id\":\"$COMPANY_ID\""
+
+          # Chain to Engineer for provisioning
+          if check_signal "needs_provisioning"; then
+            dispatch "new_company" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+          fi
 
           # Chain to Scout if research needed
-          echo "$RESULT" | grep -q "needs_research.*true" && \
-            dispatch "research_request" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
+          if check_signal "needs_research"; then
+            dispatch "research_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+          fi
 
-          # Chain to Engineer if feature needed
-          echo "$RESULT" | grep -q "needs_feature.*true" && \
-            dispatch "feature_request" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
+          # Chain to Engineer if feature needed — always dispatch on cycle_start
+          if check_signal "needs_feature" || echo "$TRIGGER" | grep -q "cycle_start"; then
+            dispatch "feature_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+          fi
 
-          # Chain to workers if plan has growth/outreach tasks
-          echo "$RESULT" | grep -q "growth" && \
-            dispatch "growth_trigger" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
-          echo "$RESULT" | grep -q "outreach" && \
-            dispatch "outreach_trigger" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
+          # Chain to workers if plan mentions growth/outreach tasks
+          echo "$RESULT" | grep -qiP "growth_tasks|growth_strategy|content.?calendar" && \
+            dispatch "growth_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
+          echo "$RESULT" | grep -qiP "outreach_tasks|lead.?list|cold.?email" && \
+            dispatch "outreach_trigger" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
 
           # Always dispatch cycle_complete so Evolver/reflection can run
-          if [ -n "$COMPANY" ]; then
-            dispatch "cycle_complete" "{\"source\":\"ceo\",\"company\":\"$COMPANY\"}"
-          fi
+          dispatch "cycle_complete" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
 
           echo "Chain dispatch complete"

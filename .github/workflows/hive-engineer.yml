@@ -148,22 +148,64 @@ jobs:
             Do NOT create a Neon database or Stripe product — skip those for now.
 
             ## feature_request — Build features from CEO plan
-            Read the CEO plan from cycles table, implement the code changes in the company's repo, commit + push.
+            Execute these steps IN ORDER:
+
+            1. Extract company slug from PAYLOAD. If `company` is empty, query: `SELECT slug FROM companies WHERE status = 'mvp' ORDER BY updated_at DESC LIMIT 1`
+            2. Get the company's GitHub repo: `SELECT github_repo FROM companies WHERE slug = '<slug>'`
+            3. Get the active cycle plan:
+               ```sql
+               SELECT id, cycle_number, ceo_plan FROM cycles
+               WHERE company_id = (SELECT id FROM companies WHERE slug = '<slug>')
+               AND status = 'running' ORDER BY created_at DESC LIMIT 1
+               ```
+            4. Clone the company repo into /tmp:
+               ```bash
+               cd /tmp
+               GH_TOKEN="$GH_PAT" gh repo clone <github_repo> -- --depth 1
+               cd /tmp/<slug>
+               ```
+            5. Read the cycle's `ceo_plan` → `engineering_tasks` array. Pick the FIRST task that hasn't been completed yet.
+               IMPORTANT: Implement ONE engineering task per run. Do NOT try to do all tasks — you have limited turns.
+            6. Create a feature branch: `git checkout -b hive/cycle-<N>-<task-id>`
+            7. Implement the task following the acceptance criteria in `ceo_plan.engineering_tasks[].acceptance`
+            8. Install dependencies if needed: `npm install`
+            9. Build to verify: `npx next build` — fix any errors before proceeding
+            10. Commit changes: `git add -A && git commit -m "feat: <task summary>"`
+            11. Push the branch:
+                ```bash
+                git remote set-url origin https://x-access-token:${GH_PAT}@github.com/<github_repo>.git
+                git push -u origin hive/cycle-<N>-<task-id>
+                ```
+            12. Open a PR:
+                ```bash
+                GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"
+                ```
+            13. Log success to DB:
+                ```sql
+                INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+                VALUES ('engineer', '<company_id>', 'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
+                ```
+            14. Output: { "pr_opened": true, "pr_number": N, "company": "<slug>" }
 
             ## ops_escalation — Fix errors
-            Read the error from agent_actions, diagnose and fix, commit + push.
+            1. Extract company slug from PAYLOAD
+            2. Query recent errors: `SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '<slug>') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3`
+            3. Clone the company repo: `cd /tmp && GH_TOKEN="$GH_PAT" gh repo clone <github_repo> -- --depth 1 && cd /tmp/<slug>`
+            4. Diagnose and fix the issue
+            5. Build, commit, push, log to agent_actions
 
             ## deploy_drift — Fix stale deployments
-            Check Vercel deployment status, trigger a redeploy if needed.
+            Check Vercel deployment status via API, trigger a redeploy if needed, or investigate build failures.
 
             ## Other triggers
-            - issue (feature/bug): Implement the feature or fix described
-            - pr_approved: Merge the PR and verify deploy
+            - issue (feature/bug): Clone the relevant repo, implement the feature or fix, create PR
+            - pr_approved: Merge the PR using `GH_TOKEN="$GH_PAT" gh pr merge <N> --squash`
             - manual: Execute the specified task
 
             RULES:
-            - For feature_request: run `npx next build` before committing, create a branch and open a PR
+            - For feature_request: implement ONE task per run, create a branch and open a PR
             - For new_company: commit directly to main (it's a new repo)
+            - Always use `GH_TOKEN="$GH_PAT"` for gh commands and `x-access-token:${GH_PAT}` for git URLs
             - Write to agent_actions table: what you did, status, any errors
             - If you open a PR, output: { "pr_opened": true, "pr_number": N, "company": "slug" }
             - Output: { "company": "<slug>", "provisioned": true } for new_company
@@ -217,7 +259,10 @@ jobs:
           }
 
           # Chain to CEO if PR opened (strategy review)
-          echo "$RESULT" | grep -q "pr_opened.*true" && \
-            dispatch "ceo_review" "{\"source\":\"engineer\",\"pr_number\":$(echo "$RESULT" | jq -r '.pr_number // 0' 2>/dev/null)}"
+          # Flexible: match JSON, prose, or code blocks mentioning PR
+          PR_NUM=$(echo "$RESULT" | grep -oP '"?pr_number"?\s*[:=]\s*"?\K\d+' | head -1 || echo "0")
+          if echo "$RESULT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true|opened.*pull.?request|created.*PR'; then
+            dispatch "ceo_review" "{\"source\":\"engineer\",\"pr_number\":${PR_NUM:-0}}"
+          fi
 
           echo "Chain dispatch complete"
