@@ -359,18 +359,18 @@ jobs:
       - name: Dispatch build to company repo
         env:
           GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
           COMPANY="${{ needs.context.outputs.company }}"
           COMPANY_REPO="${{ needs.context.outputs.company_repo }}"
           TRIGGER="${{ needs.context.outputs.trigger }}"
-          PAYLOAD='${{ needs.context.outputs.payload }}'
-          TASK_SUMMARY=$(echo "$PAYLOAD" | jq -r '.task // .title // "Build task"' 2>/dev/null | head -c 100)
+          TASK_SUMMARY=$(echo "$PAYLOAD_JSON" | jq -r '.task // .title // "Build task"' 2>/dev/null | head -c 100)
 
           echo "Dispatching build to ${COMPANY_REPO} (runs on company's unlimited Actions minutes)"
 
           # Build request body with jq to handle JSON escaping properly
           # workflow_dispatch inputs are strings, so payload must be a JSON-encoded string
-          PAYLOAD_STR=$(echo "$PAYLOAD" | jq -c '.' 2>/dev/null || echo '{}')
+          PAYLOAD_STR=$(echo "$PAYLOAD_JSON" | jq -c '.' 2>/dev/null || echo '{}')
           REQUEST_BODY=$(jq -n \
             --arg ref "main" \
             --arg task "$TASK_SUMMARY" \
