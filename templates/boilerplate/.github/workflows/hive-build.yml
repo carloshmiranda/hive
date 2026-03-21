@@ -78,6 +78,18 @@ jobs:
             echo "gh_pat=$GH_PAT_TOKEN" >> $GITHUB_OUTPUT
           fi
 
+          # Get Vercel token for infra operations (analytics, env vars, redeploys)
+          RESPONSE3=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"token_type":"vercel_token"}')
+
+          VERCEL_TOKEN=$(echo "$RESPONSE3" | jq -r '.data.token // empty')
+          if [ -n "$VERCEL_TOKEN" ]; then
+            echo "::add-mask::$VERCEL_TOKEN"
+            echo "vercel_token=$VERCEL_TOKEN" >> $GITHUB_OUTPUT
+          fi
+
       - name: Load product context from Hive API
         id: context
         run: |
@@ -96,12 +108,14 @@ jobs:
 
       - name: Run build agent
         id: agent
+        env:
+          VERCEL_TOKEN: ${{ steps.auth.outputs.vercel_token }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
           prompt: |
-            You are the Engineer agent of Hive. You build features and fix bugs.
+            You are the Engineer agent of Hive. You build features, fix bugs, and manage infrastructure.
 
             TRIGGER: ${{ github.event.inputs.trigger }}
             COMPANY: ${{ github.event.inputs.company_slug }}
@@ -148,6 +162,14 @@ jobs:
 
             ## deploy_drift — Fix stale deployments
             Check Vercel deployment status, trigger a redeploy if needed.
+
+            ## Infrastructure operations
+            You have access to the Vercel API via `$VERCEL_TOKEN` for infrastructure tasks:
+            - **Enable Analytics**: `curl -s -X PATCH "https://api.vercel.com/v9/projects/${{ github.event.inputs.company_slug }}" -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" -d '{"analyticsEnabled":true,"speedInsightsEnabled":true}'`
+            - **Trigger redeploy**: `curl -s -X POST "https://api.vercel.com/v13/deployments" -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" -d '{"name":"${{ github.event.inputs.company_slug }}","target":"production","gitSource":{"type":"github","org":"carloshmiranda","repo":"${{ github.event.inputs.company_slug }}","ref":"main"}}'`
+            - **Set env vars**: `curl -s -X POST "https://api.vercel.com/v10/projects/${{ github.event.inputs.company_slug }}/env" -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" -d '{"key":"VAR_NAME","value":"VALUE","target":["production"],"type":"encrypted"}'`
+            - **List deployments**: `curl -s "https://api.vercel.com/v6/deployments?projectId=${{ github.event.inputs.company_slug }}&limit=5" -H "Authorization: Bearer $VERCEL_TOKEN"`
+            Use these for ops tasks like enabling analytics, managing env vars, or triggering redeploys.
 
             RULES:
             - Implement ONE task per run, create a branch and open a PR
