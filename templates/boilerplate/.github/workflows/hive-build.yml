@@ -123,9 +123,7 @@ jobs:
             PRODUCT_CTX=$(cat /tmp/product-context.json | head -c 8000)
           fi
 
-          # Write prompt to file (avoids quoting issues with --allowedTools variadic flag)
-          # Note: ${{ }} expressions are replaced by GitHub Actions before bash runs
-          # Using envsubst to inject PRODUCT_CTX into the prompt
+          # Write prompt to file via heredoc + envsubst (avoids --allowedTools variadic flag issue)
           export PRODUCT_CTX
           envsubst '${PRODUCT_CTX}' > /tmp/build-prompt.txt <<'BUILDPROMPT'
           You are the Engineer agent of Hive. You build features and fix bugs.
