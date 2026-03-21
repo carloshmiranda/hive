@@ -97,7 +97,12 @@ jobs:
             Based on the trigger:
 
             ## new_company — Provision infrastructure for a new company
-            Query the company from DB: `SELECT name, slug, description FROM companies WHERE id = '<company_id>'`
+            FIRST check if already provisioned:
+            `SELECT status, github_repo, vercel_project_id FROM companies WHERE id = '<company_id>'`
+            If status is 'mvp' AND github_repo IS NOT NULL AND vercel_project_id IS NOT NULL → already done.
+            Log success and output: { "company": "<slug>", "provisioned": true, "skipped": true }
+
+            Otherwise, query: `SELECT name, slug, description FROM companies WHERE id = '<company_id>'`
             Then execute these steps IN ORDER:
 
             IMPORTANT: For ALL `gh` commands, you MUST set GH_TOKEN so it uses the personal access token:
@@ -158,11 +163,14 @@ jobs:
                WHERE company_id = (SELECT id FROM companies WHERE slug = '<slug>')
                AND status = 'running' ORDER BY created_at DESC LIMIT 1
                ```
-            4. Clone the company repo into /tmp:
+            4. Clone the company repo into /tmp and configure git:
                ```bash
                cd /tmp
                GH_TOKEN="$GH_PAT" gh repo clone <github_repo> -- --depth 1
                cd /tmp/<slug>
+               git config user.name "Hive Engineer"
+               git config user.email "noreply@github.com"
+               git remote set-url origin https://x-access-token:${GH_PAT}@github.com/<github_repo>.git
                ```
             5. Read the cycle's `ceo_plan` → `engineering_tasks` array. Pick the FIRST task that hasn't been completed yet.
                IMPORTANT: Implement ONE engineering task per run. Do NOT try to do all tasks — you have limited turns.
@@ -170,27 +178,32 @@ jobs:
             7. Implement the task following the acceptance criteria in `ceo_plan.engineering_tasks[].acceptance`
             8. Install dependencies if needed: `npm install`
             9. Build to verify: `npx next build` — fix any errors before proceeding
-            10. Commit changes: `git add -A && git commit -m "feat: <task summary>"`
-            11. Push the branch:
+            10. Commit and push:
                 ```bash
-                git remote set-url origin https://x-access-token:${GH_PAT}@github.com/<github_repo>.git
+                git add -A && git commit -m "feat: <task summary>"
                 git push -u origin hive/cycle-<N>-<task-id>
                 ```
-            12. Open a PR:
+            11. Open a PR:
                 ```bash
                 GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"
                 ```
-            13. Log success to DB:
+            12. Log success to DB:
                 ```sql
                 INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
                 VALUES ('engineer', '<company_id>', 'feature_request', 'success', 'Implemented <task-id>: <summary>. PR #<N>', NOW(), NOW())
                 ```
-            14. Output: { "pr_opened": true, "pr_number": N, "company": "<slug>" }
+            13. Output: { "pr_opened": true, "pr_number": N, "company": "<slug>" }
 
             ## ops_escalation — Fix errors
             1. Extract company slug from PAYLOAD
             2. Query recent errors: `SELECT error, description FROM agent_actions WHERE company_id = (SELECT id FROM companies WHERE slug = '<slug>') AND status = 'failed' ORDER BY finished_at DESC LIMIT 3`
-            3. Clone the company repo: `cd /tmp && GH_TOKEN="$GH_PAT" gh repo clone <github_repo> -- --depth 1 && cd /tmp/<slug>`
+            3. Clone the company repo and configure git:
+               ```bash
+               cd /tmp && GH_TOKEN="$GH_PAT" gh repo clone <github_repo> -- --depth 1 && cd /tmp/<slug>
+               git config user.name "Hive Engineer"
+               git config user.email "noreply@github.com"
+               git remote set-url origin https://x-access-token:${GH_PAT}@github.com/<github_repo>.git
+               ```
             4. Diagnose and fix the issue
             5. Build, commit, push, log to agent_actions
 
