@@ -304,7 +304,25 @@ jobs:
                ```
                Customize the task descriptions based on the actual company and product spec.
 
-            Do NOT create a Neon database or Stripe product — skip those for now.
+            10. Create Stripe product for the company:
+               Get an OIDC token and call the Hive API:
+               ```bash
+               OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                 "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" | jq -r '.value')
+               curl -s -X POST "https://hive-phi.vercel.app/api/agents/stripe/product" \
+                 -H "Authorization: Bearer $OIDC" \
+                 -H "Content-Type: application/json" \
+                 -d '{"company_slug":"<slug>","name":"<Company Name> Pro","price_eur":<price>,"interval":"month"}'
+               ```
+               Use the pricing from the Scout proposal (monetisation field). Default to €9.99/month if unclear.
+               Store the returned productId and priceId in the infra table:
+               ```sql
+               INSERT INTO infra (company_id, service, resource_id, config)
+               VALUES ('<id>', 'stripe', '<productId>', '{"priceId":"<priceId>"}')
+               ON CONFLICT DO NOTHING
+               ```
+
+            Do NOT create a Neon database — companies use the Hive API for all data access.
             Output: { "company": "<slug>", "provisioned": true }
 
   # ─── Job 2: Dispatch build to company repo (runs on their unlimited Actions minutes) ───
