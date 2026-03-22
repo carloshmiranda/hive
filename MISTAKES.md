@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-22 Boilerplate module-level SDK initialization crashes builds without env vars
+**What happened:** PoupaMais provisioning failed because `neon(process.env.DATABASE_URL!)` and `new Stripe(process.env.STRIPE_SECRET_KEY!)` were called at module scope. During `next build`, these execute even though env vars aren't set, crashing the build.
+**Root cause:** SDK clients initialized at module scope (file load time) instead of inside request handlers. Next.js evaluates all route modules during build for tree-shaking.
+**Fix applied:** Moved all `neon()` and `new Stripe()` calls inside handler functions in: waitlist/route.ts, webhooks/resend/route.ts, webhooks/stripe/route.ts, checkout/page.tsx.
+**Prevention:** Never initialize SDK clients at module scope in Next.js route handlers or server components. Always instantiate inside the handler function.
+**Affects:** both (template + all provisioned companies)
+
 ### 2026-03-21 Engineer generates false compliance claims and mixes languages
 **What happened:** Senhorio's landing page claimed "100% Compliant with Portuguese tax law" and "all receipts meet Portuguese legal requirements" — but there's no receipt generation, no compliance engine, no audit. FAQ answers described features as existing when they're not built. The page also mixed Portuguese and English randomly (IRS section in PT, everything else in EN), and pricing showed "Start Free Trial" buttons in waitlist mode linking to a non-functional checkout.
 **Root cause:** The Engineer's build prompt had no rules against (1) making legal/compliance claims the product can't deliver, (2) describing unbuilt features as existing, (3) mixing languages, or (4) showing checkout CTAs in waitlist mode. The boilerplate's `<html lang>` was hardcoded to "en" regardless of target audience.
