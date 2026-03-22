@@ -108,24 +108,24 @@ jobs:
             Read BRIEFING.md, CLAUDE.md, and prompts/ceo.md for full context. Then:
 
             1. Query Neon (DATABASE_URL is set) for: active companies, pending approvals, recent metrics, open directives
-            2. Determine lifecycle mode for each company you're acting on:
-               - Count cycles for the company
-               - Check if revenue > 0 and customers > 0
-               - If cycles <= 2 OR no customers: you are in BUILD mode — read research reports and spec features with acceptance criteria
-               - If cycles 3-5 AND no paying customers: you are in LAUNCH mode — focus on conversion with hypotheses
-               - If cycles 6+ AND has customers: you are in OPTIMIZE mode — manage by metrics
+            2. Determine validation phase for the company:
+               - Fetch context from the Hive API: curl -s "$HIVE_URL/api/agents/context?agent=build&company_slug=<slug>" -H "Authorization: Bearer $CRON_SECRET"
+               - The response includes business_type, validation (score, phase, gating_rules, forbidden, kill_signal)
+               - Follow the validation phase rules in prompts/ceo.md — the phase determines what you can plan
                - Load the original Scout proposal from the approvals table (gate_type='new_company', status='approved')
                - Load ALL research reports for this company (market_research, competitive_analysis, seo_keywords)
-               - Load the previous product spec: `SELECT content FROM research_reports WHERE company_id = '<id>' AND report_type = 'product_spec'` — UPDATE it, don't rewrite from scratch
+               - Load the previous product spec: SELECT content FROM research_reports WHERE company_id = '<id>' AND report_type = 'product_spec' — UPDATE it, don't rewrite from scratch
                - After planning, ALWAYS save the updated product_spec to research_reports (UPSERT on company_id + report_type = 'product_spec')
             3. Based on the trigger:
                - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
-               - cycle_complete: Score the cycle 1-10 using mode-specific criteria from prompts/ceo.md
+               - cycle_complete: Score the cycle 1-10 using phase-appropriate criteria from prompts/ceo.md
                - gate_approved: Route the approval. If gate_type is 'new_company', output needs_provisioning: true so Engineer can scaffold the repo, Vercel project, Neon DB, and Stripe product. Include the company slug.
                - cycle_start: Start a new cycle for the specified company. Load research reports, determine lifecycle mode, create a cycle plan with engineering_tasks and growth_tasks.
-               - ceo_review: Review and merge the PR from the Engineer agent. Payload has `company` and `pr_number`.
+               - ceo_review: Review and merge PRs from the Engineer agent. Payload has `company` and `pr_number`.
+                 IMPORTANT: After reviewing the PR from the payload, ALWAYS check for additional open PRs and review those too:
+                 GH_TOKEN="$GH_PAT" gh pr list --repo carloshmiranda/<company> --state open --json number,title
 
-                 STEP 1 — Gather context:
+                 STEP 1 — Gather context (repeat for each open PR):
                  ```bash
                  GH_TOKEN="$GH_PAT" gh pr view <pr_number> --repo carloshmiranda/<company> --json title,body,additions,deletions,changedFiles,mergeable
                  GH_TOKEN="$GH_PAT" gh pr diff <pr_number> --repo carloshmiranda/<company>
