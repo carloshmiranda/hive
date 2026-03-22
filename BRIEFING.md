@@ -50,6 +50,22 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-22 [code] Phase 2 pattern extraction + boilerplate test infrastructure
+**Knowledge extraction:** Deep-reviewed Flolio and VerdeDesk codebases, extracted 19 playbook entries across 13 domains (testing, CI/CD, auth, payments, SEO, email, API design, monitoring, landing pages, data architecture, growth, content, design). These were never extracted during Flolio's import because Phase 2 of the import flow was designed but never built.
+- `/api/agents/extract`: new endpoint that reads a company repo via GitHub API, detects reusable patterns across 13 domains, returns extraction prompt for LLM-generated playbook entries
+- `/api/agents/playbook`: now accepts `source_company_id` for attribution
+- Engineer workflow: step 11 calls extract API for imported companies
+- **Boilerplate test infrastructure (from Flolio patterns):**
+  - `/api/health` endpoint for monitoring + smoke tests
+  - `playwright.config.ts` + `tests/e2e/smoke.spec.ts` (homepage load, JS errors, health check, stats endpoint)
+  - `post-deploy.yml` workflow (runs smoke tests against Vercel URL after merge, polls for deployment readiness)
+  - `@playwright/test` added to devDependencies, test scripts in package.json
+- **Provisioning improvements:**
+  - `/api/agents/provision`: one-call Neon DB + schema + Vercel project + Web Analytics + DATABASE_URL
+  - `/api/agents/analytics`: enables Vercel Web Analytics for individual or all companies
+  - `@vercel/analytics` added to boilerplate for client-side tracking
+- Metrics cron: now checks latest post-deploy smoke test results via GitHub API
+
 ### 2026-03-22 [code] Validation-gated build system (ADR-024)
 **Architecture change:** Replaced cycle-count-based build/launch/optimize modes with a composite validation score (0-100) computed from real metrics. Different business types (SaaS, blog, affiliate, newsletter, etc.) have different phase progressions, scoring formulas, and kill criteria. CEO agent now checks validation phase before planning — forbidden actions are enforced per phase (e.g., SaaS in "validate" phase cannot build auth, dashboards, or CRUD features).
 - `src/lib/validation.ts`: core scoring engine with per-type phases, gating rules, kill signals
