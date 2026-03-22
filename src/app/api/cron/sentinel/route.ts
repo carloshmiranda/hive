@@ -124,6 +124,7 @@ export async function GET(req: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  try {
   const sql = getDb();
   const traceId = crypto.randomUUID();
   const vercelToken = await getSettingValue("vercel_token");
@@ -1138,4 +1139,11 @@ export async function GET(req: Request) {
     anomalies_detected: anomalies.length,
     details: dispatches,
   });
+
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error("Sentinel failed:", message, stack);
+    return Response.json({ ok: false, error: message, stack }, { status: 500 });
+  }
 }
