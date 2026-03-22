@@ -24,14 +24,16 @@ export async function GET(req: Request) {
     WHERE c.status IN ('active', 'mvp')
   `;
 
-  const results: Array<{ slug: string; views: number; source: string }> = [];
+  const results: Array<{ slug: string; views: number; pricing_clicks: number; affiliate_clicks: number; source: string }> = [];
 
   for (const company of companies) {
     try {
       let views = 0;
+      let pricingClicks = 0;
+      let affiliateClicks = 0;
       let source = "default";
 
-      // Fetch pageviews from the company's own /api/stats endpoint
+      // Fetch metrics from the company's own /api/stats endpoint
       if (company.app_url) {
         const baseUrl = company.app_url.startsWith("http")
           ? company.app_url
@@ -44,8 +46,10 @@ export async function GET(req: Request) {
 
           if (res.ok) {
             const data = await res.json();
-            if (data.ok && typeof data.views === "number") {
-              views = data.views;
+            if (data.ok) {
+              views = typeof data.views === "number" ? data.views : 0;
+              pricingClicks = typeof data.pricing_clicks === "number" ? data.pricing_clicks : 0;
+              affiliateClicks = typeof data.affiliate_clicks === "number" ? data.affiliate_clicks : 0;
               source = "company_api";
             }
           }
@@ -57,12 +61,15 @@ export async function GET(req: Request) {
 
       // Always ensure a metrics row exists for today (even with 0s)
       await sql`
-        INSERT INTO metrics (company_id, date, page_views)
-        VALUES (${company.id}, ${today}, ${views})
-        ON CONFLICT (company_id, date) DO UPDATE SET page_views = GREATEST(metrics.page_views, ${views})
+        INSERT INTO metrics (company_id, date, page_views, pricing_cta_clicks, affiliate_clicks)
+        VALUES (${company.id}, ${today}, ${views}, ${pricingClicks}, ${affiliateClicks})
+        ON CONFLICT (company_id, date) DO UPDATE SET
+          page_views = GREATEST(metrics.page_views, ${views}),
+          pricing_cta_clicks = GREATEST(metrics.pricing_cta_clicks, ${pricingClicks}),
+          affiliate_clicks = GREATEST(metrics.affiliate_clicks, ${affiliateClicks})
       `;
 
-      results.push({ slug: company.slug, views, source });
+      results.push({ slug: company.slug, views, pricing_clicks: pricingClicks, affiliate_clicks: affiliateClicks, source });
     } catch (e) {
       console.error(`Failed to collect metrics for ${company.slug}:`, e);
     }

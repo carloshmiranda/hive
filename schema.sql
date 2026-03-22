@@ -123,6 +123,10 @@ CREATE TABLE metrics (
   email_opens       INTEGER DEFAULT 0,
   email_clicks      INTEGER DEFAULT 0,
   email_bounces     INTEGER DEFAULT 0,
+  pricing_page_views  INTEGER DEFAULT 0,  -- fake-door pricing page visits
+  pricing_cta_clicks  INTEGER DEFAULT 0,  -- pricing CTA clicks (payment intent signal)
+  affiliate_clicks    INTEGER DEFAULT 0,  -- outbound affiliate link clicks
+  affiliate_revenue   NUMERIC(10,2) DEFAULT 0,
   UNIQUE(company_id, date)
 );
 

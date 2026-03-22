@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
+import { computeValidationScore, normalizeBusinessType } from "@/lib/validation";
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
   const sql = getDb();
 
   const [company] = await sql`
-    SELECT id, name, slug, description, capabilities, company_type
+    SELECT id, name, slug, description, capabilities, company_type, created_at
     FROM companies WHERE slug = ${slug} LIMIT 1
   `.catch(() => []);
 
@@ -39,7 +40,7 @@ export async function GET(req: NextRequest) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function buildContext(sql: any, company: any) {
-  const [cycle, reports, proposal, playbook, tasks] = await Promise.all([
+  const [cycle, reports, proposal, playbook, tasks, metrics] = await Promise.all([
     sql`
       SELECT id, cycle_number, ceo_plan FROM cycles
       WHERE company_id = ${company.id} AND status = 'running'
@@ -67,6 +68,13 @@ async function buildContext(sql: any, company: any) {
         AND status IN ('proposed', 'approved')
       ORDER BY priority ASC, created_at ASC LIMIT 5
     `.catch(() => []),
+    sql`
+      SELECT date, page_views, signups, waitlist_signups, waitlist_total,
+        revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
+        affiliate_clicks, affiliate_revenue
+      FROM metrics WHERE company_id = ${company.id}
+      ORDER BY date DESC LIMIT 14
+    `.catch(() => []),
   ]);
 
   const research: Record<string, { summary: string; content: unknown }> = {};
@@ -74,13 +82,20 @@ async function buildContext(sql: any, company: any) {
     research[r.report_type] = { summary: r.summary, content: r.content };
   }
 
+  // Compute validation score and phase
+  const businessType = normalizeBusinessType(company.company_type);
+  const validation = computeValidationScore(businessType, metrics, company.created_at);
+
   return {
     description: company.description,
+    business_type: businessType,
+    validation,
     cycle: cycle[0] ? { id: cycle[0].id, cycle_number: cycle[0].cycle_number, ceo_plan: cycle[0].ceo_plan } : null,
     research,
     proposal: proposal[0]?.context?.proposal || null,
     playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     engineering_tasks: tasks,
+    metrics: metrics.slice(0, 7),
   };
 }
 

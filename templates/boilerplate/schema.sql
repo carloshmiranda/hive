@@ -80,3 +80,27 @@ CREATE TABLE IF NOT EXISTS page_views (
   views           INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (date, path)
 );
+
+-- Pricing intent tracking: fake-door CTA clicks (SaaS validation)
+-- Records each click on a pricing CTA before the product exists
+CREATE TABLE IF NOT EXISTS pricing_clicks (
+  id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  date            DATE NOT NULL DEFAULT CURRENT_DATE,
+  tier            TEXT NOT NULL,                         -- e.g. 'free', 'pro', 'enterprise'
+  source_path     TEXT NOT NULL DEFAULT '/pricing',      -- page the click came from
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pricing_clicks_date ON pricing_clicks(date);
+
+-- Affiliate click tracking: outbound clicks to affiliate links
+CREATE TABLE IF NOT EXISTS affiliate_clicks (
+  id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  date            DATE NOT NULL DEFAULT CURRENT_DATE,
+  link_id         TEXT NOT NULL,                         -- identifier for the affiliate link/product
+  destination_url TEXT,                                  -- where the click goes
+  source_path     TEXT NOT NULL DEFAULT '/',             -- page the click came from
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_affiliate_clicks_date ON affiliate_clicks(date);
