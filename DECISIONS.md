@@ -164,6 +164,7 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 **Consequences:** Better plan quality from CEO, better research from Scout, better prompts from Evolver. Slightly slower runs for those 3 agents (Opus latency). Growth/Outreach content quality improves. Engineer stays fast. Free tier quota impact: Flash at 250 RPD is sufficient for 5+ companies at a few calls/day each.
 
 ### ADR-015: CEO lifecycle modes instead of a separate product specifier agent
+**Status note:** Superseded by ADR-024 (validation-gated build system replaces cycle-count modes)
 **Date:** 2026-03-19
 **Status:** Accepted
 **Context:** After a company is approved, the CEO had no metrics to work with but its prompt was optimized for metrics-driven management. The first 2-3 cycles produced vague plans. Meanwhile, Scout's competitive analysis and market research contained exactly the data needed to spec features — but nobody translated research into feature specs.
@@ -284,6 +285,22 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Neon Data API (HTTP/JSON): still requires API key secret on each repo, less control over authorization
 - GitHub repository environments with secrets: reduces blast radius but doesn't eliminate secret management
 **Consequences:** Company repos need ZERO secrets. All auth happens at runtime via OIDC (a free GitHub feature). Token rotation only requires updating Hive settings — company repos auto-get new tokens. The API gateway provides authorization (only allowed workflows from the right owner), rate limiting potential, and audit trail. Trade-off: company workflows are now coupled to Hive API availability — if Vercel is down, company builds can't load context.
+
+### ADR-024: Validation-gated build system with per-business-type phases
+**Date:** 2026-03-22
+**Status:** Accepted (supersedes ADR-015)
+**Context:** CEO agent used cycle-count-based modes (build 0-2, launch 3-5, optimize 6+) to decide what to plan. This caused problems: the Engineer built auth systems and product features before validating demand (Senhorio had login links in waitlist mode). Cycle count is a poor proxy for readiness — a company with 10 cycles but no traffic shouldn't be building features.
+**Decision:** Replace cycle-count modes with a composite validation score (0-100) computed from real metrics per business type. Each type has distinct phase progressions: SaaS (validate→test_intent→build_mvp→build_aggressively→scale), Blog (seed_content→seo_growth→monetize→scale), Affiliate (build_directory→drive_traffic→optimize_conversions→scale). Each phase has explicit gating rules (what's allowed) and forbidden lists (what's blocked). Score computed server-side in `/api/agents/context` and injected into CEO context. CEO is the only agent that needs phase logic — it gates what tasks it plans, so downstream agents (Engineer, Growth) only see phase-appropriate work.
+**Key design choices:**
+- Kill criteria are organic-patient: 60/120/180 day windows instead of weekly. Any revenue = infinite patience.
+- Fake-door pricing validation: SaaS companies must get pricing page clicks before building product code.
+- Boilerplate collects validation metrics from day 1: pageviews, pricing CTA clicks, affiliate clicks.
+- `normalizeBusinessType()` maps legacy company_type values to the new taxonomy.
+**Alternatives considered:**
+- Per-agent phase logic: each agent checks the phase independently. Rejected — CEO is the gateway, simpler to have one checkpoint.
+- Strict automated gating: block deploys that violate phase. Rejected — too rigid, CEO should have judgment with guardrails.
+- LLM-computed scores: have Claude assess readiness. Rejected — deterministic scoring from metrics is more reliable and auditable.
+**Consequences:** CEO plans are now constrained by real data. Companies can't over-build before validating demand. Different business models get appropriate treatment. Trade-off: companies with broken metrics collection will score 0 and stay in early phases — but the boilerplate now collects metrics from day 1, so this only affects pre-existing companies.
 
 ### ADR-023: Priority-scored cycle dispatch with budget-aware throttling
 **Date:** 2026-03-21

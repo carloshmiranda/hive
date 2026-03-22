@@ -50,6 +50,17 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-22 [code] Validation-gated build system (ADR-024)
+**Architecture change:** Replaced cycle-count-based build/launch/optimize modes with a composite validation score (0-100) computed from real metrics. Different business types (SaaS, blog, affiliate, newsletter, etc.) have different phase progressions, scoring formulas, and kill criteria. CEO agent now checks validation phase before planning — forbidden actions are enforced per phase (e.g., SaaS in "validate" phase cannot build auth, dashboards, or CRUD features).
+- `src/lib/validation.ts`: core scoring engine with per-type phases, gating rules, kill signals
+- `prompts/ceo.md`: fully rewritten with phase-gated planning, organic-patient kill criteria
+- `src/app/api/agents/context/route.ts`: injects validation score + phase into CEO context
+- `schema.sql`: new metrics columns (pricing_cta_clicks, affiliate_clicks, affiliate_revenue, pricing_page_views)
+- Boilerplate: `/api/pricing-intent` (fake-door CTA tracking), `/api/affiliate-click` (outbound click tracking), `/api/stats` extended to return all validation metrics
+- Metrics cron: collects pricing_clicks and affiliate_clicks from company `/api/stats`
+- Senhorio landing page: fixed to respect LAUNCH_MODE=waitlist (no login/register links)
+- OAuth token: refreshed with long-lived `claude setup-token` CI/CD token
+
 ### 2026-03-21 [code] Full system audit + critical fixes + priority-scored dispatch (ADR-023)
 - [code] 2026-03-21: Full system audit + fixes: hasCapability bug, schema constraints, OIDC dynamic audience, token error handling, approval auto-expiry, outreach guard, priority-scored dispatch (ADR-023), boilerplate quality (semantic HTML, SVG icons, template placeholders, 404 page), Engineer content integrity + language consistency rules
 

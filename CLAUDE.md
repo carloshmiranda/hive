@@ -212,7 +212,7 @@ STEP 4: Company cycles — dispatched by Sentinel priority score (see Rule 1):
        - Uses web search to produce market_research, competitive_analysis, seo_keywords reports
        - Stored in research_reports table, fed to CEO + Growth + Outreach as context
     1. Read open directives from Carlos (dashboard/GitHub Issues)
-    2. CEO: Read metrics + playbook + research + directives → write STRUCTURED plan (engineering_tasks, growth_tasks with IDs)
+    2. CEO: Read validation score + phase + metrics + playbook + research + directives → write STRUCTURED plan gated by validation phase (engineering_tasks, growth_tasks with IDs)
     3. Growth pre-spec (BUILD MODE ONLY): Plan distribution channels, SEO requirements, build_requests BEFORE Engineering
     4. Engineer: Execute engineering_tasks + growth build_requests → commit to GitHub → deploy
     5. Growth (inbound): Execute growth_tasks informed by engineer results → SEO, content, social
@@ -254,6 +254,34 @@ STEP 9: Operational Reflection (self-awareness)
   - Commits changes to git
   - This is what makes Hive self-aware — it updates its own operational context
 ```
+
+## Validation-Gated Build System (ADR-024)
+
+Companies progress through phases based on a composite validation score (0-100) computed from real metrics, not cycle count. The score is computed in `src/lib/validation.ts` and injected into the CEO's context via `/api/agents/context`.
+
+### How it works
+1. `normalizeBusinessType()` maps `company_type` to a canonical type (saas, blog, affiliate_site, etc.)
+2. `computeValidationScore()` scores the company 0-100 based on type-specific metrics
+3. The score determines the current phase, which defines what the CEO can plan
+4. Each phase has `gating_rules` (what to focus on) and `forbidden` (what's blocked)
+5. Kill signals are organic-patient: 60/120/180 day windows. Any revenue = infinite patience.
+
+### Phase examples
+- **SaaS validate (0-24):** Landing page, waitlist, SEO. FORBIDDEN: auth, dashboards, CRUD, product features.
+- **SaaS test_intent (25-49):** Fake-door pricing page with click tracking. FORBIDDEN: building the product.
+- **SaaS build_mvp (50-74):** Core value flow only. Max 2 eng tasks/cycle.
+- **Blog seed_content (0-24):** Publish articles, SEO scaffolding. FORBIDDEN: monetization.
+- **Affiliate build_directory (0-24):** Listing pages, comparison tables. FORBIDDEN: paid traffic.
+
+### Data collection
+The boilerplate collects validation metrics from day 1:
+- `page_views` table + middleware → pageview tracking (all types)
+- `pricing_clicks` table + `/api/pricing-intent` → fake-door CTA clicks (SaaS)
+- `affiliate_clicks` table + `/api/affiliate-click` → outbound click tracking (affiliate)
+- Hive's metrics cron (`/api/cron/metrics`) fetches all three via company `/api/stats`
+
+### Agent compliance
+CEO is the only agent with phase logic. It gates what tasks get planned — Engineer and Growth just execute what CEO assigns. This means phases work with fixed prompts: CEO's prompt has the phase rules, downstream agents don't need to know.
 
 ## Cross-Company Learning Architecture
 
@@ -612,7 +640,8 @@ hive/
 │   │   ├── vercel.ts       ← Vercel API (create/delete projects, env vars)
 │   │   ├── github.ts       ← GitHub API (repos, push files, archive)
 │   │   ├── neon-api.ts     ← Neon API (create/delete DB projects)
-│   │   └── resend.ts       ← Resend helpers (TBD)
+│   │   ├── resend.ts       ← Resend helpers (TBD)
+│   │   └── validation.ts   ← Validation score engine (per-business-type phases, gating, kill signals)
 │   └── components/         ← extracted components (TBD)
 ├── templates/
 │   ├── company-claude.md   ← CLAUDE.md template for new companies
@@ -620,9 +649,9 @@ hive/
 │       ├── package.json
 │       ├── tsconfig.json
 │       ├── next.config.mjs
-│       ├── schema.sql       ← customers + waitlist + email_sequences + email_log
+│       ├── schema.sql       ← customers + waitlist + email_sequences + email_log + page_views + pricing_clicks + affiliate_clicks
 │       ├── .env.example
-│       └── src/app/        ← landing page (LAUNCH_MODE), checkout, success, webhooks (Stripe + Resend), waitlist API
+│       └── src/app/        ← landing page (LAUNCH_MODE), checkout, success, webhooks (Stripe + Resend), waitlist API, stats, pricing-intent, affiliate-click
 ├── prompts/                ← agent system prompts
 └── .github/workflows/     ← GitHub Actions workflows (primary orchestration)
 ```
