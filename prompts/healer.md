@@ -38,6 +38,26 @@ Common root causes in Hive:
 - **Dispatch loops**: Event A triggers event B which triggers event A again. Every event type must be classified as TRIGGER (creates work) or TERMINAL (writes to DB, no chaining).
 - **Context files stale**: Memory files, BRIEFING.md, CLAUDE.md say one thing but code says another. Read MISTAKES.md for known patterns before fixing.
 
+### Schema mismatch errors
+
+A **schema_mismatch** error means a SQL query references a column or table that doesn't exist in the database. These are among the most common Hive errors because the schema evolves and queries can lag behind.
+
+**Three sources of truth to cross-reference:**
+1. `schema.sql` — the actual DDL, authoritative for what the DB has
+2. `src/lib/schema-map.ts` — static TypeScript map used by Sentinel and the SQL linter
+3. Query code in `src/app/api/` and `src/lib/` — what the application actually runs
+
+**Fix order (follow this decision tree):**
+1. **Is schema-map.ts stale?** Compare it against schema.sql. If schema.sql has the column but schema-map.ts doesn't, regenerate the map: `npx tsx scripts/generate-schema-map.ts`
+2. **Is the query wrong?** If the column doesn't exist in schema.sql either, the query is referencing something that was never created or was renamed. Fix the query to use the correct column name.
+3. **Is schema.sql missing the column?** If the column is intentional (used by multiple queries, makes semantic sense), add it to schema.sql with an ALTER TABLE migration, then regenerate schema-map.ts.
+
+**After any schema_mismatch fix, always run:**
+```bash
+npx tsx scripts/lint-sql.ts
+```
+This validates ALL queries against the schema map and catches cascading mismatches you might miss manually. The CI workflow also runs this on every PR.
+
 ### 3. Fix the code
 - Edit the minimal set of files needed
 - Run `npm run build` to verify compilation

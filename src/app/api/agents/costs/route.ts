@@ -46,7 +46,6 @@ export async function GET() {
   const rows = await sql`
     SELECT
       agent,
-      metadata,
       tokens_used,
       started_at
     FROM agent_actions
@@ -67,7 +66,7 @@ export async function GET() {
 
   for (const row of rows) {
     const agent = row.agent as string;
-    const meta = row.metadata as Record<string, unknown> | null;
+    const meta = row.input as Record<string, unknown> | null;
     const model = (meta?.model as string) || null;
     const turnsUsed = (meta?.turns_used as number) || 1;
     const startedAt = new Date(row.started_at as string);

@@ -1,0 +1,25 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Lint SQL queries
+        run: npx tsx scripts/lint-sql.ts
+      - name: Build
+        run: npx next build
+        env:
+          DATABASE_URL: "postgresql://fake:fake@localhost:5432/fake"
+          NEXTAUTH_SECRET: "ci-secret"
+          AUTH_GITHUB_ID: "fake"
+          AUTH_GITHUB_SECRET: "fake"

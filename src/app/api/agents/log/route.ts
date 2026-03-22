@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   const hasMetadata = Object.keys(metadata).length > 0;
 
   await sql`
-    INSERT INTO agent_actions (agent, company_id, action_type, status, description, error, metadata, started_at, finished_at)
+    INSERT INTO agent_actions (agent, company_id, action_type, status, description, error, input, started_at, finished_at)
     VALUES (${agent}, ${companyId}, ${action_type}, ${status},
       ${description || null}, ${errorMsg || null},
       ${hasMetadata ? JSON.stringify(metadata) : null}::jsonb,

@@ -118,13 +118,15 @@ jobs:
             - **Systemic** (same error in 2+ companies OR 3+ occurrences): fix in the Hive repo
             - **Company-specific** (only in one company): note for Engineer to fix (you're in the Hive repo)
             - **Prompt issues** (agent output format wrong): note for Evolver, not a code fix
+            - **schema_mismatch** (column/table does not exist): query references a column that is missing from the DB or schema map. Cross-reference schema.sql, src/lib/schema-map.ts, and the query code. Fix order: (1) if schema-map.ts is stale, regenerate with `npx tsx scripts/generate-schema-map.ts`; (2) if the query is wrong, fix the column name; (3) if schema.sql is missing the column, add it and regenerate. After ANY schema_mismatch fix, always run `npx tsx scripts/lint-sql.ts` to catch cascading issues.
 
             ## STEP 3: Fix systemic errors
             For each systemic error:
             1. Find the root cause in the Hive codebase
             2. Fix the minimal set of files
             3. Run `npx next build` to verify
-            4. Commit with message: `fix: [what was broken]`
+            4. Run `npx tsx scripts/lint-sql.ts` to verify no SQL schema mismatches
+            5. Commit with message: `fix: [what was broken]`
 
             ## STEP 4: Document learnings
             - Write to MISTAKES.md (What happened / Root cause / Fix / Prevention / Affects)

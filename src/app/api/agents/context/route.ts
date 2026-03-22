@@ -44,7 +44,7 @@ async function buildContext(sql: any, company: any) {
     sql`
       SELECT id, cycle_number, ceo_plan FROM cycles
       WHERE company_id = ${company.id} AND status = 'running'
-      ORDER BY created_at DESC LIMIT 1
+      ORDER BY started_at DESC LIMIT 1
     `.catch(() => []),
     sql`
       SELECT report_type, summary, content FROM research_reports
@@ -126,7 +126,7 @@ async function growthContext(sql: any, company: any) {
     sql`
       SELECT proposed_fix FROM evolver_proposals
       WHERE status = 'approved'
-        AND (affected_agents @> ARRAY['growth'] OR affected_agents IS NULL)
+        AND (affected_companies @> ARRAY['growth'] OR affected_companies IS NULL)
         AND implemented_at IS NULL LIMIT 3
     `.catch(() => []),
     sql`
