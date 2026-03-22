@@ -13,8 +13,7 @@
 ## In Progress
 <!-- Move items here when an agent starts working on them -->
 
-### 🟡 P1 — Self-healing layers 2-3 (SQL linter + auto-fix)
-Layer 1 done (schema drift check in Sentinel). Remaining: build-time SQL linter (`scripts/lint-sql.ts`) that greps codebase for SQL queries and validates column/table references against schema-map.ts, CI integration, and Healer prompt update for `schema_mismatch` error class.
+<!-- Self-healing layers 2-3 moved to Done -->
 
 ---
 
@@ -69,6 +68,9 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-22 — SQL linter + CI + Healer schema_mismatch handling (P1)
+Build-time SQL linter (`scripts/lint-sql.ts`) validates all `sql` tagged template queries against `schema-map.ts`. CI workflow (`.github/workflows/ci.yml`) runs linter + build on PRs. Healer prompt updated with `schema_mismatch` error class. Caught and fixed 4 real bugs on first run: `cycles.created_at`, `evolver_proposals.affected_agents`, `agent_actions.metadata` (2x).
 
 ### ✅ 2026-03-22 — Schema drift detection in Sentinel (P1)
 `src/lib/schema-map.ts` — static schema map with all 18 tables, columns, types, CHECK constraints. Sentinel check 24 compares expected schema against live DB via `information_schema`, logs mismatches as agent_actions, dispatches Healer when 3+ issues found. `scripts/generate-schema-map.ts` for regeneration.
