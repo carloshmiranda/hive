@@ -716,6 +716,77 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "ceo_task_backlog", payload: { company: co.slug } });
   }
 
+  // 23. Infrastructure drift detection — check company repos for missing boilerplate infra files
+  // Creates engineering tasks when companies are missing health endpoint, smoke tests, or post-deploy workflow
+  const INFRA_FILES = [
+    { path: "src/app/api/health/route.ts", task: "Add /api/health endpoint for monitoring and smoke tests", category: "qa" },
+    { path: "playwright.config.ts", task: "Add Playwright config for automated smoke tests", category: "qa" },
+    { path: "tests/e2e/smoke.spec.ts", task: "Add smoke test suite (homepage, health, stats, JS errors)", category: "qa" },
+    { path: ".github/workflows/post-deploy.yml", task: "Add post-deploy smoke test workflow", category: "qa" },
+  ];
+  const ghPat = process.env.GH_PAT;
+  if (ghPat) {
+    const infraCompanies = await sql`
+      SELECT c.id, c.slug, c.github_repo FROM companies c
+      WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
+    `;
+    for (const co of infraCompanies) {
+      // Debounce: skip if we already checked this company in the last 7 days
+      const [recentCheck] = await sql`
+        SELECT id FROM agent_actions
+        WHERE company_id = ${co.id} AND action_type = 'infra_drift_check'
+        AND started_at > NOW() - INTERVAL '7 days'
+        LIMIT 1
+      `;
+      if (recentCheck) continue;
+
+      const repo = (co.github_repo as string).replace("https://github.com/", "");
+      const missingFiles: typeof INFRA_FILES = [];
+
+      for (const f of INFRA_FILES) {
+        try {
+          const res = await fetch(
+            `https://api.github.com/repos/${repo}/contents/${f.path}`,
+            {
+              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+              signal: AbortSignal.timeout(5000),
+            }
+          );
+          if (res.status === 404) missingFiles.push(f);
+        } catch {
+          // Skip on error (rate limit, timeout)
+        }
+      }
+
+      // Log the check
+      await sql`
+        INSERT INTO agent_actions (agent, company_id, action_type, status, description, output, started_at, finished_at)
+        VALUES ('sentinel', ${co.id}, 'infra_drift_check', 'success',
+          ${`Infra drift check for ${co.slug}: ${missingFiles.length}/${INFRA_FILES.length} files missing`},
+          ${JSON.stringify({ missing: missingFiles.map(f => f.path), checked: INFRA_FILES.length })}::jsonb,
+          NOW(), NOW())
+      `;
+
+      // Create engineering tasks for missing infra files (if not already pending)
+      if (missingFiles.length > 0) {
+        for (const f of missingFiles) {
+          await sql`
+            INSERT INTO company_tasks (company_id, category, title, description, priority, source)
+            VALUES (${co.id}, ${f.category}, ${f.task},
+              ${"Boilerplate infrastructure file missing: " + f.path + ". Copy pattern from Hive boilerplate templates. This enables automated quality gates and monitoring."},
+              2, 'sentinel')
+            ON CONFLICT DO NOTHING
+          `;
+        }
+        dispatches.push({
+          type: "task_created",
+          target: "infra_drift",
+          payload: { company: co.slug, missing: missingFiles.map(f => f.path) },
+        });
+      }
+    }
+  }
+
   // 17. Dispatch loop detection (>5 same-agent actions in 30 min = likely loop)
   const dispatchLoops = await sql`
     SELECT agent, company_id, c.slug, COUNT(*) as cnt
