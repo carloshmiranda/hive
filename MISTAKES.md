@@ -343,3 +343,12 @@
 **Fix applied:** Changed from inline `PAYLOAD='${{ }}'` to `env: PAYLOAD_JSON: ${{ }}`. GitHub Actions env vars are safely passed without shell interpretation.
 **Prevention:** NEVER use `${{ }}` inside shell `run:` blocks for values that may contain special characters. Always pass them via `env:` block, which is safe. This applies to ALL workflow inputs, payloads, and user-provided strings.
 **Affects:** hive (engineer build dispatch, any workflow using ${{ }} in run blocks)
+
+### [2026-03-22] Sentinel silently 500-ing for days — 3 schema mismatches
+**What happened:** Sentinel cron was returning empty 500s on every run. No error details in Vercel logs (just a truncated `fetchConnectionCache` warning). Three separate schema mismatches:
+1. `metrics.metric` — query used key-value syntax (`m.metric = 'mrr'`, `m.value`) but table has flat columns (`m.mrr`, `m.date`)
+2. `agent_actions.metadata` — query referenced `metadata->>'turns_used'` but column is `tokens_used`
+3. `approvals.gate_type` constraint — code used `capability_migration` and `social_account` but DB constraint hadn't been migrated to include them
+**Root cause:** Schema was updated in schema.sql but the constraint wasn't applied to the live DB. The `metadata` and `metric` references were written assuming a different schema shape. No error boundary meant the 500 was silent — Vercel logs showed only the Neon SDK deprecation warning, not the actual error.
+**Fix applied:** Fixed all 3 queries, added try/catch error boundary that returns the actual error message and stack trace, updated live DB constraint.
+**Prevention:** (1) Always add error boundaries to cron handlers — silent 500s are undebuggable. (2) After writing SQL queries, verify column names against `information_schema.columns`. (3) When adding new enum values to schema.sql, also run the ALTER on the live DB or add a migration step.
