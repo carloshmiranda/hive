@@ -240,7 +240,7 @@ ${capabilitiesSummary(company.capabilities)}`;
     // 8. Ops escalation → dispatch fix to company repo (free Actions) with Hive fallback
     if (agentName === "ops" && output.includes("needs_engineer")) {
       try {
-        const ghPat = process.env.GH_PAT;
+        const ghPat = await getSettingValue("github_token") || process.env.GH_PAT;
         if (ghPat && company.github_repo) {
           // Try company repo's hive-fix.yml first (free on public repos)
           const fixRes = await fetch(

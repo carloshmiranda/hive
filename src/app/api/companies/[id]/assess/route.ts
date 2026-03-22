@@ -84,8 +84,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // 2. Check Vercel env vars if available
-  const vercelToken = process.env.VERCEL_TOKEN || await getSettingValue("vercel_token").catch(() => null);
-  const vercelTeamId = process.env.VERCEL_TEAM_ID || await getSettingValue("vercel_team_id").catch(() => null);
+  const vercelToken = await getSettingValue("vercel_token").catch(() => null) || process.env.VERCEL_TOKEN;
+  const vercelTeamId = await getSettingValue("vercel_team_id").catch(() => null) || process.env.VERCEL_TEAM_ID;
   if (company.vercel_project_id && vercelToken) {
     try {
       const teamParam = vercelTeamId ? `&teamId=${vercelTeamId}` : "";
@@ -128,7 +128,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // 3. Check repo for key files
-  const ghPat = process.env.GH_PAT || await getSettingValue("github_token").catch(() => null);
+  const ghPat = await getSettingValue("github_token").catch(() => null) || process.env.GH_PAT;
   if (company.github_repo && ghPat) {
     try {
       const repoPath = company.github_repo;

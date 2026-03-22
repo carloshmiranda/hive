@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { getBoilerplateGaps } from "@/lib/capabilities";
+import { SCHEMA_MAP, getExpectedTables } from "@/lib/schema-map";
 import boilerplateManifest from "../../../../../templates/boilerplate-manifest.json";
 
 export const dynamic = "force-dynamic";
@@ -747,6 +748,72 @@ export async function GET(req: Request) {
     }
   }
 
+  // 24. Schema drift detection — compare expected schema map against live DB
+  // Catches: missing tables, missing columns, extra columns, stale CHECK constraints
+  const schemaDrift: Array<{ table: string; issue: string }> = [];
+  try {
+    const expected = getExpectedTables();
+    // Query live DB for actual tables and columns
+    const liveTables = await sql`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+    `;
+    const liveTableNames = new Set(liveTables.map((t: any) => t.table_name as string));
+
+    for (const { table } of expected) {
+      if (!liveTableNames.has(table)) {
+        schemaDrift.push({ table, issue: `Table '${table}' expected but missing from DB` });
+        continue;
+      }
+      // Check columns for this table
+      const liveCols = await sql`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ${table}
+      `;
+      const liveColNames = new Set(liveCols.map((c: any) => c.column_name as string));
+      const expectedCols = Object.keys(SCHEMA_MAP[table].columns);
+
+      for (const col of expectedCols) {
+        if (!liveColNames.has(col)) {
+          schemaDrift.push({ table, issue: `Column '${table}.${col}' expected but missing from DB` });
+        }
+      }
+      // Warn about extra columns in DB not in schema map (may indicate schema.sql is stale)
+      for (const liveCol of liveColNames) {
+        if (!SCHEMA_MAP[table].columns[liveCol]) {
+          schemaDrift.push({ table, issue: `Column '${table}.${liveCol}' exists in DB but not in schema map — update schema.sql` });
+        }
+      }
+    }
+
+    if (schemaDrift.length > 0) {
+      console.warn(`Schema drift detected (${schemaDrift.length} issues):`, schemaDrift);
+      // Log as an agent action so it's visible in the dashboard + Healer can pick it up
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, error, started_at, finished_at)
+        VALUES (
+          'sentinel', 'schema_drift_check',
+          ${`Schema drift: ${schemaDrift.length} mismatches found`},
+          'failed',
+          ${JSON.stringify(schemaDrift)},
+          NOW(), NOW()
+        )
+      `;
+      // If systemic (3+ issues), dispatch Healer
+      if (schemaDrift.length >= 3) {
+        await dispatchToActions("healer_trigger", {
+          source: "sentinel",
+          error_class: "schema_mismatch",
+          drift: schemaDrift,
+          trace_id: traceId,
+        }, ghPat);
+        dispatches.push({ type: "brain", target: "healer_trigger", payload: { error_class: "schema_mismatch", count: schemaDrift.length } });
+      }
+    }
+  } catch (e: any) {
+    console.warn("Schema drift check failed (non-blocking):", e.message);
+  }
+
   // 17. Dispatch loop detection (>5 same-agent actions in 30 min = likely loop)
   const dispatchLoops = await sql`
     SELECT agent, company_id, c.slug, COUNT(*) as cnt
@@ -1136,6 +1203,7 @@ export async function GET(req: Request) {
     deploy_drift: drift.drifted,
     broken_deploys: brokenDeploys.length,
     anomalies_detected: anomalies.length,
+    schema_drift: schemaDrift.length,
     details: dispatches,
   });
 

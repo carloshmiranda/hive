@@ -185,7 +185,7 @@ export async function POST(req: Request) {
   }
 
   // Dispatch repository_dispatch for brain agents to react to payment events
-  const ghPat = process.env.GH_PAT;
+  const ghPat = await getSettingValue("github_token") || process.env.GH_PAT;
   const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
   if (ghPat && ["charge.succeeded", "customer.subscription.created", "customer.subscription.deleted", "charge.refunded"].includes(event.type)) {
     try {

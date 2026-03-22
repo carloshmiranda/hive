@@ -50,6 +50,14 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-22 [code] Self-healing layer 1: Schema drift detection
+- `src/lib/schema-map.ts`: Static schema map with all 18 tables, columns, types, and CHECK constraints
+- Sentinel check 24: Compares schema map against live DB via `information_schema` — catches missing tables, missing columns, extra columns
+- When 3+ mismatches found → dispatches Healer with `schema_mismatch` error class
+- `scripts/generate-schema-map.ts`: Regenerator script that parses `schema.sql`
+- Also fixed stale credential patterns in `stripe/route.ts`, `dispatch/route.ts`, `assess/route.ts` (settings-first, env-fallback)
+- Remaining self-healing layers: build-time SQL linter (P1 in BACKLOG), Healer prompt update
+
 ### 2026-03-22 [code] Centralized business types + auto-research for unknown types
 **ADR-026:** Created `src/lib/business-types.ts` as single source of truth for all 8 business types. Each definition includes phases, scoring model, relevant capabilities, and kill criteria. All consumers (validation.ts, capabilities.ts, assess/route.ts) now derive from it.
 - `/api/agents/research-type`: new endpoint — detects unknown business types, returns structured research prompt for Claude to generate a complete type definition using web search

@@ -13,6 +13,9 @@
 ## In Progress
 <!-- Move items here when an agent starts working on them -->
 
+### 🟡 P1 — Self-healing layers 2-3 (SQL linter + auto-fix)
+Layer 1 done (schema drift check in Sentinel). Remaining: build-time SQL linter (`scripts/lint-sql.ts`) that greps codebase for SQL queries and validates column/table references against schema-map.ts, CI integration, and Healer prompt update for `schema_mismatch` error class.
+
 ---
 
 ## Up Next
@@ -66,6 +69,15 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-22 — Schema drift detection in Sentinel (P1)
+`src/lib/schema-map.ts` — static schema map with all 18 tables, columns, types, CHECK constraints. Sentinel check 24 compares expected schema against live DB via `information_schema`, logs mismatches as agent_actions, dispatches Healer when 3+ issues found. `scripts/generate-schema-map.ts` for regeneration.
+
+### ✅ 2026-03-22 — Sentinel 3 schema mismatches fixed (P0)
+Sentinel was silently 500-ing due to: `metrics.metric` (doesn't exist, should be `metrics.mrr`), `agent_actions.metadata` (should be `tokens_used`), `approvals.gate_type` CHECK missing values. All fixed + error boundary added.
+
+### ✅ 2026-03-22 — Centralized business types (P1)
+`src/lib/business-types.ts` as single source of truth for 8 business types. Auto-research endpoint for unknown types. Engineer Step 0 pre-provisioning hook. ADR-026.
 
 ### ✅ 2026-03-21 — Cost tracking per agent run (P2)
 New `/api/agents/costs` endpoint with per-agent cost estimates (Opus $0.15/turn, Sonnet $0.03/turn, free-tier $0). Portfolio endpoint now includes `est_cost_24h` and `budget_utilization_pct` (turns in last 5h / 225 max). Dashboard can surface burn rate.
