@@ -236,29 +236,26 @@ jobs:
                git push -u origin main
                ```
                If the remote already has commits, use `git push -u origin main --force`.
-            4. Create Vercel project using curl:
-               ```
-               curl -s -X POST "https://api.vercel.com/v10/projects" \
-                 -H "Authorization: Bearer $VERCEL_TOKEN" \
+            4. Provision infrastructure via Hive API (creates Neon DB + Vercel project + enables Web Analytics + sets DATABASE_URL):
+               ```bash
+               OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                 "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" | jq -r '.value')
+               PROVISION_RESULT=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/provision" \
+                 -H "Authorization: Bearer $OIDC" \
                  -H "Content-Type: application/json" \
-                 -d '{"name":"<slug>","framework":"nextjs","gitRepository":{"type":"github","repo":"carloshmiranda/<slug>"}}'
+                 -d '{"company_slug":"<slug>","company_id":"<id>"}')
+               echo "Provision result: $PROVISION_RESULT"
                ```
-               If Vercel returns "project already exists", skip this step.
-            4b. Company repos do not need any environment variables — all auth and data access
-               happens via OIDC token exchange and the Hive API.
-            5. Record infra in DB:
+               This single call handles: Neon DB creation + schema, Vercel project creation, Web Analytics,
+               DATABASE_URL env var on Vercel, and infra records in DB. Check the result for errors.
+            5. Record GitHub infra and update company (Neon + Vercel infra is already recorded by the provision API):
                ```sql
                INSERT INTO infra (company_id, service, resource_id, config)
-               VALUES ('<id>', 'github', 'carloshmiranda/<slug>', '{}'),
-                      ('<id>', 'vercel', '<slug>', '{}')
-               ON CONFLICT DO NOTHING
-               ```
-            6. Update company:
-               ```sql
+               VALUES ('<id>', 'github', 'carloshmiranda/<slug>', '{}')
+               ON CONFLICT DO NOTHING;
+
                UPDATE companies SET
                  status = 'mvp',
-                 vercel_project_id = '<slug>',
-                 vercel_url = 'https://<slug>.vercel.app',
                  github_repo = 'carloshmiranda/<slug>',
                  updated_at = NOW()
                WHERE id = '<id>'
@@ -383,7 +380,8 @@ jobs:
                ON CONFLICT DO NOTHING
                ```
 
-            Do NOT create a Neon database — companies use the Hive API for all data access.
+            The provision API (step 4) handles Neon DB creation, schema, Vercel project, Web Analytics, and DATABASE_URL.
+            You do NOT need to create these manually — the API does it all in one call.
             Output: { "company": "<slug>", "provisioned": true }
 
   # ─── Job 2: Dispatch build to company repo (runs on their unlimited Actions minutes) ───
