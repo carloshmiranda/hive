@@ -165,6 +165,8 @@ export function capabilitiesSummary(
     "Email": ["email_provider", "email_sequences", "email_log", "resend_webhook"],
     "Growth": ["waitlist", "referral_mechanics", "gsc_integration", "visibility_metrics"],
     "SEO": ["indexnow", "llms_txt", "sitemap", "json_ld"],
+    "QA & Monitoring": ["health_endpoint", "smoke_tests", "post_deploy", "analytics"],
+    "Data Collection": ["stats_endpoint", "pricing_intent", "affiliate_tracking"],
   };
 
   for (const [group, keys] of Object.entries(groups)) {

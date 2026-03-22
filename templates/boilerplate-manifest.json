@@ -97,6 +97,73 @@
       "compatibility": {
         "company_types": ["b2c_saas", "b2b_saas", "blog", "affiliate_site", "marketplace", "newsletter"]
       }
+    },
+    {
+      "id": "health_endpoint",
+      "capability": "health_endpoint",
+      "description": "Health check API endpoint for monitoring and smoke tests",
+      "files": ["src/app/api/health/route.ts"],
+      "compatibility": {
+        "company_types": ["b2c_saas", "b2b_saas", "blog", "affiliate_site", "marketplace", "newsletter", "api_service"]
+      }
+    },
+    {
+      "id": "smoke_tests",
+      "capability": "smoke_tests",
+      "description": "Playwright smoke test suite (homepage load, JS errors, health endpoint, stats API)",
+      "files": ["playwright.config.ts", "tests/e2e/smoke.spec.ts"],
+      "compatibility": {
+        "company_types": ["b2c_saas", "b2b_saas", "blog", "affiliate_site", "marketplace", "newsletter", "api_service"]
+      }
+    },
+    {
+      "id": "post_deploy_workflow",
+      "capability": "post_deploy",
+      "description": "GitHub Actions workflow that runs smoke tests against Vercel URL after merge to main",
+      "files": [".github/workflows/post-deploy.yml"],
+      "compatibility": {
+        "requires_capability": "smoke_tests",
+        "company_types": ["b2c_saas", "b2b_saas", "blog", "affiliate_site", "marketplace", "newsletter", "api_service"]
+      }
+    },
+    {
+      "id": "analytics",
+      "capability": "analytics",
+      "description": "Vercel Web Analytics client-side tracking (@vercel/analytics in layout)",
+      "files": ["src/app/layout.tsx"],
+      "compatibility": {
+        "company_types": ["b2c_saas", "b2b_saas", "blog", "affiliate_site", "marketplace", "newsletter"]
+      }
+    },
+    {
+      "id": "pricing_intent",
+      "capability": "pricing_intent",
+      "description": "Fake-door CTA click tracking for SaaS pricing validation",
+      "files": ["src/app/api/pricing-intent/route.ts", "schema.sql:pricing_clicks"],
+      "sql": "CREATE TABLE IF NOT EXISTS pricing_clicks (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, date DATE NOT NULL DEFAULT CURRENT_DATE, tier TEXT NOT NULL, source_path TEXT NOT NULL DEFAULT '/pricing', created_at TIMESTAMPTZ NOT NULL DEFAULT now());",
+      "compatibility": {
+        "company_types": ["b2c_saas", "b2b_saas", "marketplace", "digital_product", "api_service"],
+        "skip_if": "has_paying_customers"
+      }
+    },
+    {
+      "id": "affiliate_tracking",
+      "capability": "affiliate_tracking",
+      "description": "Outbound affiliate link click tracking for monetization validation",
+      "files": ["src/app/api/affiliate-click/route.ts", "schema.sql:affiliate_clicks"],
+      "sql": "CREATE TABLE IF NOT EXISTS affiliate_clicks (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, date DATE NOT NULL DEFAULT CURRENT_DATE, link_id TEXT NOT NULL, destination_url TEXT, source_path TEXT NOT NULL DEFAULT '/', created_at TIMESTAMPTZ NOT NULL DEFAULT now());",
+      "compatibility": {
+        "company_types": ["affiliate_site", "blog"]
+      }
+    },
+    {
+      "id": "stats_endpoint",
+      "capability": "stats_endpoint",
+      "description": "Stats API endpoint that reports views, pricing clicks, and affiliate clicks for Hive metrics collection",
+      "files": ["src/app/api/stats/route.ts"],
+      "compatibility": {
+        "company_types": ["b2c_saas", "b2b_saas", "blog", "affiliate_site", "marketplace", "newsletter", "api_service"]
+      }
     }
   ]
 }

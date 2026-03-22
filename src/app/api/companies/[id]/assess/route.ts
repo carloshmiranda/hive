@@ -1,10 +1,16 @@
 import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { getSettingValue } from "@/lib/settings";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await requireAuth();
-  if (!session) return err("Unauthorized", 401);
+  // Allow both session auth (dashboard) and cron secret (Sentinel auto-assess)
+  const authHeader = req.headers.get("authorization");
+  const isCron = authHeader === `Bearer ${process.env.CRON_SECRET}`;
+  if (!isCron) {
+    const session = await requireAuth();
+    if (!session) return err("Unauthorized", 401);
+  }
 
   const { id } = await params;
   const sql = getDb();
@@ -77,12 +83,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // 2. Check Vercel env vars if available
-  if (company.vercel_project_id && process.env.VERCEL_TOKEN) {
+  const vercelToken = process.env.VERCEL_TOKEN || await getSettingValue("vercel_token").catch(() => null);
+  const vercelTeamId = process.env.VERCEL_TEAM_ID || await getSettingValue("vercel_team_id").catch(() => null);
+  if (company.vercel_project_id && vercelToken) {
     try {
-      const teamParam = process.env.VERCEL_TEAM_ID ? `&teamId=${process.env.VERCEL_TEAM_ID}` : "";
+      const teamParam = vercelTeamId ? `&teamId=${vercelTeamId}` : "";
       const envRes = await fetch(
         `https://api.vercel.com/v9/projects/${company.vercel_project_id}/env?${teamParam}`,
-        { headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` } }
+        { headers: { Authorization: `Bearer ${vercelToken}` } }
       );
       if (envRes.ok) {
         const envData = await envRes.json();
@@ -119,16 +127,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // 3. Check repo for key files
-  if (company.github_repo && process.env.GH_PAT) {
+  const ghPat = process.env.GH_PAT || await getSettingValue("github_token").catch(() => null);
+  if (company.github_repo && ghPat) {
     try {
       const repoPath = company.github_repo;
-      const headers = { Authorization: `token ${process.env.GH_PAT}`, Accept: "application/vnd.github.v3+json" };
+      const headers = { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" };
 
       const fileChecks = [
         { path: "src/app/api/webhooks/resend/route.ts", key: "resend_webhook" },
         { path: "public/llms.txt", key: "llms_txt" },
         { path: "src/app/sitemap.ts", key: "sitemap" },
         { path: "package.json", key: "framework" },
+        // QA & monitoring
+        { path: "src/app/api/health/route.ts", key: "health_endpoint" },
+        { path: "playwright.config.ts", key: "smoke_tests" },
+        { path: ".github/workflows/post-deploy.yml", key: "post_deploy" },
+        // Data collection
+        { path: "src/app/api/stats/route.ts", key: "stats_endpoint" },
+        { path: "src/app/api/pricing-intent/route.ts", key: "pricing_intent" },
+        { path: "src/app/api/affiliate-click/route.ts", key: "affiliate_tracking" },
       ];
 
       for (const check of fileChecks) {
@@ -137,13 +154,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             `https://api.github.com/repos/${repoPath}/contents/${check.path}`,
             { headers }
           );
-          if (check.key === "resend_webhook") {
-            updates.resend_webhook = { exists: fileRes.ok };
-          } else if (check.key === "llms_txt") {
-            updates.llms_txt = { exists: fileRes.ok };
-          } else if (check.key === "sitemap") {
-            updates.sitemap = { exists: fileRes.ok };
-          } else if (check.key === "framework" && fileRes.ok) {
+          if (check.key === "framework" && fileRes.ok) {
             const content = await fileRes.json();
             const decoded = atob(content.content);
             const framework = decoded.includes('"next"') ? "nextjs" :
@@ -155,6 +166,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               url: `https://github.com/${repoPath}`,
               framework,
             };
+          } else if (check.key !== "framework") {
+            // Generic file-existence check for all other keys
+            updates[check.key] = { exists: fileRes.ok };
           }
         } catch { /* individual file check — non-blocking */ }
       }
@@ -169,6 +183,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           const content = await layoutRes.json();
           const decoded = atob(content.content);
           updates.json_ld = { exists: decoded.includes("application/ld+json") };
+          updates.analytics = { exists: decoded.includes("@vercel/analytics") };
         }
       } catch { /* non-blocking */ }
     } catch {
