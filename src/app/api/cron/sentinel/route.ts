@@ -354,8 +354,8 @@ export async function GET(req: Request) {
           WHERE d.company_id = c.id AND d.status = 'open') AS has_directive,
         -- Has revenue (active paying customers)
         EXISTS(SELECT 1 FROM metrics m
-          WHERE m.company_id = c.id AND m.metric = 'mrr'
-          AND m.value > 0 AND m.recorded_at > NOW() - INTERVAL '30 days') AS has_revenue
+          WHERE m.company_id = c.id AND m.mrr > 0
+          AND m.date > NOW() - INTERVAL '30 days') AS has_revenue
       FROM companies c
       WHERE c.status IN ('mvp', 'active')
       AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
