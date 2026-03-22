@@ -1,9 +1,8 @@
 import { getDb } from "@/lib/db";
-import { getSettingValue } from "@/lib/settings";
 
 // Vercel Cron: runs at 8am and 6pm (configure in vercel.json)
-// Collects page_views from Vercel Analytics for all active companies
-// Also ensures every MVP/active company has a metrics row for today
+// Collects page_views from each company's /api/stats endpoint
+// Each company app tracks its own pageviews via middleware → page_views table
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -16,16 +15,12 @@ export async function GET(req: Request) {
   }
 
   const sql = getDb();
-  const vercelToken = await getSettingValue("vercel_token");
   const today = new Date().toISOString().split("T")[0];
 
-  // Get all active/mvp companies — use infra table for Vercel project IDs
-  // since companies.vercel_project_id may not be set
+  // Get all active/mvp companies with their URLs
   const companies = await sql`
-    SELECT c.id, c.slug,
-      COALESCE(c.vercel_project_id, i.resource_id) as vercel_project_id
+    SELECT c.id, c.slug, COALESCE(c.domain, c.vercel_url) as app_url
     FROM companies c
-    LEFT JOIN infra i ON i.company_id = c.id AND i.service = 'vercel'
     WHERE c.status IN ('active', 'mvp')
   `;
 
@@ -36,25 +31,31 @@ export async function GET(req: Request) {
       let views = 0;
       let source = "default";
 
-      // Try Vercel Analytics if we have a project ID and token
-      if (vercelToken && company.vercel_project_id) {
-        const from = new Date();
-        from.setHours(0, 0, 0, 0);
+      // Fetch pageviews from the company's own /api/stats endpoint
+      if (company.app_url) {
+        const baseUrl = company.app_url.startsWith("http")
+          ? company.app_url
+          : `https://${company.app_url}`;
 
-        const res = await fetch(
-          `https://vercel.com/api/web/insights/stats?projectId=${company.vercel_project_id}&from=${from.toISOString()}&to=${new Date().toISOString()}`,
-          { headers: { Authorization: `Bearer ${vercelToken}` } }
-        );
+        try {
+          const res = await fetch(`${baseUrl}/api/stats`, {
+            signal: AbortSignal.timeout(5000),
+          });
 
-        if (res.ok) {
-          const data = await res.json();
-          views = data.pageViews || data.totalPageViews || 0;
-          source = "vercel_analytics";
+          if (res.ok) {
+            const data = await res.json();
+            if (data.ok && typeof data.views === "number") {
+              views = data.views;
+              source = "company_api";
+            }
+          }
+        } catch {
+          // Company app may not have /api/stats yet — that's fine
+          console.log(`${company.slug}: /api/stats not available`);
         }
       }
 
       // Always ensure a metrics row exists for today (even with 0s)
-      // This prevents the dashboard from showing "no data"
       await sql`
         INSERT INTO metrics (company_id, date, page_views)
         VALUES (${company.id}, ${today}, ${views})

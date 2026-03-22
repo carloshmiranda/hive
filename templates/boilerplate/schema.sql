@@ -72,3 +72,11 @@ CREATE TABLE IF NOT EXISTS email_log (
 CREATE INDEX IF NOT EXISTS idx_email_log_recipient ON email_log(recipient);
 CREATE INDEX IF NOT EXISTS idx_email_log_sequence ON email_log(sequence_id);
 CREATE INDEX IF NOT EXISTS idx_email_log_resend_id ON email_log(resend_id);
+
+-- Lightweight pageview counter for Hive metrics collection
+CREATE TABLE IF NOT EXISTS page_views (
+  date            DATE NOT NULL DEFAULT CURRENT_DATE,
+  path            TEXT NOT NULL DEFAULT '/',
+  views           INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (date, path)
+);

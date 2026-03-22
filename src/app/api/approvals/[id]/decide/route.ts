@@ -40,9 +40,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         if (approval.company_id) {
           await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${approval.company_id} AND status = 'idea'`;
         }
-        // Dispatch CEO to route the approval (include slug for chain dispatch)
+        // Dispatch directly to Engineer for provisioning (skip CEO middleman)
         const [newComp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
-        await dispatchEvent("gate_approved", { gate_type: "new_company", company_id: approval.company_id, company: newComp?.slug });
+        await dispatchEvent("new_company", { source: "approval", company_id: approval.company_id, company: newComp?.slug });
         break;
 
       case "kill_company":
