@@ -11,8 +11,7 @@ const MAX_CYCLE_DISPATCHES = 2;
 
 type Dispatch = { type: string; target: string; payload: Record<string, unknown> };
 
-async function dispatchToActions(eventType: string, payload: Record<string, unknown>) {
-  const ghPat = process.env.GH_PAT;
+async function dispatchToActions(eventType: string, payload: Record<string, unknown>, ghPat: string | null) {
   if (!ghPat) return;
   await fetch(`https://api.github.com/repos/${REPO}/dispatches`, {
     method: "POST",
@@ -41,9 +40,9 @@ async function dispatchToWorker(agent: string, companySlug: string, trigger: str
 async function dispatchToCompanyWorkflow(
   githubRepo: string,
   workflow: string,
-  inputs: Record<string, string>
+  inputs: Record<string, string>,
+  ghPat: string | null
 ) {
-  const ghPat = process.env.GH_PAT;
   if (!ghPat) return;
   await fetch(`https://api.github.com/repos/${githubRepo}/actions/workflows/${workflow}/dispatches`, {
     method: "POST",
@@ -79,12 +78,11 @@ async function checkHttpHealth(
   return results.filter((r): r is NonNullable<typeof r> => r !== null);
 }
 
-async function checkDeployDrift(vercelToken: string | null): Promise<{
+async function checkDeployDrift(vercelToken: string | null, ghPat: string | null): Promise<{
   drifted: boolean;
   mainSha?: string;
   deploySha?: string;
 }> {
-  const ghPat = process.env.GH_PAT;
   if (!vercelToken || !ghPat) return { drifted: false };
 
   try {
@@ -128,6 +126,7 @@ export async function GET(req: Request) {
   const sql = getDb();
   const traceId = crypto.randomUUID();
   const vercelToken = await getSettingValue("vercel_token");
+  const ghPat = await getSettingValue("github_token");
   const dispatches: Dispatch[] = [];
   let cycleDispatches = 0;
 
@@ -553,7 +552,7 @@ export async function GET(req: Request) {
       company: topAnomaly.slug,
       anomalies: anomalies.map(a => `${a.slug}:${a.metric}(${a.direction})`),
       trace_id: traceId,
-    });
+    }, ghPat);
     dispatches.push({
       type: "brain",
       target: "ceo_review",
@@ -594,7 +593,7 @@ export async function GET(req: Request) {
           recent_rate: Math.round(recentRate * 100),
           prior_rate: Math.round(priorRate * 100),
           trace_id: traceId,
-        });
+        }, ghPat);
         dispatches.push({
           type: "brain",
           target: "evolve_trigger",
@@ -685,7 +684,7 @@ export async function GET(req: Request) {
       company: co.slug,
       directive: "Generate product_spec with mission, what_we_build, and vision. Use existing market_research and competitive_analysis reports as input. This is priority 1 for this cycle.",
       trace_id: traceId,
-    });
+    }, ghPat);
     dispatches.push({ type: "brain", target: "ceo_product_spec", payload: { company: co.slug } });
   }
 
@@ -713,7 +712,7 @@ export async function GET(req: Request) {
       company: co.slug,
       directive: "Generate task backlog with proposed_tasks. Include 5-10 tasks across engineering, growth, research, qa, and ops categories based on company lifecycle stage.",
       trace_id: traceId,
-    });
+    }, ghPat);
     dispatches.push({ type: "brain", target: "ceo_task_backlog", payload: { company: co.slug } });
   }
 
@@ -780,7 +779,7 @@ export async function GET(req: Request) {
 
   // 1. Pipeline low → Scout
   if (pipelineLow) {
-    await dispatchToActions("pipeline_low", { source: "sentinel", trace_id: traceId });
+    await dispatchToActions("pipeline_low", { source: "sentinel", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "pipeline_low", payload: { source: "sentinel" } });
   }
 
@@ -792,7 +791,7 @@ export async function GET(req: Request) {
           company_slug: r.slug,
           trigger: "sentinel_stale_content",
           task_summary: `Content refresh for ${r.slug}`,
-        });
+        }, ghPat);
         dispatches.push({ type: "company_actions", target: "growth", payload: { company: r.slug, repo: r.github_repo } });
         continue;
       } catch {
@@ -812,7 +811,7 @@ export async function GET(req: Request) {
   // 4. No CEO review → CEO brain
   if (noCeoReview.length > 0) {
     const slug = noCeoReview[0].slug;
-    await dispatchToActions("ceo_review", { source: "sentinel", company: slug, trace_id: traceId });
+    await dispatchToActions("ceo_review", { source: "sentinel", company: slug, trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "ceo_review", payload: { company: slug } });
   }
 
@@ -824,16 +823,16 @@ export async function GET(req: Request) {
 
   // 6. Evolve due → Evolver brain
   if (evolveDue) {
-    await dispatchToActions("evolve_trigger", { source: "sentinel", trace_id: traceId });
+    await dispatchToActions("evolve_trigger", { source: "sentinel", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { source: "sentinel" } });
   }
 
   // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)
   if (highFailureRate) {
-    await dispatchToActions("evolve_trigger", { source: "sentinel", reason: "high_failure_rate", trace_id: traceId });
+    await dispatchToActions("evolve_trigger", { source: "sentinel", reason: "high_failure_rate", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { reason: "high_failure_rate" } });
     // Healer fixes code, Evolver proposes process improvements — both run
-    await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate", trace_id: traceId });
+    await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "high_failure_rate" } });
   }
 
@@ -845,7 +844,7 @@ export async function GET(req: Request) {
       WHERE agent = 'healer' AND finished_at > NOW() - INTERVAL '24 hours'
     `;
     if (!lastHeal?.last_run) {
-      await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "errors_detected", trace_id: traceId });
+      await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "errors_detected", trace_id: traceId }, ghPat);
       dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "errors_detected" } });
     }
   }
@@ -853,19 +852,19 @@ export async function GET(req: Request) {
   // 8. Stale research → Scout research refresh
   if (staleResearch.length > 0) {
     const slug = staleResearch[0].slug;
-    await dispatchToActions("research_request", { source: "sentinel", company: slug, trace_id: traceId });
+    await dispatchToActions("research_request", { source: "sentinel", company: slug, trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "research_request", payload: { company: slug } });
   }
 
   // 9. Stuck approved → provision via Engineer
   for (const r of stuckApproved) {
-    await dispatchToActions("new_company", { source: "sentinel", company: r.slug, trace_id: traceId });
+    await dispatchToActions("new_company", { source: "sentinel", company: r.slug, trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "new_company", payload: { company: r.slug } });
   }
 
   // 9b. Orphaned MVPs → re-provision
   for (const r of orphanedMvps) {
-    await dispatchToActions("new_company", { source: "sentinel", company: r.slug, reason: "orphaned_mvp", trace_id: traceId });
+    await dispatchToActions("new_company", { source: "sentinel", company: r.slug, reason: "orphaned_mvp", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "new_company", payload: { company: r.slug, reason: "orphaned_mvp" } });
   }
 
@@ -876,14 +875,14 @@ export async function GET(req: Request) {
         company_slug: r.slug as string,
         trigger: "feature_request",
         task_summary: "Retry — previous build failed",
-      });
+      }, ghPat);
       dispatches.push({ type: "company_actions", target: "feature_request", payload: { company: r.slug, reason: "failed_task_recovery" } });
     } else if (r.github_repo && r.agent === "growth") {
       await dispatchToCompanyWorkflow(r.github_repo as string, "hive-growth.yml", {
         company_slug: r.slug as string,
         trigger: "sentinel_retry",
         task_summary: "Retry — previous growth run failed",
-      });
+      }, ghPat);
       dispatches.push({ type: "company_actions", target: "growth", payload: { company: r.slug, reason: "failed_task_recovery" } });
     } else {
       // Fallback to Hive repo dispatch if no company repo
@@ -894,7 +893,7 @@ export async function GET(req: Request) {
         company_id: r.company_id,
         reason: "failed_task_recovery",
         trace_id: traceId,
-      });
+      }, ghPat);
       dispatches.push({ type: "brain", target: eventType, payload: { company: r.slug, reason: "failed_task_recovery" } });
     }
     // Log the retry so we don't re-dispatch again for 6h
@@ -912,7 +911,7 @@ export async function GET(req: Request) {
       agent: r.agent as string,
       count: parseInt(r.cnt as string),
     }));
-    await dispatchToActions("evolve_trigger", { source: "sentinel", reason: "max_turns_exhaustion", agents, trace_id: traceId });
+    await dispatchToActions("evolve_trigger", { source: "sentinel", reason: "max_turns_exhaustion", agents, trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { reason: "max_turns_exhaustion", agents } });
   }
 
@@ -923,10 +922,10 @@ export async function GET(req: Request) {
         company_slug: r.slug as string,
         trigger: "feature_request",
         task_summary: "Chain gap recovery — CEO planned features not yet built",
-      });
+      }, ghPat);
       dispatches.push({ type: "company_actions", target: "feature_request", payload: { company: r.slug, repo: r.github_repo } });
     } else {
-      await dispatchToActions("feature_request", { source: "sentinel_recovery", company: r.slug, trace_id: traceId });
+      await dispatchToActions("feature_request", { source: "sentinel_recovery", company: r.slug, trace_id: traceId }, ghPat);
       dispatches.push({ type: "brain", target: "feature_request", payload: { company: r.slug } });
     }
   }
@@ -948,7 +947,7 @@ export async function GET(req: Request) {
       company: r.slug,
       company_id: r.company_id,
       trace_id: traceId,
-    });
+    }, ghPat);
     dispatches.push({ type: "brain", target: "research_request", payload: { company: r.slug, reason: "stalled" } });
   }
 
@@ -976,7 +975,7 @@ export async function GET(req: Request) {
       company_id: r.company_id,
       chain_to_ceo: true,
       trace_id: traceId,
-    });
+    }, ghPat);
     dispatches.push({
       type: "brain",
       target: "cycle_start",
@@ -1002,7 +1001,7 @@ export async function GET(req: Request) {
         company_slug: r.slug as string,
         trigger: "feature_request",
         task_summary: "Retry — previous run was rate-limited",
-      });
+      }, ghPat);
       dispatches.push({ type: "company_actions", target: "feature_request", payload: { company: r.slug, reason: "rate_limited_retry" } });
     } else {
       // Brain agents (CEO, Scout, provision) must stay on Hive repo
@@ -1011,7 +1010,7 @@ export async function GET(req: Request) {
         company: r.slug,
         company_id: r.company_id,
         trace_id: traceId,
-      });
+      }, ghPat);
       dispatches.push({ type: "brain", target: eventType, payload: { company: r.slug, reason: "rate_limited_retry" } });
     }
   }
@@ -1032,7 +1031,7 @@ export async function GET(req: Request) {
               company_slug: r.slug as string,
               error_summary: `Deploy broken after provision (HTTP ${res.status})`,
               source: "sentinel",
-            });
+            }, ghPat);
             dispatches.push({ type: "company_actions", target: "ops_escalation", payload: { company: r.slug, status: res.status } });
           } else {
             await dispatchToActions("ops_escalation", {
@@ -1041,7 +1040,7 @@ export async function GET(req: Request) {
               reason: "post_provision_deploy_broken",
               http_status: res.status,
               trace_id: traceId,
-            });
+            }, ghPat);
             dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: r.slug, status: res.status } });
           }
         }
@@ -1052,7 +1051,7 @@ export async function GET(req: Request) {
           reason: "post_provision_deploy_broken",
           http_status: 0,
           trace_id: traceId,
-        });
+        }, ghPat);
         dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: r.slug, status: 0 } });
       }
     } else {
@@ -1062,7 +1061,7 @@ export async function GET(req: Request) {
         company_id: r.company_id,
         reason: "missing_url",
         trace_id: traceId,
-      });
+      }, ghPat);
       dispatches.push({ type: "brain", target: "new_company", payload: { company: r.slug, reason: "missing_url" } });
     }
   }
@@ -1102,7 +1101,7 @@ export async function GET(req: Request) {
         company_slug: b.slug,
         error_summary: `Deploy broken (HTTP ${b.status})`,
         source: "sentinel",
-      });
+      }, ghPat);
       dispatches.push({ type: "company_actions", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
     } else {
       await dispatchToActions("ops_escalation", {
@@ -1111,20 +1110,20 @@ export async function GET(req: Request) {
         reason: "deploy_broken",
         http_status: b.status,
         trace_id: traceId,
-      });
+      }, ghPat);
       dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
     }
   }
 
   // --- Deploy drift check ---
-  const drift = await checkDeployDrift(vercelToken);
+  const drift = await checkDeployDrift(vercelToken, ghPat);
   if (drift.drifted) {
     await dispatchToActions("deploy_drift", {
       source: "sentinel",
       main_sha: drift.mainSha,
       deploy_sha: drift.deploySha,
       trace_id: traceId,
-    });
+    }, ghPat);
     dispatches.push({ type: "brain", target: "deploy_drift", payload: { main: drift.mainSha, deployed: drift.deploySha } });
   }
 
