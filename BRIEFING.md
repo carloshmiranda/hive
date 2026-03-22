@@ -50,6 +50,20 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-22 [code] Centralized business types + auto-research for unknown types
+**ADR-026:** Created `src/lib/business-types.ts` as single source of truth for all 8 business types. Each definition includes phases, scoring model, relevant capabilities, and kill criteria. All consumers (validation.ts, capabilities.ts, assess/route.ts) now derive from it.
+- `/api/agents/research-type`: new endpoint — detects unknown business types, returns structured research prompt for Claude to generate a complete type definition using web search
+- Engineer workflow Step 0: before provisioning, checks if the proposed business_model is known; if not, researches best practices, generates the definition, commits to business-types.ts
+- Engineer now also sets `company_type` on the company record during provisioning (was missing before)
+- `getBoilerplateGaps()` and `applyCompatibility()` now use centralized `isCapabilityRelevant()` instead of hardcoded type lists
+- Adding a new business type: Scout proposes it → Engineer auto-researches → definition committed → provisioning continues
+
+### 2026-03-22 [code] Type-aware infrastructure drift detection
+- Sentinel auto-assesses unassessed companies every 7 days via `/api/companies/{id}/assess`
+- Assessment feeds check 20 (manifest-based migration detection) which is type-aware
+- Manifest expanded to 18 features with type-specific compatibility arrays
+- `assess/route.ts` extended to check 10 files (was 4) + detect analytics in layout.tsx
+
 ### 2026-03-22 [code] Phase 2 pattern extraction + boilerplate test infrastructure
 **Knowledge extraction:** Deep-reviewed Flolio and VerdeDesk codebases, extracted 19 playbook entries across 13 domains (testing, CI/CD, auth, payments, SEO, email, API design, monitoring, landing pages, data architecture, growth, content, design). These were never extracted during Flolio's import because Phase 2 of the import flow was designed but never built.
 - `/api/agents/extract`: new endpoint that reads a company repo via GitHub API, detects reusable patterns across 13 domains, returns extraction prompt for LLM-generated playbook entries

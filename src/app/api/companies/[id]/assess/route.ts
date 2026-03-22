@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { getSettingValue } from "@/lib/settings";
+import { isCapabilityRelevant } from "@/lib/business-types";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   // Allow both session auth (dashboard) and cron secret (Sentinel auto-assess)
@@ -232,29 +233,16 @@ function applyCompatibility(
   const hasCustomers = stripeData.has_customers === true;
   const companyType = company.company_type as string;
 
-  switch (capability) {
-    case "waitlist":
-      if (hasCustomers) {
-        return { ...base, makes_sense: false, reason: "Company already has paying customers" };
-      }
-      if (companyType === "internal_tool") {
-        return { ...base, makes_sense: false, reason: "Internal tool — no public waitlist needed" };
-      }
-      return { ...base, makes_sense: true };
-
-    case "referral":
-      if (["b2c_saas", "marketplace"].includes(companyType)) {
-        return { ...base, makes_sense: true };
-      }
-      if (companyType === "b2b_saas") {
-        return { ...base, makes_sense: false, reason: "B2B SaaS — referral mechanics less effective" };
-      }
-      if (companyType === "internal_tool") {
-        return { ...base, makes_sense: false, reason: "Internal tool — no referral needed" };
-      }
-      return { ...base, makes_sense: true };
-
-    default:
-      return base;
+  // Use centralized type definitions to check relevance
+  const relevant = isCapabilityRelevant(capability, companyType);
+  if (!relevant) {
+    return { ...base, makes_sense: false, reason: `Not applicable for ${companyType}` };
   }
+
+  // Business-logic overrides that depend on runtime data
+  if (capability === "waitlist" && hasCustomers) {
+    return { ...base, makes_sense: false, reason: "Company already has paying customers" };
+  }
+
+  return { ...base, makes_sense: true };
 }

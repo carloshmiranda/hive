@@ -2,7 +2,11 @@
 // Computes a validation score (0-100) and current phase per business type
 // Used by CEO agent to decide what work is appropriate each cycle
 
-export type BusinessType = 'saas' | 'blog' | 'affiliate_site' | 'newsletter' | 'marketplace' | 'digital_product' | 'faceless_channel' | 'api_service';
+import { normalizeType, getTypeDefinition } from "./business-types";
+
+// Re-export for backwards compatibility
+export type BusinessType = string;
+export const normalizeBusinessType = normalizeType;
 
 export interface MetricsRow {
   date: string;
@@ -31,78 +35,6 @@ export interface ValidationResult {
   kill_signal: boolean;
   kill_reason: string | null;
 }
-
-// Legacy company_type → business type mapping
-const TYPE_MAP: Record<string, BusinessType> = {
-  b2c_saas: 'saas',
-  b2b_saas: 'saas',
-  api_service: 'api_service',
-  blog: 'blog',
-  affiliate_site: 'affiliate_site',
-  newsletter: 'newsletter',
-  marketplace: 'marketplace',
-  digital_product: 'digital_product',
-  faceless_channel: 'faceless_channel',
-};
-
-export function normalizeBusinessType(raw: string | null): BusinessType {
-  if (!raw) return 'saas';
-  return TYPE_MAP[raw] || (raw as BusinessType) || 'saas';
-}
-
-// ─── Phase definitions per business type ───
-
-const PHASES: Record<BusinessType, { name: string; threshold: number }[]> = {
-  saas: [
-    { name: 'validate', threshold: 0 },
-    { name: 'test_intent', threshold: 25 },
-    { name: 'build_mvp', threshold: 50 },
-    { name: 'build_aggressively', threshold: 75 },
-    { name: 'scale', threshold: 90 },
-  ],
-  blog: [
-    { name: 'seed_content', threshold: 0 },
-    { name: 'seo_growth', threshold: 25 },
-    { name: 'monetize', threshold: 50 },
-    { name: 'scale', threshold: 75 },
-  ],
-  affiliate_site: [
-    { name: 'build_directory', threshold: 0 },
-    { name: 'drive_traffic', threshold: 25 },
-    { name: 'optimize_conversions', threshold: 50 },
-    { name: 'scale', threshold: 75 },
-  ],
-  newsletter: [
-    { name: 'seed_content', threshold: 0 },
-    { name: 'grow_subscribers', threshold: 25 },
-    { name: 'monetize', threshold: 50 },
-    { name: 'scale', threshold: 75 },
-  ],
-  marketplace: [
-    { name: 'validate', threshold: 0 },
-    { name: 'build_supply', threshold: 25 },
-    { name: 'build_demand', threshold: 50 },
-    { name: 'scale', threshold: 75 },
-  ],
-  digital_product: [
-    { name: 'validate', threshold: 0 },
-    { name: 'test_intent', threshold: 25 },
-    { name: 'build_product', threshold: 50 },
-    { name: 'scale', threshold: 75 },
-  ],
-  faceless_channel: [
-    { name: 'seed_content', threshold: 0 },
-    { name: 'grow_audience', threshold: 25 },
-    { name: 'monetize', threshold: 50 },
-    { name: 'scale', threshold: 75 },
-  ],
-  api_service: [
-    { name: 'validate', threshold: 0 },
-    { name: 'test_intent', threshold: 25 },
-    { name: 'build_mvp', threshold: 50 },
-    { name: 'scale', threshold: 75 },
-  ],
-};
 
 // ─── Phase-specific rules ───
 
@@ -396,18 +328,17 @@ export function computeValidationScore(
   metrics: MetricsRow[],
   companyCreatedAt: string = new Date().toISOString(),
 ): ValidationResult {
-  const type = normalizeBusinessType(rawType);
-  const phases = PHASES[type] || PHASES.saas;
+  const type = normalizeType(rawType);
+  const typeDef = getTypeDefinition(type);
+  const phases = typeDef.phases;
 
-  // Score by business type
+  // Score by business type's scoring model
   let breakdown: Record<string, number>;
-  switch (type) {
-    case 'blog':
-    case 'newsletter':
-    case 'faceless_channel':
+  switch (typeDef.scoringModel) {
+    case 'content':
       breakdown = scoreBlog(metrics);
       break;
-    case 'affiliate_site':
+    case 'affiliate':
       breakdown = scoreAffiliate(metrics);
       break;
     default:

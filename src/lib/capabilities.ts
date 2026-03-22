@@ -3,6 +3,8 @@
  * Used by agents to check what infrastructure exists before acting on it.
  */
 
+import { getTypeDefinition, isCapabilityRelevant } from "./business-types";
+
 export interface CapabilityEntry {
   exists: boolean;
   [k: string]: unknown;
@@ -39,16 +41,23 @@ export function shouldUseCapability(
  * Used by Evolver to know what to propose.
  */
 export function getMissingCapabilities(
-  capabilities: Record<string, unknown> | null | undefined
+  capabilities: Record<string, unknown> | null | undefined,
+  companyType?: string | null,
 ): string[] {
   const missing: string[] = [];
-  const optionalCaps = [
-    "email_sequences", "email_log", "resend_webhook", "waitlist",
-    "referral_mechanics", "gsc_integration", "visibility_metrics",
-    "indexnow", "llms_txt", "sitemap", "json_ld",
-  ];
 
-  for (const key of optionalCaps) {
+  // If company type provided, use centralized type definitions for relevant caps
+  // Otherwise fall back to the generic list
+  const typeDef = companyType ? getTypeDefinition(companyType) : null;
+  const capsToCheck = typeDef
+    ? typeDef.relevantCapabilities
+    : [
+        "email_sequences", "email_log", "resend_webhook", "waitlist",
+        "referral_mechanics", "gsc_integration", "visibility_metrics",
+        "indexnow", "llms_txt", "sitemap", "json_ld",
+      ];
+
+  for (const key of capsToCheck) {
     const cap = hasCapability(capabilities, key);
     if (!cap.exists && cap.makes_sense !== false) {
       missing.push(key);
@@ -117,9 +126,13 @@ export function getBoilerplateGaps(
 
     const compat = feature.compatibility;
 
-    // Check company type compatibility
-    if (compat.company_types && !((compat.company_types as string[]).includes(companyType))) {
-      continue;
+    // Check company type compatibility using centralized business-types definitions
+    // Falls back to manifest's company_types array for features not yet in business-types
+    if (!isCapabilityRelevant(feature.capability, companyType)) {
+      // Double-check against manifest for backwards compatibility
+      if (compat.company_types && !((compat.company_types as string[]).includes(companyType))) {
+        continue;
+      }
     }
 
     // Check prerequisite capability

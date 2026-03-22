@@ -151,7 +151,36 @@ jobs:
             If status is 'mvp' AND github_repo IS NOT NULL AND vercel_project_id IS NOT NULL → already done.
             Log success and output: { "company": "${{ needs.context.outputs.company }}", "provisioned": true, "skipped": true }
 
-            Otherwise, query: `SELECT name, slug, description FROM companies WHERE slug = '${{ needs.context.outputs.company }}'`
+            Otherwise, query: `SELECT id, name, slug, description, company_type FROM companies WHERE slug = '${{ needs.context.outputs.company }}'`
+            Also get the approval context: `SELECT context FROM approvals WHERE company_id = '<id>' AND gate_type = 'new_company' ORDER BY created_at DESC LIMIT 1`
+            Extract business_model from context.proposal.business_model.
+
+            STEP 0 — Set company_type and check if business type is known:
+            ```bash
+            OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" | jq -r '.value')
+            TYPE_RESULT=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/research-type" \
+              -H "Authorization: Bearer $OIDC" \
+              -H "Content-Type: application/json" \
+              -d '{"business_model":"<business_model>","company_name":"<name>","company_description":"<description>"}')
+            TYPE_STATUS=$(echo "$TYPE_RESULT" | jq -r '.status')
+            ```
+            If TYPE_STATUS is "known": good, continue provisioning normally.
+            If TYPE_STATUS is "unknown": this is a new business type. You MUST:
+              a. Read the research_prompt from TYPE_RESULT
+              b. Use web search to research best practices for this business model
+              c. Use the type_template and reference_types to generate a complete BusinessTypeDefinition
+              d. Read src/lib/business-types.ts and add the new entry to the BUSINESS_TYPES array
+              e. If the new type has unique phases, add PHASE_RULES entries in src/lib/validation.ts
+              f. If the existing scoring models (saas/content/affiliate) don't fit, add a new scoring function in validation.ts
+              g. Run `npx next build` to verify
+              h. Commit the changes: `git add src/lib/business-types.ts src/lib/validation.ts && git commit -m "feat: add <type> business type definition"`
+              i. Push to main (this is Hive's own repo, the type definition must be live before provisioning)
+            Also set company_type on the company record:
+            ```sql
+            UPDATE companies SET company_type = '<business_model>', updated_at = NOW() WHERE slug = '<slug>'
+            ```
+
             Then execute these steps IN ORDER:
 
             IMPORTANT: For ALL `gh` commands, you MUST set GH_TOKEN so it uses the personal access token:

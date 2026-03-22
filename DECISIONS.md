@@ -313,3 +313,16 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Manual priority setting (Carlos ranks companies): doesn't scale, adds friction
 - Time-based only (oldest first): ignores task backlog and lifecycle stage
 **Consequences:** Companies with more pending work, open directives, or struggling scores get dispatched first. Budget is protected — high usage automatically reduces dispatch volume. The priority_score is logged in dispatches for observability. Trade-off: the scoring query is more complex (CTE with 7 subqueries), but runs only every 4h in Sentinel so performance impact is negligible.
+
+---
+
+### ADR-026: Centralized business type registry with auto-research for unknown types
+**Date:** 2026-03-22
+**Status:** accepted
+**Context:** Business type definitions were scattered across 5+ files (validation.ts, boilerplate-manifest.json, assess/route.ts, capabilities.ts, prompts/ceo.md). Adding a new business type required touching all 5 and hoping you didn't miss one. When Scout proposes a company with a novel business model, the system had no way to automatically research and seed the right lifecycle phases, scoring, infrastructure, and kill criteria.
+**Decision:** Created `src/lib/business-types.ts` as the single source of truth. Each type definition includes: canonical ID, legacy mappings, lifecycle phases, scoring model, relevant capabilities, and kill criteria. All consumers (validation.ts, capabilities.ts, assess/route.ts) derive from it. Added `/api/agents/research-type` endpoint that detects unknown types and returns a structured research prompt. Engineer workflow Step 0 now calls this before provisioning — if the type is unknown, Claude researches best practices via web search, generates a complete definition, commits it to business-types.ts, then continues provisioning.
+**Alternatives considered:**
+- Manual type addition (Carlos adds types): doesn't scale, blocks autonomous operation
+- LLM generates types at runtime without persisting: inconsistent across cycles, no institutional memory
+- Static JSON registry (not TypeScript): loses type safety, can't export helper functions
+**Consequences:** Adding a new business type now requires adding one entry to the BUSINESS_TYPES array. Unknown types trigger automatic research during provisioning — the system learns new business models autonomously. The manifest's company_types arrays are partially redundant but kept for backwards compatibility. The research-type endpoint uses web search, so quality depends on available information about the business model.
