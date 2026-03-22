@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
 import crypto from "crypto";
 
-const sql = neon(process.env.DATABASE_URL!);
-
 // Resend webhook events: https://resend.com/docs/dashboard/webhooks/introduction
 export async function POST(req: NextRequest) {
+  const sql = neon(process.env.DATABASE_URL!);
   // Verify webhook signature if secret is configured
   const secret = process.env.RESEND_WEBHOOK_SECRET;
   if (secret) {

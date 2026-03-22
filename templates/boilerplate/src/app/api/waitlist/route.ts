@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
 
-const sql = neon(process.env.DATABASE_URL!);
+function getDb() {
+  return neon(process.env.DATABASE_URL!);
+}
 
 function json(data: any, status = 200) {
   return NextResponse.json(data, { status });
@@ -9,6 +11,7 @@ function json(data: any, status = 200) {
 
 // POST /api/waitlist — join the waitlist
 export async function POST(req: NextRequest) {
+  const sql = getDb();
   try {
     const body = await req.json();
     const { email, name, ref } = body as { email?: string; name?: string; ref?: string };
@@ -114,6 +117,7 @@ export async function POST(req: NextRequest) {
 
 // GET /api/waitlist?email=... — check position
 export async function GET(req: NextRequest) {
+  const sql = getDb();
   const email = req.nextUrl.searchParams.get("email");
   if (!email) return json({ ok: false, error: "email param required" }, 400);
 
