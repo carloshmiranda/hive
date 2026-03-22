@@ -956,7 +956,7 @@ export async function GET(req: Request) {
   // Check daily Claude usage to throttle cycle dispatches
   const dailyUsage = await sql`
     SELECT COUNT(*) as action_count,
-      COALESCE(SUM((metadata->>'turns_used')::int), 0) as total_turns
+      COALESCE(SUM(tokens_used), 0) as total_turns
     FROM agent_actions
     WHERE agent IN ('ceo', 'scout', 'engineer', 'evolver', 'healer')
     AND started_at > NOW() - INTERVAL '5 hours'
