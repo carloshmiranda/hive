@@ -19,9 +19,6 @@
 
 ## Up Next
 
-### 🟡 P1 — Consolidate 3 Vercel crons into 1 (Hobby plan prep)
-Currently 3 crons: metrics (2x/day), sentinel (hourly), digest (daily 8am). Hobby plan allows only 2 crons at 1x/day. Consolidate into a single Sentinel cron that internally calls metrics (at 8am+6pm) and digest (at 8am) based on current hour. Endpoints stay independently callable. Do this before downgrading from Pro.
-
 ### 🔴 P0 — Email domain for Resend (outreach fully blocked)
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
@@ -71,6 +68,9 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-22 — Move crons from Vercel to GitHub Actions (P1)
+All 3 Vercel crons (sentinel, metrics, digest) replaced by single `hive-crons.yml` GitHub Actions workflow with 3 schedule triggers. Zero Vercel crons needed — works on Hobby plan. Supports `workflow_dispatch` for manual triggering.
 
 ### ✅ 2026-03-22 — SQL linter + CI + Healer schema_mismatch handling (P1)
 Build-time SQL linter (`scripts/lint-sql.ts`) validates all `sql` tagged template queries against `schema-map.ts`. CI workflow (`.github/workflows/ci.yml`) runs linter + build on PRs. Healer prompt updated with `schema_mismatch` error class. Caught and fixed 4 real bugs on first run: `cycles.created_at`, `evolver_proposals.affected_agents`, `agent_actions.metadata` (2x).

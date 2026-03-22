@@ -1,0 +1,85 @@
+name: "Crons: Sentinel + Metrics + Digest"
+
+on:
+  schedule:
+    # Sentinel: every hour
+    - cron: "0 * * * *"
+    # Metrics: 8am + 6pm UTC
+    - cron: "0 8,18 * * *"
+    # Digest: 8am UTC
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: "Which cron to trigger (sentinel, metrics, digest, all)"
+        required: false
+        default: "sentinel"
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Determine which crons to run
+        id: crons
+        run: |
+          CRON="${{ github.event.schedule }}"
+          MANUAL="${{ github.event.inputs.endpoint }}"
+
+          if [ -n "$MANUAL" ]; then
+            # Manual dispatch
+            if [ "$MANUAL" = "all" ]; then
+              echo "run_sentinel=true" >> $GITHUB_OUTPUT
+              echo "run_metrics=true" >> $GITHUB_OUTPUT
+              echo "run_digest=true" >> $GITHUB_OUTPUT
+            else
+              echo "run_sentinel=$( [ '$MANUAL' = 'sentinel' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+              echo "run_metrics=$( [ '$MANUAL' = 'metrics' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+              echo "run_digest=$( [ '$MANUAL' = 'digest' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            fi
+          elif [ "$CRON" = "0 * * * *" ]; then
+            # Hourly — sentinel only
+            echo "run_sentinel=true" >> $GITHUB_OUTPUT
+            echo "run_metrics=false" >> $GITHUB_OUTPUT
+            echo "run_digest=false" >> $GITHUB_OUTPUT
+          elif [ "$CRON" = "0 8,18 * * *" ]; then
+            # 8am/6pm — metrics (sentinel also runs from the hourly schedule)
+            echo "run_sentinel=false" >> $GITHUB_OUTPUT
+            echo "run_metrics=true" >> $GITHUB_OUTPUT
+            echo "run_digest=false" >> $GITHUB_OUTPUT
+          elif [ "$CRON" = "0 8 * * *" ]; then
+            # 8am — digest (metrics also runs from 8,18 schedule)
+            echo "run_sentinel=false" >> $GITHUB_OUTPUT
+            echo "run_metrics=false" >> $GITHUB_OUTPUT
+            echo "run_digest=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger Sentinel
+        if: steps.crons.outputs.run_sentinel == 'true'
+        run: |
+          STATUS=$(curl -s -o /tmp/sentinel.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://hive-phi.vercel.app/api/cron/sentinel")
+          echo "Sentinel HTTP $STATUS"
+          cat /tmp/sentinel.json | head -c 2000
+          [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]
+
+      - name: Trigger Metrics
+        if: steps.crons.outputs.run_metrics == 'true'
+        run: |
+          STATUS=$(curl -s -o /tmp/metrics.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://hive-phi.vercel.app/api/cron/metrics")
+          echo "Metrics HTTP $STATUS"
+          cat /tmp/metrics.json | head -c 2000
+          [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]
+
+      - name: Trigger Digest
+        if: steps.crons.outputs.run_digest == 'true'
+        run: |
+          STATUS=$(curl -s -o /tmp/digest.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://hive-phi.vercel.app/api/cron/digest")
+          echo "Digest HTTP $STATUS"
+          cat /tmp/digest.json | head -c 2000
+          [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]
