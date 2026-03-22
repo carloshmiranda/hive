@@ -15,17 +15,19 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { domain, insight, evidence, confidence } = body;
+  const { source_company_id, domain, insight, evidence, confidence } = body;
   if (!domain || !insight) {
     return err("Missing required fields: domain, insight", 400);
   }
 
   const sql = getDb();
 
-  // Deduplicate: skip if same domain + insight already exists
+  // Deduplicate: skip if same domain + similar insight already exists for this company
   const [existing] = await sql`
     SELECT id FROM playbook
-    WHERE domain = ${domain} AND insight = ${insight}
+    WHERE domain = ${domain}
+      AND (source_company_id = ${source_company_id || null} OR source_company_id IS NULL)
+      AND insight = ${insight}
     LIMIT 1
   `.catch(() => []);
 
@@ -34,8 +36,8 @@ export async function POST(req: NextRequest) {
   }
 
   const [entry] = await sql`
-    INSERT INTO playbook (domain, insight, evidence, confidence)
-    VALUES (${domain}, ${insight}, ${evidence || null}, ${confidence ?? 0.7})
+    INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
+    VALUES (${source_company_id || null}, ${domain}, ${insight}, ${evidence || null}, ${confidence ?? 0.7})
     RETURNING id, domain, insight, confidence
   `;
 

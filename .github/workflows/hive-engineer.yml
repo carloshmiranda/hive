@@ -380,6 +380,28 @@ jobs:
                ON CONFLICT DO NOTHING
                ```
 
+            11. Extract patterns from imported repos (Phase 2 — only for imported companies):
+               If this company was imported (not scaffolded from boilerplate), run pattern extraction:
+               ```bash
+               OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                 "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" | jq -r '.value')
+               EXTRACT_RESULT=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/extract" \
+                 -H "Authorization: Bearer $OIDC" \
+                 -H "Content-Type: application/json" \
+                 -d '{"company_slug":"<slug>","company_id":"<id>"}')
+               echo "Extraction result: $EXTRACT_RESULT"
+               ```
+               The extract API reads the company repo via GitHub API, detects which domains have
+               reusable patterns (testing, CI/CD, auth, payments, SEO, etc.), reads key files,
+               and returns an extraction_prompt. If new_domains is non-empty, use the prompt to
+               generate playbook entries and POST each one to the Hive playbook API:
+               ```bash
+               curl -s -X POST "https://hive-phi.vercel.app/api/agents/playbook" \
+                 -H "Authorization: Bearer $OIDC" \
+                 -H "Content-Type: application/json" \
+                 -d '{"source_company_id":"<id>","domain":"<domain>","insight":"<insight>","confidence":0.8}'
+               ```
+
             The provision API (step 4) handles Neon DB creation, schema, Vercel project, Web Analytics, and DATABASE_URL.
             You do NOT need to create these manually — the API does it all in one call.
             Output: { "company": "<slug>", "provisioned": true }

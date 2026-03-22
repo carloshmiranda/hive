@@ -1,0 +1,76 @@
+name: Post-deploy smoke tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'next.config.*'
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'URL to test against'
+        required: false
+
+concurrency:
+  group: post-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Resolve deploy URL
+        id: url
+        run: |
+          if [ -n "${{ inputs.base_url }}" ]; then
+            echo "base_url=${{ inputs.base_url }}" >> "$GITHUB_OUTPUT"
+          else
+            # Default to Vercel production URL (repo name = project name)
+            REPO_NAME="${{ github.event.repository.name }}"
+            echo "base_url=https://${REPO_NAME}.vercel.app" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for deployment
+        run: |
+          URL="${{ steps.url.outputs.base_url }}"
+          echo "Waiting for $URL to be ready..."
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "301" ] || [ "$STATUS" = "302" ]; then
+              echo "Site is ready (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS, retrying in 15s..."
+            sleep 15
+          done
+          echo "WARNING: Site may not be ready, running tests anyway"
+
+      - name: Run smoke tests
+        run: npx playwright test
+        env:
+          BASE_URL: ${{ steps.url.outputs.base_url }}
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-report
+          path: playwright-report/
+          retention-days: 14
