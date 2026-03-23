@@ -928,7 +928,7 @@ export async function GET(req: Request) {
       const [existing] = await sql`
         SELECT id FROM evolver_proposals
         WHERE title ILIKE ${"%" + esc.gate_type + "%" + esc.slug + "%"}
-          AND status IN ('proposed', 'approved')
+          AND status IN ('pending', 'approved')
         LIMIT 1
       `;
       if (!existing) {
@@ -942,7 +942,7 @@ export async function GET(req: Request) {
             'sentinel_recurring_escalation',
             ${JSON.stringify({ action: `Create automated resolution for ${esc.gate_type} escalations`, suggestion: "Add a new trigger to the Hive capability registry or a dedicated fix endpoint" })}::jsonb,
             ${[esc.slug as string]},
-            'proposed'
+            'pending'
           )
         `;
         dispatches.push({
