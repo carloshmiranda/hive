@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { validateTaskAgainstPhase } from "@/lib/phase-gate";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
@@ -48,10 +49,22 @@ export async function POST(req: Request) {
   // Support bulk insert (CEO agent sends array)
   const items = Array.isArray(body) ? body : [body];
   const results = [];
+  const rejected: { title: string; phase: string | null; violations: string[] }[] = [];
 
   for (const item of items) {
     const { company_id, category, title, description, priority, source, prerequisites, acceptance } = item;
     if (!company_id || !category || !title || !description) {
+      continue;
+    }
+
+    // Phase gate: reject tasks that violate the company's validation phase
+    const gate = await validateTaskAgainstPhase(sql, company_id, title, description);
+    if (!gate.allowed) {
+      rejected.push({
+        title,
+        phase: gate.phase,
+        violations: gate.violations.map((v) => `Phase "${v.phase}" forbids: ${v.rule} (matched "${v.matched_pattern}")`),
+      });
       continue;
     }
 
@@ -75,5 +88,9 @@ export async function POST(req: Request) {
     results.push(task);
   }
 
+  // If some tasks were rejected by phase gate, include that info
+  if (rejected.length > 0) {
+    return json({ created: results, rejected, phase_gated: true }, 201);
+  }
   return json(results, 201);
 }

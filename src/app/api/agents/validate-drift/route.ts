@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { computeValidationScore, normalizeBusinessType, type MetricsRow } from "@/lib/validation";
+import { checkForbidden } from "@/lib/phase-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -44,21 +45,12 @@ export async function POST(req: Request) {
     return json({ ok: true, passed: true, violations: [], phase: validation.phase });
   }
 
-  // Check work_summary against forbidden patterns
+  // Check work_summary against forbidden patterns using shared gate logic
   const violations: string[] = [];
-  const summary = (work_summary || "").toLowerCase();
 
-  for (const rule of validation.forbidden) {
-    // Extract key terms from forbidden rule and check if work touches them
-    const ruleTerms = rule.toLowerCase();
-
-    // Match specific forbidden patterns against work summary
-    const patterns = extractPatterns(ruleTerms);
-    for (const pattern of patterns) {
-      if (summary.includes(pattern)) {
-        violations.push(`Phase "${validation.phase}" forbids: ${rule}. Found "${pattern}" in work summary.`);
-      }
-    }
+  const summaryViolations = checkForbidden(work_summary || "", validation.forbidden, validation.phase);
+  for (const v of summaryViolations) {
+    violations.push(`Phase "${validation.phase}" forbids: ${v.rule}. Found "${v.matched_pattern}" in work summary.`);
   }
 
   // Also check recent agent_actions for this company+agent to detect drift
@@ -71,14 +63,9 @@ export async function POST(req: Request) {
     `.catch(() => []);
 
     for (const action of recentActions) {
-      const desc = (action.description || "").toLowerCase();
-      for (const rule of validation.forbidden) {
-        const patterns = extractPatterns(rule.toLowerCase());
-        for (const pattern of patterns) {
-          if (desc.includes(pattern)) {
-            violations.push(`Agent "${agent}" action violates phase "${validation.phase}": ${rule}`);
-          }
-        }
+      const actionViolations = checkForbidden(action.description || "", validation.forbidden, validation.phase);
+      for (const v of actionViolations) {
+        violations.push(`Agent "${agent}" action violates phase "${validation.phase}": ${v.rule}`);
       }
     }
   }
@@ -105,41 +92,3 @@ export async function POST(req: Request) {
   });
 }
 
-// Extract meaningful keywords from forbidden rule text
-function extractPatterns(rule: string): string[] {
-  const patterns: string[] = [];
-
-  // Common forbidden terms mapped to detectable patterns
-  const termMap: Record<string, string[]> = {
-    "auth": ["auth", "login", "register", "signup form", "session"],
-    "dashboard": ["dashboard", "admin panel"],
-    "crud": ["crud", "create, read, update", "user management"],
-    "product features": ["product feature", "user account", "settings page", "profile"],
-    "stripe checkout": ["stripe checkout", "payment form", "checkout page"],
-    "database schema for product": ["user table", "product table", "orders table"],
-    "monetization": ["ads", "sponsorship", "affiliate link", "ad revenue"],
-    "paid traffic": ["paid ads", "google ads", "facebook ads", "paid campaign"],
-    "login": ["login page", "login form", "/login", "sign in"],
-    "register": ["register page", "registration", "/register", "sign up form"],
-  };
-
-  for (const [key, values] of Object.entries(termMap)) {
-    if (rule.includes(key)) {
-      patterns.push(...values);
-    }
-  }
-
-  // If no specific patterns matched, use the rule text itself (simplified)
-  if (patterns.length === 0) {
-    // Extract noun phrases: split by commas and parentheses
-    const parts = rule.split(/[,()]/);
-    for (const part of parts) {
-      const trimmed = part.trim();
-      if (trimmed.length > 3 && trimmed.length < 40) {
-        patterns.push(trimmed);
-      }
-    }
-  }
-
-  return patterns;
-}

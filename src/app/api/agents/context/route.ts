@@ -3,6 +3,7 @@ import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { computeValidationScore, normalizeBusinessType } from "@/lib/validation";
 import { getCapabilitySummary } from "@/lib/hive-capabilities";
+import { checkForbidden } from "@/lib/phase-gate";
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
@@ -87,6 +88,22 @@ async function buildContext(sql: any, company: any) {
   const businessType = normalizeBusinessType(company.company_type);
   const validation = computeValidationScore(businessType, metrics, company.created_at);
 
+  // Phase gate: filter out tasks that violate the current validation phase
+  type Task = { id: string; title: string; description: string; priority: number; acceptance: string; status: string };
+  let filteredTasks = tasks as Task[];
+  const gatedTasks: string[] = [];
+  if (validation.forbidden && validation.forbidden.length > 0) {
+    filteredTasks = [];
+    for (const task of tasks as Task[]) {
+      const violations = checkForbidden(`${task.title}: ${task.description}`, validation.forbidden, validation.phase);
+      if (violations.length > 0) {
+        gatedTasks.push(`${task.title} (violates: ${violations[0].rule})`);
+      } else {
+        filteredTasks.push(task);
+      }
+    }
+  }
+
   return {
     description: company.description,
     business_type: businessType,
@@ -95,7 +112,8 @@ async function buildContext(sql: any, company: any) {
     research,
     proposal: proposal[0]?.context?.proposal || null,
     playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
-    engineering_tasks: tasks,
+    engineering_tasks: filteredTasks,
+    ...(gatedTasks.length > 0 ? { phase_gated_tasks: gatedTasks } : {}),
     metrics: metrics.slice(0, 7),
     hive_capabilities: getCapabilitySummary(),
   };
@@ -156,6 +174,22 @@ async function growthContext(sql: any, company: any) {
   `.catch(() => []);
   const validation = computeValidationScore(businessType, growthMetrics as Parameters<typeof computeValidationScore>[1], company.created_at);
 
+  // Phase gate: filter out growth tasks that violate the current validation phase
+  type GrowthTask = { id: string; title: string; description: string; priority: number; acceptance: string; status: string };
+  let filteredGrowthTasks = tasks as GrowthTask[];
+  const gatedGrowthTasks: string[] = [];
+  if (validation.forbidden && validation.forbidden.length > 0) {
+    filteredGrowthTasks = [];
+    for (const task of tasks as GrowthTask[]) {
+      const violations = checkForbidden(`${task.title}: ${task.description}`, validation.forbidden, validation.phase);
+      if (violations.length > 0) {
+        gatedGrowthTasks.push(`${task.title} (violates: ${violations[0].rule})`);
+      } else {
+        filteredGrowthTasks.push(task);
+      }
+    }
+  }
+
   return {
     company: {
       name: company.name,
@@ -172,7 +206,8 @@ async function growthContext(sql: any, company: any) {
     })),
     playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     evolver_proposals: proposals.map((p: { proposed_fix: string }) => p.proposed_fix),
-    growth_tasks: tasks,
+    growth_tasks: filteredGrowthTasks,
+    ...(gatedGrowthTasks.length > 0 ? { phase_gated_tasks: gatedGrowthTasks } : {}),
     hive_capabilities: getCapabilitySummary(),
   };
 }

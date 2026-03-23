@@ -45,11 +45,11 @@ Two-layer dedup in Sentinel dispatch functions: (1) cross-run — queries GitHub
 ### ✅ P1 — Anti-drift mid-cycle validation (DONE — 2026-03-23)
 Three layers: (1) Growth context now includes `validation` with `gating_rules` and `forbidden` (was missing). (2) New `/api/agents/validate-drift` endpoint checks work summary against phase-specific forbidden patterns, logs violations as `drift_detection` agent_actions. (3) Company `hive-build.yml` calls validate-drift before dispatching CEO review, flags drift in the dispatch payload so CEO can factor it into review scoring.
 
-### 🟢 P2 — Playbook confidence decay + learning loop
-Playbook entries currently live forever with static confidence. Implement: (1) confidence decay on entries that lead to agent failures, (2) confidence boost on entries correlated with high CEO scores, (3) auto-prune entries below threshold. Inspired by Ruflo's RETRIEVE → JUDGE → DISTILL → CONSOLIDATE pipeline where patterns gain/lose confidence based on outcomes.
+### ✅ P2 — Playbook confidence decay + learning loop (DONE — 2026-03-23)
+Three mechanisms: (1) Time-based decay: Sentinel check 27 applies -0.02 confidence to entries unreferenced for 30+ days. (2) Auto-prune: entries below 0.15 confidence get superseded by higher-confidence same-domain entries (or zeroed out). (3) Cycle-score boost/decay was already in consolidate endpoint. Combined: playbook entries now have a full lifecycle — created → referenced → boosted/decayed → pruned.
 
-### 🟢 P2 — CLAUDE.md mechanical enforcement (policy gates)
-Hive relies on CEO following CLAUDE.md rules (validation phases, forbidden actions) via prompt instructions. If CEO ignores a rule, there's no mechanical check. Compile phase rules into enforceable gates — e.g., if company is in `validate` phase, reject Engineer tasks that include auth/dashboard/CRUD work before they dispatch. Inspired by Ruflo's `@claude-flow/guidance` package that compiles CLAUDE.md into a 7-phase enforcement pipeline.
+### ✅ P2 — CLAUDE.md mechanical enforcement / policy gates (DONE — 2026-03-23)
+Three-layer enforcement: (1) Task creation gate: `POST /api/tasks` validates tasks against company's validation phase, rejects forbidden work with violation details. (2) Context delivery gate: `GET /api/agents/context` filters out tasks that violate phase rules before Engineer/Growth sees them. (3) Shared `src/lib/phase-gate.ts` library with `checkForbidden()`, `extractPatterns()`, `validateTaskAgainstPhase()` — used by task creation, context delivery, and validate-drift (refactored from inline). Term map expanded with more patterns (oauth, jwt, adsense, ppc, dark mode, etc.).
 
 ### 🟢 P2 — Pre-trained pattern packs for new companies
 Currently new companies inherit raw playbook entries (confidence ≥ 0.6). Structure domain knowledge into curated pattern packs (e.g., "SaaS pricing patterns", "SEO content patterns", "Portuguese market patterns") with richer metadata. New companies get relevant packs based on business type. Inspired by Ruflo's pre-built pattern packs (security-essentials, testing-patterns, etc.) with measurable accuracy scores.

@@ -1582,6 +1582,66 @@ export async function GET(req: Request) {
     dispatches.push({ type: "reminder", target: "evolver_proposal", payload: { id: p.id, severity: p.severity, title: p.title } });
   }
 
+  // 27. Playbook confidence time-decay + auto-prune
+  // Entries unreferenced for 30+ days lose confidence. Below 0.15 → pruned (superseded).
+  // This prevents stale playbook entries from cluttering agent context forever.
+  let playbookDecayed = 0;
+  let playbookPruned = 0;
+
+  const stalePlaybook = await sql`
+    SELECT id, confidence, last_referenced_at, created_at
+    FROM playbook
+    WHERE superseded_by IS NULL
+      AND confidence > 0.15
+      AND COALESCE(last_referenced_at, created_at) < NOW() - INTERVAL '30 days'
+  `.catch(() => []);
+
+  for (const entry of stalePlaybook) {
+    // Decay: -0.02 per Sentinel run (runs every 4h, so ~0.12/day, but capped by 30-day window)
+    const newConfidence = Math.max(0, Number(entry.confidence) - 0.02);
+    await sql`
+      UPDATE playbook SET confidence = ${newConfidence} WHERE id = ${entry.id}
+    `.catch(() => {});
+    playbookDecayed++;
+  }
+
+  // Auto-prune: mark entries below threshold as superseded (soft delete)
+  const pruneCandidates = await sql`
+    SELECT id, domain, insight FROM playbook
+    WHERE superseded_by IS NULL AND confidence <= 0.15 AND confidence > 0
+  `.catch(() => []);
+
+  for (const entry of pruneCandidates) {
+    // Find a higher-confidence entry in the same domain to supersede with
+    const [replacement] = await sql`
+      SELECT id FROM playbook
+      WHERE domain = ${entry.domain} AND superseded_by IS NULL
+        AND confidence > 0.5 AND id != ${entry.id}
+      ORDER BY confidence DESC LIMIT 1
+    `.catch(() => []);
+
+    if (replacement) {
+      await sql`
+        UPDATE playbook SET superseded_by = ${replacement.id} WHERE id = ${entry.id}
+      `.catch(() => {});
+    } else {
+      // No replacement — just zero out confidence so it won't be injected
+      await sql`
+        UPDATE playbook SET confidence = 0 WHERE id = ${entry.id}
+      `.catch(() => {});
+    }
+    playbookPruned++;
+  }
+
+  if (playbookDecayed > 0 || playbookPruned > 0) {
+    await sql`
+      INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+      VALUES ('sentinel', 'playbook_maintenance',
+        ${`Playbook maintenance: ${playbookDecayed} entries decayed, ${playbookPruned} entries pruned (below 0.15 confidence)`},
+        'success', NOW(), NOW())
+    `.catch(() => {});
+  }
+
   return Response.json({
     ok: true,
     trace_id: traceId,
@@ -1599,6 +1659,8 @@ export async function GET(req: Request) {
     active_claims: activeClaims.size,
     stale_reclaimed: staleRunning.length,
     proposals_auto_approved: proposalsAutoApproved,
+    playbook_decayed: playbookDecayed,
+    playbook_pruned: playbookPruned,
     details: dispatches,
   });
 
