@@ -550,7 +550,7 @@ jobs:
           echo "Infra records: $INFRA"
 
           # 2. Delete Vercel project
-          VERCEL_ID=$(echo "$INFRA" | jq -r '.[] | select(.service == "vercel") | .external_id // empty' | head -1)
+          VERCEL_ID=$(echo "$INFRA" | jq -r '.[] | select(.service == "vercel") | .resource_id // empty' | head -1)
           if [ -n "$VERCEL_ID" ] && [ -n "$VERCEL_TOKEN" ]; then
             echo "Deleting Vercel project: $VERCEL_ID"
             HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
@@ -562,7 +562,7 @@ jobs:
           fi
 
           # 3. Delete Neon project
-          NEON_ID=$(echo "$INFRA" | jq -r '.[] | select(.service == "neon") | .external_id // empty' | head -1)
+          NEON_ID=$(echo "$INFRA" | jq -r '.[] | select(.service == "neon") | .resource_id // empty' | head -1)
           if [ -n "$NEON_ID" ] && [ -n "$NEON_KEY" ]; then
             echo "Deleting Neon project: $NEON_ID"
             HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
@@ -574,7 +574,7 @@ jobs:
           fi
 
           # 4. Archive GitHub repo (if not already)
-          REPO=$(echo "$INFRA" | jq -r '.[] | select(.service == "github") | .external_id // empty' | head -1)
+          REPO=$(echo "$INFRA" | jq -r '.[] | select(.service == "github") | .resource_id // empty' | head -1)
           if [ -z "$REPO" ]; then
             REPO="carloshmiranda/${COMPANY}"
           fi
