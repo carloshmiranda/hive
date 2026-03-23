@@ -81,7 +81,12 @@ export async function POST(req: NextRequest) {
         }
       }
     } catch (e: any) {
-      repairs.neon = { error: e.message, created: false };
+      const msg = e.message || "";
+      if (msg.includes("managed by Vercel") || msg.includes("organization is managed")) {
+        repairs.neon = { skipped: true, reason: "Neon org managed by Vercel — use Vercel dashboard to provision DB" };
+      } else {
+        repairs.neon = { error: msg, created: false };
+      }
     }
   } else {
     // DB exists — verify connection and check for missing tables

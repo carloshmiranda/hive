@@ -127,11 +127,17 @@ export async function removeGitLink(projectId: string): Promise<boolean> {
   }
 }
 
-export async function redeployProduction(projectId: string): Promise<{ id: string; url: string }> {
-  const res = await vercel(`/v13/deployments`, "POST", {
-    name: projectId,
-    project: projectId,
-    target: "production",
-  });
-  return { id: res.id || res.uid, url: res.url };
+export async function redeployProduction(projectId: string): Promise<{ id: string; url: string } | null> {
+  // Get the latest deployment and redeploy it
+  const dep = await getLatestDeployment(projectId);
+  if (!dep) return null;
+
+  // Use the Vercel redeploy API (v13/deployments/{id}/redeploy)
+  try {
+    const res = await vercel(`/v13/deployments/${dep.id}/redeploy`, "POST", { target: "production" });
+    return { id: res.id || res.uid, url: res.url };
+  } catch {
+    // Fallback: some Vercel plans don't support redeploy API
+    return null;
+  }
 }
