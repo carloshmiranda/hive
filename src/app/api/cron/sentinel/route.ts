@@ -366,12 +366,15 @@ export async function GET(req: Request) {
   const evolveDue = parseInt(cyclesSinceEvolve.cnt) > 10;
 
   // 7. High failure rate >20% in 48h (min 5 actions)
+  // Exclude healer+sentinel from the count — their own failures would trigger more healer
+  // dispatches, creating a self-reinforcing loop
   const [failureStats] = await sql`
     SELECT
       COUNT(*) FILTER (WHERE status = 'failed') as failed,
       COUNT(*) as total
     FROM agent_actions
     WHERE finished_at > NOW() - INTERVAL '48 hours'
+      AND agent NOT IN ('healer', 'sentinel')
   `;
   const failRate = parseInt(failureStats.total) > 0
     ? parseInt(failureStats.failed) / parseInt(failureStats.total)
@@ -1139,12 +1142,19 @@ export async function GET(req: Request) {
   }
 
   // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)
+  // Guard: check Healer hasn't run in last 6h (prevents re-dispatch loop when Healer itself fails)
   if (highFailureRate) {
     await dispatchToActions("evolve_trigger", { source: "sentinel", reason: "high_failure_rate", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { reason: "high_failure_rate" } });
-    // Healer fixes code, Evolver proposes process improvements — both run
-    await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate", trace_id: traceId }, ghPat);
-    dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "high_failure_rate" } });
+
+    const [lastHealerRun] = await sql`
+      SELECT MAX(started_at) as last_run FROM agent_actions
+      WHERE agent = 'healer' AND started_at > NOW() - INTERVAL '6 hours'
+    `;
+    if (!lastHealerRun?.last_run) {
+      await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate", trace_id: traceId }, ghPat);
+      dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "high_failure_rate" } });
+    }
   }
 
   // 7b. Errors exist but below 20% threshold → Healer only (no Evolver)

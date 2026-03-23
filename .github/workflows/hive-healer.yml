@@ -91,7 +91,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 25 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Healer agent of Hive, the autonomous venture orchestrator.
 
