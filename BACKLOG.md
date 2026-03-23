@@ -27,11 +27,26 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 
 ## Planned
 
-### 🟢 P2 — Venture Brain activation
-Requires 2+ active companies with data. Portfolio analysis, resource allocation, cross-company pattern matching. Should create directives like "VerdeDesk solved Portuguese tax compliance, apply pattern to Senhorio." Currently a stub.
+### 🟡 P1 — CEO PR review: add UI/UX quality gate
+CEO auto-merges UI-only PRs with -2 risk score (faster merge). No visual quality checks exist. Need to add: (1) design consistency check — brand color used on all CTAs, no mixed styling patterns, (2) duplicate content detection — grep diff for repeated headings/sections, (3) landing page changes bump risk +2 (landing page = conversion = revenue), (4) responsive design verification mention, (5) accessibility floor — semantic HTML, contrast. Add to hive-ceo.yml STEP 4 alongside code quality.
+
+### 🟡 P1 — CEO cycle review: include design quality in scoring
+Design quality is invisible to the strategic layer. CEO scores cycles on metrics/validation but never on visual quality. Add: (1) design_quality field in review output (1-10), (2) factor into agent_grades — Engineer grade should reflect UI quality, (3) low design score triggers directive for next cycle, (4) add "visual regression" as a miss category.
+
+### 🟡 P1 — Growth agent: design-aware content rules
+Growth agent creates landing page copy and content with zero design rules. Need: (1) brand color/typography consistency requirements, (2) no design changes without matching existing design tokens, (3) content layout must follow company-claude.md structure, (4) image/visual requirements for blog posts and SEO pages, (5) accessibility rules (contrast, alt text on content images).
+
+### 🟡 P1 — Boilerplate design token system
+globals.css has zero CSS variables — every company starts from scratch and Engineer invents colors per page. Need: (1) CSS custom properties in globals.css for --brand, --brand-hover, --text, --text-muted, --bg, --bg-card, --radius, --spacing-section, (2) Provisioner sets these from business domain during scaffold (finance=blue, agriculture=green, etc.), (3) All boilerplate components reference tokens not hardcoded colors, (4) Tailwind v4 @theme directive to constrain palette.
 
 ### 🟢 P2 — Performance-driven model routing
 Track per-agent success rates by model. If Gemini Flash has >90% success on Growth tasks, keep it. If Groq starts failing Ops checks, auto-escalate to Claude. The routing table should be dynamic, not static. Inspired by Ruflo's Q-Learning router that tracks outcomes and improves routing over time.
+
+### 🟢 P2 — Post-deploy visual smoke test
+No verification that deployed pages render correctly. Engineer deploys and hopes. Need: (1) Lighthouse CI score check (performance, accessibility, SEO, best practices), (2) minimum score thresholds (performance 70+, accessibility 90+, SEO 90+), (3) run as Sentinel check on company URLs, (4) flag regressions as directives. Could use Lighthouse CI npm package in a shell step — no browser needed for basic checks.
+
+### 🟢 P2 — Cross-company design system
+Every company redefines colors, spacing, and button styles from scratch. Need: (1) shared design principles doc in boilerplate (not a component library — just rules), (2) Provisioner generates domain-aware color palette from business type + target audience, (3) Company CLAUDE.md includes generated palette as constraints, (4) Playbook entries for design patterns that work (e.g., "dark hero with light cards converts 2x better for SaaS").
 
 ---
 
@@ -84,8 +99,8 @@ New Sentinel check 13b2: finds `agent_actions` stuck in `'running'` status for >
 ### ✅ P2 — Cost-based provider routing strategy (DONE — 2026-03-23)
 Dynamic routing in worker dispatch: `getOptimalModel()` queries 7-day success rates by provider from agent_actions output JSONB. If primary provider drops below 70% success rate, auto-failover to alternative free-tier provider. Agent_actions now logs `provider`, `model`, `cost_usd`, `routing_reason`, `duration_s` in output. Costs endpoint enhanced with `by_provider` breakdown (calls, successes, failures, cost). Failure logging also includes provider data for routing decisions.
 
-### 🟢 P2 — Memory/playbook consolidation worker
-Playbook entries accumulate but never get consolidated. Implement a periodic worker that: (1) merges near-duplicate entries (same domain, similar content), (2) distills multiple entries into higher-confidence composite entries, (3) prunes entries below confidence threshold after decay. Prevents playbook bloat as portfolio grows. Inspired by Ruflo's `consolidate` background worker and LoRA distillation step.
+### ✅ P2 — Memory/playbook consolidation worker (DONE — 2026-03-23)
+Sentinel check 29: Jaccard word similarity (≥0.6) merges near-duplicate playbook entries within same domain. Higher-confidence entry wins, absorbs loser's counts, loser gets superseded_by. Cross-company composites created (≥0.5 similarity, different companies) as portfolio-level entries (source_company_id=NULL). Max 10 merges + 3 composites per run.
 
 ### 🟢 P2 — Test coverage tracking for company repos
 No visibility into whether company code has tests or what coverage looks like. Engineer builds code but nobody tracks if tests exist or pass. Implement: (1) track test presence in company repos (has tests? coverage %?), (2) flag companies with zero tests after 5+ cycles, (3) add test writing to Engineer's task list when coverage drops. Inspired by Ruflo's `testgaps` background worker that detects code changes without corresponding tests.
@@ -143,6 +158,15 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-23 — Venture Brain activation (P2)
+Sentinel check 28: (a) Cross-pollination — finds high-confidence playbook entries from company A that company B hasn't seen, creates directive. (b) Score decline detection — flags companies with declining CEO scores, references rising peers. (c) Error correlation — if company A fixed an error that company B still has, creates directive. Max 3 directives per run, 7-day cooldown per company.
+
+### ✅ 2026-03-23 — Playbook consolidation worker (P2)
+Sentinel check 29: Jaccard word similarity (≥0.6) merges near-duplicate playbook entries within same domain. Higher-confidence entry wins, absorbs loser's counts. Cross-company composites created (≥0.5 similarity, different companies) as portfolio-level entries. Max 10 merges + 3 composites per run.
+
+### ✅ 2026-03-23 — Company teardown automation (P1)
+Dedicated teardown job in hive-engineer.yml. When kill_company approval is approved, ops_escalation dispatches teardown: deletes Vercel project, Neon DB, archives GitHub repo, marks infra as torn_down. Pure shell steps — no LLM, $0 cost.
 
 ### ✅ 2026-03-22 — Move crons from Vercel to GitHub Actions (P1)
 All 3 Vercel crons (sentinel, metrics, digest) replaced by single `hive-crons.yml` GitHub Actions workflow with 3 schedule triggers. Zero Vercel crons needed — works on Hobby plan. Supports `workflow_dispatch` for manual triggering.

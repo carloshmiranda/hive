@@ -65,3 +65,24 @@ export async function deleteProject(projectId: string) {
 export async function getProject(projectId: string) {
   return vercel(`/v9/projects/${projectId}`);
 }
+
+export async function addDomain(projectId: string, domain: string) {
+  return vercel(`/v10/projects/${projectId}/domains`, "POST", { name: domain });
+}
+
+export async function getDomains(projectId: string): Promise<Array<{ name: string; verified: boolean; configured: boolean }>> {
+  const res = await vercel(`/v9/projects/${projectId}/domains`);
+  return (res.domains || []).map((d: any) => ({
+    name: d.name,
+    verified: d.verified ?? false,
+    configured: d.configured ?? false,
+  }));
+}
+
+export async function removeDomain(projectId: string, domain: string) {
+  return vercel(`/v9/projects/${projectId}/domains/${domain}`, "DELETE");
+}
+
+export async function enableWebAnalytics(projectId: string) {
+  return vercel(`/v1/web-analytics/project/${projectId}`, "POST", { enabledAt: new Date().toISOString() });
+}
