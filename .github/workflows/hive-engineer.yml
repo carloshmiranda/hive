@@ -484,11 +484,147 @@ jobs:
             You do NOT need to create these manually — the API does it all in one call.
             Output: { "company": "<slug>", "provisioned": true }
 
+  # ─── Job 1b: Teardown killed company (deterministic, no LLM) ───
+  teardown:
+    needs: context
+    if: >
+      needs.context.outputs.trigger == 'ops_escalation' &&
+      contains(needs.context.outputs.payload, 'kill_teardown')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Get tokens via OIDC
+        id: auth
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          fetch_token() {
+            local TYPE="$1" OUTPUT_KEY="$2"
+            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"token_type\":\"$TYPE\"}")
+            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+            if [ -n "$VALUE" ]; then
+              echo "::add-mask::$VALUE"
+              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
+            else
+              echo "WARNING: Failed to get $TYPE token"
+            fi
+          }
+
+          fetch_token "github_pat" "gh_pat"
+          fetch_token "vercel_token" "vercel_token"
+          fetch_token "neon_api_key" "neon_key"
+
+      - name: Teardown infrastructure
+        env:
+          GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
+          VERCEL_TOKEN: ${{ steps.auth.outputs.vercel_token }}
+          NEON_KEY: ${{ steps.auth.outputs.neon_key }}
+        run: |
+          COMPANY="${{ needs.context.outputs.company }}"
+          npm install --no-save postgres 2>/dev/null
+
+          echo "=== Tearing down company: $COMPANY ==="
+
+          # 1. Look up infra records
+          INFRA=$(node -e "
+            const postgres = require('postgres');
+            const sql = postgres(process.env.DATABASE_URL);
+            async function run() {
+              const rows = await sql\`
+                SELECT i.*, c.id as cid FROM infra i
+                JOIN companies c ON c.id = i.company_id
+                WHERE c.slug = \${'${COMPANY}'} AND i.status != 'torn_down'
+              \`;
+              console.log(JSON.stringify(rows));
+              await sql.end();
+            }
+            run().catch(e => { console.error(e.message); console.log('[]'); });
+          " 2>/dev/null)
+
+          echo "Infra records: $INFRA"
+
+          # 2. Delete Vercel project
+          VERCEL_ID=$(echo "$INFRA" | jq -r '.[] | select(.service == "vercel") | .external_id // empty' | head -1)
+          if [ -n "$VERCEL_ID" ] && [ -n "$VERCEL_TOKEN" ]; then
+            echo "Deleting Vercel project: $VERCEL_ID"
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              "https://api.vercel.com/v9/projects/$VERCEL_ID" \
+              -H "Authorization: Bearer $VERCEL_TOKEN")
+            echo "  Vercel delete: HTTP $HTTP"
+          else
+            echo "  No Vercel project to delete"
+          fi
+
+          # 3. Delete Neon project
+          NEON_ID=$(echo "$INFRA" | jq -r '.[] | select(.service == "neon") | .external_id // empty' | head -1)
+          if [ -n "$NEON_ID" ] && [ -n "$NEON_KEY" ]; then
+            echo "Deleting Neon project: $NEON_ID"
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              "https://console.neon.tech/api/v2/projects/$NEON_ID" \
+              -H "Authorization: Bearer $NEON_KEY")
+            echo "  Neon delete: HTTP $HTTP"
+          else
+            echo "  No Neon project to delete (or no API key)"
+          fi
+
+          # 4. Archive GitHub repo (if not already)
+          REPO=$(echo "$INFRA" | jq -r '.[] | select(.service == "github") | .external_id // empty' | head -1)
+          if [ -z "$REPO" ]; then
+            REPO="carloshmiranda/${COMPANY}"
+          fi
+          if [ -n "$GH_TOKEN" ]; then
+            echo "Archiving GitHub repo: $REPO"
+            curl -s -o /dev/null -X PATCH "https://api.github.com/repos/$REPO" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d '{"archived":true}' || true
+          fi
+
+          # 5. Mark infra as torn down
+          node -e "
+            const postgres = require('postgres');
+            const sql = postgres(process.env.DATABASE_URL);
+            async function run() {
+              const [c] = await sql\`SELECT id FROM companies WHERE slug = \${'${COMPANY}'} LIMIT 1\`;
+              if (!c) { await sql.end(); return; }
+              await sql\`UPDATE infra SET status = 'torn_down', torn_down_at = NOW() WHERE company_id = \${c.id} AND status != 'torn_down'\`;
+              console.log('Infra marked as torn_down');
+              await sql.end();
+            }
+            run().catch(e => console.error(e.message));
+          " 2>/dev/null
+
+          # 6. Log teardown to agent_actions
+          node -e "
+            const postgres = require('postgres');
+            const sql = postgres(process.env.DATABASE_URL);
+            async function run() {
+              const [c] = await sql\`SELECT id FROM companies WHERE slug = \${'${COMPANY}'} LIMIT 1\`;
+              await sql\`
+                INSERT INTO agent_actions (company_id, agent, action_type, status, description, started_at, finished_at)
+                VALUES (\${c?.id || null}, 'engineer', 'teardown', 'success',
+                  \${'Torn down infrastructure for ' + '${COMPANY}' + ': Vercel, Neon, GitHub archived'},
+                  NOW(), NOW())
+              \`;
+              await sql.end();
+            }
+            run().catch(e => console.error(e.message));
+          " 2>/dev/null
+
+          echo "=== Teardown complete for $COMPANY ==="
+
   # ─── Job 2: Dispatch build to company repo (runs on their unlimited Actions minutes) ───
   build:
     needs: context
     if: >
-      needs.context.outputs.company_repo != '' && (
+      needs.context.outputs.company_repo != '' &&
+      !contains(needs.context.outputs.payload, 'kill_teardown') && (
         needs.context.outputs.trigger == 'feature_request' ||
         needs.context.outputs.trigger == 'ops_escalation' ||
         needs.context.outputs.trigger == 'deploy_drift' ||
@@ -577,7 +713,8 @@ jobs:
   build-hive:
     needs: context
     if: >
-      needs.context.outputs.company_repo == '' && (
+      needs.context.outputs.company_repo == '' &&
+      !contains(needs.context.outputs.payload, 'kill_teardown') && (
         needs.context.outputs.trigger == 'feature_request' ||
         needs.context.outputs.trigger == 'ops_escalation' ||
         needs.context.outputs.trigger == 'deploy_drift' ||
