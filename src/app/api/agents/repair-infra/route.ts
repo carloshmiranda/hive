@@ -208,11 +208,11 @@ export async function POST(req: NextRequest) {
           if (!dep) {
             // No deployments at all — trigger one
             const redeploy = await redeployProduction(company.vercel_project_id);
-            repairs.vercel_deploy = { action: "redeployed", reason: "no_deployments", deployment_id: redeploy.id };
+            repairs.vercel_deploy = { action: redeploy ? "redeployed" : "redeploy_failed", reason: "no_deployments", deployment_id: redeploy?.id };
           } else if (dep.readyState === "ERROR" || dep.state === "ERROR") {
             // Latest deploy errored — trigger fresh deploy
             const redeploy = await redeployProduction(company.vercel_project_id);
-            repairs.vercel_deploy = { action: "redeployed", reason: "last_deploy_errored", deployment_id: redeploy.id };
+            repairs.vercel_deploy = { action: redeploy ? "redeployed" : "redeploy_failed", reason: "last_deploy_errored", deployment_id: redeploy?.id };
           } else {
             repairs.vercel_deploy = { status: "healthy", state: dep.readyState, url: dep.url };
           }
