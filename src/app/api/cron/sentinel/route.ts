@@ -13,8 +13,94 @@ const MAX_CYCLE_DISPATCHES = 2;
 
 type Dispatch = { type: string; target: string; payload: Record<string, unknown> };
 
+// --- Dispatch dedup (claims system) ---
+// Prevents duplicate dispatches both within a single Sentinel run and across runs.
+// Two layers:
+//   1. Cross-run: query GitHub Actions API for in_progress/queued workflow runs
+//   2. Within-run: track a Set of already-dispatched keys this execution
+
+function claimKey(eventType: string, company?: string): string {
+  return `${eventType}:${company || "_global"}`;
+}
+
+async function getActiveClaims(ghPat: string | null): Promise<Set<string>> {
+  if (!ghPat) return new Set();
+  const claims = new Set<string>();
+
+  try {
+    // Fetch in_progress and queued runs in parallel
+    const [inProgressRes, queuedRes] = await Promise.all(
+      ["in_progress", "queued"].map((status) =>
+        fetch(
+          `https://api.github.com/repos/${REPO}/actions/runs?status=${status}&per_page=50`,
+          {
+            headers: {
+              Authorization: `token ${ghPat}`,
+              Accept: "application/vnd.github.v3+json",
+            },
+            signal: AbortSignal.timeout(8000),
+          }
+        )
+      )
+    );
+
+    for (const res of [inProgressRes, queuedRes]) {
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const run of data.workflow_runs || []) {
+        // Parse run name format: "Agent: event_type — company"
+        const match = run.name?.match(/:\s*(\w+)\s*[—–-]\s*(\w+)/);
+        if (match) {
+          claims.add(claimKey(match[1], match[2]));
+        }
+        // Also extract from display_title for repository_dispatch events
+        // where name might differ from event_type
+        if (run.event === "repository_dispatch" && run.display_title) {
+          const dtMatch = run.display_title.match(/:\s*(\w+)\s*[—–-]\s*(\w+)/);
+          if (dtMatch) {
+            claims.add(claimKey(dtMatch[1], dtMatch[2]));
+          }
+        }
+      }
+    }
+  } catch {
+    // Non-critical: if GitHub API fails, proceed without cross-run dedup
+    console.log("[sentinel] Warning: could not fetch active runs for dedup");
+  }
+
+  return claims;
+}
+
+// Module-level state for the current Sentinel run (reset each invocation)
+let activeClaims = new Set<string>();
+let dispatchedThisRun = new Set<string>();
+let dedupSkips = 0;
+
+function isDuplicate(eventType: string, company?: string): boolean {
+  const key = claimKey(eventType, company);
+  if (dispatchedThisRun.has(key)) {
+    dedupSkips++;
+    console.log(`[sentinel] Dedup skip (within-run): ${key}`);
+    return true;
+  }
+  if (activeClaims.has(key)) {
+    dedupSkips++;
+    console.log(`[sentinel] Dedup skip (cross-run, already running): ${key}`);
+    return true;
+  }
+  return false;
+}
+
+function markDispatched(eventType: string, company?: string) {
+  dispatchedThisRun.add(claimKey(eventType, company));
+}
+
 async function dispatchToActions(eventType: string, payload: Record<string, unknown>, ghPat: string | null) {
   if (!ghPat) return;
+  const company = (payload.company as string) || undefined;
+  if (isDuplicate(eventType, company)) return;
+  markDispatched(eventType, company);
+
   await fetch(`https://api.github.com/repos/${REPO}/dispatches`, {
     method: "POST",
     headers: {
@@ -27,6 +113,9 @@ async function dispatchToActions(eventType: string, payload: Record<string, unkn
 }
 
 async function dispatchToWorker(agent: string, companySlug: string, trigger: string) {
+  if (isDuplicate(`worker_${agent}`, companySlug)) return;
+  markDispatched(`worker_${agent}`, companySlug);
+
   const cronSecret = process.env.CRON_SECRET;
   const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
   await fetch(`${baseUrl}/api/agents/dispatch`, {
@@ -46,6 +135,11 @@ async function dispatchToCompanyWorkflow(
   ghPat: string | null
 ) {
   if (!ghPat) return;
+  const company = inputs.company_slug;
+  const workflowKey = workflow.replace(".yml", "");
+  if (isDuplicate(`company_${workflowKey}`, company)) return;
+  markDispatched(`company_${workflowKey}`, company);
+
   await fetch(`https://api.github.com/repos/${githubRepo}/actions/workflows/${workflow}/dispatches`, {
     method: "POST",
     headers: {
@@ -142,6 +236,14 @@ export async function GET(req: Request) {
   const dispatches: Dispatch[] = [];
   let cycleDispatches = 0;
   let circuitBreaks = 0;
+
+  // Initialize dispatch dedup — fetch active GitHub Actions runs
+  activeClaims = await getActiveClaims(ghPat);
+  dispatchedThisRun = new Set<string>();
+  dedupSkips = 0;
+  if (activeClaims.size > 0) {
+    console.log(`[sentinel] Active claims (${activeClaims.size}): ${[...activeClaims].join(", ")}`);
+  }
 
   // --- Auto-expire stale approvals ---
   // Different gate types get different expiry windows based on urgency
@@ -409,6 +511,23 @@ export async function GET(req: Request) {
     WHERE status = 'running' AND started_at < NOW() - INTERVAL '2 hours'
     RETURNING cycle_number, company_id
   `;
+
+  // 13b2. Task stealability — stale running agent_actions (stuck >1h)
+  // If a GitHub Actions run crashes without writing failure to Neon, the action stays
+  // 'running' forever. Mark as 'failed' so the retry logic in 13c can pick it up.
+  const staleRunning = await sql`
+    UPDATE agent_actions
+    SET status = 'failed',
+        error = 'Stale: marked failed by Sentinel after 1h+ in running state (likely GitHub Actions crash/timeout)',
+        finished_at = NOW()
+    WHERE status = 'running'
+    AND started_at < NOW() - INTERVAL '1 hour'
+    AND agent IN ('engineer', 'growth', 'ceo', 'scout', 'healer', 'evolver')
+    RETURNING id, agent, company_id
+  `;
+  if (staleRunning.length > 0) {
+    console.log(`[sentinel] Task stealability: marked ${staleRunning.length} stale running actions as failed`);
+  }
 
   // 13c. Failed agent tasks with unfinished CEO plan work — re-dispatch
   // When Engineer/Growth fails, the tasks from ceo_plan are lost. Detect and retry.
@@ -1476,6 +1595,9 @@ export async function GET(req: Request) {
     recurring_escalations: recurringEscalations.length,
     auto_resolved: autoResolved,
     circuit_breaks: circuitBreaks,
+    dedup_skips: dedupSkips,
+    active_claims: activeClaims.size,
+    stale_reclaimed: staleRunning.length,
     proposals_auto_approved: proposalsAutoApproved,
     details: dispatches,
   });

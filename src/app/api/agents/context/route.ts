@@ -145,6 +145,17 @@ async function growthContext(sql: any, company: any) {
     research[r.report_type] = { summary: r.summary, content: r.content };
   }
 
+  // Compute validation so Growth knows phase constraints
+  const businessType = normalizeBusinessType(company.company_type);
+  const growthMetrics = await sql`
+    SELECT date, page_views, signups, waitlist_signups, waitlist_total,
+      revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
+      affiliate_clicks, affiliate_revenue
+    FROM metrics WHERE company_id = ${company.id}
+    ORDER BY date DESC LIMIT 14
+  `.catch(() => []);
+  const validation = computeValidationScore(businessType, growthMetrics as Parameters<typeof computeValidationScore>[1], company.created_at);
+
   return {
     company: {
       name: company.name,
@@ -152,6 +163,7 @@ async function growthContext(sql: any, company: any) {
       description: company.description,
       capabilities: company.capabilities,
     },
+    validation,
     ceo_plan: cycle[0]?.ceo_plan || null,
     research,
     metrics: metrics.map((m: Record<string, unknown>) => ({

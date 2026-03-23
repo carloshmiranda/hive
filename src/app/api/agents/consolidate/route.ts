@@ -1,0 +1,212 @@
+import { getDb, json, err } from "@/lib/db";
+
+export const dynamic = "force-dynamic";
+
+// POST /api/agents/consolidate
+// Called after CEO review completes a cycle. Feeds outcomes back into the playbook.
+// Three functions:
+//   1. Extract playbook_entry from CEO review and write to playbook table
+//   2. Boost confidence for playbook entries used in high-scoring cycles (8+)
+//   3. Decay confidence for playbook entries used in low-scoring cycles (≤3)
+
+export async function POST(req: Request) {
+  const authHeader = req.headers.get("authorization");
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return err("Unauthorized", 401);
+  }
+
+  const body = await req.json();
+  const { company_slug, cycle_id } = body;
+
+  if (!company_slug && !cycle_id) {
+    return err("Missing company_slug or cycle_id", 400);
+  }
+
+  const sql = getDb();
+  const results = {
+    playbook_entries_created: 0,
+    confidence_boosts: 0,
+    confidence_decays: 0,
+    cycle_score: null as number | null,
+  };
+
+  // Find the most recent completed cycle for this company
+  let cycle;
+  if (cycle_id) {
+    [cycle] = await sql`
+      SELECT cy.id, cy.company_id, cy.ceo_review, cy.cycle_number,
+        c.slug, c.id as cid
+      FROM cycles cy JOIN companies c ON c.id = cy.company_id
+      WHERE cy.id = ${cycle_id} LIMIT 1
+    `.catch(() => []);
+  } else {
+    const [company] = await sql`
+      SELECT id FROM companies WHERE slug = ${company_slug} LIMIT 1
+    `.catch(() => []);
+    if (!company) return err("Company not found", 404);
+
+    [cycle] = await sql`
+      SELECT cy.id, cy.company_id, cy.ceo_review, cy.cycle_number,
+        c.slug, c.id as cid
+      FROM cycles cy JOIN companies c ON c.id = cy.company_id
+      WHERE cy.company_id = ${company.id}
+      ORDER BY cy.started_at DESC LIMIT 1
+    `.catch(() => []);
+  }
+
+  if (!cycle || !cycle.ceo_review) {
+    return json({ ok: true, ...results, note: "No completed cycle with review found" });
+  }
+
+  const review = typeof cycle.ceo_review === "string"
+    ? JSON.parse(cycle.ceo_review)
+    : cycle.ceo_review;
+
+  // Could be nested under "review" key or flat
+  const reviewData = review.review || review;
+  const score = reviewData.score;
+  results.cycle_score = score;
+
+  // --- 1. Extract and write playbook entry from CEO review ---
+  const entry = reviewData.playbook_entry;
+  if (entry && entry.domain && entry.insight) {
+    // Deduplicate: check if similar insight already exists
+    const [existing] = await sql`
+      SELECT id FROM playbook
+      WHERE source_company_id = ${cycle.company_id}
+        AND domain = ${entry.domain}
+        AND insight = ${entry.insight}
+      LIMIT 1
+    `.catch(() => []);
+
+    if (!existing) {
+      await sql`
+        INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
+        VALUES (
+          ${cycle.company_id},
+          ${entry.domain},
+          ${entry.insight},
+          ${JSON.stringify({
+            cycle_number: cycle.cycle_number,
+            cycle_score: score,
+            source: "ceo_review_consolidation",
+          })}::jsonb,
+          ${Math.min(1, Math.max(0, entry.confidence || 0.6))}
+        )
+      `.catch(() => {});
+      results.playbook_entries_created++;
+    }
+  }
+
+  // Also extract insights from wins array if present
+  const wins = reviewData.wins || reviewData.briefing?.wins || [];
+  if (Array.isArray(wins) && wins.length > 0 && score >= 7) {
+    for (const win of wins.slice(0, 2)) {
+      const winText = typeof win === "string" ? win : win?.description || win?.text;
+      if (!winText || winText.length < 10) continue;
+
+      // Determine domain from context
+      const domain = inferDomain(winText);
+
+      const [existing] = await sql`
+        SELECT id FROM playbook
+        WHERE source_company_id = ${cycle.company_id}
+          AND domain = ${domain}
+          AND insight = ${winText}
+        LIMIT 1
+      `.catch(() => []);
+
+      if (!existing) {
+        await sql`
+          INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
+          VALUES (
+            ${cycle.company_id},
+            ${domain},
+            ${winText},
+            ${JSON.stringify({
+              cycle_number: cycle.cycle_number,
+              cycle_score: score,
+              source: "win_extraction",
+            })}::jsonb,
+            ${score >= 9 ? 0.8 : 0.6}
+          )
+        `.catch(() => {});
+        results.playbook_entries_created++;
+      }
+    }
+  }
+
+  // --- 2 & 3. Confidence boost/decay based on cycle score ---
+  // Find which playbook entries were available during this cycle's planning
+  // (entries that existed before the cycle started and had confidence >= 0.6)
+  if (score !== null && score !== undefined) {
+    const cycleStart = await sql`
+      SELECT started_at FROM cycles WHERE id = ${cycle.id}
+    `.catch(() => []);
+
+    if (cycleStart[0]?.started_at) {
+      const referencedEntries = await sql`
+        SELECT id, confidence FROM playbook
+        WHERE created_at < ${cycleStart[0].started_at}
+          AND confidence >= 0.5
+          AND (source_company_id = ${cycle.company_id} OR source_company_id IS NULL)
+        ORDER BY confidence DESC LIMIT 10
+      `.catch(() => []);
+
+      if (referencedEntries.length > 0) {
+        if (score >= 8) {
+          // High score: boost confidence of entries that were in context
+          const boostAmount = score >= 9 ? 0.05 : 0.03;
+          for (const entry of referencedEntries) {
+            const newConfidence = Math.min(1, Number(entry.confidence) + boostAmount);
+            await sql`
+              UPDATE playbook
+              SET confidence = ${newConfidence},
+                  last_referenced_at = NOW(),
+                  reference_count = COALESCE(reference_count, 0) + 1
+              WHERE id = ${entry.id}
+            `.catch(() => {});
+            results.confidence_boosts++;
+          }
+        } else if (score <= 3) {
+          // Low score: decay confidence of entries that were in context
+          const decayAmount = score <= 2 ? 0.08 : 0.05;
+          for (const entry of referencedEntries) {
+            const newConfidence = Math.max(0, Number(entry.confidence) - decayAmount);
+            await sql`
+              UPDATE playbook
+              SET confidence = ${newConfidence},
+                  last_referenced_at = NOW(),
+                  reference_count = COALESCE(reference_count, 0) + 1
+              WHERE id = ${entry.id}
+            `.catch(() => {});
+            results.confidence_decays++;
+          }
+        }
+        // Scores 4-7: neutral, no confidence change
+      }
+    }
+  }
+
+  // Log the consolidation
+  await sql`
+    INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+    VALUES (
+      ${cycle.company_id}, 'sentinel', 'cycle_consolidation',
+      ${`Cycle ${cycle.cycle_number} (score: ${score}): ${results.playbook_entries_created} entries written, ${results.confidence_boosts} boosts, ${results.confidence_decays} decays`},
+      'success', NOW(), NOW()
+    )
+  `.catch(() => {});
+
+  return json({ ok: true, ...results });
+}
+
+function inferDomain(text: string): string {
+  const lower = text.toLowerCase();
+  if (lower.match(/seo|content|blog|article|keyword|traffic|page view/)) return "growth";
+  if (lower.match(/landing|waitlist|signup|conversion|cta/)) return "growth";
+  if (lower.match(/revenue|payment|stripe|pricing|mrr|customer/)) return "strategy";
+  if (lower.match(/deploy|build|error|fix|bug|api|database/)) return "engineering";
+  if (lower.match(/email|outreach|lead|prospect/)) return "outreach";
+  return "strategy";
+}

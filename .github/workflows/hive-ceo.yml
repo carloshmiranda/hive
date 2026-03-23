@@ -346,7 +346,15 @@ jobs:
             fi
           fi
 
-          # cycle_complete: NO further dispatches (prevents infinite loop)
-          # The CEO reviews the cycle and writes to DB — no chaining needed
+          # cycle_complete / ceo_review: trigger post-cycle consolidation
+          # This feeds CEO review outcomes back into the playbook (learning loop)
+          if echo "$TRIGGER" | grep -qE "cycle_complete|ceo_review"; then
+            echo "Triggering post-cycle consolidation..."
+            curl -s -X POST "$HIVE_URL/api/agents/consolidate" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              -d "{\"company_slug\":\"$COMPANY\"}" \
+              -o /dev/null -w "  Consolidation: HTTP %{http_code}\n" || true
+          fi
 
           echo "Chain dispatch complete"

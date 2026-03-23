@@ -50,6 +50,13 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-23 [code] Ruflo-inspired closed-loop learning + dispatch dedup
+- **Dispatch dedup (claims system)**: Two-layer dedup prevents duplicate dispatches. Cross-run: queries GitHub Actions API for in_progress/queued runs. Within-run: Set tracks dispatched keys. All three dispatch functions check both layers. Response includes `dedup_skips` and `active_claims`.
+- **Anti-drift mid-cycle validation**: New `/api/agents/validate-drift` checks Engineer/Growth work against validation phase forbidden rules. Growth context now includes validation (was missing). Company `hive-build.yml` calls validate-drift before CEO review dispatch.
+- **Post-cycle consolidation**: New `/api/agents/consolidate` auto-called after CEO review. Extracts playbook entries from CEO review, boosts/decays confidence based on cycle scores (8+ boost, ≤3 decay). Closes the learning feedback loop.
+- **Task stealability**: Sentinel check 13b2 marks agent_actions stuck in `running` for >1h as `failed`. Existing retry logic (13c) picks them up. Prevents tasks from getting permanently stuck after GitHub Actions crashes.
+- **Ruflo research**: Deep analysis of ruvnet/ruflo multi-agent framework. 24 concepts added to BACKLOG.md. Key borrowed ideas: claims system, learning loops, policy gates, knowledge graph, CRDT writes.
+
 ### 2026-03-23 [code] Self-correcting autonomous loops
 - **Circuit breaker**: Sentinel stops retrying agent+company after 3 failures in 24h. Prevents the 45+ wasted dispatch problem.
 - **Error backfill**: `/api/agents/backfill-errors` fetches GitHub Actions failure reasons and fills NULL error fields. Sentinel also pre-fills before retrying.

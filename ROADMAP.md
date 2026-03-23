@@ -80,6 +80,20 @@ Hive is a **fully AI-centric autonomous venture orchestrator**. It spawns busine
 - [ ] Hive writes a MISTAKES.md entry and Healer auto-applies the fix
 - [ ] Playbook entries auto-applied to struggling companies (no manual directive needed)
 - [ ] Performance-driven model routing (success rate → model selection)
+- [ ] Playbook confidence decay/boost based on cycle outcomes
+- [ ] CLAUDE.md rules enforced mechanically (policy gates), not just via prompts
+- [ ] Anti-drift mid-cycle validation (Engineer output checked against CEO plan)
+- [ ] Context optimization for agents hitting max_turns
+- [ ] Knowledge graph replaces flat playbook queries (PageRank-ranked context injection)
+
+### Milestone: Closed-loop learning system (Ruflo-inspired)
+- [ ] Dispatch dedup / claims system — no double-dispatches
+- [ ] Task stealability — failed agent runs release tasks for retry
+- [ ] Post-cycle consolidation — outcomes systematically feed back into playbook
+- [ ] Playbook consolidation worker — merge duplicates, distill, prune
+- [ ] Cost-based provider routing — cheapest capable provider wins
+- [ ] Agent specialization profiles — learned performance per task type
+- [ ] CRDT-style concurrent write resolution for metrics/playbook
 
 ### Milestone: Advanced portfolio intelligence
 - [ ] Portfolio-level charts (MRR trends, company comparison, funnel metrics)
@@ -94,6 +108,14 @@ Hive is a **fully AI-centric autonomous venture orchestrator**. It spawns busine
 - [ ] Companies detect and respond to competitor moves
 - [ ] Churn prediction and win-back sequences
 - [ ] LTV/CAC tracking per company
+
+### Milestone: Company code quality & observability
+- [ ] Test coverage tracking for company repos (flag zero-test companies)
+- [ ] Automated security scanning on ongoing deploys (not just provisioning)
+- [ ] Performance profiling — Lighthouse scores, Core Web Vitals on deploy
+- [ ] Codebase structure mapping — auto-generated architecture maps per company
+- [ ] Browser automation for Growth verification (rendered pages, SEO, CTAs)
+- [ ] Event-sourced audit trail for agent decision replay
 
 ## Phase 4 — Scale & Platform
 

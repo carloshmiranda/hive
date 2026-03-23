@@ -31,7 +31,82 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 Requires 2+ active companies with data. Portfolio analysis, resource allocation, cross-company pattern matching. Should create directives like "VerdeDesk solved Portuguese tax compliance, apply pattern to Senhorio." Currently a stub.
 
 ### 🟢 P2 — Performance-driven model routing
-Track per-agent success rates by model. If Gemini Flash has >90% success on Growth tasks, keep it. If Groq starts failing Ops checks, auto-escalate to Claude. The routing table should be dynamic, not static.
+Track per-agent success rates by model. If Gemini Flash has >90% success on Growth tasks, keep it. If Groq starts failing Ops checks, auto-escalate to Claude. The routing table should be dynamic, not static. Inspired by Ruflo's Q-Learning router that tracks outcomes and improves routing over time.
+
+---
+
+## Ruflo-Inspired Improvements
+
+> Ideas sourced from [ruvnet/ruflo](https://github.com/ruvnet/ruflo) — a multi-agent orchestration framework. Ruflo is a local CLI tool (architecture mismatch with Hive's cloud model), but many concepts are valuable to implement natively.
+
+### ✅ P1 — Dispatch dedup / claims system (DONE — 2026-03-23)
+Two-layer dedup in Sentinel dispatch functions: (1) cross-run — queries GitHub Actions API for in_progress/queued runs, parses run names to build active claims Set; (2) within-run — tracks dispatched keys to prevent same Sentinel check from dispatching duplicates. All three dispatch functions (`dispatchToActions`, `dispatchToWorker`, `dispatchToCompanyWorkflow`) check both layers before sending. Response includes `dedup_skips` and `active_claims` counts.
+
+### ✅ P1 — Anti-drift mid-cycle validation (DONE — 2026-03-23)
+Three layers: (1) Growth context now includes `validation` with `gating_rules` and `forbidden` (was missing). (2) New `/api/agents/validate-drift` endpoint checks work summary against phase-specific forbidden patterns, logs violations as `drift_detection` agent_actions. (3) Company `hive-build.yml` calls validate-drift before dispatching CEO review, flags drift in the dispatch payload so CEO can factor it into review scoring.
+
+### 🟢 P2 — Playbook confidence decay + learning loop
+Playbook entries currently live forever with static confidence. Implement: (1) confidence decay on entries that lead to agent failures, (2) confidence boost on entries correlated with high CEO scores, (3) auto-prune entries below threshold. Inspired by Ruflo's RETRIEVE → JUDGE → DISTILL → CONSOLIDATE pipeline where patterns gain/lose confidence based on outcomes.
+
+### 🟢 P2 — CLAUDE.md mechanical enforcement (policy gates)
+Hive relies on CEO following CLAUDE.md rules (validation phases, forbidden actions) via prompt instructions. If CEO ignores a rule, there's no mechanical check. Compile phase rules into enforceable gates — e.g., if company is in `validate` phase, reject Engineer tasks that include auth/dashboard/CRUD work before they dispatch. Inspired by Ruflo's `@claude-flow/guidance` package that compiles CLAUDE.md into a 7-phase enforcement pipeline.
+
+### 🟢 P2 — Pre-trained pattern packs for new companies
+Currently new companies inherit raw playbook entries (confidence ≥ 0.6). Structure domain knowledge into curated pattern packs (e.g., "SaaS pricing patterns", "SEO content patterns", "Portuguese market patterns") with richer metadata. New companies get relevant packs based on business type. Inspired by Ruflo's pre-built pattern packs (security-essentials, testing-patterns, etc.) with measurable accuracy scores.
+
+### 🟢 P2 — Context optimization for long-running agents
+CEO agent sometimes hits max_turns (poupamais used 60 turns, Healer exhausted 26). Implement context compression: summarize earlier conversation turns, prioritize recent tool outputs, drop verbose intermediary reasoning. Agents do more within their turn budget. Inspired by Ruflo's Context Autopilot (ADR-051) with proactive archiving, importance ranking, and token tracking with warning/optimize thresholds.
+
+### ⚪ P3 — Browser automation for Growth verification
+Growth agent deploys content but never verifies it rendered correctly. Browser automation could validate: landing pages render properly, SEO meta tags are present, CTAs are clickable, OG images load. Currently "deploy and hope." Inspired by Ruflo's `@claude-flow/browser` with 59 MCP tools for browser interaction, screenshots, and trajectory learning.
+
+### ⚪ P3 — WASM-based mechanical code transforms
+Skip LLM entirely for trivial code changes (add missing imports, fix lint errors, update config values, rename variables). Saves Claude quota on Engineer tasks that don't need reasoning. Currently all code changes go through full Claude sessions. Inspired by Ruflo's Agent Booster claiming 352x speedup on mechanical transforms.
+
+### ⚪ P3 — Knowledge graph with PageRank for context injection
+Replace flat playbook queries with a knowledge graph where entries link to companies, agents, domains, and outcomes. PageRank determines which knowledge gets injected into agent context (most connected = most valuable). Currently playbook injection is a simple confidence threshold query. Inspired by Ruflo's intelligence loop where SessionStart builds a knowledge graph with PageRank-ranked context injection.
+
+### ⚪ P3 — Cross-session pattern learning (ReasoningBank)
+Cache reasoning patterns so agents don't re-derive the same logic across cycles. If CEO solved "how to evaluate a Portuguese SaaS" in cycle 5, the reasoning should be retrievable in cycle 15 without burning turns. Hive's playbook captures outcomes but not reasoning chains. Inspired by Ruflo's ReasoningBank that stores and retrieves reasoning patterns with similarity matching.
+
+### ⚪ P3 — Plugin/extension system for agent capabilities
+Allow new agent capabilities to be added without modifying core workflows. Plugins could add: new data sources (analytics providers), new output channels (social platforms), new business models (newsletter, affiliate). Currently every new capability requires workflow + API route changes. Inspired by Ruflo's plugin system with 19 official plugins and IPFS-based marketplace.
+
+### ⚪ P3 — Multi-agent consensus for kill decisions
+Instead of CEO alone recommending kills, implement a lightweight voting mechanism where multiple signals contribute: CEO score trend, Venture Brain analysis, revenue trajectory, error rate, traffic trend. Weighted consensus replaces single-agent judgment. Inspired by Ruflo's Raft/Byzantine consensus algorithms for multi-agent decisions.
+
+### ✅ P1 — Post-cycle consolidation step (DONE — 2026-03-23)
+New `/api/agents/consolidate` endpoint auto-called after CEO review via chain dispatch in `hive-ceo.yml`. Three functions: (1) extracts `playbook_entry` from CEO review JSON and writes to playbook table with dedup, (2) extracts wins from high-scoring cycles (7+) as additional playbook entries, (3) boosts confidence (+0.03/0.05) on playbook entries used in high-scoring cycles (8+), decays confidence (-0.05/0.08) for low-scoring cycles (≤3). Logs consolidation results as `cycle_consolidation` agent_action.
+
+### ✅ P1 — Task stealability on agent failure (DONE — 2026-03-23)
+New Sentinel check 13b2: finds `agent_actions` stuck in `'running'` status for >1 hour and marks them `'failed'` with descriptive error. This makes them "stealable" — the existing retry logic in check 13c picks them up on the next Sentinel run. Response includes `stale_reclaimed` count. Covers all agent types (engineer, growth, ceo, scout, healer, evolver).
+
+### 🟢 P2 — Cost-based provider routing strategy
+Beyond success-rate tracking, implement cost-aware routing: when multiple providers can handle a task type with similar success rates, prefer the cheapest. Track actual cost per task completion (not just per-turn estimates). Route Ops health checks to Groq ($0) unless Groq failure rate exceeds threshold, then escalate to Gemini before Claude. Inspired by Ruflo's `cost-based` load balancing strategy claiming 85%+ savings.
+
+### 🟢 P2 — Memory/playbook consolidation worker
+Playbook entries accumulate but never get consolidated. Implement a periodic worker that: (1) merges near-duplicate entries (same domain, similar content), (2) distills multiple entries into higher-confidence composite entries, (3) prunes entries below confidence threshold after decay. Prevents playbook bloat as portfolio grows. Inspired by Ruflo's `consolidate` background worker and LoRA distillation step.
+
+### 🟢 P2 — Test coverage tracking for company repos
+No visibility into whether company code has tests or what coverage looks like. Engineer builds code but nobody tracks if tests exist or pass. Implement: (1) track test presence in company repos (has tests? coverage %?), (2) flag companies with zero tests after 5+ cycles, (3) add test writing to Engineer's task list when coverage drops. Inspired by Ruflo's `testgaps` background worker that detects code changes without corresponding tests.
+
+### 🟢 P2 — Automated security scanning on deploys
+Secret scanning happens at provisioning but not on ongoing deploys. Implement a post-deploy security check: scan recent commits for secrets, check for new dependencies with known CVEs, validate that auth middleware is present on protected routes. Runs as part of Ops verification or as a Sentinel check. Inspired by Ruflo's `audit` background worker that triggers on security-related file changes.
+
+### 🟢 P2 — CRDT-style concurrent write resolution
+Hive agents sometimes run in parallel and write conflicting metrics or playbook entries. Currently last-write-wins (SQL UPSERT). Implement convergent data structures for metrics (counters that merge additively) and playbook (entries that merge by highest confidence). Prevents data loss from race conditions without coordination overhead. Inspired by Ruflo's CRDT consensus strategy (~10ms, strong eventual consistency).
+
+### ⚪ P3 — Agent specialization profiles (learned over time)
+Track which agents perform best on which types of tasks across all companies. Build agent profiles: "Engineer excels at React UI but struggles with database migrations", "Growth produces better content for Portuguese market than global." Use profiles to inform CEO's task assignment. Inspired by Ruflo's 60+ specialized agent types and SONA's agent-performance tracking.
+
+### ⚪ P3 — Performance profiling for company sites
+No automated performance analysis for deployed company sites. Implement: Lighthouse scores on deploy, Core Web Vitals tracking, bundle size monitoring. Flag regressions. Engineer tasks should include performance budgets. Inspired by Ruflo's `optimize` and `benchmark` background workers that trigger on performance-critical changes.
+
+### ⚪ P3 — Event-sourced audit trail for agent decisions
+Agent actions are logged but not in an event-sourced format that allows replay. Full event sourcing would enable: "why did CEO score this company 3/10?", "what context led to this Engineer decision?", "replay this cycle with different prompts." Currently agent_actions captures outcomes but not the decision chain. Inspired by Ruflo's event sourcing with replay capability.
+
+### ⚪ P3 — Codebase structure mapping for company repos
+No automated understanding of company repo architecture. Engineer works from CLAUDE.md but doesn't have a live structural map. Implement: auto-generated architecture map (routes, components, API endpoints, data models) updated on each build. Feed to CEO for better planning. Inspired by Ruflo's `map` background worker that triggers on large directory changes.
 
 ---
 
