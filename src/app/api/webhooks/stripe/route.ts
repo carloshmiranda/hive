@@ -178,7 +178,7 @@ export async function POST(req: Request) {
 
       await sql`
         INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
-        VALUES (${company.id}, 'ops', 'stripe_event', ${`Payment failed: €${((invoice.amount_due || 0) / 100).toFixed(2)} — attempt ${invoice.attempt_count}`}, 'warning', now(), now())
+        VALUES (${company.id}, 'ops', 'stripe_event', ${`Payment failed: €${((invoice.amount_due || 0) / 100).toFixed(2)} — attempt ${invoice.attempt_count}`}, 'pending', now(), now())
       `;
       break;
     }

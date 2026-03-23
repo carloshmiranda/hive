@@ -7,7 +7,7 @@
  * Exits 0 if clean, 1 if errors found.
  */
 
-import { SCHEMA_MAP, validateColumn } from "../src/lib/schema-map";
+import { SCHEMA_MAP, validateColumn, validateCheckValue } from "../src/lib/schema-map";
 import { readFileSync, readdirSync } from "fs";
 import path from "path";
 
@@ -519,6 +519,21 @@ function main() {
           });
         }
       }
+
+      // Validate string literals against CHECK constraints
+      // Matches: column = 'value', column IN ('a','b'), VALUES (..., 'value', ...)
+      const tableList = [...new Set(aliasMap.values())].map(t => ({ table: t, alias: "" }));
+      const checkErrors = validateCheckValues(query, tableList, aliasMap);
+      for (const ce of checkErrors) {
+        errors.push({
+          file: relPath,
+          line: lineOffset + 1,
+          query: query.trim().slice(0, 120).replace(/\s+/g, " "),
+          table: ce.table,
+          column: ce.column,
+          message: ce.message,
+        });
+      }
     }
   }
 
@@ -537,6 +552,59 @@ function main() {
   }
 
   process.exit(1);
+}
+
+/**
+ * Validate string literal values against CHECK constraints.
+ * Catches: status = 'invalid_value', INSERT ... VALUES (..., 'bad_status', ...)
+ */
+function validateCheckValues(
+  query: string,
+  tables: Array<{ table: string; alias: string }>,
+  aliasMap: Map<string, string>
+): Array<{ table: string; column: string; message: string }> {
+  const results: Array<{ table: string; column: string; message: string }> = [];
+  const normalized = query.replace(/\s+/g, " ").trim();
+
+  // Pattern 1: column = 'value' or column != 'value'
+  const eqPattern = /(\w+)\.(\w+)\s*(?:=|!=|<>)\s*'([^']+)'/g;
+  let match;
+  while ((match = eqPattern.exec(normalized)) !== null) {
+    const [, aliasOrTable, column, value] = match;
+    const table = aliasMap.get(aliasOrTable) || aliasOrTable;
+    const error = validateCheckValue(table, column, value);
+    if (error) results.push({ table, column, message: error });
+  }
+
+  // Pattern 2: bare column = 'value' (single-table queries)
+  if (tables.length === 1) {
+    const bareEqPattern = /(?<!\w\.)(\w+)\s*(?:=|!=|<>)\s*'([^']+)'/g;
+    while ((match = bareEqPattern.exec(normalized)) !== null) {
+      const [, column, value] = match;
+      if (SQL_KEYWORDS.has(column.toLowerCase()) || SQL_FUNCTIONS.has(column.toLowerCase())) continue;
+      const table = tables[0].table;
+      if (!SCHEMA_MAP[table]?.columns[column]) continue; // not a real column
+      const error = validateCheckValue(table, column, value);
+      if (error) results.push({ table, column, message: error });
+    }
+  }
+
+  // Pattern 3: INSERT INTO table (...columns...) VALUES (..., 'value', ...)
+  const insertMatch = normalized.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+  if (insertMatch) {
+    const table = insertMatch[1];
+    const columns = insertMatch[2].split(",").map(c => c.trim());
+    const values = insertMatch[3].split(",").map(v => v.trim());
+    for (let i = 0; i < columns.length && i < values.length; i++) {
+      const strMatch = values[i].match(/^'([^']+)'$/);
+      if (strMatch) {
+        const error = validateCheckValue(table, columns[i], strMatch[1]);
+        if (error) results.push({ table, column: columns[i], message: error });
+      }
+    }
+  }
+
+  return results;
 }
 
 main();
