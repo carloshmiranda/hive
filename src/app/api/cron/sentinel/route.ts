@@ -152,22 +152,22 @@ async function dispatchToCompanyWorkflow(
 }
 
 async function checkHttpHealth(
-  companies: Array<{ slug: string; vercel_url: string }>
+  companies: Array<{ slug: string; url: string }>
 ): Promise<Array<{ slug: string; url: string; status: number; error?: string }>> {
   const results = await Promise.all(
     companies.map(async (c) => {
       try {
-        const res = await fetch(c.vercel_url, {
+        const res = await fetch(c.url, {
           redirect: "follow",
           signal: AbortSignal.timeout(10000),
         });
         if (res.status >= 400) {
-          return { slug: c.slug, url: c.vercel_url, status: res.status };
+          return { slug: c.slug, url: c.url, status: res.status };
         }
         return null;
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "unknown";
-        return { slug: c.slug, url: c.vercel_url, status: 0, error: msg };
+        return { slug: c.slug, url: c.url, status: 0, error: msg };
       }
     })
   );
@@ -1486,11 +1486,11 @@ export async function GET(req: Request) {
 
   // --- HTTP health checks (parallel) ---
   const companiesWithUrls = await sql`
-    SELECT slug, vercel_url FROM companies
+    SELECT slug, COALESCE('https://' || domain, vercel_url) as check_url FROM companies
     WHERE status IN ('mvp', 'active') AND vercel_url IS NOT NULL AND github_repo IS NOT NULL
   `;
   const brokenDeploys = await checkHttpHealth(
-    companiesWithUrls.map((r) => ({ slug: r.slug as string, vercel_url: r.vercel_url as string }))
+    companiesWithUrls.map((r) => ({ slug: r.slug as string, url: r.check_url as string }))
   );
   for (const b of brokenDeploys) {
     // Dispatch fix directly to company repo (free Actions)
@@ -1652,6 +1652,372 @@ export async function GET(req: Request) {
     `.catch(() => {});
   }
 
+  // 28. Venture Brain — cross-company intelligence (requires 2+ live companies)
+  // Pure SQL + Node.js logic: no LLM call. Identifies cross-pollination opportunities,
+  // detects portfolio patterns, creates directives for companies that can learn from each other.
+  let ventureBrainDirectives = 0;
+  const VB_MAX_DIRECTIVES = 3;
+
+  try {
+    const liveCompanies = await sql`
+      SELECT id, slug, name, company_type FROM companies
+      WHERE status IN ('mvp', 'active') AND github_repo IS NOT NULL
+    `;
+
+    if (liveCompanies.length >= 2) {
+      // 28a. Cross-pollination: find high-confidence playbook entries from company A
+      // that company B hasn't been told about yet (no venture_brain directive in 7 days)
+      const crossPollination = await sql`
+        SELECT p.id as playbook_id, p.domain, p.insight, p.confidence,
+          p.source_company_id, sc.slug as source_slug, sc.name as source_name,
+          tc.id as target_company_id, tc.slug as target_slug, tc.name as target_name
+        FROM playbook p
+        JOIN companies sc ON sc.id = p.source_company_id
+        CROSS JOIN companies tc
+        WHERE tc.status IN ('mvp', 'active') AND tc.github_repo IS NOT NULL
+          AND tc.id != p.source_company_id
+          AND p.confidence >= 0.7
+          AND p.superseded_by IS NULL
+          -- No venture_brain directive for this company in the last 7 days
+          AND NOT EXISTS (
+            SELECT 1 FROM directives d
+            WHERE d.company_id = tc.id
+              AND d.agent = 'venture_brain'
+              AND d.created_at > NOW() - INTERVAL '7 days'
+          )
+          -- Haven't already sent this specific playbook insight to this company
+          AND NOT EXISTS (
+            SELECT 1 FROM directives d
+            WHERE d.company_id = tc.id
+              AND d.text ILIKE '%' || p.id || '%'
+          )
+        ORDER BY p.confidence DESC, p.applied_count ASC
+        LIMIT ${VB_MAX_DIRECTIVES}
+      `;
+
+      for (const row of crossPollination) {
+        if (ventureBrainDirectives >= VB_MAX_DIRECTIVES) break;
+        await sql`
+          INSERT INTO directives (company_id, agent, text, status)
+          VALUES (
+            ${row.target_company_id},
+            'venture_brain',
+            ${`[Venture Brain] From ${row.source_name}: Apply "${row.insight}" (domain: ${row.domain}, confidence: ${row.confidence}). Playbook ref: ${row.playbook_id}`},
+            'open'
+          )
+        `;
+        // Bump the playbook entry's applied_count and last_referenced_at
+        await sql`
+          UPDATE playbook
+          SET applied_count = applied_count + 1, last_referenced_at = NOW()
+          WHERE id = ${row.playbook_id}
+        `;
+        ventureBrainDirectives++;
+        dispatches.push({
+          type: "venture_brain",
+          target: "cross_pollination",
+          payload: { source: row.source_slug, target: row.target_slug, domain: row.domain, playbook_id: row.playbook_id },
+        });
+      }
+
+      // 28b. Detect declining CEO scores — companies with avg score dropping over last 3 cycles
+      // vs previous 3 cycles. If a peer is rising, suggest learning from the peer.
+      if (ventureBrainDirectives < VB_MAX_DIRECTIVES) {
+        const scoreTrends = await sql`
+          WITH recent AS (
+            SELECT company_id, AVG((ceo_review->>'score')::numeric) as avg_score
+            FROM cycles
+            WHERE status = 'complete' AND ceo_review IS NOT NULL
+              AND ceo_review->>'score' IS NOT NULL
+              AND started_at > NOW() - INTERVAL '21 days'
+            GROUP BY company_id
+            HAVING COUNT(*) >= 2
+          ),
+          previous AS (
+            SELECT company_id, AVG((ceo_review->>'score')::numeric) as avg_score
+            FROM cycles
+            WHERE status = 'complete' AND ceo_review IS NOT NULL
+              AND ceo_review->>'score' IS NOT NULL
+              AND started_at BETWEEN NOW() - INTERVAL '42 days' AND NOW() - INTERVAL '21 days'
+            GROUP BY company_id
+            HAVING COUNT(*) >= 2
+          )
+          SELECT r.company_id, c.slug, c.name,
+            r.avg_score as recent_score, p.avg_score as previous_score,
+            (r.avg_score - p.avg_score) as score_delta
+          FROM recent r
+          JOIN previous p ON p.company_id = r.company_id
+          JOIN companies c ON c.id = r.company_id
+          WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
+          ORDER BY score_delta ASC
+        `;
+
+        // Find declining companies (delta < -1) and rising companies (delta > +1)
+        const declining = scoreTrends.filter((r: any) => Number(r.score_delta) < -1);
+        const rising = scoreTrends.filter((r: any) => Number(r.score_delta) > 1);
+
+        for (const dec of declining) {
+          if (ventureBrainDirectives >= VB_MAX_DIRECTIVES) break;
+          // Check 7-day cooldown
+          const [recentDirective] = await sql`
+            SELECT id FROM directives
+            WHERE company_id = ${dec.company_id} AND agent = 'venture_brain'
+              AND created_at > NOW() - INTERVAL '7 days'
+            LIMIT 1
+          `;
+          if (recentDirective) continue;
+
+          // If there's a rising peer, mention it; otherwise just flag the decline
+          const peer = rising.length > 0 ? rising[0] : null;
+          const peerNote = peer
+            ? ` Meanwhile, ${peer.name} is improving (score ${Number(peer.previous_score).toFixed(1)} -> ${Number(peer.recent_score).toFixed(1)}). Check their recent playbook entries for applicable tactics.`
+            : "";
+
+          await sql`
+            INSERT INTO directives (company_id, agent, text, status)
+            VALUES (
+              ${dec.company_id},
+              'venture_brain',
+              ${`[Venture Brain] CEO score declining for ${dec.name}: ${Number(dec.previous_score).toFixed(1)} -> ${Number(dec.recent_score).toFixed(1)} (delta: ${Number(dec.score_delta).toFixed(1)}).${peerNote} Investigate root cause and adjust strategy.`},
+              'open'
+            )
+          `;
+          ventureBrainDirectives++;
+          dispatches.push({
+            type: "venture_brain",
+            target: "score_decline",
+            payload: { company: dec.slug, delta: Number(dec.score_delta), peer: peer?.slug || null },
+          });
+        }
+      }
+
+      // 28c. Cross-company error correlation: if company A fixed an error that company B still has
+      if (ventureBrainDirectives < VB_MAX_DIRECTIVES) {
+        const crossErrors = await sql`
+          WITH failed_recent AS (
+            SELECT aa.company_id, c.slug, c.name,
+              REGEXP_REPLACE(aa.error, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', 'UUID', 'gi') as normalized_error
+            FROM agent_actions aa
+            JOIN companies c ON c.id = aa.company_id
+            WHERE aa.status = 'failed'
+              AND aa.error IS NOT NULL
+              AND aa.started_at > NOW() - INTERVAL '7 days'
+              AND c.status IN ('mvp', 'active')
+          ),
+          fixed AS (
+            SELECT aa.company_id, c.slug as fix_slug, c.name as fix_name,
+              REGEXP_REPLACE(aa.error, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', 'UUID', 'gi') as normalized_error
+            FROM agent_actions aa
+            JOIN companies c ON c.id = aa.company_id
+            WHERE aa.status = 'success'
+              AND aa.error IS NOT NULL
+              AND aa.action_type IN ('sentinel_retry', 'auto_resolve_escalation')
+              AND aa.started_at > NOW() - INTERVAL '30 days'
+          )
+          SELECT DISTINCT f.company_id as failing_company_id, f.slug as failing_slug,
+            fx.fix_slug, fx.fix_name, f.normalized_error
+          FROM failed_recent f
+          JOIN fixed fx ON fx.normalized_error = f.normalized_error AND fx.company_id != f.company_id
+          WHERE NOT EXISTS (
+            SELECT 1 FROM directives d
+            WHERE d.company_id = f.company_id AND d.agent = 'venture_brain'
+              AND d.created_at > NOW() - INTERVAL '7 days'
+          )
+          LIMIT ${VB_MAX_DIRECTIVES - ventureBrainDirectives}
+        `;
+
+        for (const row of crossErrors) {
+          if (ventureBrainDirectives >= VB_MAX_DIRECTIVES) break;
+          await sql`
+            INSERT INTO directives (company_id, agent, text, status)
+            VALUES (
+              ${row.failing_company_id},
+              'venture_brain',
+              ${`[Venture Brain] Error correlation: ${row.fix_name} already fixed a similar error ("${(row.normalized_error as string).slice(0, 120)}..."). Apply the same fix approach.`},
+              'open'
+            )
+          `;
+          ventureBrainDirectives++;
+          dispatches.push({
+            type: "venture_brain",
+            target: "error_correlation",
+            payload: { failing: row.failing_slug, fixed_by: row.fix_slug },
+          });
+        }
+      }
+
+      // 28d. Write portfolio-level playbook entry if meaningful pattern detected
+      // (only if we found cross-pollination or score trends worth noting)
+      if (ventureBrainDirectives > 0) {
+        const portfolioInsight = ventureBrainDirectives > 0
+          ? `Venture Brain run: created ${ventureBrainDirectives} cross-company directive(s) across ${liveCompanies.length} live companies.`
+          : null;
+        if (portfolioInsight) {
+          await sql`
+            INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
+            VALUES ('sentinel', 'venture_brain',
+              ${portfolioInsight},
+              'success',
+              ${JSON.stringify({ directives_created: ventureBrainDirectives, live_companies: liveCompanies.length })}::jsonb,
+              NOW(), NOW())
+          `;
+        }
+      }
+    }
+  } catch (e: any) {
+    console.warn("Venture Brain check failed (non-blocking):", e.message);
+  }
+
+  // 29. Playbook consolidation — merge near-duplicate entries using text similarity
+  // Same domain, not superseded, confidence > 0.2, Jaccard word overlap >= 0.6
+  // Cross-company composites created when entries from different companies overlap >= 0.5
+  let playbookMerged = 0;
+  let playbookComposites = 0;
+  const PB_MAX_MERGES = 10;
+  const PB_MAX_COMPOSITES = 3;
+
+  function jaccardSimilarity(a: string, b: string): number {
+    const wordsA = new Set(a.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean));
+    const wordsB = new Set(b.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean));
+    if (wordsA.size === 0 || wordsB.size === 0) return 0;
+    let intersection = 0;
+    for (const w of wordsA) { if (wordsB.has(w)) intersection++; }
+    const union = new Set([...wordsA, ...wordsB]).size;
+    return union === 0 ? 0 : intersection / union;
+  }
+
+  try {
+    // Fetch all active playbook entries grouped by domain
+    const consolidationEntries = await sql`
+      SELECT id, source_company_id, domain, insight, confidence, applied_count, reference_count
+      FROM playbook
+      WHERE superseded_by IS NULL AND confidence > 0.2
+      ORDER BY domain, confidence DESC
+    `;
+
+    // Group by domain
+    const byDomain: Record<string, typeof consolidationEntries> = {};
+    for (const e of consolidationEntries) {
+      const d = e.domain as string;
+      if (!byDomain[d]) byDomain[d] = [];
+      byDomain[d].push(e);
+    }
+
+    // Track already-superseded IDs this run to avoid double-merging
+    const supersededThisRun = new Set<string>();
+
+    for (const domain of Object.keys(byDomain)) {
+      const entries = byDomain[domain];
+
+      // --- Merge near-duplicates (same domain, Jaccard >= 0.6) ---
+      for (let i = 0; i < entries.length && playbookMerged < PB_MAX_MERGES; i++) {
+        const a = entries[i];
+        if (supersededThisRun.has(a.id as string)) continue;
+        const insightA = a.insight as string;
+        if (insightA.split(/\s+/).length < 5) continue; // skip very short insights
+
+        for (let j = i + 1; j < entries.length && playbookMerged < PB_MAX_MERGES; j++) {
+          const b = entries[j];
+          if (supersededThisRun.has(b.id as string)) continue;
+          const insightB = b.insight as string;
+          if (insightB.split(/\s+/).length < 5) continue;
+
+          const similarity = jaccardSimilarity(insightA, insightB);
+          if (similarity < 0.6) continue;
+
+          // Winner = higher confidence (entries sorted by confidence DESC, so a >= b)
+          const winner = a;
+          const loser = b;
+          const boostedConfidence = Math.min(1.0, Number(winner.confidence) + 0.05);
+          const combinedApplied = Number(winner.applied_count) + Number(loser.applied_count);
+          const combinedRefs = Number(winner.reference_count) + Number(loser.reference_count);
+
+          await sql`
+            UPDATE playbook
+            SET superseded_by = ${winner.id}
+            WHERE id = ${loser.id}
+          `;
+
+          await sql`
+            UPDATE playbook
+            SET confidence = ${boostedConfidence},
+                applied_count = ${combinedApplied},
+                reference_count = ${combinedRefs},
+                last_referenced_at = NOW()
+            WHERE id = ${winner.id}
+          `;
+
+          supersededThisRun.add(loser.id as string);
+          playbookMerged++;
+        }
+      }
+
+      // --- Cross-company composites (Jaccard >= 0.5, different companies) ---
+      // Only consider entries from specific companies (source_company_id NOT NULL)
+      const companyEntries = entries.filter(
+        (e) => e.source_company_id != null && !supersededThisRun.has(e.id as string)
+            && (e.insight as string).split(/\s+/).length >= 5
+      );
+
+      for (let i = 0; i < companyEntries.length && playbookComposites < PB_MAX_COMPOSITES; i++) {
+        const a = companyEntries[i];
+        const insightA = a.insight as string;
+
+        for (let j = i + 1; j < companyEntries.length && playbookComposites < PB_MAX_COMPOSITES; j++) {
+          const b = companyEntries[j];
+          if (a.source_company_id === b.source_company_id) continue; // must be different companies
+          const insightB = b.insight as string;
+
+          const similarity = jaccardSimilarity(insightA, insightB);
+          if (similarity < 0.5) continue;
+
+          // Check if a portfolio-level composite already exists for this domain with similar content
+          const [existingComposite] = await sql`
+            SELECT id, insight FROM playbook
+            WHERE domain = ${domain} AND source_company_id IS NULL
+              AND superseded_by IS NULL AND confidence > 0.2
+            ORDER BY confidence DESC LIMIT 1
+          `;
+
+          if (existingComposite && jaccardSimilarity(existingComposite.insight as string, insightA) >= 0.5) {
+            continue; // similar composite already exists
+          }
+
+          const compositeConfidence = Math.min(1.0, Math.max(Number(a.confidence), Number(b.confidence)) + 0.05);
+          // Use the longer insight as the composite (it likely has more detail)
+          const compositeInsight = insightA.length >= insightB.length ? insightA : insightB;
+
+          await sql`
+            INSERT INTO playbook (source_company_id, domain, insight, confidence, evidence, applied_count, reference_count)
+            VALUES (
+              NULL,
+              ${domain},
+              ${compositeInsight},
+              ${compositeConfidence},
+              ${JSON.stringify({ composite_from: [a.id, b.id], created_by: "sentinel_consolidation" })}::jsonb,
+              0,
+              0
+            )
+          `;
+
+          playbookComposites++;
+        }
+      }
+    }
+
+    if (playbookMerged > 0 || playbookComposites > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'playbook_consolidation',
+          ${`Playbook consolidation: ${playbookMerged} duplicates merged, ${playbookComposites} cross-company composites created`},
+          'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("Check 29 (playbook consolidation) failed:", msg);
+  }
+
   return Response.json({
     ok: true,
     trace_id: traceId,
@@ -1671,6 +2037,9 @@ export async function GET(req: Request) {
     proposals_auto_approved: proposalsAutoApproved,
     playbook_decayed: playbookDecayed,
     playbook_pruned: playbookPruned,
+    venture_brain_directives: ventureBrainDirectives,
+    playbook_merged: playbookMerged,
+    playbook_composites: playbookComposites,
     details: dispatches,
   });
 
