@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { createProject as createNeonProject } from "@/lib/neon-api";
-import { setEnvVars } from "@/lib/vercel";
+import { setEnvVars, getProject, getLatestDeployment, listProjectsForRepo, unlinkGitRepo, redeployProduction } from "@/lib/vercel";
 import { getSettingValue } from "@/lib/settings";
 
 /**
@@ -156,13 +156,105 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Repair 3: Vercel deploy health ──
+  // Diagnose: project missing, deploy broken, duplicate projects on same repo
+  if (company.vercel_project_id) {
+    try {
+      // 3a. Check if the tracked Vercel project actually exists
+      let projectExists = true;
+      try {
+        await getProject(company.vercel_project_id);
+      } catch {
+        projectExists = false;
+        repairs.vercel_project = { error: "tracked project not found", project_id: company.vercel_project_id };
+      }
+
+      // 3b. Check for duplicate Vercel projects on same GitHub repo
+      if (company.github_repo) {
+        try {
+          const projects = await listProjectsForRepo(company.github_repo);
+          if (projects.length > 1) {
+            // Multiple projects deploying from same repo — this causes 429s and conflicts
+            const tracked = projects.find(p => p.id === company.vercel_project_id || p.name === company.vercel_project_id);
+            const duplicates = projects.filter(p => p.id !== company.vercel_project_id && p.name !== company.vercel_project_id);
+
+            repairs.vercel_duplicates = {
+              tracked_project: tracked?.name || company.vercel_project_id,
+              duplicate_projects: duplicates.map(d => d.name),
+              action: "unlinked_duplicates",
+            };
+
+            // Unlink git repo from duplicate projects (they'll stop auto-deploying)
+            for (const dup of duplicates) {
+              try {
+                await unlinkGitRepo(dup.id);
+                (repairs.vercel_duplicates as Record<string, unknown>)[`unlinked_${dup.name}`] = true;
+              } catch (e: any) {
+                (repairs.vercel_duplicates as Record<string, unknown>)[`unlink_error_${dup.name}`] = e.message;
+              }
+            }
+          }
+        } catch (e: any) {
+          repairs.vercel_repo_check = { error: e.message };
+        }
+      }
+
+      // 3c. Check if latest deployment is healthy, redeploy if needed
+      if (projectExists) {
+        try {
+          const dep = await getLatestDeployment(company.vercel_project_id);
+          if (!dep) {
+            // No deployments at all — trigger one
+            const redeploy = await redeployProduction(company.vercel_project_id);
+            repairs.vercel_deploy = { action: "redeployed", reason: "no_deployments", deployment_id: redeploy.id };
+          } else if (dep.readyState === "ERROR" || dep.state === "ERROR") {
+            // Latest deploy errored — trigger fresh deploy
+            const redeploy = await redeployProduction(company.vercel_project_id);
+            repairs.vercel_deploy = { action: "redeployed", reason: "last_deploy_errored", deployment_id: redeploy.id };
+          } else {
+            repairs.vercel_deploy = { status: "healthy", state: dep.readyState, url: dep.url };
+          }
+        } catch (e: any) {
+          repairs.vercel_deploy = { error: e.message };
+        }
+      }
+    } catch (e: any) {
+      repairs.vercel_repair = { error: e.message };
+    }
+  }
+
+  // ── Repair 4: Resolve stale escalations ──
+  // If the same escalation has been pending for 3+ cycles, mark it resolved with auto-repair note
+  const { repair_type } = body;
+  if (repair_type === "stale_escalation") {
+    try {
+      const staleEscalations = await sql`
+        SELECT id, title, gate_type FROM approvals
+        WHERE company_id = ${company.id} AND status = 'pending'
+          AND gate_type = 'spend_approval'
+          AND created_at < NOW() - INTERVAL '48 hours'
+      `;
+      for (const esc of staleEscalations) {
+        await sql`
+          UPDATE approvals SET status = 'rejected', decided_at = NOW(),
+            context = context || ${JSON.stringify({ auto_resolved: true, reason: "stale_escalation_auto_repair", repairs })}::jsonb
+          WHERE id = ${esc.id}
+        `;
+      }
+      repairs.stale_escalations = { resolved: staleEscalations.length, ids: staleEscalations.map((e: any) => e.id) };
+    } catch (e: any) {
+      repairs.stale_escalations = { error: e.message };
+    }
+  }
+
   // Log the repair action
+  const hasErrors = Object.values(repairs).some((v: any) => v?.error);
   await sql`
     INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
     VALUES (
       ${company.id}, 'sentinel', 'infra_repair',
       ${`Infrastructure repair for ${company_slug}`},
-      'success', ${JSON.stringify(repairs)}::jsonb,
+      ${hasErrors ? 'partial' : 'success'}, ${JSON.stringify(repairs)}::jsonb,
       NOW(), NOW()
     )
   `;

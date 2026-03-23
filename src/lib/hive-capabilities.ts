@@ -24,7 +24,7 @@ export const HIVE_CAPABILITIES: HiveCapability[] = [
     method: "POST",
     auth: "cron_secret",
     description:
-      "Fix missing Neon DB, run schema, set Vercel env vars for existing companies",
+      "Fix missing Neon DB, run schema, set Vercel env vars, repair broken deploys, unlink duplicate Vercel projects",
     triggers: [
       "neon_project_id IS NULL",
       "database not provisioned",
@@ -34,6 +34,14 @@ export const HIVE_CAPABILITIES: HiveCapability[] = [
       "connection_string missing",
       "schema tables missing",
       "missing tables",
+      "deploy broken",
+      "Vercel deploy broken",
+      "HTTP 404",
+      "HTTP 429",
+      "duplicate Vercel project",
+      "deploy broken after provision",
+      "systemic bugs blocking",
+      "needs manual fix",
     ],
     params: { company_slug: "Company slug to repair" },
   },

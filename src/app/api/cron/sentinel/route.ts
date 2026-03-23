@@ -1492,13 +1492,59 @@ export async function GET(req: Request) {
   const brokenDeploys = await checkHttpHealth(
     companiesWithUrls.map((r) => ({ slug: r.slug as string, url: r.check_url as string }))
   );
+  // 30. Broken deploys → try infra repair FIRST, then code fix as fallback
+  // This prevents burning Claude tokens on hive-fix.yml when the issue is infrastructure
+  // (duplicate Vercel projects, missing env vars, failed deploys — not code bugs)
+  let infraRepairsAttempted = 0;
   for (const b of brokenDeploys) {
-    // Dispatch fix directly to company repo (free Actions)
+    // Step 1: Try infrastructure repair (free, no LLM)
+    try {
+      const repairRes = await fetch(`${baseUrl}/api/agents/repair-infra`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ company_slug: b.slug, repair_type: "stale_escalation" }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const repairData = await repairRes.json();
+      infraRepairsAttempted++;
+
+      const repaired = repairData.repairs?.vercel_duplicates?.action === "unlinked_duplicates"
+        || repairData.repairs?.vercel_deploy?.action === "redeployed";
+
+      dispatches.push({
+        type: "internal",
+        target: "deploy_repair",
+        payload: { company: b.slug, http_status: b.status, infra_repaired: repaired, repairs: repairData.repairs },
+      });
+
+      if (repaired) {
+        // Infra repair handled it — skip code fix dispatch
+        continue;
+      }
+    } catch (e: any) {
+      console.warn(`Infra repair failed for ${b.slug}: ${e.message}`);
+    }
+
+    // Step 2: Infra repair didn't fix it — check circuit breaker before dispatching code fix
+    const [failCount] = await sql`
+      SELECT COUNT(*)::int as cnt FROM agent_actions
+      WHERE company_id = (SELECT id FROM companies WHERE slug = ${b.slug})
+        AND agent = 'engineer' AND status = 'failed'
+        AND action_type IN ('error_fix', 'feature_request')
+        AND started_at > NOW() - INTERVAL '24 hours'
+    `;
+    if ((failCount?.cnt || 0) >= 3) {
+      // Circuit breaker: too many failed fixes, don't waste more tokens
+      dispatches.push({ type: "circuit_break", target: "deploy_fix_skipped", payload: { company: b.slug, failures_24h: failCount?.cnt } });
+      continue;
+    }
+
+    // Step 3: Dispatch code fix to company repo
     const [co] = await sql`SELECT github_repo FROM companies WHERE slug = ${b.slug} LIMIT 1`;
     if (co?.github_repo) {
       await dispatchToCompanyWorkflow(co.github_repo as string, "hive-fix.yml", {
         company_slug: b.slug,
-        error_summary: `Deploy broken (HTTP ${b.status})`,
+        error_summary: `Deploy broken (HTTP ${b.status}) — infra repair attempted, issue appears to be code-level`,
         source: "sentinel",
       }, ghPat);
       dispatches.push({ type: "company_actions", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
@@ -2038,6 +2084,7 @@ export async function GET(req: Request) {
     playbook_decayed: playbookDecayed,
     playbook_pruned: playbookPruned,
     venture_brain_directives: ventureBrainDirectives,
+    infra_repairs_attempted: infraRepairsAttempted,
     playbook_merged: playbookMerged,
     playbook_composites: playbookComposites,
     details: dispatches,

@@ -86,3 +86,33 @@ export async function removeDomain(projectId: string, domain: string) {
 export async function enableWebAnalytics(projectId: string) {
   return vercel(`/v1/web-analytics/project/${projectId}`, "POST", { enabledAt: new Date().toISOString() });
 }
+
+export async function getLatestDeployment(projectId: string): Promise<{ id: string; url: string; state: string; readyState: string; createdAt: number } | null> {
+  const res = await vercel(`/v6/deployments?projectId=${projectId}&limit=1&target=production`);
+  const dep = res.deployments?.[0];
+  if (!dep) return null;
+  return { id: dep.uid, url: dep.url, state: dep.state, readyState: dep.readyState, createdAt: dep.createdAt };
+}
+
+export async function listProjectsForRepo(repoFullName: string): Promise<Array<{ id: string; name: string; updatedAt: number; link?: { repo: string } }>> {
+  const res = await vercel(`/v9/projects?repo=${encodeURIComponent(repoFullName)}&limit=20`);
+  return (res.projects || []).map((p: any) => ({
+    id: p.id,
+    name: p.name,
+    updatedAt: p.updatedAt,
+    link: p.link ? { repo: p.link.repo } : undefined,
+  }));
+}
+
+export async function unlinkGitRepo(projectId: string): Promise<void> {
+  await vercel(`/v9/projects/${projectId}/link`, "DELETE");
+}
+
+export async function redeployProduction(projectId: string): Promise<{ id: string; url: string }> {
+  const res = await vercel(`/v13/deployments`, "POST", {
+    name: projectId,
+    project: projectId,
+    target: "production",
+  });
+  return { id: res.id || res.uid, url: res.url };
+}
