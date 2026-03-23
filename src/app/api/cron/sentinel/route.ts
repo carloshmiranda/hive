@@ -933,12 +933,14 @@ export async function GET(req: Request) {
       `;
       if (!existing) {
         await sql`
-          INSERT INTO evolver_proposals (gap_type, title, diagnosis, proposed_fix, affected_companies, status)
+          INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, proposed_fix, affected_companies, status)
           VALUES (
             'process',
+            'medium',
             ${`Recurring escalation needs automation: ${esc.gate_type} for ${esc.slug}`},
             ${`The same ${esc.gate_type} approval has appeared ${esc.occurrences} times in 14 days for ${esc.slug}. Latest: ${description.slice(0, 200)}`},
-            ${`Create an automated resolution for ${esc.gate_type} escalations. Consider adding a new trigger to the Hive capability registry or a dedicated fix endpoint.`},
+            'sentinel_recurring_escalation',
+            ${JSON.stringify({ action: `Create automated resolution for ${esc.gate_type} escalations`, suggestion: "Add a new trigger to the Hive capability registry or a dedicated fix endpoint" })}::jsonb,
             ${[esc.slug as string]},
             'proposed'
           )
