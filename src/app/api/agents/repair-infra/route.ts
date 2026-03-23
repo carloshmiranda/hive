@@ -1,14 +1,14 @@
 import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { createProject as createNeonProject } from "@/lib/neon-api";
-import { setEnvVars, getProject, getLatestDeployment, listProjectsForRepo, unlinkGitRepo, redeployProduction } from "@/lib/vercel";
+import { setEnvVars, getProject, getLatestDeployment, listProjectsForRepo, removeGitLink, redeployProduction } from "@/lib/vercel";
 import { getSettingValue } from "@/lib/settings";
 
 /**
  * POST /api/agents/repair-infra — fix missing infrastructure for existing companies.
  *
- * Unlike /api/agents/provision (OIDC, full setup), this is a repair endpoint
- * that fills gaps: missing Neon DB, missing env vars, missing schema tables.
+ * Repairs: missing Neon DB, missing env vars, broken Vercel deploys,
+ * duplicate Vercel projects, stale escalations.
  * Callable by Sentinel via CRON_SECRET auth.
  */
 export async function POST(req: NextRequest) {
@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
     return err("Unauthorized", 401);
   }
 
+  try {
   const body = await req.json();
   const { company_slug } = body;
   if (!company_slug) return err("company_slug required", 400);
@@ -186,12 +187,8 @@ export async function POST(req: NextRequest) {
 
             // Unlink git repo from duplicate projects (they'll stop auto-deploying)
             for (const dup of duplicates) {
-              try {
-                await unlinkGitRepo(dup.id);
-                (repairs.vercel_duplicates as Record<string, unknown>)[`unlinked_${dup.name}`] = true;
-              } catch (e: any) {
-                (repairs.vercel_duplicates as Record<string, unknown>)[`unlink_error_${dup.name}`] = e.message;
-              }
+              const unlinked = await removeGitLink(dup.id);
+              (repairs.vercel_duplicates as Record<string, unknown>)[`unlinked_${dup.name}`] = unlinked;
             }
           }
         } catch (e: any) {
@@ -260,4 +257,10 @@ export async function POST(req: NextRequest) {
   `;
 
   return json({ ok: true, repairs });
+
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("repair-infra crashed:", msg);
+    return err(`Internal error: ${msg}`, 500);
+  }
 }

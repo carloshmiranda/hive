@@ -94,18 +94,37 @@ export async function getLatestDeployment(projectId: string): Promise<{ id: stri
   return { id: dep.uid, url: dep.url, state: dep.state, readyState: dep.readyState, createdAt: dep.createdAt };
 }
 
-export async function listProjectsForRepo(repoFullName: string): Promise<Array<{ id: string; name: string; updatedAt: number; link?: { repo: string } }>> {
-  const res = await vercel(`/v9/projects?repo=${encodeURIComponent(repoFullName)}&limit=20`);
-  return (res.projects || []).map((p: any) => ({
-    id: p.id,
-    name: p.name,
-    updatedAt: p.updatedAt,
-    link: p.link ? { repo: p.link.repo } : undefined,
-  }));
+export async function listProjectsForRepo(repoFullName: string): Promise<Array<{ id: string; name: string; updatedAt: number; repo?: string }>> {
+  // Vercel API doesn't support filtering by repo directly.
+  // Fetch all projects and filter by gitRepository.repo match.
+  const res = await vercel(`/v9/projects?limit=100`);
+  const repoLower = repoFullName.toLowerCase();
+  return (res.projects || [])
+    .filter((p: any) => {
+      const linked = p.link?.repo?.toLowerCase() || p.gitRepository?.repo?.toLowerCase() || "";
+      return linked === repoLower || linked.endsWith(`/${repoLower.split("/").pop()}`);
+    })
+    .map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      updatedAt: p.updatedAt,
+      repo: p.link?.repo || p.gitRepository?.repo,
+    }));
 }
 
 export async function unlinkGitRepo(projectId: string): Promise<void> {
+  // Remove the git repository link so the project stops auto-deploying
   await vercel(`/v9/projects/${projectId}/link`, "DELETE");
+}
+
+export async function removeGitLink(projectId: string): Promise<boolean> {
+  // Alternative: try unlinking, return false on error (non-critical)
+  try {
+    await unlinkGitRepo(projectId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function redeployProduction(projectId: string): Promise<{ id: string; url: string }> {
