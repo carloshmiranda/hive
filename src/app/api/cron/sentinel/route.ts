@@ -1484,6 +1484,53 @@ export async function GET(req: Request) {
     });
   }
 
+  // 31. Stats endpoint health — probe /api/stats on each company, create fix tasks for broken ones
+  let statsEndpointsBroken = 0;
+  const statsCompanies = await sql`
+    SELECT c.id, c.slug, COALESCE('https://' || c.domain, c.vercel_url) as app_url, c.github_repo
+    FROM companies c
+    WHERE c.status IN ('mvp', 'active') AND c.vercel_url IS NOT NULL
+  `;
+  for (const sc of statsCompanies) {
+    if (!sc.app_url) continue;
+    const statsUrl = `${sc.app_url}/api/stats`;
+    try {
+      const res = await fetch(statsUrl, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.ok || typeof data.views !== "number") {
+        throw new Error("Invalid response format: missing ok/views fields");
+      }
+      // Stats endpoint is healthy — no action needed
+    } catch (e: any) {
+      statsEndpointsBroken++;
+      // Check if we already have a pending fix task for this
+      const [existingTask] = await sql`
+        SELECT id FROM company_tasks
+        WHERE company_id = ${sc.id} AND title LIKE '%stats endpoint%'
+        AND status IN ('proposed', 'in_progress')
+        LIMIT 1
+      `;
+      if (!existingTask) {
+        // Create an engineering task to fix the stats endpoint
+        await sql`
+          INSERT INTO company_tasks (company_id, title, description, category, priority, status)
+          VALUES (
+            ${sc.id},
+            'Fix /api/stats endpoint for metrics collection',
+            ${`The /api/stats endpoint at ${statsUrl} is broken (${e.message}). This endpoint must return JSON: { ok: true, views: number, pricing_clicks: number, affiliate_clicks: number }. Copy the boilerplate from templates/boilerplate/src/app/api/stats/route.ts. Ensure the page_views, pricing_clicks, and affiliate_clicks tables exist in the company DB. Also ensure middleware.ts tracks pageviews by POSTing to /api/stats on each page navigation.`},
+            'engineering', 2, 'proposed'
+          )
+        `;
+        dispatches.push({
+          type: "internal",
+          target: "stats_endpoint_fix",
+          payload: { company: sc.slug, error: e.message, task_created: true },
+        });
+      }
+    }
+  }
+
   // --- HTTP health checks (parallel) ---
   const companiesWithUrls = await sql`
     SELECT slug, COALESCE('https://' || domain, vercel_url) as check_url FROM companies
@@ -2085,6 +2132,7 @@ export async function GET(req: Request) {
     playbook_pruned: playbookPruned,
     venture_brain_directives: ventureBrainDirectives,
     infra_repairs_attempted: infraRepairsAttempted,
+    stats_endpoints_broken: statsEndpointsBroken,
     playbook_merged: playbookMerged,
     playbook_composites: playbookComposites,
     details: dispatches,

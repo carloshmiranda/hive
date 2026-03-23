@@ -39,18 +39,27 @@
   - Resend domain verification (need a real domain for outreach emails)
 - **Known issues:**
   - 9 Scout proposals pending approval (auto-expiry planned)
+  - All 3 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration)
 - **Recently fixed:**
+  - Accrue→Flolio Vercel project rename (deleted broken Hive-provisioned project, renamed original)
+  - Autonomous deploy repair (Sentinel check 30: infra-first → circuit breaker → code fix)
+  - UI/UX quality gates across all agent prompts + boilerplate design tokens
   - Company teardown automation (kill_company approval → deterministic shell teardown)
   - Venture Brain cross-pollination (Sentinel check 28)
   - Playbook consolidation with Jaccard similarity (Sentinel check 29)
   - Domain management API (`/api/companies/[id]/domain`)
-  - Custom domain health checks in Sentinel
   - Provisioning preflight sets company_type before Claude agent runs
   - Healer self-reinforcing loop fix (6h cooldown + excluded from failure rate)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-23 [code] Accrue→Flolio rename + autonomous deploy repair + free LLM dispatch
+- **Accrue→Flolio rename**: Deleted broken Hive-provisioned `flolio` Vercel project (prj_yazBlxB1, ERROR state). Renamed original `accrue` project → `flolio` via Vercel API. Updated DB (companies + infra tables). Custom domain flolio.app still active. No more naming confusion.
+- **Autonomous deploy repair**: Built 3-step repair pipeline in Sentinel check 30: (1) try repair-infra first ($0, no LLM), (2) check circuit breaker (3+ failures → skip), (3) dispatch hive-fix.yml as last resort. Added Vercel duplicate project detection, redeployment, stale escalation resolution. Expanded capability registry with 8 new triggers.
+- **UI/UX quality gates**: Design tokens in boilerplate globals.css, CEO PR review design scan (STEP 4b), CEO cycle design scoring, Growth design rules, Engineer visual standards. Removed -2 "UI-only" discount that let bad design auto-merge.
+- **Flolio domain conflict resolved**: Two Vercel projects (flolio + accrue) for same repo caused 429s. Deleted broken one, renamed working one.
 
 ### 2026-03-23 [code] UI/UX quality roadmap + domain management + Venture Brain + playbook consolidation
 - **UI/UX quality gap identified**: CEO auto-merges UI-only PRs with -2 risk score, zero visual quality checks anywhere. Added 6 backlog items (4 P1, 2 P2): CEO PR review UI/UX gate, cycle design scoring, Growth design rules, boilerplate design tokens, post-deploy visual smoke test, cross-company design system.
@@ -274,11 +283,10 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **UI/UX quality gates (P1)** — CEO PR review design scoring, cycle review design scoring, Growth agent design rules, boilerplate design token system
-2. **Resolve Flolio domain conflict** — decide which Vercel project to track (original vs Hive-provisioned), update infra table
-3. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
-5. **Revenue focus** — all 3 active companies need growth-focused CEO cycles emphasizing conversion and monetization
+1. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
+2. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
+3. **Revenue focus** — all 3 active companies need growth-focused CEO cycles emphasizing conversion and monetization
+4. **Dispatch free LLM work** — Growth (Gemini) and Ops (Groq) can run at $0 via company repos and Vercel serverless
 
 ## Open Questions
 

@@ -56,9 +56,10 @@ export async function GET(req: Request) {
               source = "company_api";
             }
           }
-        } catch {
-          // Company app may not have /api/stats yet — that's fine
-          console.log(`${company.slug}: /api/stats not available`);
+        } catch (fetchErr: any) {
+          // Company app may not have /api/stats yet — log for debugging
+          console.warn(`${company.slug}: /api/stats failed: ${fetchErr.message || "unknown"}`);
+          source = "fallback_zeroes";
         }
       }
 
