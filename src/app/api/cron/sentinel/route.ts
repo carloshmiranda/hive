@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { getBoilerplateGaps } from "@/lib/capabilities";
 import { SCHEMA_MAP, getExpectedTables } from "@/lib/schema-map";
+import { findCapabilityForProblem } from "@/lib/hive-capabilities";
 import boilerplateManifest from "../../../../../templates/boilerplate-manifest.json";
 
 export const dynamic = "force-dynamic";
@@ -850,6 +851,94 @@ export async function GET(req: Request) {
     dispatches.push({ type: "escalation", target: "dispatch_loop", payload: { loops: loopDetails } });
   }
 
+  // 25. Recurring escalation detector — find approval patterns that repeat
+  // If the same gate_type + company_id appears 2+ times in 14 days, the system
+  // keeps hitting the same wall. Try to auto-resolve via capability registry.
+  const recurringEscalations = await sql`
+    SELECT a.gate_type, a.company_id, c.slug, COUNT(*)::int as occurrences,
+      MAX(a.description) as latest_description
+    FROM approvals a
+    JOIN companies c ON c.id = a.company_id
+    WHERE a.created_at > NOW() - INTERVAL '14 days'
+      AND a.company_id IS NOT NULL
+    GROUP BY a.gate_type, a.company_id, c.slug
+    HAVING COUNT(*) >= 2
+  `;
+
+  let autoResolved = 0;
+  for (const esc of recurringEscalations) {
+    const description = (esc.latest_description as string) || "";
+    const capability = findCapabilityForProblem(description);
+
+    if (capability) {
+      // Auto-resolve: call the matching endpoint directly
+      try {
+        const resolveUrl = `${baseUrl}${capability.endpoint.replace("{id}", esc.company_id as string)}`;
+        const resolveBody: Record<string, string> = {};
+        if (capability.params.company_slug) resolveBody.company_slug = esc.slug as string;
+
+        const res = await fetch(resolveUrl, {
+          method: capability.method === "GET" ? "GET" : "POST",
+          headers: {
+            Authorization: `Bearer ${cronSecret}`,
+            "Content-Type": "application/json",
+          },
+          ...(capability.method !== "GET" && Object.keys(resolveBody).length > 0
+            ? { body: JSON.stringify(resolveBody) }
+            : {}),
+          signal: AbortSignal.timeout(30000),
+        });
+
+        await sql`
+          INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+          VALUES (
+            ${esc.company_id}, 'sentinel', 'auto_resolve_escalation',
+            ${`Auto-resolved recurring ${esc.gate_type} for ${esc.slug} via ${capability.id} (${esc.occurrences}x in 14d)`},
+            ${res.ok ? 'success' : 'failed'},
+            ${JSON.stringify({ capability: capability.id, endpoint: capability.endpoint, occurrences: esc.occurrences, http_status: res.status })}::jsonb,
+            NOW(), NOW()
+          )
+        `;
+
+        if (res.ok) autoResolved++;
+        dispatches.push({
+          type: "internal",
+          target: "auto_resolve_escalation",
+          payload: { company: esc.slug, gate_type: esc.gate_type, capability: capability.id, resolved: res.ok },
+        });
+      } catch (e: any) {
+        console.warn(`Auto-resolve failed for ${esc.slug}/${esc.gate_type}: ${e.message}`);
+      }
+    } else {
+      // No matching capability — suggest automation via evolver_proposals
+      // Only create if one doesn't already exist for this pattern
+      const [existing] = await sql`
+        SELECT id FROM evolver_proposals
+        WHERE title ILIKE ${"%" + esc.gate_type + "%" + esc.slug + "%"}
+          AND status IN ('proposed', 'approved')
+        LIMIT 1
+      `;
+      if (!existing) {
+        await sql`
+          INSERT INTO evolver_proposals (gap_type, title, diagnosis, proposed_fix, affected_companies, status)
+          VALUES (
+            'process',
+            ${`Recurring escalation needs automation: ${esc.gate_type} for ${esc.slug}`},
+            ${`The same ${esc.gate_type} approval has appeared ${esc.occurrences} times in 14 days for ${esc.slug}. Latest: ${description.slice(0, 200)}`},
+            ${`Create an automated resolution for ${esc.gate_type} escalations. Consider adding a new trigger to the Hive capability registry or a dedicated fix endpoint.`},
+            ${[esc.slug as string]},
+            'proposed'
+          )
+        `;
+        dispatches.push({
+          type: "evolver_proposal",
+          target: "recurring_escalation",
+          payload: { company: esc.slug, gate_type: esc.gate_type, occurrences: esc.occurrences },
+        });
+      }
+    }
+  }
+
   // --- Dispatch logic ---
 
   // 1. Pipeline low → Scout
@@ -1231,6 +1320,8 @@ export async function GET(req: Request) {
     broken_deploys: brokenDeploys.length,
     anomalies_detected: anomalies.length,
     schema_drift: schemaDrift.length,
+    recurring_escalations: recurringEscalations.length,
+    auto_resolved: autoResolved,
     details: dispatches,
   });
 

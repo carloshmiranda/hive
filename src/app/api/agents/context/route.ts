@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { computeValidationScore, normalizeBusinessType } from "@/lib/validation";
+import { getCapabilitySummary } from "@/lib/hive-capabilities";
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
@@ -96,6 +97,7 @@ async function buildContext(sql: any, company: any) {
     playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     engineering_tasks: tasks,
     metrics: metrics.slice(0, 7),
+    hive_capabilities: getCapabilitySummary(),
   };
 }
 
@@ -159,6 +161,7 @@ async function growthContext(sql: any, company: any) {
     playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     evolver_proposals: proposals.map((p: { proposed_fix: string }) => p.proposed_fix),
     growth_tasks: tasks,
+    hive_capabilities: getCapabilitySummary(),
   };
 }
 
@@ -191,5 +194,6 @@ async function fixContext(sql: any, company: any) {
     errors,
     previous_fixes: fixes.map((f: { description: string }) => f.description),
     cross_company_patterns: patterns.map((p: { description: string }) => p.description),
+    hive_capabilities: getCapabilitySummary(),
   };
 }
