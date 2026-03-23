@@ -344,6 +344,12 @@
 **Prevention:** NEVER use `${{ }}` inside shell `run:` blocks for values that may contain special characters. Always pass them via `env:` block, which is safe. This applies to ALL workflow inputs, payloads, and user-provided strings.
 **Affects:** hive (engineer build dispatch, any workflow using ${{ }} in run blocks)
 
+### [2026-03-23] Escalations defaulted to "tell Carlos" instead of using existing APIs
+**What happened:** Senhorio went 8 cycles without a Neon database. The CEO agent created manual `spend_approval` escalations asking Carlos to go to console.neon.tech. Meanwhile, `/api/agents/provision` and `src/lib/neon-api.ts` already had the code to do this automatically.
+**Root cause:** Three compounding failures: (1) Agents had no awareness of Hive's own capabilities — they didn't know provisioning APIs existed. (2) The escalation path always defaulted to "create approval gate for Carlos" with no retry-via-API option. (3) The Evolver detected the problem (18 proposals!) but proposals sat in `pending` status waiting for human review.
+**Fix applied:** (1) Capability registry (`hive-capabilities.ts`) — 20 endpoints registered, injected into agent context. (2) `/api/agents/repair-infra` — auto-provisions missing Neon DBs, callable by Sentinel. (3) Recurring escalation detector auto-resolves via capability registry. (4) Circuit breaker stops blind retries after 3 failures. (5) Safe Evolver proposals auto-approve after 24h.
+**Prevention:** When adding a new API endpoint, register it in `hive-capabilities.ts` with trigger patterns. Agents should always check capabilities before escalating to Carlos. The default should be "try to fix it, then escalate" not "escalate immediately."
+
 ### [2026-03-22] Sentinel silently 500-ing for days — 3 schema mismatches
 **What happened:** Sentinel cron was returning empty 500s on every run. No error details in Vercel logs (just a truncated `fetchConnectionCache` warning). Three separate schema mismatches:
 1. `metrics.metric` — query used key-value syntax (`m.metric = 'mrr'`, `m.value`) but table has flat columns (`m.mrr`, `m.date`)

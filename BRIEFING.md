@@ -50,6 +50,14 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-23 [code] Self-correcting autonomous loops
+- **Circuit breaker**: Sentinel stops retrying agent+company after 3 failures in 24h. Prevents the 45+ wasted dispatch problem.
+- **Error backfill**: `/api/agents/backfill-errors` fetches GitHub Actions failure reasons and fills NULL error fields. Sentinel also pre-fills before retrying.
+- **Auto-approve safe proposals**: Evolver proposals with process/knowledge gap type + medium/low severity get auto-approved after 24h. Critical/high get dashboard reminders after 48h.
+- **Capability registry**: `src/lib/hive-capabilities.ts` — 20 API endpoints registered. All agents receive capability summary in context for self-awareness.
+- **Recurring escalation detector**: Sentinel check 25 auto-resolves repeat approvals via capability registry, or creates Evolver proposals for missing automations.
+- **Auto-repair infra**: `/api/agents/repair-infra` provisions missing Neon DBs via API. Sentinel check 9c calls it instead of creating manual escalations.
+
 ### 2026-03-22 [code] Self-healing layer 1: Schema drift detection
 - `src/lib/schema-map.ts`: Static schema map with all 18 tables, columns, types, and CHECK constraints
 - Sentinel check 24: Compares schema map against live DB via `information_schema` — catches missing tables, missing columns, extra columns
