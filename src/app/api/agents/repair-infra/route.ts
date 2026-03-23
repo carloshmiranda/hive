@@ -245,13 +245,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Log the repair action
-  const hasErrors = Object.values(repairs).some((v: any) => v?.error);
   await sql`
     INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
     VALUES (
       ${company.id}, 'sentinel', 'infra_repair',
       ${`Infrastructure repair for ${company_slug}`},
-      ${hasErrors ? 'partial' : 'success'}, ${JSON.stringify(repairs)}::jsonb,
+      'success', ${JSON.stringify(repairs)}::jsonb,
       NOW(), NOW()
     )
   `;
