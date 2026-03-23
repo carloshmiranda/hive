@@ -287,6 +287,14 @@ export async function GET(req: Request) {
     AND NOT EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
   `;
 
+  // 9c. MVPs with missing Neon DB (have some infra but no neon_project_id)
+  const missingNeonDb = await sql`
+    SELECT c.slug FROM companies c
+    WHERE c.status IN ('mvp', 'active')
+    AND c.neon_project_id IS NULL
+    AND c.github_repo IS NOT NULL
+  `;
+
   // 10. Max turns exhaustion
   const maxTurnsHits = await sql`
     SELECT agent, COUNT(*) as cnt
@@ -933,6 +941,25 @@ export async function GET(req: Request) {
   for (const r of orphanedMvps) {
     await dispatchToActions("new_company", { source: "sentinel", company: r.slug, reason: "orphaned_mvp", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "new_company", payload: { company: r.slug, reason: "orphaned_mvp" } });
+  }
+
+  // 9c. Missing Neon DB → auto-repair infrastructure (no manual steps needed)
+  for (const r of missingNeonDb) {
+    try {
+      const repairRes = await fetch(`${baseUrl}/api/agents/repair-infra`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cronSecret}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ company_slug: r.slug }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const repairData = await repairRes.json();
+      dispatches.push({ type: "internal", target: "infra_repair", payload: { company: r.slug, result: repairData } });
+    } catch (e: any) {
+      console.error(`Infra repair failed for ${r.slug}: ${e.message}`);
+    }
   }
 
   // 13c. Failed agent tasks → re-dispatch directly to company repo (free Actions)
