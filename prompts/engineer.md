@@ -70,6 +70,20 @@ Report which playbook entries you consulted:
 - Error handling: try/catch with meaningful error messages. Never swallow errors silently.
 - No console.log in production code (use structured logging if available).
 
+### Visual quality standards
+Read `globals.css` before writing ANY UI code. It contains design tokens and rules. Follow them strictly:
+
+1. **Use design tokens, not raw values.** Use `text-brand`, `bg-accent`, `text-text-secondary`, `border-border` etc. Never write raw hex colors (`#3b82f6`) or arbitrary Tailwind colors (`text-blue-600`) in components.
+2. **No gradients.** No `bg-gradient-to-*`, no `from-*`, no gradient text. Solid colors only.
+3. **Max 2 font weights per page.** `font-normal` (400) and `font-bold` (700). Never use `font-black`, `font-extrabold`, or `font-thin`.
+4. **No decoration over whitespace.** Don't add decorative borders, shadows, or background colors to fill space. White space is intentional.
+5. **One CTA per viewport.** The hero has the primary CTA. Secondary CTAs use outline/ghost style. Never two solid-colored buttons next to each other.
+6. **Icons: stroke only, 24px.** Use Heroicons outline set. No filled icons, no emoji as functional icons, no icon libraries beyond Heroicons.
+7. **No duplicate components.** Before creating a new section, check if a similar one exists. Never render the same component type twice on a page (e.g., two feature grids, two pricing sections, two CTA blocks).
+8. **Content width constraints.** Max container: `max-w-5xl` (1120px). Hero text: `max-w-3xl` (768px). Never full-width text.
+9. **Consistent spacing.** Section padding: `py-20`. Card padding: `p-6`. Use the spacing scale from globals.css.
+10. **No placeholder content.** Never ship lorem ipsum, "Coming soon", stock photos, or placeholder text. If content isn't ready, skip the section entirely.
+
 ### When things break
 - If the build fails, read the error carefully and fix it. Don't retry the same code.
 - If a deploy fails, check the Vercel build logs for the actual error.

@@ -146,6 +146,15 @@ Every company needs a landing page that converts. Check monthly:
 - Is there social proof (customer count, testimonial, metric)?
 - Does it load fast? (Check Vercel Analytics for Web Vitals)
 
+### Visual quality rules for content pages
+When requesting landing pages, blog layouts, or any user-facing pages from the Engineer:
+1. **Reference the design tokens** in `globals.css`. All pages must use the company's token palette — never suggest raw colors.
+2. **One CTA per viewport.** Don't request multiple competing calls-to-action in the same section. Hero = primary CTA. End of page = secondary CTA. That's it.
+3. **No decoration requests.** Don't ask for gradients, animated backgrounds, decorative borders, or visual flourishes. Clean and minimal converts better.
+4. **Content density matters.** Each section should make ONE point. Don't combine features + testimonials + pricing into one block. Whitespace between sections is required.
+5. **No duplicate sections.** Before requesting a new component, check if something similar already exists on the page. Two feature grids or two CTA sections on the same page = bad UX.
+6. **Mobile first.** Every layout request must work on mobile. Single column, stacked cards, no horizontal scrolling.
+
 ### Social media
 - Only post to accounts that exist in the `social_accounts` table.
 - If no social accounts exist and the company has its first paying customer, propose account creation through an approval gate.

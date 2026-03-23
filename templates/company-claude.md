@@ -34,11 +34,17 @@
 {{PLAYBOOK_ENTRIES}}
 
 ## Design & UX Requirements
+- **Read `globals.css` before ANY UI work** — it contains design tokens (@theme) and 10 design rules. Follow them strictly.
+- Use design token classes (`text-brand`, `bg-accent`, `text-text-secondary`, `border-border`) — NEVER raw hex values or arbitrary Tailwind colors in components.
+- NO gradients. No `bg-gradient-to-*`, no gradient text. Solid colors only.
+- Max 2 font weights per page: `font-normal` (400) and `font-bold` (700).
 - Visual design must be allusive to the business domain — use colors, imagery, and language that evoke the industry
-- ONE brand color for all interactive elements (buttons, links, highlights) — consistent throughout
+- ONE brand color for all interactive elements (buttons, links, highlights) — defined as `--color-accent` in globals.css
 - Landing page follows conversion-optimized structure: hero → social proof (real data only) → problem → features (max 3, SVG icons) → how-it-works → FAQ → final CTA
 - Headlines must be specific and pass the "so what?" test — no generic "Get started" or "Save time"
 - Single conversion goal: every CTA leads to the same action (waitlist or checkout)
+- One CTA per viewport. Never two solid-colored buttons adjacent.
+- No duplicate components on the same page (two feature grids, two CTA blocks = violation).
 - Server Components by default — only use "use client" when interactivity is needed
 - Semantic HTML: `<nav>`, `<main>`, `<section>`, `<button>` — never `<div onClick>`
 - Color contrast: minimum 4.5:1 for all text

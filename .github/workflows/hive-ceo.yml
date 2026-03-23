@@ -150,6 +150,15 @@ jobs:
                  - No hardcoded values (URLs, prices, emails should come from config/DB)
                  - New API routes call requireAuth() or have documented reason not to
 
+                 STEP 4b — Design quality scan (for PRs that touch .tsx/.css files):
+                 - No gradients (bg-gradient-to-*, from-*, via-*) — solid colors only
+                 - No raw hex colors in components — must use design tokens from globals.css (text-brand, bg-accent, etc.)
+                 - No duplicate sections on the same page (two feature grids, two CTA blocks, two hero sections)
+                 - Max 2 font weights used (font-normal, font-bold — no font-black, font-extrabold)
+                 - No placeholder content (lorem ipsum, "Coming soon", stock photo URLs)
+                 - Landing page changes: verify single CTA per viewport, proper section spacing
+                 If ANY design violation found: add +2 to risk score and list violations in review summary.
+
                  STEP 5 — Risk score:
                  | Factor | Points |
                  | Touches auth/payments/user data | +3 |
@@ -158,8 +167,9 @@ jobs:
                  | >500 lines changed | +2 |
                  | >10 files changed | +2 |
                  | New API routes | +1 |
-                 | Only UI/styling changes | -2 |
-                 | Only content/copy changes | -3 |
+                 | Touches landing page (page.tsx) | +1 |
+                 | Design violations found in 4b | +2 |
+                 | Only content/copy changes (no code) | -2 |
 
                  Score 0-3: Auto-merge. Score 4-6: Merge + log detailed summary. Score 7+: Do NOT merge, create approval gate for Carlos.
 

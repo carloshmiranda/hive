@@ -14,6 +14,7 @@
   - Senhorio — status: mvp, 4 cycles, last CEO score 3/10, built tax calculator at /calculadora
   - Flolio — status: mvp, 4 cycles (imported, iterating autonomously)
 - **Pipeline:** 9 idea-status companies (Scout proposals, pending approval)
+- **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
 ### Agent Architecture (7 agents)
 
@@ -39,16 +40,25 @@
 - **Known issues:**
   - 9 Scout proposals pending approval (auto-expiry planned)
 - **Recently fixed:**
-  - Full dispatch chain verified end-to-end: Hive Engineer → verdedesk hive-build → Claude agent merged waitlist branch
-  - Per-job OIDC token fetch (GitHub Actions strips masked secrets from cross-job outputs)
-  - OIDC API gateway: zero-secret company repos, all auth via OIDC token exchange
-  - Stripe product auto-creation wired into provisioning flow
-  - Task tracking + playbook writes via OIDC-authenticated API endpoints
-  - Claude Code OAuth token refreshed in settings
+  - Company teardown automation (kill_company approval → deterministic shell teardown)
+  - Venture Brain cross-pollination (Sentinel check 28)
+  - Playbook consolidation with Jaccard similarity (Sentinel check 29)
+  - Domain management API (`/api/companies/[id]/domain`)
+  - Custom domain health checks in Sentinel
+  - Provisioning preflight sets company_type before Claude agent runs
+  - Healer self-reinforcing loop fix (6h cooldown + excluded from failure rate)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-23 [code] UI/UX quality roadmap + domain management + Venture Brain + playbook consolidation
+- **UI/UX quality gap identified**: CEO auto-merges UI-only PRs with -2 risk score, zero visual quality checks anywhere. Added 6 backlog items (4 P1, 2 P2): CEO PR review UI/UX gate, cycle design scoring, Growth design rules, boilerplate design tokens, post-deploy visual smoke test, cross-company design system.
+- **Domain management API**: New `/api/companies/[id]/domain` (GET/POST/DELETE) + `addDomain`, `getDomains`, `removeDomain` in `src/lib/vercel.ts`. Sentinel health checks now use `COALESCE(domain, vercel_url)` for custom domains.
+- **Venture Brain (Sentinel check 28)**: Cross-pollination (playbook insights from company A → directive for company B), score decline detection (3+ point drops), error correlation across companies. Pure SQL, no LLM.
+- **Playbook consolidation (Sentinel check 29)**: Jaccard word similarity merging (≥0.6 threshold), cross-company composite creation (≥0.5). Prevents near-duplicate entries.
+- **Company teardown automation**: Dedicated shell job in hive-engineer.yml. kill_company approval → ops_escalation dispatch → teardown job (Vercel delete, Neon delete, GitHub archive, infra marking). Tested live with poupamais.
+- **Flolio domain conflict**: flolio.app is on original Vercel project (prj_zSdAai8w), not Hive-provisioned one (prj_yazBlxB1). Needs resolution.
 
 ### 2026-03-23 [code] Healer loop fix + poupamais kill + provisioning preflight
 - **Healer self-reinforcing loop**: Excluded healer/sentinel from failure rate calculation + added 6h cooldown. Bumped max-turns 25→35.
@@ -264,11 +274,11 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **First real nightly cycle run** — trigger full orchestrator dispatch end-to-end, verify CEO → Engineer → Growth chain works with all audit fixes applied
-2. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-3. **Test full dispatch chain end-to-end** — verify priority-scored dispatch, OIDC dynamic audience, token error handling, approval auto-expiry all work in production
+1. **UI/UX quality gates (P1)** — CEO PR review design scoring, cycle review design scoring, Growth agent design rules, boilerplate design token system
+2. **Resolve Flolio domain conflict** — decide which Vercel project to track (original vs Hive-provisioned), update infra table
+3. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
 4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
-5. **Review Evolver proposals + pending approvals** — approve/reject in Inbox tab, clear the 9 stale Scout proposals
+5. **Revenue focus** — all 3 active companies need growth-focused CEO cycles emphasizing conversion and monetization
 
 ## Open Questions
 

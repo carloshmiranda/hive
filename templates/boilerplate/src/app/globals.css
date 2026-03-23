@@ -1,5 +1,71 @@
 @import "tailwindcss";
 
+/* ─── Design Tokens ───
+   Constrained palette that prevents AI-generated "gradient slop".
+   Engineers MUST use these tokens — never raw hex/rgb values.
+   To customize: change values here, NOT in components. */
+
+@theme {
+  /* Brand — Provisioner sets these from company identity */
+  --color-brand: #111827;       /* gray-900 default — change per company */
+  --color-brand-light: #f3f4f6; /* gray-100 default — tinted bg */
+  --color-accent: #2563eb;      /* blue-600 default — CTAs, links, charts */
+  --color-accent-light: #dbeafe;/* blue-100 — hover states, badges */
+
+  /* Neutrals — universal, don't change per company */
+  --color-text: #111827;        /* primary text */
+  --color-text-secondary: #6b7280; /* secondary text, labels */
+  --color-text-muted: #9ca3af;  /* placeholders, hints */
+  --color-bg: #ffffff;          /* page background */
+  --color-bg-subtle: #f9fafb;   /* cards, sections */
+  --color-border: #e5e7eb;      /* borders, dividers */
+  --color-border-light: #f3f4f6;/* subtle separators */
+
+  /* Feedback — standard across all companies */
+  --color-success: #16a34a;
+  --color-error: #dc2626;
+  --color-warning: #d97706;
+
+  /* Typography scale — 5 sizes max */
+  --font-size-xs: 0.75rem;     /* 12px — labels, badges */
+  --font-size-sm: 0.875rem;    /* 14px — body small, nav */
+  --font-size-base: 1rem;      /* 16px — body */
+  --font-size-lg: 1.25rem;     /* 20px — section intros */
+  --font-size-xl: 1.5rem;      /* 24px — section headings */
+
+  /* Spacing scale — 8px base grid */
+  --spacing-xs: 0.25rem;  /* 4px */
+  --spacing-sm: 0.5rem;   /* 8px */
+  --spacing-md: 1rem;     /* 16px */
+  --spacing-lg: 1.5rem;   /* 24px */
+  --spacing-xl: 2rem;     /* 32px */
+  --spacing-2xl: 3rem;    /* 48px */
+  --spacing-3xl: 5rem;    /* 80px */
+
+  /* Radius — 3 options only */
+  --radius-sm: 0.375rem;  /* 6px — inputs, badges */
+  --radius-md: 0.75rem;   /* 12px — cards, sections */
+  --radius-lg: 1rem;      /* 16px — modals, hero elements */
+  --radius-full: 9999px;  /* pills */
+
+  /* Shadows — 2 options only */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* ─── Design Rules (for AI agents reading this file) ───
+   1. NO gradients on backgrounds or text. Solid colors only.
+   2. NO more than 2 font weights per page (regular + bold).
+   3. NO more than 3 colors visible at once (brand + accent + neutral).
+   4. Max content width: 1120px (max-w-5xl). Hero text: 768px (max-w-3xl).
+   5. Section padding: py-20 (80px). Component gaps: gap-3 to gap-8.
+   6. Buttons: solid bg + white text OR border + dark text. Never both styled.
+   7. Icons: stroke style, 24px, currentColor. No filled icons, no emoji as icons.
+   8. Images/illustrations: only if real assets exist. Never placeholder stock.
+   9. One CTA per viewport. Hero CTA = primary, secondary CTAs = ghost/outline.
+   10. White space > decoration. When in doubt, remove elements, don't add them.
+*/
+
 html {
   scroll-behavior: smooth;
 }
@@ -7,4 +73,6 @@ html {
 body {
   font-family: system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
+  color: var(--color-text);
+  background: var(--color-bg);
 }

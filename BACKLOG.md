@@ -27,17 +27,17 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 
 ## Planned
 
-### 🟡 P1 — CEO PR review: add UI/UX quality gate
-CEO auto-merges UI-only PRs with -2 risk score (faster merge). No visual quality checks exist. Need to add: (1) design consistency check — brand color used on all CTAs, no mixed styling patterns, (2) duplicate content detection — grep diff for repeated headings/sections, (3) landing page changes bump risk +2 (landing page = conversion = revenue), (4) responsive design verification mention, (5) accessibility floor — semantic HTML, contrast. Add to hive-ceo.yml STEP 4 alongside code quality.
+### ✅ P1 — CEO PR review: add UI/UX quality gate (DONE — 2026-03-23)
+Added STEP 4b (design quality scan) to hive-ceo.yml PR review. Checks: no gradients, no raw hex, no duplicate sections, max 2 font weights, no placeholder content, landing page CTA rules. Design violations add +2 risk. Removed -2 discount for UI-only PRs — UI changes now get proper scrutiny.
 
-### 🟡 P1 — CEO cycle review: include design quality in scoring
-Design quality is invisible to the strategic layer. CEO scores cycles on metrics/validation but never on visual quality. Add: (1) design_quality field in review output (1-10), (2) factor into agent_grades — Engineer grade should reflect UI quality, (3) low design score triggers directive for next cycle, (4) add "visual regression" as a miss category.
+### ✅ P1 — CEO cycle review: include design quality in scoring (DONE — 2026-03-23)
+Added `design_review` field to CEO review output with `ui_changed`, `violations`, `score_deduction`, `notes`. Score deductions: gradient -1, >3 colors -1, duplicate sections -2, placeholder content -2, raw hex -1, decorative clutter -1. CEO now reviews UI changes every cycle.
 
-### 🟡 P1 — Growth agent: design-aware content rules
-Growth agent creates landing page copy and content with zero design rules. Need: (1) brand color/typography consistency requirements, (2) no design changes without matching existing design tokens, (3) content layout must follow company-claude.md structure, (4) image/visual requirements for blog posts and SEO pages, (5) accessibility rules (contrast, alt text on content images).
+### ✅ P1 — Growth agent: design-aware content rules (DONE — 2026-03-23)
+Added "Visual quality rules for content pages" section to growth.md: reference design tokens, one CTA per viewport, no decoration requests, content density rules, no duplicate sections, mobile first.
 
-### 🟡 P1 — Boilerplate design token system
-globals.css has zero CSS variables — every company starts from scratch and Engineer invents colors per page. Need: (1) CSS custom properties in globals.css for --brand, --brand-hover, --text, --text-muted, --bg, --bg-card, --radius, --spacing-section, (2) Provisioner sets these from business domain during scaffold (finance=blue, agriculture=green, etc.), (3) All boilerplate components reference tokens not hardcoded colors, (4) Tailwind v4 @theme directive to constrain palette.
+### ✅ P1 — Boilerplate design token system (DONE — 2026-03-23)
+Added Tailwind v4 @theme block to globals.css with constrained tokens: brand/accent colors, neutrals, feedback colors, typography scale (5 sizes), 8px spacing grid, 3 radius options, 2 shadow options. Added 10 design rules as CSS comments (no gradients, max 2 font weights, max 3 colors, etc.). Engineer prompt updated with 10 visual quality standards. Company CLAUDE.md template updated to reference tokens.
 
 ### 🟢 P2 — Performance-driven model routing
 Track per-agent success rates by model. If Gemini Flash has >90% success on Growth tasks, keep it. If Groq starts failing Ops checks, auto-escalate to Claude. The routing table should be dynamic, not static. Inspired by Ruflo's Q-Learning router that tracks outcomes and improves routing over time.

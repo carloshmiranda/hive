@@ -216,12 +216,23 @@ Score based on phase-appropriate criteria:
 - Score 5-7: some progress, no regressions
 - Score 1-4: nothing shipped or metrics declined
 
+**Design quality (all phases — score modifier):**
+Review any UI changes this cycle for visual quality. Deduct points for:
+- Gradients on backgrounds or text (-1)
+- More than 3 colors visible simultaneously (-1)
+- Duplicate sections or components on the same page (-2)
+- Placeholder/lorem ipsum content shipped to production (-2)
+- Raw hex colors instead of design tokens from globals.css (-1)
+- Decorative clutter (unnecessary borders, shadows, badges) (-1)
+If UI changes look clean, well-spaced, and follow the design tokens: no deduction.
+
 For all phases:
 1. Read what each agent actually did.
 2. Check for failed agent actions this cycle.
-3. Score the cycle 1-10 based on phase-appropriate criteria.
-4. Identify one learning worth adding to the playbook.
-5. If `kill_signal` is true, include `"kill_flag": true` with reason.
+3. **Review UI changes for design quality** (see scoring modifiers above).
+4. Score the cycle 1-10 based on phase-appropriate criteria + design quality.
+5. Identify one learning worth adding to the playbook.
+6. If `kill_signal` is true, include `"kill_flag": true` with reason.
 
 ### Review output (JSON):
 
@@ -256,6 +267,12 @@ For all phases:
     "agent_grades": {
       "engineer": { "grade": "A|B|C|F", "note": "Brief assessment" },
       "growth": { "grade": "A|B|C|F", "note": "Brief assessment" }
+    },
+    "design_review": {
+      "ui_changed": true,
+      "violations": ["gradient on hero", "duplicate CTA section"],
+      "score_deduction": -2,
+      "notes": "Brief assessment of visual quality"
     },
     "playbook_entry": {
       "domain": "growth|engineering|ops|strategy",
