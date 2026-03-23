@@ -118,6 +118,16 @@ async function checkDeployDrift(vercelToken: string | null, ghPat: string | null
   }
 }
 
+async function isCircuitOpen(sql: any, agent: string, companyId: string | null): Promise<boolean> {
+  if (!companyId) return false;
+  const [result] = await sql`
+    SELECT COUNT(*)::int as failures FROM agent_actions
+    WHERE agent = ${agent} AND company_id = ${companyId}
+    AND status = 'failed' AND started_at > NOW() - INTERVAL '24 hours'
+  `;
+  return (result?.failures || 0) >= 3;
+}
+
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -131,6 +141,7 @@ export async function GET(req: Request) {
   const ghPat = await getSettingValue("github_token");
   const dispatches: Dispatch[] = [];
   let cycleDispatches = 0;
+  let circuitBreaks = 0;
 
   // --- Auto-expire stale approvals ---
   // Different gate types get different expiry windows based on urgency
@@ -402,7 +413,8 @@ export async function GET(req: Request) {
   // 13c. Failed agent tasks with unfinished CEO plan work — re-dispatch
   // When Engineer/Growth fails, the tasks from ceo_plan are lost. Detect and retry.
   const failedWithPlanWork = await sql`
-    SELECT DISTINCT aa.agent, aa.action_type, aa.company_id, c.slug, c.github_repo
+    SELECT DISTINCT ON (aa.company_id, aa.agent)
+      aa.id as action_id, aa.agent, aa.action_type, aa.error, aa.company_id, c.slug, c.github_repo
     FROM agent_actions aa
     JOIN companies c ON c.id = aa.company_id
     WHERE aa.status = 'failed'
@@ -424,6 +436,7 @@ export async function GET(req: Request) {
       AND aa3.action_type = 'sentinel_retry'
       AND aa3.started_at > NOW() - INTERVAL '6 hours'
     )
+    ORDER BY aa.company_id, aa.agent, aa.finished_at DESC
   `;
 
   // 14. Rate-limited agents (0 turns)
@@ -949,6 +962,19 @@ export async function GET(req: Request) {
 
   // 2. Stale content → Growth on company repo (free Actions) with Vercel fallback
   for (const r of staleContent) {
+    // Circuit breaker: skip if growth has 3+ failures for this company in 24h
+    const [staleCompany] = await sql`SELECT id FROM companies WHERE slug = ${r.slug} LIMIT 1`;
+    if (staleCompany && await isCircuitOpen(sql, "growth", staleCompany.id as string)) {
+      await sql`
+        INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+        VALUES ('growth', ${staleCompany.id}, 'circuit_breaker', 'success',
+          ${"Circuit breaker open: skipping growth for " + r.slug + " (3+ failures in 24h)"},
+          NOW(), NOW())
+      `;
+      circuitBreaks++;
+      dispatches.push({ type: "circuit_breaker", target: "growth", payload: { company: r.slug, reason: "3+_failures_24h" } });
+      continue;
+    }
     if (r.github_repo) {
       try {
         await dispatchToCompanyWorkflow(r.github_repo, "hive-growth.yml", {
@@ -1051,8 +1077,42 @@ export async function GET(req: Request) {
     }
   }
 
+  // 13c-pre. Backfill NULL errors from GitHub Actions API before retrying
+  for (const r of failedWithPlanWork) {
+    if (!r.error && r.github_repo && ghPat) {
+      try {
+        const runsRes = await fetch(
+          `https://api.github.com/repos/${r.github_repo}/actions/runs?per_page=5&status=failure`,
+          { headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" }, signal: AbortSignal.timeout(10000) }
+        );
+        if (runsRes.ok) {
+          const runs = await runsRes.json();
+          const latestFail = runs.workflow_runs?.[0];
+          if (latestFail) {
+            await sql`
+              UPDATE agent_actions SET error = ${`GitHub Actions: ${latestFail.conclusion} — ${latestFail.name} (run ${latestFail.id})`}
+              WHERE id = ${r.action_id} AND error IS NULL
+            `;
+          }
+        }
+      } catch { /* non-blocking */ }
+    }
+  }
+
   // 13c. Failed agent tasks → re-dispatch directly to company repo (free Actions)
   for (const r of failedWithPlanWork) {
+    // Circuit breaker: skip if 3+ failures for this agent+company in 24h
+    if (await isCircuitOpen(sql, r.agent as string, r.company_id as string)) {
+      await sql`
+        INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+        VALUES (${r.agent}, ${r.company_id}, 'circuit_breaker', 'success',
+          ${"Circuit breaker open: skipping " + r.agent + " retry for " + r.slug + " (3+ failures in 24h)"},
+          NOW(), NOW())
+      `;
+      circuitBreaks++;
+      dispatches.push({ type: "circuit_breaker", target: r.agent as string, payload: { company: r.slug, reason: "3+_failures_24h" } });
+      continue;
+    }
     if (r.github_repo && r.agent === "engineer") {
       await dispatchToCompanyWorkflow(r.github_repo as string, "hive-build.yml", {
         company_slug: r.slug as string,
@@ -1100,6 +1160,19 @@ export async function GET(req: Request) {
 
   // 11. Chain dispatch gaps → dispatch directly to company repo (free Actions)
   for (const r of chainGaps) {
+    // Circuit breaker: skip if engineer has 3+ failures for this company in 24h
+    const [gapCompany] = await sql`SELECT id FROM companies WHERE slug = ${r.slug} LIMIT 1`;
+    if (gapCompany && await isCircuitOpen(sql, "engineer", gapCompany.id as string)) {
+      await sql`
+        INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+        VALUES ('engineer', ${gapCompany.id}, 'circuit_breaker', 'success',
+          ${"Circuit breaker open: skipping engineer chain gap recovery for " + r.slug + " (3+ failures in 24h)"},
+          NOW(), NOW())
+      `;
+      circuitBreaks++;
+      dispatches.push({ type: "circuit_breaker", target: "engineer", payload: { company: r.slug, reason: "3+_failures_24h" } });
+      continue;
+    }
     if (r.github_repo) {
       await dispatchToCompanyWorkflow(r.github_repo as string, "hive-build.yml", {
         company_slug: r.slug as string,
@@ -1169,6 +1242,18 @@ export async function GET(req: Request) {
 
   // 14. Rate-limited agents → re-dispatch (company-scoped work goes direct to company repo)
   for (const r of rateLimited) {
+    // Circuit breaker: skip if this agent+company has 3+ failures in 24h
+    if (await isCircuitOpen(sql, r.agent as string, r.company_id as string)) {
+      await sql`
+        INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+        VALUES (${r.agent}, ${r.company_id}, 'circuit_breaker', 'success',
+          ${"Circuit breaker open: skipping " + r.agent + " rate-limit retry for " + r.slug + " (3+ failures in 24h)"},
+          NOW(), NOW())
+      `;
+      circuitBreaks++;
+      dispatches.push({ type: "circuit_breaker", target: r.agent as string, payload: { company: r.slug, reason: "3+_failures_24h" } });
+      continue;
+    }
     let eventType = "feature_request";
     if (r.agent === "engineer" && ["scaffold_company", "provision_company"].includes(r.action_type as string)) {
       eventType = "new_company";
@@ -1310,6 +1395,72 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "deploy_drift", payload: { main: drift.mainSha, deployed: drift.deploySha } });
   }
 
+  // 26. Auto-approve safe evolver proposals
+  // Safe = process/knowledge gap + medium/low severity + no financial keywords + pending >24h
+  const UNSAFE_KEYWORDS = /\b(spend|delete|remove|kill|payment|stripe|billing)\b/i;
+  let proposalsAutoApproved = 0;
+
+  const safeProposals = await sql`
+    SELECT id, title, proposed_fix, gap_type, severity
+    FROM evolver_proposals
+    WHERE status = 'pending'
+    AND gap_type IN ('process', 'knowledge')
+    AND severity IN ('medium', 'low')
+    AND created_at < NOW() - INTERVAL '24 hours'
+  `;
+
+  for (const p of safeProposals) {
+    // Check proposed_fix for unsafe financial keywords
+    const fixText = typeof p.proposed_fix === "string" ? p.proposed_fix : JSON.stringify(p.proposed_fix);
+    if (UNSAFE_KEYWORDS.test(fixText) || UNSAFE_KEYWORDS.test(p.title as string)) {
+      continue;
+    }
+
+    await sql`
+      UPDATE evolver_proposals
+      SET status = 'approved', reviewed_at = NOW(), notes = 'Auto-approved by Sentinel (safe criteria met)'
+      WHERE id = ${p.id}
+    `;
+    await sql`
+      INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
+      VALUES ('sentinel', 'auto_approve_proposal', ${`Auto-approved safe evolver proposal: ${p.title}`},
+        'success', ${JSON.stringify({ proposal_id: p.id, gap_type: p.gap_type, severity: p.severity })}::jsonb,
+        NOW(), NOW())
+    `;
+    proposalsAutoApproved++;
+    dispatches.push({ type: "auto_approve", target: "evolver_proposal", payload: { id: p.id, title: p.title } });
+  }
+
+  // Reminder for critical/high severity proposals pending >48h
+  const urgentPending = await sql`
+    SELECT id, title, severity, gap_type
+    FROM evolver_proposals
+    WHERE status = 'pending'
+    AND severity IN ('critical', 'high')
+    AND created_at < NOW() - INTERVAL '48 hours'
+  `;
+
+  for (const p of urgentPending) {
+    // Only log reminder once per 24h
+    const [recentReminder] = await sql`
+      SELECT id FROM agent_actions
+      WHERE agent = 'sentinel' AND action_type = 'proposal_reminder'
+      AND description ILIKE ${"%" + (p.id as string) + "%"}
+      AND started_at > NOW() - INTERVAL '24 hours'
+      LIMIT 1
+    `;
+    if (recentReminder) continue;
+
+    await sql`
+      INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
+      VALUES ('sentinel', 'proposal_reminder',
+        ${`Reminder: ${p.severity} evolver proposal pending >48h: ${p.title} (${p.id})`},
+        'success', ${JSON.stringify({ proposal_id: p.id, severity: p.severity, gap_type: p.gap_type })}::jsonb,
+        NOW(), NOW())
+    `;
+    dispatches.push({ type: "reminder", target: "evolver_proposal", payload: { id: p.id, severity: p.severity, title: p.title } });
+  }
+
   return Response.json({
     ok: true,
     trace_id: traceId,
@@ -1322,6 +1473,8 @@ export async function GET(req: Request) {
     schema_drift: schemaDrift.length,
     recurring_escalations: recurringEscalations.length,
     auto_resolved: autoResolved,
+    circuit_breaks: circuitBreaks,
+    proposals_auto_approved: proposalsAutoApproved,
     details: dispatches,
   });
 
