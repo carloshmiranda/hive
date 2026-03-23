@@ -26,7 +26,7 @@ export async function createProject(slug: string) {
     project: {
       name: `hive-${slug}`,
       pg_version: 16,
-      region_id: "aws-eu-west-1", // closest to Portugal
+      region_id: "aws-eu-central-1", // Frankfurt — closest available to Portugal
     },
   });
 
