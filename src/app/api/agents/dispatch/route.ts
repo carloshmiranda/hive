@@ -30,12 +30,79 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2)
 const WORKER_AGENTS = ["growth", "outreach", "ops"] as const;
 type WorkerAgent = typeof WORKER_AGENTS[number];
 
-// Agent → LLM provider mapping
-const AGENT_MODEL: Record<WorkerAgent, { provider: "gemini" | "groq"; model: string }> = {
+// Default agent → LLM provider mapping (used when no performance data available)
+const DEFAULT_AGENT_MODEL: Record<WorkerAgent, { provider: "gemini" | "groq"; model: string }> = {
   growth:   { provider: "gemini", model: "gemini-2.5-flash" },
   outreach: { provider: "gemini", model: "gemini-2.5-flash" },
   ops:      { provider: "groq",  model: "llama-3.3-70b-versatile" },
 };
+
+// Cost per call by provider (estimated USD)
+const PROVIDER_COST: Record<string, number> = {
+  gemini: 0,       // free tier
+  groq: 0,         // free tier
+  claude: 0.03,    // Sonnet per-turn fallback
+};
+
+// Get optimal provider for an agent based on historical success rates
+// If primary provider has <70% success rate in last 7 days, try cheaper alternatives first
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getOptimalModel(sql: any, agent: WorkerAgent): Promise<{ provider: "gemini" | "groq"; model: string; routing_reason: string }> {
+  const defaults = DEFAULT_AGENT_MODEL[agent];
+
+  try {
+    // Get success rates by provider for this agent in last 7 days
+    const stats = await sql`
+      SELECT
+        output->>'provider' as provider,
+        output->>'model' as model,
+        COUNT(*) FILTER (WHERE status = 'success') as successes,
+        COUNT(*) as total
+      FROM agent_actions
+      WHERE agent = ${agent}
+        AND action_type = 'execute_task'
+        AND started_at > NOW() - INTERVAL '7 days'
+        AND output IS NOT NULL
+        AND output->>'provider' IS NOT NULL
+      GROUP BY output->>'provider', output->>'model'
+    `.catch(() => []);
+
+    if (stats.length === 0) {
+      return { ...defaults, routing_reason: "no_history" };
+    }
+
+    // Check primary provider success rate
+    const primaryStats = stats.find((s: Record<string, unknown>) => s.provider === defaults.provider);
+    if (primaryStats) {
+      const successRate = Number(primaryStats.successes) / Number(primaryStats.total);
+      if (successRate >= 0.7) {
+        return { ...defaults, routing_reason: `primary_ok (${Math.round(successRate * 100)}% success)` };
+      }
+
+      // Primary failing — try alternative
+      // For Gemini agents: try Groq as cheaper alternative
+      // For Groq agents: try Gemini
+      if (defaults.provider === "gemini") {
+        const groqStats = stats.find((s: Record<string, unknown>) => s.provider === "groq");
+        if (groqStats && Number(groqStats.successes) / Number(groqStats.total) >= 0.5) {
+          return { provider: "groq", model: "llama-3.3-70b-versatile", routing_reason: `failover (${defaults.provider} at ${Math.round(successRate * 100)}%)` };
+        }
+      } else {
+        const geminiStats = stats.find((s: Record<string, unknown>) => s.provider === "gemini");
+        if (geminiStats && Number(geminiStats.successes) / Number(geminiStats.total) >= 0.5) {
+          return { provider: "gemini", model: "gemini-2.5-flash", routing_reason: `failover (${defaults.provider} at ${Math.round(successRate * 100)}%)` };
+        }
+      }
+
+      // Both failing — stick with default (fallback chain handles it)
+      return { ...defaults, routing_reason: `degraded (${Math.round(successRate * 100)}% success, no better alternative)` };
+    }
+
+    return { ...defaults, routing_reason: "no_primary_data" };
+  } catch {
+    return { ...defaults, routing_reason: "stats_error" };
+  }
+}
 
 // Default prompts — one verb per agent
 const DEFAULT_PROMPTS: Record<WorkerAgent, string> = {
@@ -43,6 +110,13 @@ const DEFAULT_PROMPTS: Record<WorkerAgent, string> = {
   outreach: "Prospect leads. Read the lead list and outreach log, then draft cold emails and plan follow-ups. Output JSON: { leads: [...], emails_drafted: [...] }",
   ops: "Verify health. Check deploy status, collect metrics from Stripe/Vercel/Neon, detect anomalies. Output JSON: { metrics_collected: N, health_status: 'ok'|'degraded', issues_found: [...], needs_engineer: bool }",
 };
+
+// Truncate large JSONB content to save context tokens
+function truncateJson(content: unknown, maxChars: number): string {
+  const str = typeof content === "string" ? content : JSON.stringify(content);
+  if (str.length <= maxChars) return str;
+  return str.slice(0, maxChars) + `... [truncated, ${str.length - maxChars} chars omitted]`;
+}
 
 // Max duration: Gemini calls take 10-30s, 60s is Hobby-tier safe
 export const maxDuration = 60;
@@ -198,18 +272,19 @@ ${capabilitiesSummary(company.capabilities)}`;
       const [llmVis] = await sql`
         SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'llm_visibility'
       `;
-      if (visSnapshot) fullPrompt += `\n\nVISIBILITY DATA (from GSC):\n${JSON.stringify(visSnapshot.content)}`;
-      if (llmVis) fullPrompt += `\n\nLLM VISIBILITY:\n${JSON.stringify(llmVis.content)}`;
+      // Context optimization: truncate large JSONB reports to prevent token bloat
+      if (visSnapshot) fullPrompt += `\n\nVISIBILITY DATA (from GSC):\n${truncateJson(visSnapshot.content, 2000)}`;
+      if (llmVis) fullPrompt += `\n\nLLM VISIBILITY:\n${truncateJson(llmVis.content, 1500)}`;
 
       // Content performance report — per-URL trends and refresh recommendations
       const [contentPerf] = await sql`
         SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'content_performance'
       `;
-      if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${JSON.stringify(contentPerf.content)}`;
+      if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${truncateJson(contentPerf.content, 2000)}`;
     }
 
-    // 5. Call the LLM
-    const { provider, model } = AGENT_MODEL[agentName];
+    // 5. Call the LLM — cost-based routing selects optimal provider
+    const { provider, model, routing_reason } = await getOptimalModel(sql, agentName);
     let output: string;
 
     if (provider === "gemini") {
@@ -218,16 +293,17 @@ ${capabilitiesSummary(company.capabilities)}`;
       output = await callGroq(fullPrompt, model);
     }
 
-    // 6. Log the result to agent_actions
+    // 6. Log the result to agent_actions with cost tracking
     const duration = Math.round((Date.now() - startTime) / 1000);
+    const estimatedCost = PROVIDER_COST[provider] || 0;
     await sql`
       INSERT INTO agent_actions (
-        company_id, cycle_id, agent, action_type, description, 
+        company_id, cycle_id, agent, action_type, description,
         status, output, started_at, finished_at
       ) VALUES (
         ${company.id}, ${latestCycle?.id || null}, ${agentName}, 'execute_task',
-        ${`[serverless] ${agentName} for ${company.slug} (${trigger || "scheduled"}, ${duration}s, ${provider}/${model})`},
-        'success', ${JSON.stringify({ output: output.slice(0, 5000), provider, model, trigger })},
+        ${`[serverless] ${agentName} for ${company.slug} (${trigger || "scheduled"}, ${duration}s, ${provider}/${model}, routed: ${routing_reason})`},
+        'success', ${JSON.stringify({ output: output.slice(0, 5000), provider, model, trigger, routing_reason, cost_usd: estimatedCost, duration_s: duration })}::jsonb,
         ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
       )
     `;
@@ -288,23 +364,27 @@ ${capabilitiesSummary(company.capabilities)}`;
       company: company.slug,
       provider,
       model,
+      routing_reason,
+      cost_usd: estimatedCost,
       duration_seconds: duration,
       output_preview: output.slice(0, 500),
     });
 
   } catch (error: any) {
-    // Log failure
+    // Log failure with provider info for routing decisions
     const duration = Math.round((Date.now() - startTime) / 1000);
     try {
       const [company] = await sql`SELECT id FROM companies WHERE slug = ${company_slug}`;
+      const failedModel = DEFAULT_AGENT_MODEL[agentName] || { provider: "unknown", model: "unknown" };
       await sql`
         INSERT INTO agent_actions (
           company_id, agent, action_type, description, status, error,
-          started_at, finished_at
+          output, started_at, finished_at
         ) VALUES (
           ${company?.id || null}, ${agentName}, 'execute_task',
-          ${`[serverless] ${agentName} failed for ${company_slug} (${duration}s)`},
+          ${`[serverless] ${agentName} failed for ${company_slug} (${duration}s, ${failedModel.provider}/${failedModel.model})`},
           'failed', ${error.message?.slice(0, 500) || "Unknown error"},
+          ${JSON.stringify({ provider: failedModel.provider, model: failedModel.model, duration_s: duration })}::jsonb,
           ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
         )
       `;

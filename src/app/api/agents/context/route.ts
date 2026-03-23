@@ -79,9 +79,11 @@ async function buildContext(sql: any, company: any) {
     `.catch(() => []),
   ]);
 
-  const research: Record<string, { summary: string; content: unknown }> = {};
+  // Context optimization: use summaries by default, full content only when requested
+  // Research reports can be 10-50KB each; summaries are ~200 bytes
+  const research: Record<string, { summary: string; content?: unknown }> = {};
   for (const r of reports) {
-    research[r.report_type] = { summary: r.summary, content: r.content };
+    research[r.report_type] = { summary: r.summary };
   }
 
   // Compute validation score and phase
@@ -158,9 +160,10 @@ async function growthContext(sql: any, company: any) {
     `.catch(() => []),
   ]);
 
-  const research: Record<string, { summary: string; content: unknown }> = {};
+  // Context optimization: summaries only (saves 20-50KB per Growth context call)
+  const research: Record<string, { summary: string }> = {};
   for (const r of reports) {
-    research[r.report_type] = { summary: r.summary, content: r.content };
+    research[r.report_type] = { summary: r.summary };
   }
 
   // Compute validation so Growth knows phase constraints

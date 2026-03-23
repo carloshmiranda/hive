@@ -54,8 +54,8 @@ Three-layer enforcement: (1) Task creation gate: `POST /api/tasks` validates tas
 ### 🟢 P2 — Pre-trained pattern packs for new companies
 Currently new companies inherit raw playbook entries (confidence ≥ 0.6). Structure domain knowledge into curated pattern packs (e.g., "SaaS pricing patterns", "SEO content patterns", "Portuguese market patterns") with richer metadata. New companies get relevant packs based on business type. Inspired by Ruflo's pre-built pattern packs (security-essentials, testing-patterns, etc.) with measurable accuracy scores.
 
-### 🟢 P2 — Context optimization for long-running agents
-CEO agent sometimes hits max_turns (poupamais used 60 turns, Healer exhausted 26). Implement context compression: summarize earlier conversation turns, prioritize recent tool outputs, drop verbose intermediary reasoning. Agents do more within their turn budget. Inspired by Ruflo's Context Autopilot (ADR-051) with proactive archiving, importance ranking, and token tracking with warning/optimize thresholds.
+### ✅ P2 — Context optimization for long-running agents (DONE — 2026-03-23)
+Three optimizations: (1) Research reports now deliver summaries only in context API (saves 20-50KB per call), full content stays in DB. (2) Worker agent dispatch truncates visibility/content_performance JSONB to 2KB max via `truncateJson()`. (3) Growth context no longer includes full report content. Combined: ~60-70% reduction in context payload size, more turns available for actual work.
 
 ### ⚪ P3 — Browser automation for Growth verification
 Growth agent deploys content but never verifies it rendered correctly. Browser automation could validate: landing pages render properly, SEO meta tags are present, CTAs are clickable, OG images load. Currently "deploy and hope." Inspired by Ruflo's `@claude-flow/browser` with 59 MCP tools for browser interaction, screenshots, and trajectory learning.
@@ -81,8 +81,8 @@ New `/api/agents/consolidate` endpoint auto-called after CEO review via chain di
 ### ✅ P1 — Task stealability on agent failure (DONE — 2026-03-23)
 New Sentinel check 13b2: finds `agent_actions` stuck in `'running'` status for >1 hour and marks them `'failed'` with descriptive error. This makes them "stealable" — the existing retry logic in check 13c picks them up on the next Sentinel run. Response includes `stale_reclaimed` count. Covers all agent types (engineer, growth, ceo, scout, healer, evolver).
 
-### 🟢 P2 — Cost-based provider routing strategy
-Beyond success-rate tracking, implement cost-aware routing: when multiple providers can handle a task type with similar success rates, prefer the cheapest. Track actual cost per task completion (not just per-turn estimates). Route Ops health checks to Groq ($0) unless Groq failure rate exceeds threshold, then escalate to Gemini before Claude. Inspired by Ruflo's `cost-based` load balancing strategy claiming 85%+ savings.
+### ✅ P2 — Cost-based provider routing strategy (DONE — 2026-03-23)
+Dynamic routing in worker dispatch: `getOptimalModel()` queries 7-day success rates by provider from agent_actions output JSONB. If primary provider drops below 70% success rate, auto-failover to alternative free-tier provider. Agent_actions now logs `provider`, `model`, `cost_usd`, `routing_reason`, `duration_s` in output. Costs endpoint enhanced with `by_provider` breakdown (calls, successes, failures, cost). Failure logging also includes provider data for routing decisions.
 
 ### 🟢 P2 — Memory/playbook consolidation worker
 Playbook entries accumulate but never get consolidated. Implement a periodic worker that: (1) merges near-duplicate entries (same domain, similar content), (2) distills multiple entries into higher-confidence composite entries, (3) prunes entries below confidence threshold after decay. Prevents playbook bloat as portfolio grows. Inspired by Ruflo's `consolidate` background worker and LoRA distillation step.

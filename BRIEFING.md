@@ -50,6 +50,10 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-23 [code] Context optimization + cost-based routing
+- **Context optimization**: Research reports now deliver summaries only in context API (saves 20-50KB per call). Worker dispatch truncates visibility/content_performance JSONB to 2KB max. ~60-70% reduction in context payload size.
+- **Cost-based provider routing**: Worker dispatch now uses `getOptimalModel()` which queries 7-day success rates. If primary provider (Gemini/Groq) drops below 70% success, auto-failover to alternative. Agent_actions logs provider, model, cost, routing_reason. Costs endpoint has `by_provider` breakdown.
+
 ### 2026-03-23 [code] Phase gates + playbook lifecycle
 - **Mechanical phase enforcement**: Three-layer policy gates prevent forbidden work. Layer 1: `POST /api/tasks` rejects tasks violating validation phase (e.g., auth tasks in `validate` phase). Layer 2: `GET /api/agents/context` filters tasks before Engineer/Growth sees them. Layer 3: validate-drift (existing) catches post-hoc. Shared `src/lib/phase-gate.ts` with expanded term map.
 - **Playbook time-decay**: Sentinel check 27 decays entries unreferenced for 30+ days (-0.02/run). Auto-prunes entries below 0.15 confidence via supersession. Combined with existing cycle-score decay, playbook entries now have full lifecycle.
