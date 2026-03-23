@@ -15,6 +15,22 @@
 
 ---
 
+### 2026-03-23 Provisioning sets wrong company_type when Claude agent hits max_turns
+**What happened:** Poupamais was proposed by Scout as a blog/affiliate site, approved by Carlos, but provisioned as SaaS. The company got SaaS boilerplate, SaaS validation phases, and SaaS-specific build tasks — completely wrong business model.
+**Root cause:** The Engineer provision agent's STEP 0 (set company_type) is a Claude Code step that queries the approval context and sets the type. When the agent hit max_turns (30) before completing STEP 0, company_type was never set. The provisioner defaulted to SaaS behavior. The business_model from the Scout proposal was lost.
+**Fix applied:** Added a pre-flight shell step in `hive-engineer.yml` that runs BEFORE the Claude agent. It queries the approvals table directly via DATABASE_URL, extracts `business_model` from the Scout proposal context, and sets `company_type` in the DB. Shell steps can't hit max_turns — they always complete.
+**Prevention:** Critical data transforms (like setting business type) must happen in deterministic shell steps, not inside LLM agents that can hit turn limits. Any step where failure = silent wrong default is a pre-flight candidate.
+**Affects:** both (Hive workflow + all future companies)
+
+### 2026-03-23 Healer self-reinforcing failure loop
+**What happened:** Healer hit max_turns (25), logged its own failure to agent_actions. Sentinel saw higher failure rate, dispatched Healer again. 5 failures in one day, ~$0.60 each wasted.
+**Root cause:** Sentinel's failure rate calculation included healer and sentinel's own failures, creating a feedback loop where healer failures triggered more healer dispatches.
+**Fix applied:** (1) Excluded `healer` and `sentinel` from failure rate query. (2) Added 6h cooldown guard before dispatching healer on high failure rate. (3) Bumped Healer max-turns from 25 to 35.
+**Prevention:** Agents that respond to failure metrics must exclude their own failures from those metrics. Always add cooldown guards to prevent rapid re-dispatch loops.
+**Affects:** hive
+
+---
+
 ### 2026-03-22 Boilerplate module-level SDK initialization crashes builds without env vars
 **What happened:** PoupaMais provisioning failed because `neon(process.env.DATABASE_URL!)` and `new Stripe(process.env.STRIPE_SECRET_KEY!)` were called at module scope. During `next build`, these execute even though env vars aren't set, crashing the build.
 **Root cause:** SDK clients initialized at module scope (file load time) instead of inside request handlers. Next.js evaluates all route modules during build for tree-shaking.

@@ -50,6 +50,11 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-23 [code] Healer loop fix + poupamais kill + provisioning preflight
+- **Healer self-reinforcing loop**: Excluded healer/sentinel from failure rate calculation + added 6h cooldown. Bumped max-turns 25→35.
+- **Poupamais killed**: GitHub repo archived, kill directive created (issue #8). Company was provisioned as SaaS when Scout proposed it as blog/affiliate — wrong business_model due to max_turns in STEP 0.
+- **Provisioning preflight**: Added shell step in hive-engineer.yml that sets company_type from approval context BEFORE Claude agent runs. Queries DB directly via DATABASE_URL. Shell steps can't hit max_turns — prevents the poupamais bug from recurring.
+
 ### 2026-03-23 [code] Context optimization + cost-based routing
 - **Context optimization**: Research reports now deliver summaries only in context API (saves 20-50KB per call). Worker dispatch truncates visibility/content_performance JSONB to 2KB max. ~60-70% reduction in context payload size.
 - **Cost-based provider routing**: Worker dispatch now uses `getOptimalModel()` which queries 7-day success rates. If primary provider (Gemini/Groq) drops below 70% success, auto-failover to alternative. Agent_actions logs provider, model, cost, routing_reason. Costs endpoint has `by_provider` breakdown.

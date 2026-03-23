@@ -130,6 +130,55 @@ jobs:
           fetch_token "github_pat" "gh_pat" "true"
           fetch_token "vercel_token" "vercel_token" "true"
 
+      - name: Pre-flight — set company_type from approval context
+        id: preflight
+        run: |
+          # Extract business_model from the Scout proposal approval context BEFORE Claude runs.
+          # This prevents the bug where max_turns exhaustion leaves company_type unset.
+          # Uses DATABASE_URL directly (already in env) — no API auth needed.
+          COMPANY_SLUG="${{ needs.context.outputs.company }}"
+
+          if [ -z "$COMPANY_SLUG" ]; then
+            echo "No company slug — skipping preflight"
+            exit 0
+          fi
+
+          npm install --no-save postgres 2>/dev/null
+
+          BIZ_MODEL=$(node -e "
+            const postgres = require('postgres');
+            const sql = postgres(process.env.DATABASE_URL);
+            async function run() {
+              const [company] = await sql\`SELECT id, company_type FROM companies WHERE slug = \${'${COMPANY_SLUG}'} LIMIT 1\`;
+              if (!company) { console.log(''); await sql.end(); return; }
+              if (company.company_type) {
+                console.log(company.company_type);
+                await sql.end();
+                return;
+              }
+              const [approval] = await sql\`
+                SELECT context FROM approvals
+                WHERE company_id = \${company.id} AND gate_type = 'new_company' AND status = 'approved'
+                ORDER BY created_at DESC LIMIT 1
+              \`;
+              const biz = approval?.context?.proposal?.business_model || '';
+              if (biz) {
+                await sql\`UPDATE companies SET company_type = \${biz}, updated_at = NOW() WHERE id = \${company.id}\`;
+                console.error('Set company_type to: ' + biz);
+              }
+              console.log(biz);
+              await sql.end();
+            }
+            run().catch(e => { console.error(e.message); process.exit(0); });
+          " 2>&1 | tail -1)
+
+          echo "company_type=${BIZ_MODEL}" >> $GITHUB_OUTPUT
+          if [ -n "$BIZ_MODEL" ]; then
+            echo "Pre-flight: company_type set to ${BIZ_MODEL}"
+          else
+            echo "WARNING: Could not determine business_model from approval context"
+          fi
+
       - name: Run provision agent
         id: agent
         env:
