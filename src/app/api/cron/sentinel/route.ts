@@ -322,7 +322,7 @@ export async function GET(req: Request) {
   // Companies without infra (github_repo IS NULL) should be EXCLUDED from dispatch-triggering
   // checks. Only check 9b (orphaned MVPs) intentionally includes them to trigger provisioning.
 
-  // 1. Pipeline count
+  // 1. Pipeline count + Scout proposal management
   const [pipeline] = await sql`
     SELECT COUNT(*) as cnt FROM companies
     WHERE status IN ('idea','approved','provisioning','mvp','active')
@@ -330,7 +330,51 @@ export async function GET(req: Request) {
   const [pendingIdeas] = await sql`
     SELECT COUNT(*) as cnt FROM companies WHERE status = 'idea'
   `;
-  const pipelineLow = parseInt(pipeline.cnt) < 3 && parseInt(pendingIdeas.cnt) === 0;
+
+  // Check pending Scout proposals (new_company approvals)
+  const [pendingProposals] = await sql`
+    SELECT COUNT(*) as cnt FROM approvals
+    WHERE gate_type = 'new_company' AND status = 'pending'
+  `;
+
+  // Auto-cleanup stale Scout proposals when pipeline is clogged (>5 pending)
+  let proposalCleanupCount = 0;
+  if (parseInt(pendingProposals.cnt) > 5) {
+    console.log(`[sentinel] Pipeline clogged: ${pendingProposals.cnt} pending Scout proposals`);
+    try {
+      const cleanupRes = await fetch("https://hive-phi.vercel.app/api/approvals/scout-cleanup", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.CRON_SECRET}`
+        },
+        body: JSON.stringify({
+          max_pending: 3,
+          min_age_hours: 48,
+          reason: "Auto-cleanup by Sentinel: too many Scout proposals blocking company execution"
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (cleanupRes.ok) {
+        const data = await cleanupRes.json();
+        proposalCleanupCount = data.expired_count || 0;
+        console.log(`[sentinel] Scout cleanup: expired ${proposalCleanupCount} stale proposals`);
+      }
+    } catch (e) {
+      console.log(`[sentinel] Scout cleanup failed: ${e instanceof Error ? e.message : "unknown"}`);
+    }
+  }
+
+  // Check for stale proposals (>48h old)
+  const [staleProposals] = await sql`
+    SELECT COUNT(*) as cnt FROM approvals
+    WHERE gate_type = 'new_company' AND status = 'pending'
+    AND created_at < NOW() - INTERVAL '48 hours'
+  `;
+
+  // Scout blocked if too many pending proposals or any stale proposals exist
+  const scoutBlocked = parseInt(pendingProposals.cnt) > 3 || parseInt(staleProposals.cnt) > 0;
+  const pipelineLow = parseInt(pipeline.cnt) < 3 && parseInt(pendingIdeas.cnt) === 0 && !scoutBlocked;
 
   // 2. Stale content (no growth success in 7 days)
   const staleContent = await sql`
@@ -1123,10 +1167,12 @@ export async function GET(req: Request) {
 
   // --- Dispatch logic ---
 
-  // 1. Pipeline low → Scout
+  // 1. Pipeline low → Scout (if not blocked by proposal backlog)
   if (pipelineLow) {
     await dispatchToActions("pipeline_low", { source: "sentinel", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "pipeline_low", payload: { source: "sentinel" } });
+  } else if (scoutBlocked) {
+    console.log(`[sentinel] Scout blocked: ${pendingProposals.cnt} pending, ${staleProposals.cnt} stale proposals`);
   }
 
   // 2. Stale content → Growth on company repo (free Actions) with Vercel fallback
@@ -3125,6 +3171,7 @@ export async function GET(req: Request) {
     trace_id: traceId,
     dispatches: dispatches.length,
     approvals_expired: expiredApprovals.length,
+    scout_proposals_cleaned: proposalCleanupCount,
     stuck_cycles_cleaned: stuckCycles.length,
     deploy_drift: drift.drifted,
     broken_deploys: brokenDeploys.length,
