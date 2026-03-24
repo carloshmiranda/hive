@@ -270,6 +270,13 @@ For all phases:
    ```
 
    Replace `<cycle_id>` with the ID from step 1 and `<your_review_json>` with your complete review object.
+
+   **VALIDATION:** The API will reject incomplete reviews. Your review MUST include ALL required fields:
+   - `review.score` (number 1-10)
+   - `review.agent_grades` (object with agent grades)
+   - `review.kill_flag` (boolean)
+   - `review.validation_phase` (string)
+
    Without this step, validation scoring, kill signals, and agent grading will be broken.
 
 ### Review output (JSON):

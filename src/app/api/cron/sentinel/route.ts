@@ -584,14 +584,35 @@ export async function GET(req: Request) {
   `;
 
   // 13b. Stuck cycles (running >2h, auto-cleanup)
+  // Get stuck cycles before cleanup
   const stuckCycles = await sql`
-    UPDATE cycles
-    SET status = 'failed',
-        finished_at = NOW(),
-        ceo_review = jsonb_build_object('timeout_reason', 'Cycle stuck in running state >2h, cleaned up by Sentinel')
+    SELECT id, cycle_number, company_id
+    FROM cycles
     WHERE status = 'running' AND started_at < NOW() - INTERVAL '2 hours'
-    RETURNING cycle_number, company_id
   `;
+
+  // Use the cleanup endpoint for each stuck cycle to avoid interfering with CEO reviews
+  for (const cycle of stuckCycles) {
+    try {
+      const response = await fetch(`${process.env.VERCEL_URL || 'https://hive-phi.vercel.app'}/api/cycles/${cycle.id}/cleanup`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${process.env.CRON_SECRET}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          cleanup_reason: 'Cycle stuck in running state >2h, cleaned up by Sentinel',
+          status: 'failed'
+        })
+      });
+
+      if (!response.ok) {
+        console.error(`Failed to cleanup cycle ${cycle.id}: ${response.status}`);
+      }
+    } catch (error) {
+      console.error(`Error cleaning up cycle ${cycle.id}:`, error);
+    }
+  }
 
   // 13b2. Task stealability — stale running agent_actions (stuck >1h)
   // If a GitHub Actions run crashes without writing failure to Neon, the action stays
