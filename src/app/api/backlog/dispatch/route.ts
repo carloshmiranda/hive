@@ -25,13 +25,55 @@ export async function POST(req: Request) {
 
   // If a completed item was passed, mark it done/failed
   if (completed_id && completed_status) {
-    await sql`
-      UPDATE hive_backlog
-      SET status = ${completed_status === "success" ? "done" : "blocked"},
-          completed_at = NOW(),
-          notes = COALESCE(notes, '') || ${completed_status === "success" ? " Completed via chain dispatch." : " Failed — marked blocked."}
-      WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-    `.catch(() => {});
+    if (completed_status === "success") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'done', completed_at = NOW(),
+            notes = COALESCE(notes, '') || ' Completed via chain dispatch.'
+        WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+      `.catch(() => {});
+    } else {
+      // Failed: check attempt count. Retry once (back to 'ready'), block on 2nd failure.
+      const [item] = await sql`
+        SELECT id, notes FROM hive_backlog WHERE id = ${completed_id}
+      `.catch(() => []);
+      const prevAttempts = (item?.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+
+      if (prevAttempts < 1) {
+        // First failure → back to ready for retry
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'ready', dispatched_at = NULL,
+              notes = COALESCE(notes, '') || ${` [attempt ${prevAttempts + 1}] Failed — will retry.`}
+          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+        `.catch(() => {});
+      } else {
+        // 2nd+ failure → blocked permanently, notify
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'blocked', completed_at = NOW(),
+              notes = COALESCE(notes, '') || ${` [attempt ${prevAttempts + 1}] Failed again — blocked.`}
+          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+        `.catch(() => {});
+        // Notify Carlos about permanently blocked item
+        const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+        await fetch(`${baseUrl}/api/notify`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.CRON_SECRET}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent: "backlog",
+            action: "blocked_after_retry",
+            company: "hive",
+            status: "failed",
+            summary: `Backlog item failed twice, now blocked: ${item?.notes?.match(/^[^[]+/)?.[0]?.trim() || completed_id}`,
+          }),
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => {});
+      }
+    }
   }
 
   // Check budget — don't dispatch if Claude budget is exhausted
