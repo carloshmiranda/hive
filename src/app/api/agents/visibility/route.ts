@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (keywords.length > 0) {
-      const citations = await checkLLMCitations(company.name, company.vercel_url, keywords);
+      const citations = await checkLLMCitations(company.name, company.vercel_url, keywords, sql);
 
       // Store individual citation results
       for (const c of citations) {
