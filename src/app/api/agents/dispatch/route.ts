@@ -4,120 +4,14 @@ import { getSettingValue } from "@/lib/settings";
 import { capabilitiesSummary } from "@/lib/capabilities";
 import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
+import { callLLMWithLogging } from "@/lib/llm";
 
-// Retry wrapper for transient LLM API failures (429, 5xx, network errors)
-// Implements exponential backoff with jitter for rate limiting (429) responses
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await fetch(url, options);
-      if (res.ok || [400, 401, 403, 404].includes(res.status)) return res;
+// Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
+// Handles provider routing, fallbacks, rate limiting, and response normalization
 
-      if (attempt < maxRetries) {
-        let delay: number;
-        if (res.status === 429) {
-          // Exponential backoff with jitter for rate limits: 2^attempt * base + random jitter
-          const baseDelay = 1000; // 1 second base
-          const exponentialDelay = baseDelay * Math.pow(2, attempt);
-          const jitter = Math.random() * 1000; // 0-1 second jitter
-          delay = exponentialDelay + jitter;
-          console.log(`Rate limit hit (429), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
-        } else {
-          // Regular retry for other errors
-          delay = attempt === 0 ? 1000 : 3000;
-        }
-
-        await new Promise(r => setTimeout(r, delay));
-        continue;
-      }
-      return res;
-    } catch (err) {
-      if (attempt === maxRetries) throw err;
-      const delay = attempt === 0 ? 1000 : 3000;
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-  throw new Error("fetchWithRetry: unreachable");
-}
-
-// Agents that can run on Vercel serverless (Gemini/Groq HTTP calls only)
+// Agents that can run on Vercel serverless (unified LLM abstraction)
 const WORKER_AGENTS = ["growth", "outreach", "ops"] as const;
 type WorkerAgent = typeof WORKER_AGENTS[number];
-
-// Default agent → LLM provider mapping (used when no performance data available)
-const DEFAULT_AGENT_MODEL: Record<WorkerAgent, { provider: "gemini" | "groq"; model: string }> = {
-  growth:   { provider: "gemini", model: "gemini-2.5-flash" },
-  outreach: { provider: "gemini", model: "gemini-2.5-flash" },
-  ops:      { provider: "groq",  model: "llama-3.3-70b-versatile" },
-};
-
-// Cost per call by provider (estimated USD)
-const PROVIDER_COST: Record<string, number> = {
-  gemini: 0,       // free tier
-  groq: 0,         // free tier
-  claude: 0.03,    // Sonnet per-turn fallback
-};
-
-// Get optimal provider for an agent based on historical success rates
-// If primary provider has <70% success rate in last 48h, try alternatives
-// Short window (48h) allows fast reaction to provider outages/degradation
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getOptimalModel(sql: any, agent: WorkerAgent): Promise<{ provider: "gemini" | "groq"; model: string; routing_reason: string }> {
-  const defaults = DEFAULT_AGENT_MODEL[agent];
-
-  try {
-    // Get success rates by provider for this agent in last 48 hours
-    const stats = await sql`
-      SELECT
-        output->>'provider' as provider,
-        output->>'model' as model,
-        COUNT(*) FILTER (WHERE status = 'success') as successes,
-        COUNT(*) as total
-      FROM agent_actions
-      WHERE agent = ${agent}
-        AND action_type = 'execute_task'
-        AND started_at > NOW() - INTERVAL '48 hours'
-        AND output IS NOT NULL
-        AND output->>'provider' IS NOT NULL
-      GROUP BY output->>'provider', output->>'model'
-    `.catch(() => []);
-
-    if (stats.length === 0) {
-      return { ...defaults, routing_reason: "no_history" };
-    }
-
-    // Check primary provider success rate
-    const primaryStats = stats.find((s: Record<string, unknown>) => s.provider === defaults.provider);
-    if (primaryStats) {
-      const successRate = Number(primaryStats.successes) / Number(primaryStats.total);
-      if (successRate >= 0.7) {
-        return { ...defaults, routing_reason: `primary_ok (${Math.round(successRate * 100)}% success)` };
-      }
-
-      // Primary failing — try alternative
-      // For Gemini agents: try Groq as cheaper alternative
-      // For Groq agents: try Gemini
-      if (defaults.provider === "gemini") {
-        const groqStats = stats.find((s: Record<string, unknown>) => s.provider === "groq");
-        if (groqStats && Number(groqStats.successes) / Number(groqStats.total) >= 0.5) {
-          return { provider: "groq", model: "llama-3.3-70b-versatile", routing_reason: `failover (${defaults.provider} at ${Math.round(successRate * 100)}%)` };
-        }
-      } else {
-        const geminiStats = stats.find((s: Record<string, unknown>) => s.provider === "gemini");
-        if (geminiStats && Number(geminiStats.successes) / Number(geminiStats.total) >= 0.5) {
-          return { provider: "gemini", model: "gemini-2.5-flash", routing_reason: `failover (${defaults.provider} at ${Math.round(successRate * 100)}%)` };
-        }
-      }
-
-      // Both failing — stick with default (fallback chain handles it)
-      return { ...defaults, routing_reason: `degraded (${Math.round(successRate * 100)}% success, no better alternative)` };
-    }
-
-    return { ...defaults, routing_reason: "no_primary_data" };
-  } catch {
-    return { ...defaults, routing_reason: "stats_error" };
-  }
-}
 
 // Default prompts — one verb per agent
 const DEFAULT_PROMPTS: Record<WorkerAgent, string> = {
@@ -298,27 +192,20 @@ ${capabilitiesSummary(company.capabilities)}`;
       if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${truncateJson(contentPerf.content, 2000)}`;
     }
 
-    // 5. Call the LLM — cost-based routing selects optimal provider
-    const { provider, model, routing_reason } = await getOptimalModel(sql, agentName);
-    let output: string;
+    // 5. Call the unified LLM interface with automatic provider selection and fallback
+    const { response, logData } = await callLLMWithLogging(agentName, fullPrompt, { sql });
+    const output = response.content;
 
-    if (provider === "gemini") {
-      output = await callGemini(fullPrompt, model);
-    } else {
-      output = await callGroq(fullPrompt, model);
-    }
-
-    // 6. Log the result to agent_actions with cost tracking
+    // 6. Log the result to agent_actions with provider metadata
     const duration = Math.round((Date.now() - startTime) / 1000);
-    const estimatedCost = PROVIDER_COST[provider] || 0;
     await sql`
       INSERT INTO agent_actions (
         company_id, cycle_id, agent, action_type, description,
         status, output, started_at, finished_at
       ) VALUES (
         ${company.id}, ${latestCycle?.id || null}, ${agentName}, 'execute_task',
-        ${`[serverless] ${agentName} for ${company.slug} (${trigger || "scheduled"}, ${duration}s, ${provider}/${model}, routed: ${routing_reason})`},
-        'success', ${JSON.stringify({ output: output.slice(0, 5000), provider, model, trigger, routing_reason, cost_usd: estimatedCost, duration_s: duration })}::jsonb,
+        ${`[serverless] ${agentName} for ${company.slug} (${trigger || "scheduled"}, ${logData.duration_s}s, ${logData.provider}/${logData.model}, routed: ${logData.routing_reason})`},
+        'success', ${JSON.stringify({ output: output.slice(0, 5000), ...logData, trigger })}::jsonb,
         ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
       )
     `;
@@ -377,96 +264,50 @@ ${capabilitiesSummary(company.capabilities)}`;
       ok: true,
       agent: agentName,
       company: company.slug,
-      provider,
-      model,
-      routing_reason,
-      cost_usd: estimatedCost,
-      duration_seconds: duration,
+      provider: logData.provider,
+      model: logData.model,
+      routing_reason: logData.routing_reason,
+      cost_usd: logData.cost_usd,
+      duration_seconds: logData.duration_s,
       output_preview: output.slice(0, 500),
     });
 
   } catch (error: any) {
-    // Log failure with provider info for routing decisions
+    // Handle unified LLM errors with provider info for routing decisions
     const duration = Math.round((Date.now() - startTime) / 1000);
     try {
       const [company] = await sql`SELECT id FROM companies WHERE slug = ${company_slug}`;
-      const failedModel = DEFAULT_AGENT_MODEL[agentName] || { provider: "unknown", model: "unknown" };
+
+      // Extract log data from LLM error if available
+      const logData = error.logData || {
+        provider: "unknown",
+        model: "unknown",
+        routing_reason: "error",
+        cost_usd: 0,
+        duration_s: duration,
+        status: "failed",
+        error: error.message?.slice(0, 500) || "Unknown error"
+      };
+
       await sql`
         INSERT INTO agent_actions (
           company_id, agent, action_type, description, status, error,
           output, started_at, finished_at
         ) VALUES (
           ${company?.id || null}, ${agentName}, 'execute_task',
-          ${`[serverless] ${agentName} failed for ${company_slug} (${duration}s, ${failedModel.provider}/${failedModel.model})`},
-          'failed', ${error.message?.slice(0, 500) || "Unknown error"},
-          ${JSON.stringify({ provider: failedModel.provider, model: failedModel.model, duration_s: duration })}::jsonb,
+          ${`[serverless] ${agentName} failed for ${company_slug} (${logData.duration_s}s, ${logData.provider}/${logData.model})`},
+          'failed', ${logData.error},
+          ${JSON.stringify(logData)}::jsonb,
           ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
         )
       `;
     } catch { /* don't fail the failure logging */ }
 
-    return err(`Agent dispatch failed: ${error.message}`, 500);
+    return err(`Agent dispatch failed: ${(error.error || error).message}`, 500);
   }
 }
 
-// === LLM PROVIDERS ===
-
-async function callGemini(prompt: string, model: string): Promise<string> {
-  const apiKey = await getSettingValue("gemini_api_key");
-  if (!apiKey) throw new Error("gemini_api_key not configured in settings");
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetchWithRetry(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 8192, temperature: 0.7 },
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    console.log(`Gemini ${model} failed (${res.status}): ${body.slice(0, 200)}`);
-    // Fallback chain: Flash → Flash-Lite → Groq
-    if (model === "gemini-2.5-flash") {
-      return callGemini(prompt, "gemini-2.5-flash-lite");
-    }
-    return callGroq(prompt, "llama-3.3-70b-versatile");
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned empty response");
-  return text.trim();
-}
-
-async function callGroq(prompt: string, model: string): Promise<string> {
-  const apiKey = await getSettingValue("groq_api_key");
-  if (!apiKey) throw new Error("groq_api_key not configured in settings");
-
-  // Use more aggressive retry for Groq due to rate limiting
-  const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 8192,
-      temperature: 0.7,
-    }),
-  }, 4); // Increase retries from 2 to 4 for rate limit resilience
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Groq ${model} HTTP ${res.status}: ${body.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error("Groq returned empty response");
-  return text.trim();
-}
+// LLM providers now handled by unified interface in src/lib/llm.ts
 
 // === POST-PROCESSING ===
 
