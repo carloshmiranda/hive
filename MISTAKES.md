@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-24 Cascade marks backlog items "done" before PR merge — false completion notifications
+**What happened:** Carlos received Telegram notifications that 15+ backlog items were "completed" but none of the code was on main. 7 PRs sat open, unmerged. The cascade kept dispatching new items while claiming previous ones were done.
+**Root cause:** `backlog/dispatch/route.ts` marked items `status = 'done'` when Engineer reported `completed_status = "success"`. But "success" means "PR created", not "code merged." There was no lifecycle step between PR creation and merge.
+**Fix applied:** (1) Added `pr_open` status — Engineer success now moves items to `pr_open` instead of `done`. (2) GitHub webhook handler for `pull_request.closed` events marks `pr_open` items as `done` on merge or resets to `ready` on close-without-merge. (3) Added max 5 retry cap to prevent infinite retry loops (one item reached 104 attempts).
+**Prevention:** Any "completion" status must verify the actual outcome (merge, deploy, metric change), not just that the agent exited successfully. Agent "success" ≠ task "done."
+**Affects:** hive
+
 ### 2026-03-24 NextRequest wrapping crashes OIDC auth on consumed request bodies
 **What happened:** All chain dispatch calls from GitHub Actions to `/api/backlog/dispatch`, `/api/dispatch/cycle-complete`, and `/api/dispatch/health-gate` returned 500 errors. CRON_SECRET-authenticated calls worked fine.
 **Root cause:** OIDC auth path did `new NextRequest(req)` to wrap the standard Request. But when the request body has already been consumed (by `req.json()`), constructing a new NextRequest crashes with `TypeError: Cannot read priv...`. Since `validateOIDC` only reads headers (not body), the wrapping was unnecessary.

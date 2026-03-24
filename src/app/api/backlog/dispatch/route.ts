@@ -22,13 +22,16 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const { completed_id, completed_status } = body;
 
-  // If a completed item was passed, mark it done/failed
+  // If a completed item was passed, update its status
   if (completed_id && completed_status) {
     if (completed_status === "success") {
+      // Engineer "success" means PR created, NOT code merged.
+      // Move to 'pr_open' so it stays visible until PR is merged.
+      // Sentinel or a webhook will mark 'done' after merge.
       await sql`
         UPDATE hive_backlog
-        SET status = 'done', completed_at = NOW(),
-            notes = COALESCE(notes, '') || ' Completed via chain dispatch.'
+        SET status = 'pr_open', dispatched_at = NOW(),
+            notes = COALESCE(notes, '') || ' PR created via chain dispatch — awaiting merge.'
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
     } else {
@@ -41,15 +44,24 @@ export async function POST(req: Request) {
       const prevAttempts = (item?.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
       const attempt = prevAttempts + 1;
 
-      // Back to ready with attempt context — the scoring engine will
-      // deprioritize via the novelty penalty (hasSimilarFailed check)
-      // so it won't burn budget retrying the same item in a loop
-      await sql`
-        UPDATE hive_backlog
-        SET status = 'ready', dispatched_at = NULL,
-            notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
-        WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-      `.catch(() => {});
+      // Auto-block after 5 failed attempts — prevents infinite retry loops
+      if (attempt >= 5) {
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'blocked', dispatched_at = NULL,
+              notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Auto-blocked after ${attempt} failures — needs decomposition or manual review.`}
+          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+        `.catch(() => {});
+      } else {
+        // Back to ready with attempt context — the scoring engine will
+        // deprioritize via the novelty penalty (hasSimilarFailed check)
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'ready', dispatched_at = NULL,
+              notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
+          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+        `.catch(() => {});
+      }
 
       // After 3 failures, notify Carlos (but still keep retrying)
       if (attempt >= 3) {

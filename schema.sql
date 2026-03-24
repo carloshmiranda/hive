@@ -404,7 +404,8 @@ CREATE TABLE hive_backlog (
                   'approved',      -- Carlos approved (for P2/P3 needing gate)
                   'dispatched',    -- sent to Engineer
                   'in_progress',   -- Engineer is working on it
-                  'done',          -- completed
+                  'pr_open',       -- PR created, awaiting merge
+                  'done',          -- completed (PR merged)
                   'blocked',       -- needs manual intervention
                   'rejected'       -- Carlos rejected
                 )),

@@ -148,6 +148,71 @@ export async function POST(req: Request) {
       break;
     }
 
+    case "pull_request": {
+      // PR merged → mark matching backlog items as done
+      // PR closed without merge → reset to ready for re-dispatch
+      if (body.action !== "closed") break;
+      const pr = body.pull_request;
+      if (!pr) break;
+
+      const prRepo = body.repository?.name;
+      const prNumber = pr.number;
+      const prBranch = pr.head?.ref || "";
+      const merged = pr.merged === true;
+
+      // Only handle Hive repo PRs (backlog items are Hive self-improvement)
+      if (prRepo !== "hive") break;
+
+      // Find backlog items in pr_open status that match this PR
+      // Match by pr_number if stored, or by title similarity with PR title
+      const prTitle = (pr.title || "").slice(0, 50);
+      const matchingItems = await sql`
+        SELECT id, title FROM hive_backlog
+        WHERE status = 'pr_open'
+        AND (
+          pr_number = ${prNumber}
+          OR title ILIKE ${"%" + prTitle.replace(/^feat: |^fix: |^refactor: |^chore: /i, "").slice(0, 40) + "%"}
+        )
+      `.catch(() => []);
+
+      const itemIds = matchingItems.map((i: Record<string, string>) => i.id);
+      const itemTitles = matchingItems.map((i: Record<string, string>) => i.title);
+
+      if (itemIds.length > 0) {
+        if (merged) {
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'done', completed_at = NOW(),
+                pr_number = ${prNumber}, pr_url = ${pr.html_url || ""},
+                notes = COALESCE(notes, '') || ${` PR #${prNumber} merged.`}
+            WHERE id = ANY(${itemIds})
+            AND status = 'pr_open'
+          `.catch(() => {});
+
+          // Notify
+          import("@/lib/telegram").then(({ notifyHive }) =>
+            notifyHive({
+              agent: "webhook",
+              action: "backlog_merged",
+              company: "_hive",
+              status: "success",
+              summary: `PR #${prNumber} merged → ${itemTitles.join(", ")}`,
+            })
+          ).catch(() => {});
+        } else {
+          // Closed without merge — reset to ready
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'ready', dispatched_at = NULL,
+                notes = COALESCE(notes, '') || ${` PR #${prNumber} closed without merge — will retry.`}
+            WHERE id = ANY(${itemIds})
+            AND status = 'pr_open'
+          `.catch(() => {});
+        }
+      }
+      break;
+    }
+
     case "issues": {
       // Detect new hive-directive issues created directly on GitHub
       if (body.action !== "opened") break;
