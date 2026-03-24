@@ -1591,6 +1591,76 @@ export async function GET(req: Request) {
     }
   }
 
+  // 33. Stale record reconciliation — verify DB records match actual Vercel/GitHub state
+  // Detects: renamed repos, renamed Vercel projects, stale URLs after rebrand
+  let staleRecordsFixed = 0;
+  if (vercelToken) {
+    const teamId = await getSettingValue("vercel_team_id").catch(() => null);
+    const teamParam = teamId ? `?teamId=${teamId}` : "";
+    const reconCompanies = await sql`
+      SELECT id, slug, vercel_project_id, vercel_url, github_repo
+      FROM companies WHERE status IN ('mvp', 'active') AND vercel_project_id IS NOT NULL
+    `;
+    for (const rc of reconCompanies) {
+      try {
+        // Check Vercel project — get actual name and domains
+        const vRes = await fetch(`https://api.vercel.com/v9/projects/${rc.vercel_project_id}${teamParam}`, {
+          headers: { Authorization: `Bearer ${vercelToken}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (vRes.ok) {
+          const vProject = await vRes.json();
+          const actualName = vProject.name;
+          const actualAlias = (vProject.alias || []).find((a: string) => a.endsWith(".vercel.app"));
+          const actualUrl = actualAlias ? `https://${actualAlias}` : `https://${actualName}.vercel.app`;
+          const storedUrl = rc.vercel_url as string;
+
+          if (storedUrl && actualUrl !== storedUrl && !storedUrl.includes(actualName)) {
+            // DB has wrong URL — update it
+            await sql`UPDATE companies SET vercel_url = ${actualUrl}, updated_at = NOW() WHERE id = ${rc.id}`;
+            staleRecordsFixed++;
+            await sql`
+              INSERT INTO agent_actions (agent, action_type, status, company_id, output)
+              VALUES ('sentinel', 'stale_record_fix', 'success', ${rc.id},
+                ${JSON.stringify({ field: "vercel_url", old: storedUrl, new: actualUrl })}::jsonb)
+            `;
+          }
+        }
+
+        // Check GitHub repo — verify it exists at the stored path
+        if (rc.github_repo && ghPat) {
+          const ghRes = await fetch(`https://api.github.com/repos/${rc.github_repo}`, {
+            headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github+json" },
+            signal: AbortSignal.timeout(5000),
+          });
+          if (ghRes.status === 301 || ghRes.status === 404) {
+            // Repo was renamed or deleted — try to find it by slug
+            const findRes = await fetch(`https://api.github.com/repos/carloshmiranda/${rc.slug}`, {
+              headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github+json" },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (findRes.ok) {
+              const repoData = await findRes.json();
+              const actualRepo = repoData.full_name;
+              if (actualRepo !== rc.github_repo) {
+                await sql`UPDATE companies SET github_repo = ${actualRepo}, updated_at = NOW() WHERE id = ${rc.id}`;
+                await sql`UPDATE infra SET resource_id = ${actualRepo} WHERE resource_id = ${rc.github_repo} AND service = 'github'`;
+                staleRecordsFixed++;
+                await sql`
+                  INSERT INTO agent_actions (agent, action_type, status, company_id, output)
+                  VALUES ('sentinel', 'stale_record_fix', 'success', ${rc.id},
+                    ${JSON.stringify({ field: "github_repo", old: rc.github_repo, new: actualRepo })}::jsonb)
+                `;
+              }
+            }
+          }
+        }
+      } catch {
+        // API errors — skip this company, will retry next run
+      }
+    }
+  }
+
   // --- HTTP health checks (parallel) ---
   const companiesWithUrls = await sql`
     SELECT slug, COALESCE('https://' || domain, vercel_url) as check_url FROM companies
@@ -2194,6 +2264,7 @@ export async function GET(req: Request) {
     infra_repairs_attempted: infraRepairsAttempted,
     stats_endpoints_broken: statsEndpointsBroken,
     language_mismatches: languageMismatches,
+    stale_records_fixed: staleRecordsFixed,
     playbook_merged: playbookMerged,
     playbook_composites: playbookComposites,
     details: dispatches,
