@@ -197,38 +197,68 @@ export async function POST(req: Request) {
     return json({ chained: false, reason: "no_companies_need_cycles" });
   }
 
-  const next = scored[0]!;
+  // Parallel dispatch: dispatch up to max_concurrent companies simultaneously
+  const maxDispatch = Math.min(
+    health.max_concurrent || 1, // Use max_concurrent from health gate
+    scored.length,
+    health.max_concurrent - health.system.running_brains // Available slots
+  );
 
-  // Dispatch cycle_start for the top company
-  const res = await fetch(`https://api.github.com/repos/${REPO}/dispatches`, {
-    method: "POST",
-    headers: {
-      Authorization: `token ${ghPat}`,
-      Accept: "application/vnd.github.v3+json",
-    },
-    body: JSON.stringify({
-      event_type: "cycle_start",
-      client_payload: {
-        source: "chain_dispatch",
-        company: next.slug,
-        company_id: next.id,
-        priority_score: next.priority_score,
-        chain_next: true,
+  const toDispatch = scored.slice(0, maxDispatch);
+  const dispatched: Array<{ company: string; priority_score: number; status: number }> = [];
+
+  // Dispatch all selected companies in parallel
+  const dispatchPromises = toDispatch.map(async (company) => {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `token ${ghPat}`,
+        Accept: "application/vnd.github.v3+json",
       },
-    }),
-    signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({
+        event_type: "cycle_start",
+        client_payload: {
+          source: "chain_dispatch",
+          company: company.slug,
+          company_id: company.id,
+          priority_score: company.priority_score,
+          chain_next: true,
+          parallel_mode: true,
+        },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (res.ok || res.status === 204) {
+      dispatched.push({
+        company: company.slug,
+        priority_score: company.priority_score,
+        status: res.status,
+      });
+    }
+
+    return { company, res };
   });
 
-  if (res.ok || res.status === 204) {
-    // Log dispatch for dedup (so concurrent calls don't double-dispatch)
-    await sql`
-      INSERT INTO agent_actions (agent, action_type, status, description, company_id, started_at, finished_at)
-      VALUES ('dispatch', 'chain_cycle', 'success',
-        ${`Chain dispatch: ${company || "unknown"} → ${next.slug} (score ${next.priority_score})`},
-        ${next.id}, NOW(), NOW())
-    `.catch(() => {});
+  const results = await Promise.allSettled(dispatchPromises);
+
+  if (dispatched.length > 0) {
+    // Log parallel dispatches for dedup
+    for (const d of dispatched) {
+      const companyId = toDispatch.find(c => c.slug === d.company)?.id;
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, status, description, company_id, started_at, finished_at)
+        VALUES ('dispatch', 'chain_cycle', 'success',
+          ${`Parallel dispatch: ${company || "unknown"} done → ${d.company} (score ${d.priority_score})`},
+          ${companyId}, NOW(), NOW())
+      `.catch(() => {});
+    }
 
     // Notify via Telegram
+    const summary = dispatched.length === 1
+      ? `Chained: ${company} done → dispatching ${dispatched[0].company} (score: ${dispatched[0].priority_score})`
+      : `Parallel dispatch: ${company} done → dispatched ${dispatched.length} companies: ${dispatched.map(d => d.company).join(", ")}`;
+
     await fetch(`${HIVE_URL}/api/notify`, {
       method: "POST",
       headers: {
@@ -238,9 +268,9 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         agent: "dispatch",
         action: "chain_cycle",
-        company: next.slug,
+        company: dispatched.length === 1 ? dispatched[0].company : "parallel",
         status: "dispatched",
-        summary: `Chained: ${company} done → dispatching ${next.slug} (score: ${next.priority_score})`,
+        summary,
       }),
       signal: AbortSignal.timeout(5000),
     }).catch(() => {});
@@ -248,14 +278,20 @@ export async function POST(req: Request) {
     return json({
       chained: true,
       type: "company_cycle",
+      mode: dispatched.length > 1 ? "parallel" : "single",
       completed: { agent, company, status },
-      next: {
-        company: next.slug,
-        priority_score: next.priority_score,
-        pending_tasks: next.pending_tasks,
-      },
+      dispatched: dispatched.map(d => ({
+        company: d.company,
+        priority_score: d.priority_score,
+      })),
     });
   }
 
-  return json({ chained: false, reason: "github_dispatch_failed", status: res.status });
+  const failedResults = results.filter(r => r.status === 'rejected');
+  return json({
+    chained: false,
+    reason: "github_dispatch_failed",
+    failures: failedResults.length,
+    attempted: toDispatch.length
+  });
 }

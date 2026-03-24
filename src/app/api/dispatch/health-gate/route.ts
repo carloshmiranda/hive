@@ -41,8 +41,21 @@ export async function POST(req: Request) {
   const runningBrains = runningAgents.filter(
     (a) => ["ceo", "scout", "engineer", "evolver", "healer"].includes(a.agent)
   );
-  if (runningBrains.length >= 2) {
-    blockers.push(`concurrent_brains: ${runningBrains.length} brain agents running`);
+
+  // Calculate max concurrent based on budget availability
+  // Budget-aware concurrency: 225 turns per 5h window
+  // Conservative: Allow 2 concurrent up to 70% budget, 1 concurrent up to 90%, 0 above 90%
+  let maxConcurrent = 0;
+  if (claudePct <= 70) {
+    maxConcurrent = 2;
+  } else if (claudePct <= 85) {
+    maxConcurrent = 1;
+  } else {
+    maxConcurrent = 0;
+  }
+
+  if (runningBrains.length >= maxConcurrent) {
+    blockers.push(`concurrent_brains: ${runningBrains.length}/${maxConcurrent} brain agents running`);
   }
 
   // 3. System failure rate (last 24h)
@@ -93,6 +106,7 @@ export async function POST(req: Request) {
     healthy: blockers.length === 0,
     recommendation,
     hive_first: hiveFirst,
+    max_concurrent: maxConcurrent,
     budget: {
       claude_turns: claudeTurns,
       claude_pct: claudePct,

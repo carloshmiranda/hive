@@ -1713,22 +1713,40 @@ export async function GET(req: Request) {
     console.warn("Check 13b (backlog dispatch) failed:", e instanceof Error ? e.message : String(e));
   }
 
-  // 13c. Company cycle dispatch — remaining budget after Hive fixes + backlog
-  for (const r of needsCycle) {
-    if (cycleDispatches >= remainingSlots) break;
+  // 13c. Company cycle dispatch — parallel dispatch when budget allows
+  const companiesToDispatch = needsCycle.slice(0, remainingSlots);
+
+  // Dispatch all eligible companies in parallel
+  const cyclePromises = companiesToDispatch.map(async (r) => {
     await dispatchToActions("research_request", {
       source: "sentinel_cycle",
       company: r.slug,
       company_id: r.company_id,
       chain_to_ceo: true,
+      parallel_mode: remainingSlots > 1,
       trace_id: traceId,
     }, ghPat);
+
     dispatches.push({
       type: "brain",
       target: "cycle_start",
-      payload: { company: r.slug, priority_score: r.priority_score },
+      payload: {
+        company: r.slug,
+        priority_score: r.priority_score,
+        parallel_mode: remainingSlots > 1
+      },
     });
-    cycleDispatches++;
+
+    return r.slug;
+  });
+
+  if (cyclePromises.length > 0) {
+    await Promise.allSettled(cyclePromises);
+    cycleDispatches += companiesToDispatch.length;
+
+    if (companiesToDispatch.length > 1) {
+      console.log(`[sentinel] Parallel dispatch: ${companiesToDispatch.length} companies (${companiesToDispatch.map(r => r.slug).join(", ")})`);
+    }
   }
 
   // 14. Rate-limited agents → re-dispatch (company-scoped work goes direct to company repo)
