@@ -1,0 +1,91 @@
+// Telegram Bot API helper for Hive notifications
+// Sends real-time push notifications to Carlos when agents do work.
+//
+// Setup:
+//   1. Message @BotFather on Telegram, send /newbot, name it "Hive Bot"
+//   2. Copy the bot token → add as `telegram_bot_token` in Hive settings (/settings)
+//   3. Start a chat with the bot, send /start
+//   4. Get your chat ID: fetch https://api.telegram.org/bot<TOKEN>/getUpdates
+//      → look for result[0].message.chat.id
+//   5. Add chat ID as `telegram_chat_id` in Hive settings (/settings)
+
+import { getSettingValue } from "@/lib/settings";
+
+const TELEGRAM_API = "https://api.telegram.org";
+
+export async function sendTelegramMessage(
+  botToken: string,
+  chatId: string,
+  text: string,
+  parseMode: "HTML" | "Markdown" = "HTML"
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: parseMode,
+        disable_web_page_preview: true,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type NotificationEvent = {
+  agent: string;
+  action: string;
+  company?: string;
+  status: "started" | "success" | "failed";
+  summary: string;
+  details?: string;
+};
+
+// Format agent activity as a Telegram notification
+export function formatAgentNotification(event: NotificationEvent): string {
+  const icons: Record<string, string> = {
+    ceo: "\u{1F454}",
+    scout: "\u{1F50D}",
+    engineer: "\u2699\uFE0F",
+    evolver: "\u{1F9EC}",
+    growth: "\u{1F4C8}",
+    outreach: "\u{1F4E7}",
+    ops: "\u{1F527}",
+    sentinel: "\u{1F6E1}\uFE0F",
+    healer: "\u{1F3E5}",
+    digest: "\u{1F4EC}",
+    webhook: "\u{1F514}",
+  };
+  const statusIcons: Record<string, string> = {
+    started: "\u25B6\uFE0F",
+    success: "\u2705",
+    failed: "\u274C",
+  };
+  const icon = icons[event.agent] || "\u{1F916}";
+  const statusIcon = statusIcons[event.status] || "\u2753";
+
+  let msg = `${statusIcon} ${icon} <b>${event.agent.toUpperCase()}</b>`;
+  if (event.company) msg += ` \u2192 ${event.company}`;
+  msg += `\n<b>${event.action}</b>`;
+  msg += `\n${event.summary}`;
+  if (event.details) msg += `\n\n<i>${event.details.slice(0, 500)}</i>`;
+  return msg;
+}
+
+// Send a Hive notification (reads settings, sends if configured)
+export async function notifyHive(event: NotificationEvent): Promise<boolean> {
+  try {
+    const botToken = await getSettingValue("telegram_bot_token");
+    const chatId = await getSettingValue("telegram_chat_id");
+    if (!botToken || !chatId) return false;
+    const message = formatAgentNotification(event);
+    return sendTelegramMessage(botToken, chatId, message);
+  } catch {
+    return false;
+  }
+}

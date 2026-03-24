@@ -111,6 +111,17 @@ async function dispatchToActions(eventType: string, payload: Record<string, unkn
     },
     body: JSON.stringify({ event_type: eventType, client_payload: payload }),
   });
+
+  // Non-blocking Telegram notification
+  import("@/lib/telegram").then(({ notifyHive }) =>
+    notifyHive({
+      agent: (payload.agent as string) || eventType.split("_")[0],
+      action: eventType,
+      company,
+      status: "started",
+      summary: `Dispatched ${eventType} via GitHub Actions`,
+    })
+  ).catch(() => {});
 }
 
 async function dispatchToWorker(agent: string, companySlug: string, trigger: string) {
@@ -127,6 +138,17 @@ async function dispatchToWorker(agent: string, companySlug: string, trigger: str
     },
     body: JSON.stringify({ company_slug: companySlug, agent, trigger }),
   });
+
+  // Non-blocking Telegram notification
+  import("@/lib/telegram").then(({ notifyHive }) =>
+    notifyHive({
+      agent,
+      action: trigger,
+      company: companySlug,
+      status: "started",
+      summary: `Dispatched ${agent} worker for ${companySlug}`,
+    })
+  ).catch(() => {});
 }
 
 async function dispatchToCompanyWorkflow(
@@ -150,6 +172,17 @@ async function dispatchToCompanyWorkflow(
     },
     body: JSON.stringify({ ref: "main", inputs }),
   });
+
+  // Non-blocking Telegram notification
+  import("@/lib/telegram").then(({ notifyHive }) =>
+    notifyHive({
+      agent: inputs.agent || workflowKey.replace("hive-", ""),
+      action: `${workflowKey} workflow`,
+      company,
+      status: "started",
+      summary: `Dispatched ${workflow} on ${githubRepo.split("/")[1]}`,
+    })
+  ).catch(() => {});
 }
 
 async function checkHttpHealth(
@@ -2790,6 +2823,31 @@ export async function GET(req: Request) {
     const msg = e instanceof Error ? e.message : String(e);
     console.warn("Check 35 (error pattern learning) failed:", msg);
   }
+
+  // Send Telegram notification if something interesting happened
+  try {
+    const { notifyHive } = await import("@/lib/telegram");
+    const interesting = dispatches.length > 0 || staleRecordsFixed > 0 ||
+      selfImprovementProposals > 0 || agentRegressions > 0 || statsEndpointsBroken > 0 ||
+      languageMismatches > 0;
+    if (interesting) {
+      const parts: string[] = [];
+      if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
+      if (staleRecordsFixed > 0) parts.push(`${staleRecordsFixed} stale records fixed`);
+      if (selfImprovementProposals > 0) parts.push(`${selfImprovementProposals} improvement proposals`);
+      if (agentRegressions > 0) parts.push(`${agentRegressions} agent regressions`);
+      if (statsEndpointsBroken > 0) parts.push(`${statsEndpointsBroken} broken stats endpoints`);
+      if (languageMismatches > 0) parts.push(`${languageMismatches} language mismatches`);
+
+      await notifyHive({
+        agent: "sentinel",
+        action: "health_check",
+        status: "success",
+        summary: parts.join(", "),
+        details: dispatches.map((d: Dispatch) => `${d.type}: ${d.target}`).join("\n"),
+      });
+    }
+  } catch { /* Telegram not configured — silently skip */ }
 
   return Response.json({
     ok: true,

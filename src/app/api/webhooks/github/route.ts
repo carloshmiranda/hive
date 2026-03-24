@@ -97,6 +97,17 @@ export async function POST(req: Request) {
           VALUES (${company.id}, 'engineer', 'deploy', ${`Deploy failed: ${desc}`}, 'failed', ${desc}, now(), now())
         `;
 
+        // Telegram notification for deploy failure
+        import("@/lib/telegram").then(({ notifyHive }) =>
+          notifyHive({
+            agent: "webhook",
+            action: "deploy_failed",
+            company: repoName,
+            status: "failed",
+            summary: `Deploy failed: ${desc}`,
+          })
+        ).catch(() => {});
+
         // Create escalation if deploy keeps failing
         const [recentFailures] = await sql`
           SELECT count(*) as cnt FROM agent_actions
@@ -122,6 +133,17 @@ export async function POST(req: Request) {
           INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
           VALUES (${company.id}, 'engineer', 'deploy', 'Deploy succeeded', 'success', now(), now())
         `;
+
+        // Telegram notification for deploy success
+        import("@/lib/telegram").then(({ notifyHive }) =>
+          notifyHive({
+            agent: "webhook",
+            action: "deploy_success",
+            company: repoName,
+            status: "success",
+            summary: "Deploy succeeded",
+          })
+        ).catch(() => {});
       }
       break;
     }
