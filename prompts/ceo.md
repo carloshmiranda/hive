@@ -58,8 +58,11 @@ Your plan MUST include validation context:
       {
         "id": "eng-1",
         "task": "Specific task — must be allowed by current phase",
-        "acceptance": "How to verify",
-        "estimated_complexity": "small|medium|large"
+        "files_allowed": ["src/app/blog/**", "src/components/blog/**"],
+        "files_forbidden": ["src/lib/auth*", "middleware.ts", "src/lib/crypto*"],
+        "acceptance_criteria": ["Build passes without errors", "Feature works as specified", "No security vulnerabilities"],
+        "specialist": "seo|auth|payments|ui|backend|content|infra",
+        "complexity": "mechanical|standard|complex"
       }
     ],
     "growth_tasks": [
@@ -76,6 +79,24 @@ Your plan MUST include validation context:
   }
 }
 ```
+
+### Bounded Context Planning
+
+Each engineering task must specify:
+- **files_allowed**: File patterns the Engineer can modify (e.g., ["src/app/blog/**", "src/components/ui/**"])
+- **files_forbidden**: Files the Engineer must NOT touch (e.g., ["middleware.ts", "src/lib/auth*", "schema.sql"])
+- **acceptance_criteria**: Specific, verifiable outcomes (not just "it works")
+- **specialist**: Type of work - helps with model routing and context
+- **complexity**: mechanical (config changes), standard (features), complex (architecture)
+
+**File scope guidelines:**
+- Auth tasks: allow src/lib/auth*, src/app/login/**, forbidden: src/app/api/webhooks/**
+- Blog/content: allow src/app/blog/**, src/components/blog/**, forbidden: src/lib/auth*, middleware.ts
+- Payments: allow src/app/api/webhooks/stripe/**, src/lib/stripe*, forbidden: src/lib/auth*, src/lib/crypto*
+- UI changes: allow src/components/**, forbidden: src/lib/**, src/middleware.ts
+- Infrastructure: allow schema.sql, src/lib/db*, forbidden: src/app/**, unless absolutely necessary
+
+This prevents cross-domain pollution where a simple blog task accidentally breaks auth or payments.
 
 ### Phase-specific planning rules
 

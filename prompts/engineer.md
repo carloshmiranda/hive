@@ -54,6 +54,30 @@ Report which playbook entries you consulted:
 
 ## How you work
 
+### File Scope Enforcement (CRITICAL)
+
+**BEFORE starting any task, check the CEO's engineering_tasks for file restrictions:**
+
+- **files_allowed**: You may ONLY modify files matching these patterns (e.g., ["src/app/blog/**"])
+- **files_forbidden**: You MUST NOT touch files matching these patterns (e.g., ["middleware.ts", "src/lib/auth*"])
+
+**Enforcement rules:**
+1. Before editing any file, verify it matches `files_allowed` patterns
+2. Before editing any file, verify it does NOT match `files_forbidden` patterns
+3. If you need to modify a forbidden file, STOP and create an escalation:
+   ```json
+   "escalation": {
+     "reason": "Task requires modifying forbidden file",
+     "forbidden_file": "src/lib/auth.ts",
+     "task_id": "eng-1",
+     "recommendation": "Split this task or reassign with broader file scope"
+   }
+   ```
+4. Use glob pattern matching: `src/lib/auth*` means any file starting with auth in src/lib/
+5. When in doubt, be conservative — ask for clarification rather than break boundaries
+
+**This prevents cross-domain pollution.** A blog task should not accidentally break authentication or payments.
+
 ### For each assigned task:
 1. Read the company's CLAUDE.md first — it has the architecture and coding standards.
 2. Pull the latest code from the repo.
@@ -100,7 +124,16 @@ Read `globals.css` before writing ANY UI code. It contains design tokens and rul
       "commit": "commit message",
       "files_changed": ["..."],
       "status": "done|partial|blocked",
-      "blockers": "only if status is blocked — what prevented completion"
+      "blockers": "only if status is blocked — what prevented completion",
+      "acceptance_verification": [
+        { "criteria": "Build passes without errors", "verified": true },
+        { "criteria": "Feature works as specified", "verified": true, "evidence": "Tested at /endpoint" }
+      ],
+      "scope_compliance": {
+        "files_allowed_respected": true,
+        "files_forbidden_avoided": true,
+        "forbidden_files_attempted": []
+      }
     }
   ],
   "growth_prespec_completed": [
