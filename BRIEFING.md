@@ -64,6 +64,16 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-24 [code] Continuous event-driven dispatch + health gate + chain callbacks
+- **Continuous dispatch**: Agents no longer wait for Sentinel's 4h poll to dispatch next work. When a CEO cycle completes, it calls `/api/dispatch/cycle-complete` which checks health, scores companies, and dispatches the next one immediately.
+- **Health gate** (`/api/dispatch/health-gate`): Pre-dispatch check for budget (Claude 225/5h), concurrent agents, system failure rate, Hive backlog priority. Returns `dispatch`/`wait`/`stop` recommendation.
+- **Cycle-complete callback** (`/api/dispatch/cycle-complete`): Completion callback endpoint. Flow: agent done → health gate → hive-first check (backlog P0/P1 take priority) → score companies → dispatch next highest-priority cycle. Falls back to backlog items if no companies need cycles.
+- **Chain cascade**: Engineer backlog chain now falls through to company cycles when backlog is empty. CEO cycle_complete chains to next company. Sentinel becomes safety net, not primary dispatcher.
+- **Hive-first priority**: Health gate checks for critical Hive backlog items. If P0/P1 items exist and no Hive engineer is running, recommends backlog dispatch before company cycles.
+- **Model routing 48h window**: Changed from 7-day to 48h window for faster failover when providers degrade.
+- **Backlog scoring engine** (`src/lib/backlog-priority.ts`): WSJF/RICE hybrid — Impact 35%, Urgency 25%, Reliability 20%, Blocking 15% × category multiplier × novelty penalty.
+- **Middleware fix**: Added `api/notify`, `api/backlog`, `api/dispatch` to middleware exclusion list.
+
 ### 2026-03-24 [code] Telegram notifications + self-improvement loop + Ruflo systems + guardrails
 - **Telegram real-time notifications**: Built `src/lib/telegram.ts` with sendMessage, sendMessageWithButtons, editMessage. Agents send notifications via `/api/notify`. Approval gates auto-notify with Approve/Reject inline buttons. PRs notify with Merge/Close buttons. Auto-merged PRs get informational-only messages.
 - **Telegram interactive approvals**: `/api/webhooks/telegram/route.ts` handles callback queries (button presses). Approve/reject updates approval status + dispatches Engineer for new_company. Merge/close manages PRs via GitHub API. Messages edited to show result after action.
@@ -310,13 +320,12 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Set up Telegram bot** — create bot via @BotFather, set webhook URL, add tokens to Hive settings. Enables real-time notifications + interactive approvals.
-2. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-3. **Fix CEO review recording** — most cycles complete without CEO scores, breaking validation scoring and kill signal detection
-4. **Fix stats endpoints at company level** — all 3 companies return broken /api/stats, metrics pipeline collects zeros. Check 31 creates tasks but Engineer needs to execute them
-5. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
-6. **Add Groq backoff/retry** — concurrent Ops dispatches hit 429 rate limits
-7. **Triage 15 idea-status companies** — Scout proposals accumulating while existing companies can't execute properly
+1. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
+2. **Fix CEO review recording** — most cycles complete without CEO scores, breaking validation scoring and kill signal detection
+3. **Fix stats endpoints at company level** — all 3 companies return broken /api/stats, metrics pipeline collects zeros. Check 31 creates tasks but Engineer needs to execute them
+4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
+5. **Add Groq backoff/retry** — concurrent Ops dispatches hit 429 rate limits
+6. **Triage 15 idea-status companies** — Scout proposals accumulating while existing companies can't execute properly
 
 ## Open Questions
 

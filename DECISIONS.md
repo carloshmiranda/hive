@@ -343,6 +343,24 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Separate self-improvement agent: over-engineered — Engineer already handles code changes
 **Consequences:** Hive can fix its own bugs and implement improvements without manual sessions. Carlos reviews risky changes via PR (or Telegram Merge/Close buttons). Safe changes land immediately. The backlog shrinks autonomously. Trade-off: a bad safe classification could push a breaking change — but the classification is conservative (only config/docs/minor code changes are safe).
 
+### ADR-029: Continuous event-driven dispatch (replace Sentinel polling)
+**Date:** 2026-03-24
+**Status:** Accepted
+**Context:** Sentinel runs every 4h as a cron job, dispatching company cycles and backlog items. This meant work sat idle for up to 4h between completions. With backlog chain dispatch already working (Engineer → backlog/dispatch), the same pattern can extend to company cycles. Carlos asked: "Why do we need to wait on Sentinel 4h cycle to move work if there is work to be done?"
+**Decision:** Build completion callbacks that chain work items automatically. Two new endpoints: (1) `/api/dispatch/health-gate` — checks Claude budget (225/5h), concurrent brain agents, system failure rate, Hive backlog priority. Returns dispatch/wait/stop recommendation. (2) `/api/dispatch/cycle-complete` — completion callback called by CEO workflow after cycle_complete/ceo_review. Flow: health gate → hive-first check (P0/P1 backlog takes priority) → score all companies → dispatch highest-priority one. Engineer's backlog chain falls through to company cycles when backlog is empty.
+**Key design choices:**
+- Health gate as a separate endpoint — reusable by any dispatch trigger (Sentinel, chain, manual)
+- Hive-first priority — critical backlog items always beat company cycles
+- 6h minimum spacing — prevents re-dispatching the same company too quickly
+- Company scoring reuses Sentinel's formula (pending tasks, staleness, lifecycle stage, CEO score)
+- Sentinel remains as safety net — catches anything that fell through chain dispatch (e.g., after failures)
+- Completion callbacks are fire-and-forget (`|| true`) — workflow success not dependent on chain working
+**Alternatives considered:**
+- WebSocket-based dispatch: too complex for serverless
+- Reduce Sentinel interval to 1h: still polling, wastes cron budget
+- GitHub Actions workflow chaining: limited to same repo, complex dependency graph
+**Consequences:** Work moves immediately after completion instead of waiting up to 4h. Budget utilization improves. Sentinel's role changes from primary dispatcher to safety net. Trade-off: more API calls between workflows and Vercel (each completion triggers health gate + scoring), but these are fast SQL queries within Vercel's free tier.
+
 ### ADR-028: Telegram as real-time notification and approval channel
 **Date:** 2026-03-24
 **Status:** Accepted

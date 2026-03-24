@@ -114,6 +114,14 @@ Company repos are PUBLIC — GitHub gives unlimited Actions minutes. Each compan
 ### Tier 3: Vercel serverless worker agents
 Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Called directly from brain agent chain dispatch steps or from Sentinel cron.
 
+### Continuous dispatch (chain callbacks)
+Work chains automatically without waiting for Sentinel's 4h poll:
+- **CEO cycle_complete** → calls `/api/dispatch/cycle-complete` → health gate → score companies → dispatch next cycle
+- **Engineer backlog done** → calls `/api/backlog/dispatch` → if empty, falls through to `/api/dispatch/cycle-complete`
+- **Health gate** (`/api/dispatch/health-gate`): checks Claude budget, concurrent agents, failure rate, Hive backlog priority. Returns dispatch/wait/stop.
+- **Hive-first priority**: P0/P1 backlog items take precedence over company cycles.
+- Sentinel remains as safety net — catches work missed by chain dispatch (e.g., after failures or system restarts).
+
 ## Learning from Imports
 
 When a project is imported, the Onboarding agent runs two phases:

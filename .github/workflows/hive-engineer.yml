@@ -834,7 +834,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"agent\":\"engineer\",\"action\":\"self_improvement\",\"company\":\"hive\",\"status\":\"${STATUS}\",\"summary\":\"${TASK}\"}" || true
 
-      - name: Chain dispatch next backlog item
+      - name: Chain dispatch next work item
         if: always()
         run: |
           OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -842,12 +842,27 @@ jobs:
             | jq -r '.value')
           BACKLOG_ID=$(echo '${{ needs.context.outputs.payload }}' | jq -r '.backlog_id // empty' 2>/dev/null || echo "")
           STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
+          HIVE_URL="https://hive-phi.vercel.app"
+          COMPANY=$(echo '${{ needs.context.outputs.payload }}' | jq -r '.company // empty' 2>/dev/null || echo "")
+
           if [ -n "$BACKLOG_ID" ] || [ "$(echo '${{ needs.context.outputs.payload }}' | jq -r '.chain_next // false')" = "true" ]; then
-            echo "Chaining: marking $BACKLOG_ID as $STATUS, dispatching next backlog item..."
-            curl -s -X POST "https://hive-phi.vercel.app/api/backlog/dispatch" \
+            # First try to chain to next backlog item
+            echo "Chaining: marking $BACKLOG_ID as $STATUS, dispatching next..."
+            BACKLOG_RESULT=$(curl -s -X POST "$HIVE_URL/api/backlog/dispatch" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\"}" || true
+              -d "{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\"}" || echo "{}")
+            echo "  Backlog result: $BACKLOG_RESULT"
+
+            # If no backlog items left, chain to next company cycle
+            DISPATCHED=$(echo "$BACKLOG_RESULT" | jq -r '.dispatched // false' 2>/dev/null || echo "false")
+            if [ "$DISPATCHED" != "true" ]; then
+              echo "No backlog items — chaining to company cycle..."
+              curl -s -X POST "$HIVE_URL/api/dispatch/cycle-complete" \
+                -H "Authorization: Bearer $OIDC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"agent\":\"engineer\",\"company\":\"${COMPANY}\",\"status\":\"${STATUS}\",\"action_type\":\"self_improvement\"}" || true
+            fi
           fi
 
       - name: Log failure to Hive API

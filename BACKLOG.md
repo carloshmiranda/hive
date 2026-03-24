@@ -151,6 +151,9 @@ Not every business needs Next.js. Astro for content/SEO sites, SvelteKit for lig
 ### ✅ P3 — Autonomous self-improvement (DONE — 2026-03-24)
 Sentinel Check 37 detects improvement opportunities (recurring errors, zero metrics, timeouts, stuck tasks). Creates proposals. Safe changes push to main. Risky changes create PRs. Engineer dispatched with `company: "_hive"`. Telegram notification after every self-improvement build.
 
+### ✅ P1 — Continuous event-driven dispatch (DONE — 2026-03-24)
+Replaced Sentinel 4h polling as primary dispatcher. New endpoints: `/api/dispatch/health-gate` (budget, failures, concurrent agents, Hive-first check), `/api/dispatch/cycle-complete` (completion callback → health gate → score companies → dispatch next). CEO workflow chains to next company after cycle_complete. Engineer workflow chains to backlog then company cycles when done. Hive backlog items take priority over company cycles when P0/P1 items exist. Sentinel remains as safety net for missed dispatches.
+
 ### ⚪ P3 — Business model diversity beyond SaaS
 Content/affiliate sites (ad revenue), faceless YouTube channels (ad revenue), newsletter businesses (sponsorship), API/tool businesses (usage-based). Each needs different boilerplate, metrics, and growth strategies.
 

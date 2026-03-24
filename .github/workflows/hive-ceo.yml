@@ -356,7 +356,7 @@ jobs:
             fi
           fi
 
-          # cycle_complete / ceo_review: trigger post-cycle consolidation
+          # cycle_complete / ceo_review: trigger post-cycle consolidation + chain next company
           # This feeds CEO review outcomes back into the playbook (learning loop)
           if echo "$TRIGGER" | grep -qE "cycle_complete|ceo_review"; then
             echo "Triggering post-cycle consolidation..."
@@ -365,6 +365,14 @@ jobs:
               -H "Content-Type: application/json" \
               -d "{\"company_slug\":\"$COMPANY\"}" \
               -o /dev/null -w "  Consolidation: HTTP %{http_code}\n" || true
+
+            # Chain dispatch: cycle done → health gate → next company
+            echo "Chaining to next company cycle..."
+            CHAIN_RESULT=$(curl -s -X POST "$HIVE_URL/api/dispatch/cycle-complete" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              -d "{\"agent\":\"ceo\",\"company\":\"$COMPANY\",\"status\":\"cycle_complete\",\"action_type\":\"cycle_review\"}")
+            echo "  Chain result: $CHAIN_RESULT"
           fi
 
           echo "Chain dispatch complete"
