@@ -45,6 +45,20 @@ export async function POST(req: Request) {
     blockers.push(`concurrent_brains: ${runningBrains.length} brain agents running`);
   }
 
+  // 3a. Rate limit detection — consecutive Claude limit failures
+  const [rateLimitRow] = await sql`
+    SELECT COUNT(*) FILTER (WHERE status = 'failed'
+      AND (error ILIKE '%rate limit%' OR error ILIKE '%session limit%'
+        OR error ILIKE '%usage cap%' OR error ILIKE '%too many%'
+        OR error ILIKE '%quota%' OR error ILIKE '%limit reached%'
+        OR error ILIKE '%max_tokens%' OR error ILIKE '%capacity%'))::int as rate_limited
+    FROM agent_actions
+    WHERE agent IN ('ceo', 'scout', 'engineer', 'evolver', 'healer')
+    AND started_at > NOW() - INTERVAL '2 hours'
+  `.catch(() => [{ rate_limited: 0 }]);
+  const rateLimited = Number((rateLimitRow as Record<string, number>)?.rate_limited || 0);
+  if (rateLimited >= 2) blockers.push(`claude_rate_limited: ${rateLimited} failures in 2h (weekly/session cap likely hit)`);
+
   // 3. System failure rate (last 24h)
   const [failRate] = await sql`
     SELECT COUNT(*) FILTER (WHERE status = 'failed')::float /
