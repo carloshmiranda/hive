@@ -15,6 +15,34 @@
 
 ---
 
+### 2026-03-24 Sentinel auto-resolve loop — 94 dispatches/48h for single company
+**What happened:** Sentinel Check 25 (recurring escalation detector) tried to auto-resolve `capability_migration` and `escalation` approvals by matching them against the capability registry. This false-matched to `repair_infra`, which was called but couldn't fix the issue (wrong endpoint for the problem). The approval stayed pending, so next run it tried again. Combined with Check 17 creating NEW escalation approvals on every run (no dedup), this created 94 dispatches in 48h for Flolio alone.
+**Root cause:** Auto-resolve should only apply to gate types that CAN be resolved by calling an API endpoint (like `spend_approval` matching `repair_infra`). `capability_migration` and `escalation` gates require human review or code changes — no API can fix them.
+**Fix applied:** (1) Skip `capability_migration`, `escalation`, `ops_escalation`, `new_company`, `kill_company` from auto-resolve. (2) Dedup Check 17 escalation approvals. (3) Shortened expiry to 2-3 days. (4) Bulk-expired 34 stale noise approvals.
+**Prevention:** When adding auto-resolve logic, always ask: "Can this gate type actually be resolved by calling an API?" If not, skip it. Auto-resolve is for recurring infra problems, not for workflow/configuration issues.
+**Affects:** hive
+
+### 2026-03-24 Scout proposes names without checking domain/Vercel availability
+**What happened:** CiberSegura was proposed with slug `cibersegura`, but `cibersegura.vercel.app` was already taken by a Spanish cybersecurity site. Vercel assigned `cibersegura-flax.vercel.app` — an unprofessional URL. The DB stored the assumed URL (wrong), and Carlos was confused by seeing someone else's Spanish site. Additionally, CiberSegura was proposed as a blog but provisioned as SaaS (same poupamais bug).
+**Root cause:** Scout prompt had zero guidance on checking name/domain availability. It assumed any slug would work.
+**Fix applied:** Added Phase 5 to Scout prompt: mandatory Vercel subdomain check (web_fetch), GitHub repo check, and domain availability search before finalizing proposals. If taken, must pick a different name.
+**Prevention:** Scout MUST verify availability before proposing. Provisioner should also read back actual Vercel domains from the API response rather than assuming `{slug}.vercel.app`.
+**Affects:** both
+
+### 2026-03-24 CiberSegura URL pointing to someone else's site
+**What happened:** `cibersegura.vercel.app` showed a Spanish cybersecurity site that Carlos thought was ours. Our actual site was at `cibersegura-flax.vercel.app` — Vercel added the `-flax` suffix because `cibersegura.vercel.app` was already taken by another user.
+**Root cause:** During provisioning, the code assumed the Vercel project would get `{slug}.vercel.app` as its domain. Vercel adds random suffixes when the name is taken. The DB stored the assumed URL, never the actual one.
+**Fix applied:** Updated DB to `cibersegura-flax.vercel.app`.
+**Prevention:** After Vercel project creation, read back the actual domains from the Vercel API response instead of assuming `{slug}.vercel.app`. Add this check to the provisioning flow.
+**Affects:** both
+
+### 2026-03-24 Zero metrics across all companies — broken stats pipeline
+**What happened:** All companies showed 0 page_views, 0 signups, 0 customers. The metrics cron ran successfully but silently fell back to zeros for every company.
+**Root cause:** Three cascading failures: (1) Most company repos don't have `/api/stats` endpoint (VerdeDesk, Flolio), (2) Senhorio has one but with wrong response format and 500 error, (3) No pageview-tracking middleware deployed. The boilerplate has these files but agents overwrote or never deployed them.
+**Fix applied:** Added Sentinel Check 31 that probes `/api/stats` on every company each run and auto-creates engineering tasks when broken. First run detected 4 broken endpoints and created 3 fix tasks.
+**Prevention:** After provisioning, run a health check on `/api/stats` before marking the company as ready. Add stats endpoint validation to the post-provision verification step.
+**Affects:** both
+
 ### 2026-03-23 Provisioning sets wrong company_type when Claude agent hits max_turns
 **What happened:** Poupamais was proposed by Scout as a blog/affiliate site, approved by Carlos, but provisioned as SaaS. The company got SaaS boilerplate, SaaS validation phases, and SaaS-specific build tasks — completely wrong business model.
 **Root cause:** The Engineer provision agent's STEP 0 (set company_type) is a Claude Code step that queries the approval context and sets the type. When the agent hit max_turns (30) before completing STEP 0, company_type was never set. The provisioner defaulted to SaaS behavior. The business_model from the Scout proposal was lost.

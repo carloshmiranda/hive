@@ -13,7 +13,7 @@
   - VerdeDesk — status: mvp, 18+ cycles, last CEO score 5/10, building waitlist + IRS guide
   - Senhorio — status: mvp, 4 cycles, last CEO score 3/10, built tax calculator at /calculadora
   - Flolio — status: mvp, 4 cycles (imported, iterating autonomously)
-- **Pipeline:** 9 idea-status companies (Scout proposals, pending approval)
+- **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
 ### Agent Architecture (7 agents)
@@ -38,9 +38,17 @@
 - **Blocked on:**
   - Resend domain verification (need a real domain for outreach emails)
 - **Known issues:**
-  - 9 Scout proposals pending approval (auto-expiry planned)
+  - 15 Scout proposals pending approval (auto-expiry planned but accumulating faster)
   - All 3 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration)
+  - CEO reviews not being recorded — most cycles complete without CEO scores
+  - Engineer 68% failure rate is polling timeouts (20min), not real failures
+  - Zero metrics across all 3 companies — stats endpoints broken at company level
+  - Groq rate limiting (429) on concurrent Ops dispatches
 - **Recently fixed:**
+  - Sentinel dispatch loop — 94 dispatches in 48h (Check 25 skip list + Check 17 dedup + expiry reduction)
+  - Self-healing stats endpoint probe (Sentinel Check 31) — auto-creates fix tasks for broken /api/stats
+  - 34 stale noise approvals bulk-expired (escalation + capability_migration)
+  - CiberSegura URL fixed (was pointing to someone else's site)
   - Accrue→Flolio Vercel project rename (deleted broken Hive-provisioned project, renamed original)
   - Autonomous deploy repair (Sentinel check 30: infra-first → circuit breaker → code fix)
   - UI/UX quality gates across all agent prompts + boilerplate design tokens
@@ -54,6 +62,14 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-24 [code] Company review + Sentinel loop fix + metrics pipeline self-healing
+- **Comprehensive company review**: Audited all agent_actions, cycles, and errors across all companies. Found 5 critical issues: (1) Sentinel dispatch loop (94/48h), (2) Engineer polling timeouts (68% of failures), (3) CEO reviews not recorded, (4) 34 stale noise approvals, (5) Groq rate limits.
+- **Sentinel dispatch loop fixed**: Check 25 auto-resolve was trying to fix non-API-resolvable gate types (capability_migration, escalation), creating a feedback loop. Added SKIP_AUTO_RESOLVE list. Check 17 now deduplicates escalation approvals. Reduced expiry: capability_migration 14d→3d, escalation 3d→2d.
+- **Self-healing stats endpoints (Check 31)**: Probes each company's `/api/stats` endpoint, validates response format (`{ok, views}`), creates engineering tasks for broken endpoints. First run detected 4 broken endpoints across 3 companies.
+- **CiberSegura URL fix**: DB had `cibersegura.vercel.app` (someone else's site). Updated to `cibersegura-flax.vercel.app` (actual Vercel-assigned URL with suffix).
+- **Approval cleanup**: Bulk-expired 34 stale noise approvals (escalation + capability_migration). 16 new_company + 1 spend_approval remain as real decisions.
+- **Free LLM dispatch**: Triggered Growth (Gemini) and Ops (Groq) for all 3 active companies. Groq hit 429 rate limits on concurrent calls — needs backoff.
 
 ### 2026-03-23 [code] Accrue→Flolio rename + autonomous deploy repair + free LLM dispatch
 - **Accrue→Flolio rename**: Deleted broken Hive-provisioned `flolio` Vercel project (prj_yazBlxB1, ERROR state). Renamed original `accrue` project → `flolio` via Vercel API. Updated DB (companies + infra tables). Custom domain flolio.app still active. No more naming confusion.
@@ -284,9 +300,11 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 ## What's Next (in priority order)
 
 1. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-2. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
-3. **Revenue focus** — all 3 active companies need growth-focused CEO cycles emphasizing conversion and monetization
-4. **Dispatch free LLM work** — Growth (Gemini) and Ops (Groq) can run at $0 via company repos and Vercel serverless
+2. **Fix CEO review recording** — most cycles complete without CEO scores, breaking validation scoring and kill signal detection
+3. **Fix stats endpoints at company level** — all 3 companies return broken /api/stats, metrics pipeline collects zeros. Check 31 creates tasks but Engineer needs to execute them
+4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
+5. **Add Groq backoff/retry** — concurrent Ops dispatches hit 429 rate limits
+6. **Triage 15 idea-status companies** — Scout proposals accumulating while existing companies can't execute properly
 
 ## Open Questions
 

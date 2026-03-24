@@ -187,7 +187,16 @@ For each competitor, gather ALL of the following:
 - web_fetch: Google Trends for niche keywords (rising = good, declining = avoid)
 - For Portuguese niches: check INE statistics, government data
 
-### Phase 5: Rank, cross-reference portfolio, and build 3 proposals
+### Phase 5: Name & domain availability check (MANDATORY for each finalist)
+Before finalizing proposals, verify the proposed slug/name is actually available:
+
+1. **Vercel subdomain**: web_fetch `https://{slug}.vercel.app` — if it loads a real site, the name is TAKEN. Pick a different name. Do NOT propose a name where Vercel will add a random suffix (like `-flax` or `-nine`).
+2. **GitHub repo**: web_fetch `https://github.com/carloshmiranda/{slug}` — if it returns a repo page, the name is TAKEN.
+3. **Domain availability**: web_search `"{slug}.com" OR "{slug}.app" domain available` — prefer names where a `.com` or `.app` domain could be purchased. This is not a hard requirement but strongly preferred.
+
+If a name is taken on Vercel or GitHub, you MUST choose a different slug. Try variations: add a prefix (get-, use-, try-), combine words differently, or pick a completely different name. The deployed URL matters — nobody wants `myapp-flax.vercel.app`.
+
+### Phase 6: Rank, cross-reference portfolio, and build 3 proposals
 Score each niche on:
 1. **Demand strength** — community complaints, search volume, trend direction
 2. **Competition gap** — underserved, overpriced, low quality, or non-existent

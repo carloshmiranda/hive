@@ -39,6 +39,15 @@ Added "Visual quality rules for content pages" section to growth.md: reference d
 ### ✅ P1 — Boilerplate design token system (DONE — 2026-03-23)
 Added Tailwind v4 @theme block to globals.css with constrained tokens: brand/accent colors, neutrals, feedback colors, typography scale (5 sizes), 8px spacing grid, 3 radius options, 2 shadow options. Added 10 design rules as CSS comments (no gradients, max 2 font weights, max 3 colors, etc.). Engineer prompt updated with 10 visual quality standards. Company CLAUDE.md template updated to reference tokens.
 
+### 🟡 P1 — Fix CEO review not recording scores
+Most cycles complete without CEO review scores. This breaks validation scoring (score stays at 0), kill signal detection (no decline to detect), and agent grading. Root cause: CEO review dispatch may not be firing, or CEO agent may not be writing structured output. Investigate cycle completion flow → CEO review dispatch → review output parsing.
+
+### 🟡 P1 — Engineer polling timeout false failures
+68% of Engineer failures are 20-minute GitHub Actions polling timeouts, not actual build failures. The build may succeed on the company repo but Hive's Engineer workflow times out waiting. Options: (1) increase polling timeout, (2) webhook-based callback from company repo, (3) don't count polling timeouts as failures in success rate calculations.
+
+### 🟡 P1 — Groq rate limit backoff
+Concurrent Ops dispatches hit Groq 429 rate limits. Need exponential backoff + jitter in `/api/agents/dispatch` for Groq provider, or stagger Ops dispatches in Sentinel with delays between companies.
+
 ### 🟢 P2 — Performance-driven model routing
 Track per-agent success rates by model. If Gemini Flash has >90% success on Growth tasks, keep it. If Groq starts failing Ops checks, auto-escalate to Claude. The routing table should be dynamic, not static. Inspired by Ruflo's Q-Learning router that tracks outcomes and improves routing over time.
 

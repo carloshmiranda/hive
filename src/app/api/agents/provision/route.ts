@@ -116,11 +116,29 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Step 4: Update company record ──
+  // ── Step 4: Update company record with ACTUAL Vercel URL ──
+  // Read back actual domain from Vercel API instead of assuming {slug}.vercel.app
+  // (Vercel adds random suffixes like -flax when the name is taken)
+  let actualVercelUrl = `https://${company_slug}.vercel.app`;
+  if (vercelProjectId) {
+    try {
+      const { getProject } = await import("@/lib/vercel");
+      const proj = await getProject(vercelProjectId);
+      // Vercel returns aliases array or a name that may differ from the slug
+      const alias = proj.alias?.find((a: string) => a.endsWith('.vercel.app'));
+      if (alias) {
+        actualVercelUrl = `https://${alias}`;
+      } else if (proj.name && proj.name !== company_slug) {
+        actualVercelUrl = `https://${proj.name}.vercel.app`;
+      }
+    } catch {
+      // Fall back to assumed URL if API call fails
+    }
+  }
   await sql`
     UPDATE companies SET
       vercel_project_id = COALESCE(${vercelProjectId}, vercel_project_id),
-      vercel_url = COALESCE(${'https://' + company_slug + '.vercel.app'}, vercel_url),
+      vercel_url = COALESCE(${actualVercelUrl}, vercel_url),
       updated_at = NOW()
     WHERE id = ${company_id}
   `.catch(() => {});
