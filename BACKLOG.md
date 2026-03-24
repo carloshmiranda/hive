@@ -111,8 +111,8 @@ Dynamic routing in worker dispatch: `getOptimalModel()` queries 7-day success ra
 ### ✅ P2 — Memory/playbook consolidation worker (DONE — 2026-03-23)
 Sentinel check 29: Jaccard word similarity (≥0.6) merges near-duplicate playbook entries within same domain. Higher-confidence entry wins, absorbs loser's counts, loser gets superseded_by. Cross-company composites created (≥0.5 similarity, different companies) as portfolio-level entries (source_company_id=NULL). Max 10 merges + 3 composites per run.
 
-### 🟢 P2 — Test coverage tracking for company repos
-No visibility into whether company code has tests or what coverage looks like. Engineer builds code but nobody tracks if tests exist or pass. Implement: (1) track test presence in company repos (has tests? coverage %?), (2) flag companies with zero tests after 5+ cycles, (3) add test writing to Engineer's task list when coverage drops. Inspired by Ruflo's `testgaps` background worker that detects code changes without corresponding tests.
+### ✅ P2 — Test coverage tracking for company repos (DONE — 2026-03-24)
+Sentinel Check 36: queries GitHub API for test files and latest test run status per company. Creates engineering tasks for missing/failing tests. Updates capabilities JSONB with test inventory.
 
 ### 🟢 P2 — Automated security scanning on deploys
 Secret scanning happens at provisioning but not on ongoing deploys. Implement a post-deploy security check: scan recent commits for secrets, check for new dependencies with known CVEs, validate that auth middleware is present on protected routes. Runs as part of Ops verification or as a Sentinel check. Inspired by Ruflo's `audit` background worker that triggers on security-related file changes.

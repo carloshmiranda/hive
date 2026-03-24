@@ -1943,6 +1943,40 @@ export async function GET(req: Request) {
     dispatches.push({ type: "auto_approve", target: "evolver_proposal", payload: { id: p.id, title: p.title } });
   }
 
+  // Dispatch approved improvement proposals to Engineer (self-improvement)
+  // Only dispatch capability proposals that haven't been dispatched yet.
+  // Engineer works on Hive's own repo in a branch, creates a PR for review.
+  const approvedImprovements = await sql`
+    SELECT id, title, diagnosis, proposed_fix, gap_type, severity
+    FROM evolver_proposals
+    WHERE status = 'approved'
+      AND gap_type IN ('capability', 'outcome')
+      AND signal_source = 'sentinel_self_improvement'
+      AND implemented_at IS NULL
+      AND reviewed_at > NOW() - INTERVAL '7 days'
+    ORDER BY
+      CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
+    LIMIT 1
+  `;
+  for (const imp of approvedImprovements) {
+    const dispatchKey = `self_improve:${imp.id}`;
+    if (isDuplicate("feature_request", dispatchKey)) continue;
+    // Dispatch Engineer to work on Hive's own repo
+    await dispatchToActions("feature_request", {
+      company: "_hive",
+      task: `Self-improvement: ${imp.title}`,
+      description: `Diagnosis: ${imp.diagnosis}\n\nProposed fix: ${typeof imp.proposed_fix === 'string' ? imp.proposed_fix : JSON.stringify(imp.proposed_fix)}`,
+      proposal_id: imp.id,
+      branch: `hive/improvement/${(imp.title as string).toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+    }, ghPat);
+    // Mark as dispatched (set implemented_at to prevent re-dispatch, will be updated on completion)
+    await sql`
+      UPDATE evolver_proposals SET implemented_at = NOW(), notes = COALESCE(notes, '') || ' | Dispatched to Engineer'
+      WHERE id = ${imp.id}
+    `;
+    dispatches.push({ type: "self_improvement", target: "engineer", payload: { proposal_id: imp.id, title: imp.title } });
+  }
+
   // Reminder for critical/high severity proposals pending >48h
   const urgentPending = await sql`
     SELECT id, title, severity, gap_type
@@ -2650,6 +2684,113 @@ export async function GET(req: Request) {
     console.warn("Check 37 (self-improvement proposals) failed:", msg);
   }
 
+  // 35. Auto-learn error patterns from successful fixes (ReasoningBank-lite)
+  // Finds successful fix actions in the last 24h, looks for a preceding failed action
+  // (same agent, same company, within 2h), and records the error->fix pattern.
+  let errorPatternsLearned = 0;
+
+  try {
+    const successfulFixes = await sql`
+      SELECT id, agent, company_id, action_type, description, output, finished_at
+      FROM agent_actions
+      WHERE status = 'success'
+        AND action_type IN ('fix_code', 'execute_task', 'scaffold_company')
+        AND finished_at > NOW() - INTERVAL '24 hours'
+      ORDER BY finished_at DESC
+      LIMIT 20
+    `;
+
+    const EP_SIMILARITY_THRESHOLD = 0.6;
+
+    for (const fix of successfulFixes) {
+      if (!fix.agent) continue;
+
+      // Find a preceding failed action (same agent, same company, within 2h before success)
+      const precedingFailures = fix.company_id
+        ? await sql`
+            SELECT id, error, description, action_type
+            FROM agent_actions
+            WHERE status = 'failed'
+              AND agent = ${fix.agent}
+              AND company_id = ${fix.company_id}
+              AND finished_at BETWEEN ${fix.finished_at}::timestamptz - INTERVAL '2 hours' AND ${fix.finished_at}::timestamptz
+            ORDER BY finished_at DESC
+            LIMIT 1
+          `
+        : await sql`
+            SELECT id, error, description, action_type
+            FROM agent_actions
+            WHERE status = 'failed'
+              AND agent = ${fix.agent}
+              AND company_id IS NULL
+              AND finished_at BETWEEN ${fix.finished_at}::timestamptz - INTERVAL '2 hours' AND ${fix.finished_at}::timestamptz
+            ORDER BY finished_at DESC
+            LIMIT 1
+          `;
+
+      if (precedingFailures.length === 0 || !precedingFailures[0].error) continue;
+
+      const failedAction = precedingFailures[0];
+      const errorText = failedAction.error as string;
+      const normalized = normalizeError(errorText);
+      if (!normalized || normalized.length < 10) continue;
+
+      // Derive fix summary from the successful action
+      const fixSummary = (fix.description as string) ||
+        (fix.output && typeof fix.output === "object" ? JSON.stringify(fix.output).slice(0, 200) : null) ||
+        `Fixed ${failedAction.action_type} error in ${fix.agent} agent`;
+
+      // Dedup: check if this pattern already exists with high similarity
+      const existingPatterns = await sql`
+        SELECT id, pattern FROM error_patterns
+        WHERE agent = ${fix.agent} AND resolved = true
+        ORDER BY last_seen_at DESC LIMIT 50
+      `;
+
+      let alreadyExists = false;
+      for (const ep of existingPatterns) {
+        const sim = errorSimilarity(normalized, ep.pattern as string);
+        if (sim >= EP_SIMILARITY_THRESHOLD) {
+          await sql`
+            UPDATE error_patterns
+            SET occurrences = occurrences + 1, last_seen_at = NOW()
+            WHERE id = ${ep.id}
+          `;
+          alreadyExists = true;
+          break;
+        }
+      }
+
+      if (!alreadyExists) {
+        await sql`
+          INSERT INTO error_patterns (pattern, agent, fix_summary, fix_detail, source_action_id, resolved, auto_fixable)
+          VALUES (
+            ${normalized},
+            ${fix.agent},
+            ${fixSummary.slice(0, 500)},
+            ${errorText.slice(0, 1000)},
+            ${fix.id},
+            true,
+            true
+          )
+        `;
+        errorPatternsLearned++;
+      }
+    }
+
+    if (errorPatternsLearned > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'error_pattern_learning',
+          ${`Auto-learned ${errorPatternsLearned} error->fix patterns from successful fixes`},
+          'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("Check 35 (error pattern learning) failed:", msg);
+  }
+
   return Response.json({
     ok: true,
     trace_id: traceId,
@@ -2680,6 +2821,7 @@ export async function GET(req: Request) {
     agent_escalations: agentEscalations,
     test_coverage_issues: testCoverageIssues,
     self_improvement_proposals: selfImprovementProposals,
+    error_patterns_learned: errorPatternsLearned,
     details: dispatches,
   });
 

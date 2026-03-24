@@ -780,19 +780,43 @@ jobs:
             PAYLOAD: ${{ needs.context.outputs.payload }}
             COMPANY: ${{ needs.context.outputs.company }}
 
-            WARNING: The company has no github_repo yet. You are in the Hive repo.
-            Only do Hive-internal work (templates, boilerplate, operational improvements).
-            If this is a feature_request for a company, log: "Company needs provisioning first" and exit.
+            ## Routing
 
-            For Hive-internal issues/tasks:
+            If COMPANY is "_hive" or empty, this is Hive self-improvement work.
+            If COMPANY is a real company slug but has no github_repo, log "Company needs provisioning first" and exit.
+
+            ## Self-improvement workflow (COMPANY = "_hive")
+
+            The PAYLOAD contains task, description, and optionally proposal_id and branch.
+            This is an automated improvement proposal from Sentinel — implement it.
+
+            1. Read CLAUDE.md, BRIEFING.md, MISTAKES.md for context
+            2. Parse the task description from PAYLOAD to understand what to build
+            3. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
+               `git checkout -b <branch>`
+            4. Implement the change
+            5. Run `npx next build` — fix any errors until it passes
+            6. Commit with conventional commit message (feat/fix/refactor)
+            7. Push the branch and create a PR:
+               `GH_TOKEN="$GH_PAT" gh pr create --title "<title>" --body "<diagnosis + what was done>"`
+            8. Log success to agent_actions via the Hive API
+
+            IMPORTANT: Do NOT push directly to main. Always create a PR for self-improvement work.
+            Carlos reviews and merges these PRs.
+
+            ## Regular Hive-internal work
+
+            For non-self-improvement tasks (ops_escalation, deploy_drift, etc.):
             1. Implement the change in the current directory
             2. Build to verify: `npx next build` — fix any errors
-            3. Commit and push
+            3. Commit and push to main
             4. Log to agent_actions
 
-            RULES:
+            ## Rules
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
             - Write to agent_actions table: what you did, status, any errors
+            - Read files before editing them
+            - Keep changes focused — one improvement per PR
 
       - name: Log failure to Hive API
         if: always() && steps.agent.outcome == 'failure'
