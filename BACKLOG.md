@@ -66,6 +66,18 @@ Also needs `CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}` added to CEO age
 ### 🟡 P1 — Groq rate limit backoff
 Concurrent Ops dispatches hit Groq 429 rate limits. Need exponential backoff + jitter in `/api/agents/dispatch` for Groq provider, or stagger Ops dispatches in Sentinel with delays between companies.
 
+### 🟡 P1 — CEO micro-plan before backlog dispatch
+Backlog items go straight to Engineer with a one-line description — no plan, no acceptance criteria, no file-level instructions. This is why 73% of cascade dispatches fail. Fix: insert a lightweight CEO planning step (5 turns max) before Engineer. Flow: `backlog/dispatch` → CEO micro-plan (reads item + codebase context, outputs structured `engineering_tasks[{id, task, files, acceptance}]`) → Engineer (executes plan). Implementation: add a `plan` step to `hive-engineer.yml` that runs CEO with a slim planning prompt when `source=backlog_chain`, stores plan in the dispatch payload. This is what makes the normal company cycle work — CEO plans, Engineer executes.
+
+### 🟡 P1 — Cascade failure circuit breaker
+The cascade loop keeps dispatching even when most items fail, burning Claude quota on P3 items that need decomposition. Fix: if >50% of the last 5 backlog dispatches failed, pause the cascade for 1 hour. Implementation: in `backlog/dispatch/route.ts`, query `agent_actions` for recent `engineer` backlog runs, compute rolling failure rate, return `{dispatched: false, reason: "circuit_breaker"}` when tripped. Resets automatically after 1h or on a manual dispatch.
+
+### 🟡 P1 — Priority floor for cascade dispatch
+The cascade auto-dispatches P3 items like "Claude Agent SDK migration" that are aspirational, not urgent. These should wait for Sentinel's 4h window or a manual trigger. Fix: cascade only auto-dispatches P0/P1 items. P2/P3 items require either Sentinel dispatch or `approved` status. Implementation: add priority check in `backlog/dispatch/route.ts` — when called from chain (`completed_id` present), filter to `priority IN ('P0', 'P1')` only.
+
+### 🟡 P1 — Failed item cooldown period
+Failed items get re-dispatched within minutes (LTV/CAC failed at 11:59, retried at 12:05). The novelty penalty lowers the score but the item still wins if others score lower. Fix: add a 30-minute cooldown after failure — items with `[attempt N]` note updated in the last 30min are excluded from dispatch. Implementation: in `backlog/dispatch/route.ts`, add WHERE clause `AND (notes NOT LIKE '%attempt%' OR updated_at < NOW() - INTERVAL '30 minutes')` to the ready items query.
+
 ### 🟡 P1 — Model escalation on backlog retry
 When a backlog item fails twice on Sonnet, the third attempt should escalate to Opus. Pass `model_override` in the dispatch payload so `hive-engineer.yml` can use it. Cheap way to avoid wasting retries — harder tasks need stronger reasoning. Implementation: `backlog/dispatch/route.ts` checks attempt count, adds `model: "opus"` to `client_payload` when attempt ≥ 3; `hive-engineer.yml` reads `model` from payload and overrides the `model` input on `claude-code-action`.
 
