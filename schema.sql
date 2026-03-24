@@ -389,3 +389,33 @@ CREATE TABLE error_patterns (
 CREATE INDEX idx_error_patterns_pattern ON error_patterns USING gin (to_tsvector('english', pattern));
 CREATE INDEX idx_error_patterns_agent ON error_patterns(agent);
 CREATE INDEX idx_error_patterns_resolved ON error_patterns(resolved) WHERE resolved = true;
+
+-- Hive self-improvement backlog: structured items for autonomous execution
+CREATE TABLE hive_backlog (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  priority      TEXT NOT NULL DEFAULT 'P2' CHECK (priority IN ('P0', 'P1', 'P2', 'P3')),
+  title         TEXT NOT NULL,
+  description   TEXT NOT NULL,     -- what to do, acceptance criteria
+  category      TEXT NOT NULL DEFAULT 'feature' CHECK (category IN (
+                  'bugfix', 'feature', 'refactor', 'infra', 'quality', 'research'
+                )),
+  status        TEXT NOT NULL DEFAULT 'ready' CHECK (status IN (
+                  'ready',         -- available for dispatch
+                  'approved',      -- Carlos approved (for P2/P3 needing gate)
+                  'dispatched',    -- sent to Engineer
+                  'in_progress',   -- Engineer is working on it
+                  'done',          -- completed
+                  'blocked',       -- needs manual intervention
+                  'rejected'       -- Carlos rejected
+                )),
+  source        TEXT DEFAULT 'brainstorm', -- brainstorm, sentinel, evolver, carlos
+  dispatch_id   TEXT,              -- agent_action id when dispatched
+  pr_number     INTEGER,           -- PR created for risky changes
+  pr_url        TEXT,
+  notes         TEXT,              -- resolution notes, blockers, etc.
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  dispatched_at TIMESTAMPTZ,
+  completed_at  TIMESTAMPTZ
+);
+CREATE INDEX idx_hive_backlog_status ON hive_backlog(status);
+CREATE INDEX idx_hive_backlog_priority ON hive_backlog(priority);

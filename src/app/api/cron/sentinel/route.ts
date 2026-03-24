@@ -1508,7 +1508,146 @@ export async function GET(req: Request) {
     console.warn("Check 13a (hive-first triage) failed:", e instanceof Error ? e.message : String(e));
   }
 
-  // 13b. Company cycle dispatch — remaining budget after Hive fixes
+  // 13b. Scored backlog dispatch — pick highest-scoring Hive improvement if budget allows
+  // Backlog items compete with company cycles for remaining slots.
+  // P0/P1 items auto-dispatch. P2/P3 dispatch only when no company cycles are pending.
+  let backlogDispatched = 0;
+  try {
+    if (remainingSlots > 0) {
+      const { computeBacklogScore, detectBlockedAgents } = await import("@/lib/backlog-priority");
+
+      // Fetch ready + approved backlog items
+      const backlogItems = await sql`
+        SELECT * FROM hive_backlog
+        WHERE status IN ('ready', 'approved')
+        ORDER BY
+          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+          created_at ASC
+        LIMIT 10
+      `.catch(() => []);
+
+      if (backlogItems.length > 0) {
+        // Gather signals for scoring
+        const activeCompanyCount = await sql`
+          SELECT COUNT(*)::int as count FROM companies WHERE status IN ('mvp', 'active')
+        `.catch(() => [{ count: 4 }]);
+        const totalCompanies = Number(activeCompanyCount[0]?.count || 4);
+
+        const backlogFailureRate = await sql`
+          SELECT COUNT(*) FILTER (WHERE status = 'failed')::float /
+            NULLIF(COUNT(*), 0)::float as rate
+          FROM agent_actions
+          WHERE agent NOT IN ('sentinel', 'healer')
+          AND finished_at > NOW() - INTERVAL '48 hours'
+        `.catch(() => [{ rate: 0 }]);
+        const overallRate = Number(backlogFailureRate[0]?.rate || 0);
+
+        // Score each item
+        const scored = [];
+        for (const item of backlogItems) {
+          const titleDesc = `${item.title} ${item.description}`;
+          // Count related errors (keyword match in last 7 days)
+          const keywords = item.title.split(/\s+/).filter((w: string) => w.length > 4).slice(0, 3);
+          let relatedErrors = 0;
+          if (keywords.length > 0) {
+            const pattern = keywords.join("|");
+            const [errCount] = await sql`
+              SELECT COUNT(*)::int as count FROM agent_actions
+              WHERE status = 'failed' AND error IS NOT NULL
+              AND finished_at > NOW() - INTERVAL '7 days'
+              AND error ~* ${pattern}
+            `.catch(() => [{ count: 0 }]);
+            relatedErrors = Number(errCount?.count || 0);
+          }
+
+          // Check if similar item was attempted and failed
+          const [failedSimilar] = await sql`
+            SELECT id FROM hive_backlog
+            WHERE status IN ('blocked', 'rejected')
+            AND title ILIKE ${item.title.slice(0, 40) + "%"}
+            AND completed_at > NOW() - INTERVAL '30 days'
+            LIMIT 1
+          `.catch(() => []);
+
+          // Count affected companies
+          let companiesAffected = 0;
+          if (keywords.length > 0) {
+            const pattern = keywords.join("|");
+            const [compCount] = await sql`
+              SELECT COUNT(DISTINCT company_id)::int as count FROM agent_actions
+              WHERE status = 'failed' AND error ~* ${pattern}
+              AND finished_at > NOW() - INTERVAL '7 days'
+              AND company_id IS NOT NULL
+            `.catch(() => [{ count: 0 }]);
+            companiesAffected = Number(compCount?.count || 0);
+          }
+
+          const blocksAgents = detectBlockedAgents(item.title, item.description);
+          const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
+
+          scored.push(computeBacklogScore(item as Parameters<typeof computeBacklogScore>[0], {
+            relatedErrors,
+            companiesAffected,
+            systemFailureRate: overallRate,
+            hasSimilarFailed: !!failedSimilar,
+            blocksAgents,
+            daysSinceCreated,
+            totalCompanies,
+          }));
+        }
+
+        // Sort by score descending
+        scored.sort((a, b) => b.priority_score - a.priority_score);
+        const top = scored[0];
+
+        // Dispatch rules:
+        // P0/P1: always dispatch (they beat company cycles)
+        // P2/P3: only dispatch if no company cycles are pending (idle capacity)
+        const shouldDispatch = top && (
+          (top.priority === "P0" || top.priority === "P1") ||
+          (needsCycle.length === 0)
+        );
+
+        if (shouldDispatch && top && remainingSlots > 0) {
+          await dispatchToActions("feature_request", {
+            source: "sentinel_backlog",
+            company: "_hive",
+            task: top.description,
+            backlog_id: top.id,
+            priority: top.priority,
+            priority_score: top.priority_score,
+            score_breakdown: top.score_breakdown,
+            trace_id: traceId,
+          }, ghPat);
+
+          // Mark as dispatched
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'dispatched', dispatched_at = NOW()
+            WHERE id = ${top.id}
+          `.catch(() => {});
+
+          dispatches.push({
+            type: "brain",
+            target: "hive_backlog_item",
+            payload: {
+              backlog_id: top.id,
+              title: top.title,
+              priority: top.priority,
+              priority_score: top.priority_score,
+              score_breakdown: top.score_breakdown,
+            },
+          });
+          backlogDispatched++;
+          remainingSlots--;
+        }
+      }
+    }
+  } catch (e: unknown) {
+    console.warn("Check 13b (backlog dispatch) failed:", e instanceof Error ? e.message : String(e));
+  }
+
+  // 13c. Company cycle dispatch — remaining budget after Hive fixes + backlog
   for (const r of needsCycle) {
     if (cycleDispatches >= remainingSlots) break;
     await dispatchToActions("research_request", {
@@ -2939,10 +3078,11 @@ export async function GET(req: Request) {
     const { notifyHive } = await import("@/lib/telegram");
     const interesting = dispatches.length > 0 || staleRecordsFixed > 0 ||
       selfImprovementProposals > 0 || agentRegressions > 0 || statsEndpointsBroken > 0 ||
-      languageMismatches > 0 || hiveFixesDispatched > 0;
+      languageMismatches > 0 || hiveFixesDispatched > 0 || backlogDispatched > 0;
     if (interesting) {
       const parts: string[] = [];
       if (hiveFixesDispatched > 0) parts.push(`🔧 ${hiveFixesDispatched} Hive fixes (priority)`);
+      if (backlogDispatched > 0) parts.push(`📋 ${backlogDispatched} backlog item dispatched`);
       if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
       if (staleRecordsFixed > 0) parts.push(`${staleRecordsFixed} stale records fixed`);
       if (selfImprovementProposals > 0) parts.push(`${selfImprovementProposals} improvement proposals`);
@@ -2991,6 +3131,7 @@ export async function GET(req: Request) {
     test_coverage_issues: testCoverageIssues,
     self_improvement_proposals: selfImprovementProposals,
     hive_fixes_dispatched: hiveFixesDispatched,
+    backlog_dispatched: backlogDispatched,
     error_patterns_learned: errorPatternsLearned,
     details: dispatches,
   });
