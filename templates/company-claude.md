@@ -5,8 +5,13 @@
 ## Identity
 - **Slug**: {{SLUG}}
 - **Target audience**: {{TARGET_AUDIENCE}}
+- **Market**: {{MARKET}}
+- **Content language**: {{CONTENT_LANGUAGE}}
 - **Status**: {{STATUS}}
 - **Hive company ID**: {{COMPANY_ID}}
+
+## Language Rule
+ALL user-facing content MUST be in **{{CONTENT_LANGUAGE_NAME}}**. This includes: page text, meta tags, alt text, error messages, button labels, headings, blog posts, SEO content. Do NOT mix languages.
 
 ## Tech Stack
 - Next.js 15 (App Router)

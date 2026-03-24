@@ -162,9 +162,11 @@ jobs:
                 ORDER BY created_at DESC LIMIT 1
               \`;
               const biz = approval?.context?.proposal?.business_model || '';
+              const market = approval?.context?.proposal?.market || 'global';
+              const lang = market === 'Portugal' || market === 'portugal' ? 'pt' : 'en';
               if (biz) {
-                await sql\`UPDATE companies SET company_type = \${biz}, updated_at = NOW() WHERE id = \${company.id}\`;
-                console.error('Set company_type to: ' + biz);
+                await sql\`UPDATE companies SET company_type = \${biz}, market = \${market.toLowerCase()}, content_language = \${lang}, updated_at = NOW() WHERE id = \${company.id}\`;
+                console.error('Set company_type=' + biz + ' market=' + market + ' lang=' + lang);
               }
               console.log(biz);
               await sql.end();

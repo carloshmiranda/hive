@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   const sql = getDb();
 
   const [company] = await sql`
-    SELECT id, name, slug, description, capabilities, company_type, created_at
+    SELECT id, name, slug, description, capabilities, company_type, market, content_language, created_at
     FROM companies WHERE slug = ${slug} LIMIT 1
   `.catch(() => []);
 
@@ -109,6 +109,9 @@ async function buildContext(sql: any, company: any) {
   return {
     description: company.description,
     business_type: businessType,
+    content_language: company.content_language || "en",
+    market: company.market || "global",
+    language_rule: `ALL user-facing content MUST be in ${(company.content_language || "en") === "pt" ? "Portuguese" : "English"}. This includes: page text, meta tags, alt text, error messages, button labels, headings. Do NOT mix languages.`,
     validation,
     cycle: cycle[0] ? { id: cycle[0].id, cycle_number: cycle[0].cycle_number, ceo_plan: cycle[0].ceo_plan } : null,
     research,
@@ -199,7 +202,10 @@ async function growthContext(sql: any, company: any) {
       slug: company.slug,
       description: company.description,
       capabilities: company.capabilities,
+      content_language: company.content_language || "en",
+      market: company.market || "global",
     },
+    language_rule: `ALL content MUST be written in ${(company.content_language || "en") === "pt" ? "Portuguese" : "English"}. Blog posts, SEO pages, social media, meta tags — everything in one language. Do NOT mix languages.`,
     validation,
     ceo_plan: cycle[0]?.ceo_plan || null,
     research,

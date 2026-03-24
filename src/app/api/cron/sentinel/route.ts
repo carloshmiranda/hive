@@ -1542,6 +1542,55 @@ export async function GET(req: Request) {
     }
   }
 
+  // 32. Language consistency check — verify deployed site language matches content_language
+  let languageMismatches = 0;
+  const langCompanies = await sql`
+    SELECT c.id, c.slug, c.content_language, COALESCE('https://' || c.domain, c.vercel_url) as app_url
+    FROM companies c
+    WHERE c.status IN ('mvp', 'active') AND c.vercel_url IS NOT NULL AND c.content_language IS NOT NULL
+  `;
+  for (const lc of langCompanies) {
+    if (!lc.app_url) continue;
+    try {
+      const res = await fetch(lc.app_url as string, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const htmlLang = html.match(/<html[^>]*lang="([^"]+)"/)?.[1] || "";
+      const expectedLang = lc.content_language as string;
+
+      // Check html lang attribute
+      const langMismatch = htmlLang && !htmlLang.startsWith(expectedLang);
+
+      // Simple heuristic: check for common wrong-language patterns
+      const isExpectedPt = expectedLang === "pt";
+      const hasEnglishPatterns = /\b(Get started|Learn more|Sign up|Features|How it works|Ready to get started)\b/i.test(html);
+      const hasPortuguesePatterns = /\b(Começar|Saber mais|Funcionalidades|Como funciona|Pronto para começar)\b/i.test(html);
+
+      const contentMismatch = isExpectedPt ? hasEnglishPatterns && !hasPortuguesePatterns : hasPortuguesePatterns && !hasEnglishPatterns;
+
+      if (langMismatch || contentMismatch) {
+        languageMismatches++;
+        const issue = langMismatch ? `html lang="${htmlLang}" but expected "${expectedLang}"` : `content appears to be in wrong language (expected ${expectedLang})`;
+        const [existingTask] = await sql`
+          SELECT id FROM company_tasks
+          WHERE company_id = ${lc.id} AND title LIKE '%language%consistency%'
+          AND status IN ('proposed', 'in_progress')
+          LIMIT 1
+        `;
+        if (!existingTask) {
+          await sql`
+            INSERT INTO company_tasks (company_id, title, description, category, priority, status)
+            VALUES (${lc.id}, 'Fix language consistency — wrong content language detected',
+              ${`The deployed site at ${lc.app_url} has a language issue: ${issue}. All user-facing content must be in ${isExpectedPt ? "Portuguese" : "English"}. Check: html lang attribute, page text, meta tags, button labels, headings, error messages.`},
+              'engineering', 2, 'proposed')
+          `;
+        }
+      }
+    } catch {
+      // Site may be down — other checks handle this
+    }
+  }
+
   // --- HTTP health checks (parallel) ---
   const companiesWithUrls = await sql`
     SELECT slug, COALESCE('https://' || domain, vercel_url) as check_url FROM companies
@@ -2144,6 +2193,7 @@ export async function GET(req: Request) {
     venture_brain_directives: ventureBrainDirectives,
     infra_repairs_attempted: infraRepairsAttempted,
     stats_endpoints_broken: statsEndpointsBroken,
+    language_mismatches: languageMismatches,
     playbook_merged: playbookMerged,
     playbook_composites: playbookComposites,
     details: dispatches,

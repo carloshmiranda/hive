@@ -137,7 +137,7 @@ jobs:
           8. Mark completed tasks as done (see TASK TRACKING above).
 
           ## RULES
-          - Write content in the language of the target audience (Portuguese companies → Portuguese content).
+          - Write ALL content in the language specified by the context API's language_rule field. Check context.language_rule before writing anything. Do NOT mix languages.
           - Every blog post needs: keyword in title, H1, first paragraph, meta description <155 chars.
           - No fluff. Every piece of content solves a specific problem.
           - If the company has no blog directory, create one with a simple layout.
