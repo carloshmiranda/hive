@@ -116,7 +116,7 @@ export async function POST(req: Request) {
     WHERE status IN ('ready', 'approved')
     AND NOT (
       notes ILIKE '%[attempt %]%'
-      AND updated_at > NOW() - INTERVAL '30 minutes'
+      AND created_at > NOW() - INTERVAL '30 minutes'
     )
     ORDER BY
       CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
