@@ -31,6 +31,17 @@ export interface LLMProvider {
 
 // Provider definitions with fallback priority
 export const PROVIDERS: Record<string, LLMProvider> = {
+  openrouter: {
+    name: "openrouter",
+    models: [
+      "nousresearch/hermes-3-llama-3.1-405b:free",   // 405B — strongest free reasoning
+      "meta-llama/llama-3.3-70b-instruct:free",       // 70B — solid general purpose
+      "mistralai/mistral-small-3.1-24b-instruct:free", // 24B — fast, good for simple tasks
+      "qwen/qwen3-coder:free",                         // 480B — best free coding model
+    ],
+    cost_per_call: 0,
+    free_tier: true,
+  },
   groq: {
     name: "groq",
     models: ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile"],
@@ -52,21 +63,22 @@ export const PROVIDERS: Record<string, LLMProvider> = {
 };
 
 // Agent-specific provider routing table
+// OpenRouter is primary for all workers — single API key, best free models
 export const AGENT_ROUTING: Record<string, { primary: string; model: string; fallback: string[] }> = {
   growth: {
-    primary: "gemini",
-    model: "gemini-2.5-flash",
-    fallback: ["groq", "claude"],
+    primary: "openrouter",
+    model: "nousresearch/hermes-3-llama-3.1-405b:free",  // 405B for content quality
+    fallback: ["gemini", "groq", "claude"],
   },
   outreach: {
-    primary: "gemini",
-    model: "gemini-2.5-flash",
-    fallback: ["groq", "claude"],
+    primary: "openrouter",
+    model: "meta-llama/llama-3.3-70b-instruct:free",     // 70B sufficient for emails
+    fallback: ["gemini", "groq", "claude"],
   },
   ops: {
-    primary: "groq",
-    model: "llama-3.3-70b-versatile",
-    fallback: ["gemini", "claude"],
+    primary: "openrouter",
+    model: "mistralai/mistral-small-3.1-24b-instruct:free", // 24B fast for health checks
+    fallback: ["groq", "gemini", "claude"],
   },
 };
 
@@ -173,6 +185,37 @@ async function callGroq(prompt: string, model: string, options: LLMOptions = {})
   return text.trim();
 }
 
+async function callOpenRouter(prompt: string, model: string, options: LLMOptions = {}): Promise<string> {
+  const apiKey = await getSettingValue("openrouter_api_key");
+  if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
+
+  const res = await fetchWithRetry("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://hive-phi.vercel.app",
+      "X-Title": "Hive Venture Orchestrator",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: options.maxTokens || 8192,
+      temperature: options.temperature || 0.7,
+    }),
+  }, options.maxRetries || 3);
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`OpenRouter ${model} HTTP ${res.status}: ${body.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error("OpenRouter returned empty response");
+  return text.trim();
+}
+
 async function callClaude(prompt: string, model: string, options: LLMOptions = {}): Promise<string> {
   // Fallback to Claude should only happen in extreme cases
   // For now, return a placeholder that logs the fallback
@@ -249,6 +292,9 @@ export async function callLLM(
 
       // Call provider-specific function
       switch (providerName) {
+        case "openrouter":
+          content = await callOpenRouter(prompt, model, llmOptions);
+          break;
         case "gemini":
           content = await callGemini(prompt, model, llmOptions);
           break;
