@@ -9,10 +9,11 @@
 - **Phase:** Two companies actively iterating. System operational.
 - **Architecture:** 7 agents, event-driven, 3 Vercel crons (metrics 2x/day, sentinel every 4h, digest daily 8am). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
-- **Active companies:** 3
+- **Active companies:** 4
   - VerdeDesk — status: mvp, 18+ cycles, last CEO score 5/10, building waitlist + IRS guide
   - Senhorio — status: mvp, 4 cycles, last CEO score 3/10, built tax calculator at /calculadora
-  - Flolio — status: mvp, 4 cycles (imported, iterating autonomously)
+  - Flolio — status: mvp, 4 cycles (imported, iterating autonomously), global market
+  - CiberPME — status: mvp, blog (converted from SaaS), Portuguese market, cybersecurity for SMBs
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
@@ -48,7 +49,7 @@
   - Sentinel dispatch loop — 94 dispatches in 48h (Check 25 skip list + Check 17 dedup + expiry reduction)
   - Self-healing stats endpoint probe (Sentinel Check 31) — auto-creates fix tasks for broken /api/stats
   - 34 stale noise approvals bulk-expired (escalation + capability_migration)
-  - CiberSegura URL fixed (was pointing to someone else's site)
+  - CiberSegura→CiberPME rebrand complete (repo, Vercel project, code, DB)
   - Accrue→Flolio Vercel project rename (deleted broken Hive-provisioned project, renamed original)
   - Autonomous deploy repair (Sentinel check 30: infra-first → circuit breaker → code fix)
   - UI/UX quality gates across all agent prompts + boilerplate design tokens
@@ -63,11 +64,21 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-24 [code] Telegram notifications + self-improvement loop + Ruflo systems + guardrails
+- **Telegram real-time notifications**: Built `src/lib/telegram.ts` with sendMessage, sendMessageWithButtons, editMessage. Agents send notifications via `/api/notify`. Approval gates auto-notify with Approve/Reject inline buttons. PRs notify with Merge/Close buttons. Auto-merged PRs get informational-only messages.
+- **Telegram interactive approvals**: `/api/webhooks/telegram/route.ts` handles callback queries (button presses). Approve/reject updates approval status + dispatches Engineer for new_company. Merge/close manages PRs via GitHub API. Messages edited to show result after action.
+- **Self-improvement loop (Sentinel Check 37)**: Detects recurring errors, zero metrics, timeouts, stuck tasks. Creates improvement proposals. Safe changes (no schema/workflow/auth/middleware) push directly to main. Risky changes create PRs for review. Engineer dispatched with `company: "_hive"` for Hive self-improvement.
+- **Ruflo-inspired systems**: Agent specialization profiles (`src/lib/agent-profiles.ts`, `/api/agents/profiles`). Error pattern auto-learning (Check 35, `src/lib/error-normalize.ts`, `/api/agents/error-patterns`, `error_patterns` table). Test coverage tracking (Check 36).
+- **Language guardrails**: DB columns `market`/`content_language` on companies table. Context API injects `language_rule`. Sentinel Check 32 validates deployed site language. Growth workflow uses dynamic language from context API.
+- **Domain/naming guardrails**: Scout Phase 5 checks Vercel/GitHub/domain availability before proposing. Provisioner reads actual Vercel URL from API (no more assumed URLs). Sentinel Check 33 auto-fixes stale DB records (wrong URLs, renamed repos/projects).
+- **CiberPME**: Converted from SaaS to blog, rebranded from CiberSegura. 4th active company.
+- **Flolio fixes**: Growth workflow language fix (was hardcoded Portuguese, now dynamic). Terms of Service jurisdiction fixed.
+
 ### 2026-03-24 [code] Company review + Sentinel loop fix + metrics pipeline self-healing
 - **Comprehensive company review**: Audited all agent_actions, cycles, and errors across all companies. Found 5 critical issues: (1) Sentinel dispatch loop (94/48h), (2) Engineer polling timeouts (68% of failures), (3) CEO reviews not recorded, (4) 34 stale noise approvals, (5) Groq rate limits.
 - **Sentinel dispatch loop fixed**: Check 25 auto-resolve was trying to fix non-API-resolvable gate types (capability_migration, escalation), creating a feedback loop. Added SKIP_AUTO_RESOLVE list. Check 17 now deduplicates escalation approvals. Reduced expiry: capability_migration 14d→3d, escalation 3d→2d.
 - **Self-healing stats endpoints (Check 31)**: Probes each company's `/api/stats` endpoint, validates response format (`{ok, views}`), creates engineering tasks for broken endpoints. First run detected 4 broken endpoints across 3 companies.
-- **CiberSegura URL fix**: DB had `cibersegura.vercel.app` (someone else's site). Updated to `cibersegura-flax.vercel.app` (actual Vercel-assigned URL with suffix).
+- **CiberSegura→CiberPME rebrand**: Renamed GitHub repo (`carloshmiranda/ciberpme`), Vercel project (`ciberpme`), updated all code references (brand name, URLs, metadata, OG, emails), updated Hive DB (companies slug/name, infra config). Fixes the `-flax` suffix problem — new project name `ciberpme` gets a clean `.vercel.app` domain.
 - **Approval cleanup**: Bulk-expired 34 stale noise approvals (escalation + capability_migration). 16 new_company + 1 spend_approval remain as real decisions.
 - **Free LLM dispatch**: Triggered Growth (Gemini) and Ops (Groq) for all 3 active companies. Groq hit 429 rate limits on concurrent calls — needs backoff.
 
@@ -299,12 +310,13 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-2. **Fix CEO review recording** — most cycles complete without CEO scores, breaking validation scoring and kill signal detection
-3. **Fix stats endpoints at company level** — all 3 companies return broken /api/stats, metrics pipeline collects zeros. Check 31 creates tasks but Engineer needs to execute them
-4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
-5. **Add Groq backoff/retry** — concurrent Ops dispatches hit 429 rate limits
-6. **Triage 15 idea-status companies** — Scout proposals accumulating while existing companies can't execute properly
+1. **Set up Telegram bot** — create bot via @BotFather, set webhook URL, add tokens to Hive settings. Enables real-time notifications + interactive approvals.
+2. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
+3. **Fix CEO review recording** — most cycles complete without CEO scores, breaking validation scoring and kill signal detection
+4. **Fix stats endpoints at company level** — all 3 companies return broken /api/stats, metrics pipeline collects zeros. Check 31 creates tasks but Engineer needs to execute them
+5. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
+6. **Add Groq backoff/retry** — concurrent Ops dispatches hit 429 rate limits
+7. **Triage 15 idea-status companies** — Scout proposals accumulating while existing companies can't execute properly
 
 ## Open Questions
 

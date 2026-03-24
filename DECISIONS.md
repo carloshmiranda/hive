@@ -326,3 +326,37 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - LLM generates types at runtime without persisting: inconsistent across cycles, no institutional memory
 - Static JSON registry (not TypeScript): loses type safety, can't export helper functions
 **Consequences:** Adding a new business type now requires adding one entry to the BUSINESS_TYPES array. Unknown types trigger automatic research during provisioning — the system learns new business models autonomously. The manifest's company_types arrays are partially redundant but kept for backwards compatibility. The research-type endpoint uses web search, so quality depends on available information about the business model.
+
+### ADR-027: Autonomous self-improvement with safe/risky classification
+**Date:** 2026-03-24
+**Status:** Accepted
+**Context:** Hive had a backlog of improvements but no mechanism to implement them autonomously. Manual Claude Code sessions were the only way to improve Hive itself. Meanwhile, Sentinel already detected improvement opportunities (Check 37: recurring errors, zero metrics, timeouts, stuck tasks) but could only create proposals — not act on them.
+**Decision:** Close the loop: Sentinel Check 37 creates improvement proposals → approved proposals dispatch Engineer with `company: "_hive"` → Engineer implements in Hive's own repo. Changes are classified as safe or risky: safe changes (no schema, workflow, auth, or middleware modifications) push directly to main. Risky changes create PRs for Carlos to review. Telegram notification sent after every self-improvement build.
+**Key design choices:**
+- Safe vs risky classification based on file paths touched (schema.sql, .github/workflows, middleware.ts, auth.ts = risky)
+- Auto-approved proposals with `safe_to_auto_implement: true` skip the approval gate
+- Hive Engineer uses `build-hive` job (not company build dispatch) — works in Hive's own repo
+- Telegram notification includes PR link (risky) or push confirmation (safe)
+**Alternatives considered:**
+- Always create PRs: too slow for trivial fixes, creates approval fatigue
+- Always push to main: too risky for schema/workflow changes that could break the system
+- Separate self-improvement agent: over-engineered — Engineer already handles code changes
+**Consequences:** Hive can fix its own bugs and implement improvements without manual sessions. Carlos reviews risky changes via PR (or Telegram Merge/Close buttons). Safe changes land immediately. The backlog shrinks autonomously. Trade-off: a bad safe classification could push a breaking change — but the classification is conservative (only config/docs/minor code changes are safe).
+
+### ADR-028: Telegram as real-time notification and approval channel
+**Date:** 2026-03-24
+**Status:** Accepted
+**Context:** Carlos had no visibility into Hive's autonomous operations between checking the dashboard. Approval gates accumulated for hours/days before being reviewed. The dashboard was the only interface for approve/reject decisions.
+**Decision:** Integrate Telegram Bot API for real-time push notifications and interactive approvals. Three components: (1) `src/lib/telegram.ts` — send messages, messages with inline keyboard buttons, edit messages. (2) `/api/notify` — POST endpoint for agents/workflows to send notifications (auth: CRON_SECRET or OIDC). (3) `/api/webhooks/telegram` — handles callback queries (button presses) for approve/reject/merge/close actions. Approval gates auto-send Telegram messages with Approve/Reject buttons. PRs send Merge/Close buttons. Auto-merged PRs get informational-only messages.
+**Key design choices:**
+- Webhook-based (not polling) — Telegram pushes updates to our endpoint
+- Authorized chat ID verification — only respond to the configured chat
+- Fire-and-forget notifications — don't block on Telegram API failures
+- Message editing after action — original message updated to show result (no duplicate messages)
+- Settings-based configuration — `telegram_bot_token` and `telegram_chat_id` in Hive settings table
+**Alternatives considered:**
+- WhatsApp Business API: requires Facebook Business account, more complex setup
+- Slack: heavier integration, not a personal tool
+- Email notifications: already have digest, but not real-time and no interactive buttons
+- Dashboard-only: works but requires actively checking, no push notifications
+**Consequences:** Carlos gets real-time visibility into all Hive operations. Approvals can be handled from phone in seconds. PRs can be merged without opening GitHub. Trade-off: Telegram dependency — if Telegram API is down, notifications silently fail (fire-and-forget design). Setup requires manual bot creation via @BotFather.

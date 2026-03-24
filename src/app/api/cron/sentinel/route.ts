@@ -1383,8 +1383,8 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "research_request", payload: { company: r.slug, reason: "stalled" } });
   }
 
-  // 13. Companies needing new cycle — budget-aware dispatch
-  // Check daily Claude usage to throttle cycle dispatches
+  // 13. Budget check + Hive-first prioritization
+  // Check daily Claude usage to throttle dispatches
   const dailyUsage = await sql`
     SELECT COUNT(*) as action_count,
       COALESCE(SUM(tokens_used), 0) as total_turns
@@ -1396,11 +1396,112 @@ export async function GET(req: Request) {
   const budgetCeiling = 225; // Claude Max 5x ~225 messages per 5h window
   const budgetUsedPct = turnsUsed / budgetCeiling;
 
-  // Throttle: >90% budget → skip cycles, >70% → max 1, otherwise max 2
-  const maxDispatches = budgetUsedPct > 0.9 ? 0 : budgetUsedPct > 0.7 ? 1 : MAX_CYCLE_DISPATCHES;
+  // Throttle: >90% budget → skip all, >70% → max 1, otherwise max 2
+  let remainingSlots = budgetUsedPct > 0.9 ? 0 : budgetUsedPct > 0.7 ? 1 : MAX_CYCLE_DISPATCHES;
 
+  // 13a. HIVE-FIRST TRIAGE — fix Hive's own issues before running company cycles
+  // Rationale: if Hive itself is broken (systemic errors, broken pipelines),
+  // running company cycles wastes budget on work that will fail anyway.
+  let hiveFixesDispatched = 0;
+  try {
+    // (A) Approved self-improvement proposals waiting for dispatch
+    const approvedImprovements = await sql`
+      SELECT id, title, proposed_fix, severity
+      FROM evolver_proposals
+      WHERE status = 'approved'
+        AND implemented_at IS NULL
+        AND signal_source = 'sentinel_self_improvement'
+        AND created_at > NOW() - INTERVAL '14 days'
+      ORDER BY
+        CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        created_at ASC
+      LIMIT 2
+    `.catch(() => []);
+
+    // (B) Systemic errors — same error in 2+ companies in last 48h, no fix dispatched yet
+    const systemicErrors = await sql`
+      SELECT error, agent, COUNT(DISTINCT company_id)::int as affected_companies,
+        COUNT(*)::int as occurrences
+      FROM agent_actions
+      WHERE status = 'failed' AND error IS NOT NULL
+        AND finished_at > NOW() - INTERVAL '48 hours'
+        AND company_id IS NOT NULL
+      GROUP BY error, agent
+      HAVING COUNT(DISTINCT company_id) >= 2
+      ORDER BY COUNT(*) DESC
+      LIMIT 3
+    `.catch(() => []);
+
+    // (C) Agent failure rate — if >50% of all agent runs are failing, Hive needs fixing
+    const failureRate = await sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'failed')::float /
+        NULLIF(COUNT(*), 0)::float as rate
+      FROM agent_actions
+      WHERE agent NOT IN ('sentinel', 'healer')
+        AND finished_at > NOW() - INTERVAL '48 hours'
+    `.catch(() => [{ rate: 0 }]);
+    const overallFailureRate = Number(failureRate[0]?.rate || 0);
+
+    // Dispatch Hive fixes if there are approved proposals or critical systemic issues
+    const hiveFixNeeded = approvedImprovements.length > 0
+      || (systemicErrors.length > 0 && overallFailureRate > 0.4);
+
+    if (hiveFixNeeded && remainingSlots > 0) {
+      // Prioritize approved improvement proposals first
+      for (const proposal of approvedImprovements) {
+        if (remainingSlots <= 0) break;
+        await dispatchToActions("feature_request", {
+          source: "sentinel_hive_triage",
+          company: "_hive",
+          task: proposal.proposed_fix,
+          proposal_id: proposal.id,
+          severity: proposal.severity,
+          trace_id: traceId,
+        }, ghPat);
+        dispatches.push({
+          type: "brain",
+          target: "hive_self_fix",
+          payload: { proposal_id: proposal.id, title: proposal.title, severity: proposal.severity },
+        });
+        hiveFixesDispatched++;
+        remainingSlots--;
+      }
+
+      // If high systemic failure rate and still have budget, dispatch healer
+      if (systemicErrors.length > 0 && overallFailureRate > 0.4 && remainingSlots > 0) {
+        const errorSummary = systemicErrors
+          .map((e) => `${e.agent}: "${(e.error as string).slice(0, 80)}" (${e.affected_companies} companies, ${e.occurrences}x)`)
+          .join("; ");
+        await dispatchToActions("healer_trigger", {
+          source: "sentinel_hive_triage",
+          scope: "systemic",
+          reason: `Systemic failures (${Math.round(overallFailureRate * 100)}% failure rate): ${errorSummary.slice(0, 500)}`,
+          trace_id: traceId,
+        }, ghPat);
+        dispatches.push({
+          type: "brain",
+          target: "healer_systemic",
+          payload: { failure_rate: overallFailureRate, systemic_errors: systemicErrors.length },
+        });
+        hiveFixesDispatched++;
+        remainingSlots--;
+      }
+
+      if (hiveFixesDispatched > 0) {
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'hive_triage', ${`Hive-first: dispatched ${hiveFixesDispatched} fix(es) before company cycles. Failure rate: ${Math.round(overallFailureRate * 100)}%, approved proposals: ${approvedImprovements.length}, systemic errors: ${systemicErrors.length}`}, 'success', NOW(), NOW())
+        `.catch(() => {});
+      }
+    }
+  } catch (e: unknown) {
+    console.warn("Check 13a (hive-first triage) failed:", e instanceof Error ? e.message : String(e));
+  }
+
+  // 13b. Company cycle dispatch — remaining budget after Hive fixes
   for (const r of needsCycle) {
-    if (cycleDispatches >= maxDispatches) break;
+    if (cycleDispatches >= remainingSlots) break;
     await dispatchToActions("research_request", {
       source: "sentinel_cycle",
       company: r.slug,
@@ -2829,9 +2930,10 @@ export async function GET(req: Request) {
     const { notifyHive } = await import("@/lib/telegram");
     const interesting = dispatches.length > 0 || staleRecordsFixed > 0 ||
       selfImprovementProposals > 0 || agentRegressions > 0 || statsEndpointsBroken > 0 ||
-      languageMismatches > 0;
+      languageMismatches > 0 || hiveFixesDispatched > 0;
     if (interesting) {
       const parts: string[] = [];
+      if (hiveFixesDispatched > 0) parts.push(`🔧 ${hiveFixesDispatched} Hive fixes (priority)`);
       if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
       if (staleRecordsFixed > 0) parts.push(`${staleRecordsFixed} stale records fixed`);
       if (selfImprovementProposals > 0) parts.push(`${selfImprovementProposals} improvement proposals`);
@@ -2879,6 +2981,7 @@ export async function GET(req: Request) {
     agent_escalations: agentEscalations,
     test_coverage_issues: testCoverageIssues,
     self_improvement_proposals: selfImprovementProposals,
+    hive_fixes_dispatched: hiveFixesDispatched,
     error_patterns_learned: errorPatternsLearned,
     details: dispatches,
   });

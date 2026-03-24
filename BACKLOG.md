@@ -142,14 +142,14 @@ Replace GitHub Actions with Agent SDK for unlimited turns, streaming, and parall
 ### ⚪ P3 — Portfolio-level charts and analytics
 Time-series visualization of MRR, traffic, customer growth across all companies. Recharts or similar. Company comparison charts. Useful at 5+ companies.
 
-### ⚪ P3 — Telegram/WhatsApp bot for approvals
-Approve/reject gates from phone. Telegram Bot API is free. Push notification when new gate created. Reply "approve" or "reject [reason]".
+### ✅ P3 — Telegram bot for notifications + approvals (DONE — 2026-03-24)
+Full Telegram integration: `src/lib/telegram.ts` (send, buttons, edit), `/api/notify` (agent notifications), `/api/webhooks/telegram` (callback handler). Approval gates send inline Approve/Reject buttons. PRs send Merge/Close buttons. Auto-merged PRs get informational messages. Webhook handles button presses: updates approvals, dispatches Engineer, merges/closes PRs via GitHub API.
 
 ### ⚪ P3 — Multi-framework boilerplate support
 Not every business needs Next.js. Astro for content/SEO sites, SvelteKit for lightweight SaaS, static sites for landing pages, Express for API-only businesses. CEO agent picks framework based on business model.
 
-### ⚪ P3 — Autonomous self-improvement
-Orchestrator reads BACKLOG.md, picks a P2 item, implements it in a branch, runs tests, creates PR, submits for approval. The ultimate dogfooding: Hive improves Hive.
+### ✅ P3 — Autonomous self-improvement (DONE — 2026-03-24)
+Sentinel Check 37 detects improvement opportunities (recurring errors, zero metrics, timeouts, stuck tasks). Creates proposals. Safe changes push to main. Risky changes create PRs. Engineer dispatched with `company: "_hive"`. Telegram notification after every self-improvement build.
 
 ### ⚪ P3 — Business model diversity beyond SaaS
 Content/affiliate sites (ad revenue), faceless YouTube channels (ad revenue), newsletter businesses (sponsorship), API/tool businesses (usage-based). Each needs different boilerplate, metrics, and growth strategies.

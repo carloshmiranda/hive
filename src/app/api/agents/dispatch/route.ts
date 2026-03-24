@@ -45,13 +45,14 @@ const PROVIDER_COST: Record<string, number> = {
 };
 
 // Get optimal provider for an agent based on historical success rates
-// If primary provider has <70% success rate in last 7 days, try cheaper alternatives first
+// If primary provider has <70% success rate in last 48h, try alternatives
+// Short window (48h) allows fast reaction to provider outages/degradation
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getOptimalModel(sql: any, agent: WorkerAgent): Promise<{ provider: "gemini" | "groq"; model: string; routing_reason: string }> {
   const defaults = DEFAULT_AGENT_MODEL[agent];
 
   try {
-    // Get success rates by provider for this agent in last 7 days
+    // Get success rates by provider for this agent in last 48 hours
     const stats = await sql`
       SELECT
         output->>'provider' as provider,
@@ -61,7 +62,7 @@ async function getOptimalModel(sql: any, agent: WorkerAgent): Promise<{ provider
       FROM agent_actions
       WHERE agent = ${agent}
         AND action_type = 'execute_task'
-        AND started_at > NOW() - INTERVAL '7 days'
+        AND started_at > NOW() - INTERVAL '48 hours'
         AND output IS NOT NULL
         AND output->>'provider' IS NOT NULL
       GROUP BY output->>'provider', output->>'model'
