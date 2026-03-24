@@ -399,6 +399,9 @@ CREATE TABLE hive_backlog (
   category      TEXT NOT NULL DEFAULT 'feature' CHECK (category IN (
                   'bugfix', 'feature', 'refactor', 'infra', 'quality', 'research'
                 )),
+  task_type     TEXT NOT NULL DEFAULT 'api' CHECK (task_type IN (
+                  'ui', 'api', 'infra', 'content', 'config', 'security'
+                )),
   status        TEXT NOT NULL DEFAULT 'ready' CHECK (status IN (
                   'ready',         -- available for dispatch
                   'approved',      -- Carlos approved (for P2/P3 needing gate)
@@ -419,3 +422,4 @@ CREATE TABLE hive_backlog (
 );
 CREATE INDEX idx_hive_backlog_status ON hive_backlog(status);
 CREATE INDEX idx_hive_backlog_priority ON hive_backlog(priority);
+CREATE INDEX idx_hive_backlog_task_type ON hive_backlog(task_type);

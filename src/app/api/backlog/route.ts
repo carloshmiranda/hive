@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { classifyTaskType } from "@/lib/backlog-priority";
 
 // GET /api/backlog — list Hive self-improvement backlog items
 export async function GET(req: Request) {
@@ -44,11 +45,14 @@ export async function POST(req: Request) {
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
-  const { priority, title, description, category, source } = body;
+  const { priority, title, description, category, source, task_type } = body;
 
   if (!title || !description) {
     return err("title and description are required");
   }
+
+  // Auto-classify task type if not provided
+  const finalTaskType = task_type || classifyTaskType(title, description);
 
   const sql = getDb();
 
@@ -64,12 +68,13 @@ export async function POST(req: Request) {
   }
 
   const [item] = await sql`
-    INSERT INTO hive_backlog (priority, title, description, category, source)
+    INSERT INTO hive_backlog (priority, title, description, category, task_type, source)
     VALUES (
       ${priority || "P2"},
       ${title},
       ${description},
       ${category || "feature"},
+      ${finalTaskType},
       ${source || "brainstorm"}
     )
     RETURNING *

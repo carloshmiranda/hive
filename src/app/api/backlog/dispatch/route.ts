@@ -1,6 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
-import { computeBacklogScore, detectBlockedAgents } from "@/lib/backlog-priority";
+import { computeBacklogScore, detectBlockedAgents, getTaskTypeSuccessRate } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 
 // POST /api/backlog/dispatch — score and dispatch the next backlog item
@@ -228,6 +228,9 @@ export async function POST(req: Request) {
     const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
     const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
 
+    // Get Engineer success rate for this task type
+    const taskTypeSuccessRate = await getTaskTypeSuccessRate(item.task_type, sql);
+
     const scored = computeBacklogScore(item as BacklogItem, {
       relatedErrors,
       companiesAffected,
@@ -237,6 +240,7 @@ export async function POST(req: Request) {
       daysSinceCreated,
       totalCompanies,
       previousAttempts,
+      taskTypeSuccessRate,
     });
 
     if (scored.priority_score > topScore) {
