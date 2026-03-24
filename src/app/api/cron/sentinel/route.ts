@@ -1404,13 +1404,22 @@ export async function GET(req: Request) {
   // running company cycles wastes budget on work that will fail anyway.
   let hiveFixesDispatched = 0;
   try {
-    // (A) Approved self-improvement proposals waiting for dispatch
+    // (A0) Auto-approve critical proposals pending >24h — these are blocking the system
+    await sql`
+      UPDATE evolver_proposals
+      SET status = 'approved', decided_at = NOW(), notes = 'Auto-approved: critical severity pending >24h'
+      WHERE status = 'pending'
+        AND severity = 'critical'
+        AND created_at < NOW() - INTERVAL '24 hours'
+        AND created_at > NOW() - INTERVAL '14 days'
+    `.catch(() => {});
+
+    // (A) Approved self-improvement proposals waiting for dispatch (any source)
     const approvedImprovements = await sql`
       SELECT id, title, proposed_fix, severity
       FROM evolver_proposals
       WHERE status = 'approved'
         AND implemented_at IS NULL
-        AND signal_source = 'sentinel_self_improvement'
         AND created_at > NOW() - INTERVAL '14 days'
       ORDER BY
         CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
