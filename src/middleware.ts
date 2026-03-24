@@ -18,6 +18,6 @@ export default auth((req) => {
 export const config = {
   matcher: [
     // Protect everything except: login, auth API, webhooks, cron, health, agents, static files
-    "/((?!login|api/auth|api/webhooks|api/cron|api/health|api/agents|_next/static|_next/image|favicon.ico).*)",
+    "/((?!login|api/auth|api/webhooks|api/cron|api/health|api/agents|api/notify|api/backlog|_next/static|_next/image|favicon.ico).*)",
   ],
 };
