@@ -260,8 +260,8 @@ export async function GET(req: Request) {
       OR (gate_type = 'outreach_batch' AND created_at < NOW() - INTERVAL '7 days')
       OR (gate_type = 'prompt_upgrade' AND created_at < NOW() - INTERVAL '14 days')
       OR (gate_type = 'social_account' AND created_at < NOW() - INTERVAL '14 days')
-      OR (gate_type = 'capability_migration' AND created_at < NOW() - INTERVAL '14 days')
-      OR (gate_type = 'escalation' AND created_at < NOW() - INTERVAL '3 days')
+      OR (gate_type = 'capability_migration' AND created_at < NOW() - INTERVAL '3 days')
+      OR (gate_type IN ('escalation', 'ops_escalation') AND created_at < NOW() - INTERVAL '2 days')
     )
     RETURNING id, gate_type, title
   `;
@@ -970,18 +970,26 @@ export async function GET(req: Request) {
   if (dispatchLoops.length > 0) {
     const loopDetails = dispatchLoops.map((r: any) => `${r.agent}/${r.slug}:${r.cnt}`).join(", ");
     console.warn(`DISPATCH LOOP DETECTED: ${loopDetails}`);
-    // Log as escalation — don't dispatch more agents (that would feed the loop)
+    // Log as escalation — but only if no pending escalation already exists for this agent/company
     for (const r of dispatchLoops) {
-      await sql`
-        INSERT INTO approvals (company_id, gate_type, title, description, context)
-        VALUES (
-          ${r.company_id}, 'escalation',
-          ${"Dispatch loop: " + r.agent + " fired " + r.cnt + "x in 30min for " + r.slug},
-          'Possible infinite dispatch loop detected. Check chain dispatch logic for this agent/company pair.',
-          ${JSON.stringify({ agent: r.agent, company: r.slug, count: parseInt(r.cnt), detected_by: "sentinel" })}::jsonb
-        )
-        ON CONFLICT DO NOTHING
+      const [existing] = await sql`
+        SELECT id FROM approvals
+        WHERE company_id = ${r.company_id} AND gate_type = 'escalation'
+        AND status = 'pending' AND title LIKE ${"Dispatch loop: " + r.agent + "%"}
+        LIMIT 1
       `;
+      if (!existing) {
+        await sql`
+          INSERT INTO approvals (company_id, gate_type, title, description, context)
+          VALUES (
+            ${r.company_id}, 'escalation',
+            ${"Dispatch loop: " + r.agent + " fired " + r.cnt + "x in 30min for " + r.slug},
+            'Possible infinite dispatch loop detected. Check chain dispatch logic for this agent/company pair.',
+            ${JSON.stringify({ agent: r.agent, company: r.slug, count: parseInt(r.cnt), detected_by: "sentinel" })}::jsonb
+          )
+          ON CONFLICT DO NOTHING
+        `;
+      }
     }
     dispatches.push({ type: "escalation", target: "dispatch_loop", payload: { loops: loopDetails } });
   }
@@ -1001,7 +1009,10 @@ export async function GET(req: Request) {
   `;
 
   let autoResolved = 0;
+  // Gate types that can't be resolved by calling an API — skip to avoid loops
+  const SKIP_AUTO_RESOLVE = ["capability_migration", "escalation", "ops_escalation", "new_company", "kill_company"];
   for (const esc of recurringEscalations) {
+    if (SKIP_AUTO_RESOLVE.includes(esc.gate_type as string)) continue;
     const description = (esc.latest_description as string) || "";
     const capability = findCapabilityForProblem(description);
 
