@@ -4,6 +4,57 @@ import { getSettingValue } from "@/lib/settings";
 const REPO = "carloshmiranda/hive";
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
+// Dispatch free-tier worker agents (Growth, Ops, Outreach) that don't use Claude
+// Called when Claude budget is exhausted so non-Claude work continues
+async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof getDb>) {
+  const workers: { company: string; agent: string }[] = [];
+
+  const companies = await sql`
+    SELECT c.slug FROM companies c WHERE c.status IN ('mvp', 'active')
+  `.catch(() => []);
+
+  for (const c of companies) {
+    // Growth: dispatch if no success in last 12h
+    const [lastGrowth] = await sql`
+      SELECT id FROM agent_actions
+      WHERE agent = 'growth' AND status = 'success'
+      AND company_id = (SELECT id FROM companies WHERE slug = ${c.slug})
+      AND started_at > NOW() - INTERVAL '12 hours'
+      LIMIT 1
+    `.catch(() => []);
+    if (!lastGrowth) workers.push({ company: c.slug, agent: "growth" });
+
+    // Ops: dispatch if no success in last 12h
+    const [lastOps] = await sql`
+      SELECT id FROM agent_actions
+      WHERE agent = 'ops' AND status = 'success'
+      AND company_id = (SELECT id FROM companies WHERE slug = ${c.slug})
+      AND started_at > NOW() - INTERVAL '12 hours'
+      LIMIT 1
+    `.catch(() => []);
+    if (!lastOps) workers.push({ company: c.slug, agent: "ops" });
+  }
+
+  const results: string[] = [];
+  for (const w of workers) {
+    const res = await fetch(`${HIVE_URL}/api/agents/dispatch`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cronSecret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        company_slug: w.company,
+        agent: w.agent,
+        trigger: "cascade_free_worker",
+      }),
+      signal: AbortSignal.timeout(30000),
+    }).catch(() => null);
+    if (res?.ok) results.push(`${w.agent}:${w.company}`);
+  }
+  return results;
+}
+
 // POST /api/dispatch/cycle-complete — completion callback for continuous dispatch
 // Called by agent workflows when they finish. Chains to the next company cycle.
 // Flow: agent completes → calls this → health gate → score companies → dispatch next
@@ -51,7 +102,9 @@ export async function POST(req: Request) {
   const health = healthRaw.data || healthRaw;
 
   if (health.recommendation === "stop") {
-    return json({ chained: false, reason: "health_gate_stop", blockers: health.blockers });
+    // Claude is blocked but free workers can still run
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    return json({ chained: false, reason: "health_gate_stop", blockers: health.blockers, free_workers_dispatched: freeWorkers });
   }
 
   // Step 2: If Hive needs fixes first, dispatch backlog instead of company cycle
@@ -81,7 +134,9 @@ export async function POST(req: Request) {
 
   // Step 3: Score companies and pick the next one
   if (health.recommendation === "wait") {
-    return json({ chained: false, reason: "health_gate_wait", blockers: health.blockers });
+    // Claude is throttled but free workers can still run
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    return json({ chained: false, reason: "health_gate_wait", blockers: health.blockers, free_workers_dispatched: freeWorkers });
   }
 
   const ghPat = await getSettingValue("github_token").catch(() => null);

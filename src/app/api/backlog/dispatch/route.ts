@@ -3,6 +3,40 @@ import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 
+const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+
+// Dispatch free-tier workers when Claude budget is blocked
+async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof getDb>) {
+  const workers: { company: string; agent: string }[] = [];
+  const companies = await sql`
+    SELECT slug FROM companies WHERE status IN ('mvp', 'active')
+  `.catch(() => []);
+
+  for (const c of companies) {
+    for (const agent of ["growth", "ops"] as const) {
+      const [recent] = await sql`
+        SELECT id FROM agent_actions
+        WHERE agent = ${agent} AND status = 'success'
+        AND company_id = (SELECT id FROM companies WHERE slug = ${c.slug})
+        AND started_at > NOW() - INTERVAL '12 hours'
+        LIMIT 1
+      `.catch(() => []);
+      if (!recent) workers.push({ company: c.slug, agent });
+    }
+  }
+
+  const dispatched: string[] = [];
+  for (const w of workers) {
+    await fetch(`${HIVE_URL}/api/agents/dispatch`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ company_slug: w.company, agent: w.agent, trigger: "cascade_free_worker" }),
+      signal: AbortSignal.timeout(30000),
+    }).then(r => { if (r.ok) dispatched.push(`${w.agent}:${w.company}`); }).catch(() => {});
+  }
+  return dispatched;
+}
+
 // POST /api/backlog/dispatch — score and dispatch the next backlog item
 // Called by: Engineer workflow after completing a Hive fix (chain dispatch)
 //            Sentinel as part of triage (existing flow)
@@ -94,7 +128,8 @@ export async function POST(req: Request) {
   `.catch(() => [{ turns: 0 }]);
   const budgetUsedPct = Number(usage?.turns || 0) / 225;
   if (budgetUsedPct > 0.85) {
-    return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100) });
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), free_workers_dispatched: freeWorkers });
   }
 
   // Check for rate-limit failures (2h window — these indicate weekly/session cap)
@@ -110,7 +145,8 @@ export async function POST(req: Request) {
   `.catch(() => [{ rate_limited: 0 }]);
   const rateLimited = Number((rateLimitRow as Record<string, number>)?.rate_limited || 0);
   if (rateLimited >= 2) {
-    return json({ dispatched: false, reason: "claude_rate_limited", rate_limit_failures: rateLimited, window: "2h" });
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    return json({ dispatched: false, reason: "claude_rate_limited", rate_limit_failures: rateLimited, window: "2h", free_workers_dispatched: freeWorkers });
   }
 
   // Circuit breaker: short 30-min window so it recovers quickly after limit resets
@@ -124,7 +160,8 @@ export async function POST(req: Request) {
   const recentFailed = Number((recentFailureRow as Record<string, number>)?.failed || 0);
   const recentTotal = Number((recentFailureRow as Record<string, number>)?.total || 0);
   if (recentTotal >= 3 && recentFailed / recentTotal > 0.6) {
-    return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100), window: "30m" });
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100), window: "30m", free_workers_dispatched: freeWorkers });
   }
 
   // Check for running Hive Engineer jobs (dedup)
