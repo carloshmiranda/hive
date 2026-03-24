@@ -1165,6 +1165,113 @@ export async function GET(req: Request) {
     }
   }
 
+  // 26. Auto-dismiss resolved escalations — check if underlying conditions are fixed
+  // Find all pending escalations and check if their root cause is resolved
+  const pendingEscalations = await sql`
+    SELECT a.id, a.company_id, a.title, a.description, a.context, a.created_at, c.slug
+    FROM approvals a
+    LEFT JOIN companies c ON c.id = a.company_id
+    WHERE a.gate_type = 'escalation'
+      AND a.status = 'pending'
+      AND a.created_at > NOW() - INTERVAL '7 days'
+  `;
+
+  let autoDismissed = 0;
+  for (const esc of pendingEscalations) {
+    const title = esc.title as string;
+    const context = esc.context as any;
+    let shouldDismiss = false;
+    let dismissReason = "";
+
+    try {
+      // 1. Dispatch loop escalations: check if agent hasn't fired excessively recently
+      if (title.includes("Dispatch loop:") && context?.agent && context?.company) {
+        const [recentLoops] = await sql`
+          SELECT COUNT(*) as cnt
+          FROM agent_actions
+          WHERE agent = ${context.agent}
+            AND company_id = ${esc.company_id}
+            AND started_at > NOW() - INTERVAL '30 minutes'
+        `;
+        const recentCount = parseInt(recentLoops.cnt as string);
+        if (recentCount < 3) {  // Normal dispatch rate, loop resolved
+          shouldDismiss = true;
+          dismissReason = `Dispatch loop resolved: ${context.agent} only fired ${recentCount}x in last 30min (below threshold)`;
+        }
+      }
+
+      // 2. Stalled company escalations: check if there has been recent agent activity
+      else if (title.includes("Stalled:") && title.includes("no activity in 72h")) {
+        const [recentActivity] = await sql`
+          SELECT MAX(started_at) as last_activity
+          FROM agent_actions
+          WHERE company_id = ${esc.company_id}
+            AND started_at > NOW() - INTERVAL '48 hours'
+            AND status = 'success'
+        `;
+        if (recentActivity.last_activity) {
+          shouldDismiss = true;
+          dismissReason = `Company no longer stalled: recent successful activity at ${recentActivity.last_activity}`;
+        }
+      }
+
+      // 3. Agent performance escalations: check if success rate improved above 30%
+      else if (title.includes("Agent critically underperforming") && title.includes("success rate")) {
+        const agentMatch = title.match(/Agent critically underperforming: (\w+)/);
+        if (agentMatch) {
+          const agent = agentMatch[1];
+          const [recent] = await sql`
+            SELECT
+              COUNT(*) as total,
+              COUNT(*) FILTER (WHERE status = 'success') as successes
+            FROM agent_actions
+            WHERE agent = ${agent}
+              AND started_at > NOW() - INTERVAL '7 days'
+          `;
+          const total = parseInt(recent.total as string);
+          const successes = parseInt(recent.successes as string);
+          const successRate = total > 0 ? successes / total : 0;
+
+          if (successRate >= 0.4) {  // Above 40% (well above 30% threshold)
+            shouldDismiss = true;
+            dismissReason = `Agent performance recovered: ${agent} now at ${Math.round(successRate * 100)}% success rate (${successes}/${total} in 7d)`;
+          }
+        }
+      }
+
+      // Auto-dismiss if condition is resolved
+      if (shouldDismiss) {
+        await sql`
+          UPDATE approvals
+          SET status = 'expired',
+              decided_at = NOW(),
+              decision_note = ${'Auto-dismissed by Sentinel: ' + dismissReason}
+          WHERE id = ${esc.id}
+        `;
+
+        await sql`
+          INSERT INTO agent_actions (agent, company_id, action_type, description, status, output, started_at, finished_at)
+          VALUES (
+            'sentinel', ${esc.company_id}, 'auto_dismiss_escalation',
+            ${`Auto-dismissed resolved escalation: ${title}`},
+            'success',
+            ${JSON.stringify({ escalation_id: esc.id, reason: dismissReason, age_hours: Math.round((Date.now() - new Date(esc.created_at as string).getTime()) / (1000 * 60 * 60)) })}::jsonb,
+            NOW(), NOW()
+          )
+        `;
+
+        autoDismissed++;
+        dispatches.push({
+          type: "internal",
+          target: "auto_dismiss_escalation",
+          payload: { escalation_id: esc.id, company: esc.slug, title, reason: dismissReason }
+        });
+      }
+    } catch (e: any) {
+      console.warn(`Auto-dismiss check failed for escalation ${esc.id}: ${e.message}`);
+    }
+  }
+
   // --- Dispatch logic ---
 
   // 1. Pipeline low → Scout (if not blocked by proposal backlog)
@@ -3179,6 +3286,7 @@ export async function GET(req: Request) {
     schema_drift: schemaDrift.length,
     recurring_escalations: recurringEscalations.length,
     auto_resolved: autoResolved,
+    auto_dismissed_escalations: autoDismissed,
     circuit_breaks: circuitBreaks,
     dedup_skips: dedupSkips,
     active_claims: activeClaims.size,
