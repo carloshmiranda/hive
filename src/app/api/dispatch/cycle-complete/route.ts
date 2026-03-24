@@ -48,7 +48,8 @@ export async function POST(req: Request) {
     return json({ chained: false, reason: "health_gate_unreachable" });
   }
 
-  const health = await healthRes.json();
+  const healthRaw = await healthRes.json();
+  const health = healthRaw.data || healthRaw;
 
   if (health.recommendation === "stop") {
     return json({ chained: false, reason: "health_gate_stop", blockers: health.blockers });
@@ -68,12 +69,12 @@ export async function POST(req: Request) {
 
     if (backlogRes && backlogRes.ok) {
       const backlogData = await backlogRes.json();
-      if (backlogData.dispatched) {
+      if (backlogData.data?.dispatched || backlogData.dispatched) {
         return json({
           chained: true,
           type: "hive_backlog",
           reason: "hive_first_priority",
-          item: backlogData.item,
+          item: backlogData.data?.item || backlogData.item,
         });
       }
     }
@@ -172,12 +173,12 @@ export async function POST(req: Request) {
 
     if (backlogRes && backlogRes.ok) {
       const backlogData = await backlogRes.json();
-      if (backlogData.dispatched) {
+      if (backlogData.data?.dispatched || backlogData.dispatched) {
         return json({
           chained: true,
           type: "hive_backlog",
           reason: "no_companies_need_cycles",
-          item: backlogData.item,
+          item: backlogData.data?.item || backlogData.item,
         });
       }
     }
