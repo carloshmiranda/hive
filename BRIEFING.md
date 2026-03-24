@@ -64,6 +64,9 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-24 [code] Enhanced Scout proposal cleanup system
+**P1 backlog task completed:** Scout proposals were accumulating (15 pending) while existing companies couldn't execute properly. Enhanced auto-cleanup system with more aggressive thresholds: triggers at >3 pending proposals (was >5), faster expiry when severely clogged (24h vs 48h when >10 proposals), and keeps fewer proposals (2 vs 3 when clogged). Added dashboard cleanup UI when >5 proposals: "Cleanup" button for gradual cleanup and "Reset All" for nuclear option. Sentinel now prioritizes company execution over accumulating Scout ideas.
+
 ### 2026-03-24 [code] Cascade loop fixes + OIDC auth fix + Ruflo comparison + guardrails
 - **OIDC auth crash fixed**: `new NextRequest(req)` crashed when body was consumed. Changed `validateOIDC` to accept plain Request — fixed 500 errors on all chain dispatch endpoints (backlog/dispatch, cycle-complete, health-gate).
 - **Response envelope unwrap**: Engineer workflow read `.dispatched` but response is `{ok, data: {dispatched}}`. Fixed jq to `.data.dispatched // .dispatched // false`. Chain now correctly processes backlog before falling through to company cycles.
@@ -335,7 +338,7 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 3. **Fix stats endpoints at company level** — all 3 companies return broken /api/stats, metrics pipeline collects zeros. Check 31 creates tasks but Engineer needs to execute them
 4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
 5. **Add Groq backoff/retry** — concurrent Ops dispatches hit 429 rate limits
-6. **Triage 15 idea-status companies** — Scout proposals accumulating while existing companies can't execute properly
+6. ~~**Triage 15 idea-status companies**~~ — ✅ **FIXED 2026-03-24:** Enhanced Scout cleanup system with more aggressive auto-cleanup (triggers at >3 vs >5 proposals, 24h expiry when clogged) and dashboard cleanup buttons
 
 ## Open Questions
 
