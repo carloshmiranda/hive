@@ -6,20 +6,35 @@ import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
 
 // Retry wrapper for transient LLM API failures (429, 5xx, network errors)
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
+// Uses exponential backoff + jitter for 429 rate limits, faster retry for other transients
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const res = await fetch(url, options);
       if (res.ok || [400, 401, 403, 404].includes(res.status)) return res;
+
       if (attempt < maxRetries) {
-        const delay = attempt === 0 ? 1000 : 3000;
+        let delay: number;
+
+        if (res.status === 429) {
+          // Rate limit: exponential backoff with jitter (2^attempt * 1000ms + random 0-500ms)
+          const baseDelay = Math.pow(2, attempt) * 1000;
+          const jitter = Math.random() * 500;
+          delay = baseDelay + jitter;
+          console.log(`Rate limit (429), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+        } else {
+          // Other transient errors: shorter exponential backoff
+          delay = Math.pow(1.5, attempt) * 500 + Math.random() * 200;
+        }
+
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
       return res;
     } catch (err) {
       if (attempt === maxRetries) throw err;
-      const delay = attempt === 0 ? 1000 : 3000;
+      // Network errors: moderate backoff with jitter
+      const delay = Math.pow(1.5, attempt) * 800 + Math.random() * 300;
       await new Promise(r => setTimeout(r, delay));
     }
   }

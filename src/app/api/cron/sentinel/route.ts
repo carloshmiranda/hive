@@ -1174,10 +1174,17 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "ceo_review", payload: { company: slug } });
   }
 
-  // 5. Unverified deploys → Ops worker
-  for (const r of unverifiedDeploys) {
+  // 5. Unverified deploys → Ops worker (staggered to prevent Groq 429s)
+  for (let i = 0; i < unverifiedDeploys.length; i++) {
+    const r = unverifiedDeploys[i];
     await dispatchToWorker("ops", r.slug, "sentinel_unverified_deploy");
     dispatches.push({ type: "worker", target: "health_check", payload: { company: r.slug } });
+
+    // Stagger subsequent dispatches by 200-800ms to prevent concurrent Groq hits
+    if (i < unverifiedDeploys.length - 1) {
+      const staggerDelay = 200 + Math.random() * 600;
+      await new Promise(resolve => setTimeout(resolve, staggerDelay));
+    }
   }
 
   // 6. Evolve due → Evolver brain
