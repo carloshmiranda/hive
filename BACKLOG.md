@@ -42,6 +42,9 @@ Added "Visual quality rules for content pages" section to growth.md: reference d
 ### ✅ P1 — Boilerplate design token system (DONE — 2026-03-23)
 Added Tailwind v4 @theme block to globals.css with constrained tokens: brand/accent colors, neutrals, feedback colors, typography scale (5 sizes), 8px spacing grid, 3 radius options, 2 shadow options. Added 10 design rules as CSS comments (no gradients, max 2 font weights, max 3 colors, etc.). Engineer prompt updated with 10 visual quality standards. Company CLAUDE.md template updated to reference tokens.
 
+### 🟡 P1 — Public documentation for open-source usage
+Hive has no public-facing documentation. CLAUDE.md is agent-focused, not human-readable for someone wanting to fork and run their own venture orchestrator. Need: (1) **README.md** — what Hive does, architecture overview diagram (ASCII or Mermaid), feature highlights, screenshots of dashboard. (2) **ARCHITECTURE.md** — technical deep dive: agent flow, event-driven dispatch, model routing, 3-tier cost optimization, data model (18 tables), cross-company learning, validation-gated builds. (3) **SETUP.md** — step-by-step fork guide: create Neon DB, configure Vercel, add API keys (Claude Max, Gemini, Groq, Resend, Stripe), GitHub Actions setup, first company creation, first cycle. (4) Verify no secrets in code (already clean via OIDC). Implementation: Engineer can generate initial drafts from CLAUDE.md + BRIEFING.md + DECISIONS.md content, then CEO reviews for clarity and completeness.
+
 ### 🟡 P1 — Fix CEO review not recording scores (PARTIAL)
 Most cycles complete without CEO review scores. This breaks validation scoring (score stays at 0), kill signal detection (no decline to detect), and agent grading.
 
