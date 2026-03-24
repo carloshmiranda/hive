@@ -13,9 +13,8 @@ export async function POST(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
 
   if (authHeader !== `Bearer ${cronSecret}`) {
-    const { NextRequest } = await import("next/server");
     const { validateOIDC } = await import("@/lib/oidc");
-    const result = await validateOIDC(new NextRequest(req));
+    const result = await validateOIDC(req);
     if (result instanceof Response) return result;
   }
 

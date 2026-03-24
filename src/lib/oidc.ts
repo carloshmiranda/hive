@@ -1,4 +1,3 @@
-import { NextRequest } from "next/server";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { err } from "@/lib/db";
 
@@ -18,9 +17,10 @@ function getJWKS() {
 
 /**
  * Validate GitHub Actions OIDC token from Authorization header.
+ * Accepts any Request-like object with headers (Request, NextRequest, etc.).
  * Returns JWT claims on success, or a Response (error) on failure.
  */
-export async function validateOIDC(req: NextRequest): Promise<Record<string, unknown> | Response> {
+export async function validateOIDC(req: { headers: { get(name: string): string | null } }): Promise<Record<string, unknown> | Response> {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {
     return err("Missing Authorization header", 401);
