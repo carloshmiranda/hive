@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { updateMetrics } from "@/lib/convergent";
 
 // Vercel Cron: runs at 8am and 6pm (configure in vercel.json)
 // Collects page_views from each company's /api/stats endpoint
@@ -63,15 +64,14 @@ export async function GET(req: Request) {
         }
       }
 
-      // Always ensure a metrics row exists for today (even with 0s)
-      await sql`
-        INSERT INTO metrics (company_id, date, page_views, pricing_cta_clicks, affiliate_clicks)
-        VALUES (${company.id}, ${today}, ${views}, ${pricingClicks}, ${affiliateClicks})
-        ON CONFLICT (company_id, date) DO UPDATE SET
-          page_views = GREATEST(metrics.page_views, ${views}),
-          pricing_cta_clicks = GREATEST(metrics.pricing_cta_clicks, ${pricingClicks}),
-          affiliate_clicks = GREATEST(metrics.affiliate_clicks, ${affiliateClicks})
-      `;
+      // Use convergent metrics update to handle concurrent writes
+      await updateMetrics({
+        company_id: company.id,
+        date: today,
+        page_views: views,
+        pricing_cta_clicks: pricingClicks,
+        affiliate_clicks: affiliateClicks
+      });
 
       // Check latest smoke test result via GitHub API
       let smokeTestPass: boolean | null = null;

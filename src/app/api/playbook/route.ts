@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { upsertPlaybookEntry } from "@/lib/convergent";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
@@ -33,11 +34,18 @@ export async function POST(req: Request) {
   const { source_company_id, domain, insight, evidence, confidence } = body;
   if (!domain || !insight) return err("domain and insight required");
 
+  // Use convergent playbook entry to handle conflicts and highest-confidence-wins
+  const entryId = await upsertPlaybookEntry({
+    source_company_id,
+    domain,
+    insight,
+    evidence,
+    confidence: confidence || 0.5
+  });
+
   const sql = getDb();
   const [entry] = await sql`
-    INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
-    VALUES (${source_company_id || null}, ${domain}, ${insight}, ${evidence ? JSON.stringify(evidence) : null}, ${confidence || 0.5})
-    RETURNING *
+    SELECT * FROM playbook WHERE id = ${entryId}
   `;
   return json(entry, 201);
 }
