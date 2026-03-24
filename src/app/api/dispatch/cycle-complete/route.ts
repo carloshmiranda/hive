@@ -2,9 +2,7 @@ import { getDb, json } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 
 const REPO = "carloshmiranda/hive";
-const HIVE_URL = process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : "https://hive-phi.vercel.app";
+const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
 // POST /api/dispatch/cycle-complete — completion callback for continuous dispatch
 // Called by agent workflows when they finish. Chains to the next company cycle.
