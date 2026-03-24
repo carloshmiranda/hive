@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-24 NextRequest wrapping crashes OIDC auth on consumed request bodies
+**What happened:** All chain dispatch calls from GitHub Actions to `/api/backlog/dispatch`, `/api/dispatch/cycle-complete`, and `/api/dispatch/health-gate` returned 500 errors. CRON_SECRET-authenticated calls worked fine.
+**Root cause:** OIDC auth path did `new NextRequest(req)` to wrap the standard Request. But when the request body has already been consumed (by `req.json()`), constructing a new NextRequest crashes with `TypeError: Cannot read priv...`. Since `validateOIDC` only reads headers (not body), the wrapping was unnecessary.
+**Fix applied:** Changed `validateOIDC` signature from `NextRequest` to `{ headers: { get(name: string): string | null } }`. Removed `new NextRequest(req)` from all 3 files — pass `req` directly.
+**Prevention:** Never wrap `req` in `new NextRequest()` for helpers that only read headers. If a helper needs body access, it should accept the already-parsed body as a parameter.
+**Affects:** hive
+
+### 2026-03-24 Response envelope unwrap bug — chain dispatch always fell through
+**What happened:** Engineer workflow's chain dispatch step always fell through to cycle-complete even when backlog had items to dispatch. The cascade burned company cycle quota instead of processing Hive backlog.
+**Root cause:** `hive-engineer.yml` read `.dispatched` from the response, but Hive's `json()` helper wraps all responses in `{ok: true, data: {...}}`. The actual path is `.data.dispatched`. Since `.dispatched` was always undefined, it defaulted to `false`.
+**Fix applied:** Changed jq extraction to `.data.dispatched // .dispatched // false` to handle both wrapped and unwrapped responses.
+**Prevention:** All internal callers of Hive API endpoints must unwrap the `{ok, data}` envelope. Add this to CLAUDE.md as a standard pattern.
+**Affects:** hive
+
 ### 2026-03-24 Sentinel auto-resolve loop — 94 dispatches/48h for single company
 **What happened:** Sentinel Check 25 (recurring escalation detector) tried to auto-resolve `capability_migration` and `escalation` approvals by matching them against the capability registry. This false-matched to `repair_infra`, which was called but couldn't fix the issue (wrong endpoint for the problem). The approval stayed pending, so next run it tried again. Combined with Check 17 creating NEW escalation approvals on every run (no dedup), this created 94 dispatches in 48h for Flolio alone.
 **Root cause:** Auto-resolve should only apply to gate types that CAN be resolved by calling an API endpoint (like `spend_approval` matching `repair_infra`). `capability_migration` and `escalation` gates require human review or code changes — no API can fix them.

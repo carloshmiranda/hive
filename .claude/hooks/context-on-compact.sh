@@ -15,3 +15,18 @@ echo ""
 echo "---"
 echo "Recent memory:"
 cat "$CLAUDE_PROJECT_DIR/../memory/project_infra.md" 2>/dev/null | head -30 || true
+
+# Re-inject scratch files (user-pasted content saved before compaction)
+SCRATCH_DIR="$CLAUDE_PROJECT_DIR/.claude/scratch"
+if [ -d "$SCRATCH_DIR" ] && [ "$(ls -A "$SCRATCH_DIR" 2>/dev/null)" ]; then
+  echo ""
+  echo "---"
+  echo "SCRATCH FILES (user-pasted content preserved across compaction):"
+  for f in "$SCRATCH_DIR"/*; do
+    if [ -f "$f" ]; then
+      echo ""
+      echo "=== $(basename "$f") ==="
+      cat "$f"
+    fi
+  done
+fi

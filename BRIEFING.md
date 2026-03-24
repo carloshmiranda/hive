@@ -64,6 +64,16 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-24 [code] Cascade loop fixes + OIDC auth fix + Ruflo comparison + guardrails
+- **OIDC auth crash fixed**: `new NextRequest(req)` crashed when body was consumed. Changed `validateOIDC` to accept plain Request — fixed 500 errors on all chain dispatch endpoints (backlog/dispatch, cycle-complete, health-gate).
+- **Response envelope unwrap**: Engineer workflow read `.dispatched` but response is `{ok, data: {dispatched}}`. Fixed jq to `.data.dispatched // .dispatched // false`. Chain now correctly processes backlog before falling through to company cycles.
+- **Telegram notification on backlog dispatch**: Added notify call after successful dispatch. Cascade chain now visible end-to-end in Telegram.
+- **Failed item 30-minute cooldown**: Items with `[attempt N]` updated in last 30min excluded from dispatch. Prevents immediate retry loops.
+- **Cascade quality assessment**: 73% failure rate (8/11 runs) from complex tasks without planning. Added 5 P1 guardrails to backlog: CEO micro-plan, circuit breaker, priority floor, cooldown, cost-risk gate.
+- **Cost-risk gate**: P1 backlog item — items touching SDK/API/billing/architecture require manual approval before dispatch. Prevents P3 items like "Claude Agent SDK migration" from burning budget.
+- **Ruflo capability comparison**: Mapped 7 key capabilities against Hive. Added 3 P2 items: parallel company dispatch, task-type classification, unified LLM provider abstraction.
+- **Autonomous capabilities documented**: Added GSC service account, GitHub, Vercel, Neon, Stripe to project_infra.md memory. P1 item to inject into agent context so they don't flag automatable tasks as manual.
+
 ### 2026-03-24 [code] Continuous event-driven dispatch + health gate + chain callbacks
 - **Continuous dispatch**: Agents no longer wait for Sentinel's 4h poll to dispatch next work. When a CEO cycle completes, it calls `/api/dispatch/cycle-complete` which checks health, scores companies, and dispatches the next one immediately.
 - **Health gate** (`/api/dispatch/health-gate`): Pre-dispatch check for budget (Claude 225/5h), concurrent agents, system failure rate, Hive backlog priority. Returns `dispatch`/`wait`/`stop` recommendation.
