@@ -55,5 +55,19 @@ export async function POST(req: Request) {
     VALUES (${company_id || null}, ${gate_type}, ${title}, ${description}, ${context ? JSON.stringify(context) : null})
     RETURNING *
   `;
+
+  // Send Telegram notification with approve/reject buttons (fire-and-forget)
+  (async () => {
+    try {
+      const { notifyApproval } = await import("@/lib/telegram");
+      let companySlug: string | undefined;
+      if (company_id) {
+        const [c] = await sql`SELECT slug FROM companies WHERE id = ${company_id}`;
+        companySlug = c?.slug;
+      }
+      await notifyApproval({ id: approval.id, gate_type, title, company: companySlug, details: description });
+    } catch { /* Telegram not configured */ }
+  })();
+
   return json(approval, 201);
 }

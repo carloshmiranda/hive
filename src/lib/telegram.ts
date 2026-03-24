@@ -77,6 +77,60 @@ export function formatAgentNotification(event: NotificationEvent): string {
   return msg;
 }
 
+// Send a message with inline keyboard buttons
+export async function sendTelegramMessageWithButtons(
+  botToken: string,
+  chatId: string,
+  text: string,
+  buttons: Array<Array<{ text: string; callback_data: string }>>,
+  parseMode: "HTML" | "Markdown" = "HTML"
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: parseMode,
+        disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: buttons },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Edit an existing message (for updating after button press)
+export async function editTelegramMessage(
+  botToken: string,
+  chatId: string,
+  messageId: number,
+  text: string,
+  parseMode: "HTML" | "Markdown" = "HTML"
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${TELEGRAM_API}/bot${botToken}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: parseMode,
+        disable_web_page_preview: true,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Send a Hive notification (reads settings, sends if configured)
 export async function notifyHive(event: NotificationEvent): Promise<boolean> {
   try {
@@ -85,6 +139,70 @@ export async function notifyHive(event: NotificationEvent): Promise<boolean> {
     if (!botToken || !chatId) return false;
     const message = formatAgentNotification(event);
     return sendTelegramMessage(botToken, chatId, message);
+  } catch {
+    return false;
+  }
+}
+
+// Send an approval request with approve/reject buttons
+export async function notifyApproval(approval: {
+  id: string;
+  gate_type: string;
+  title: string;
+  company?: string;
+  details?: string;
+}): Promise<boolean> {
+  try {
+    const botToken = await getSettingValue("telegram_bot_token");
+    const chatId = await getSettingValue("telegram_chat_id");
+    if (!botToken || !chatId) return false;
+
+    const msg = `\u{1F6A8} <b>Approval Required</b>\n`
+      + `<b>${approval.gate_type}</b>${approval.company ? ` \u2192 ${approval.company}` : ""}\n`
+      + `${approval.title}\n`
+      + (approval.details ? `\n<i>${approval.details.slice(0, 300)}</i>` : "");
+
+    return sendTelegramMessageWithButtons(botToken, chatId, msg, [[
+      { text: "\u2705 Approve", callback_data: `approve:${approval.id}` },
+      { text: "\u274C Reject", callback_data: `reject:${approval.id}` },
+    ]]);
+  } catch {
+    return false;
+  }
+}
+
+// Send a PR review request with merge/close buttons
+export async function notifyPR(pr: {
+  number: number;
+  title: string;
+  repo: string;
+  url: string;
+  body?: string;
+  safe: boolean;  // if true, auto-merged — notification is informational
+}): Promise<boolean> {
+  try {
+    const botToken = await getSettingValue("telegram_bot_token");
+    const chatId = await getSettingValue("telegram_chat_id");
+    if (!botToken || !chatId) return false;
+
+    if (pr.safe) {
+      // Auto-merged — informational only
+      const msg = `\u2705 <b>PR Auto-Merged</b>\n`
+        + `<a href="${pr.url}">#${pr.number}</a> ${pr.title}\n`
+        + `<i>${pr.repo}</i>`;
+      return sendTelegramMessage(botToken, chatId, msg);
+    }
+
+    // Needs review — add buttons
+    const msg = `\u{1F4CB} <b>PR Review</b>\n`
+      + `<a href="${pr.url}">#${pr.number}</a> ${pr.title}\n`
+      + `<i>${pr.repo}</i>`
+      + (pr.body ? `\n\n${pr.body.slice(0, 300)}` : "");
+
+    return sendTelegramMessageWithButtons(botToken, chatId, msg, [[
+      { text: "\u2705 Merge", callback_data: `merge:${pr.repo}:${pr.number}` },
+      { text: "\u274C Close", callback_data: `close:${pr.repo}:${pr.number}` },
+    ]]);
   } catch {
     return false;
   }
