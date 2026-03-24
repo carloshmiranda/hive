@@ -148,6 +148,45 @@ export async function POST(req: Request) {
       break;
     }
 
+    case "pull_request": {
+      // Auto-trigger CEO review when PRs are opened
+      if (body.action !== "opened") break;
+
+      const repoName = body.repository?.name;
+      const prNumber = body.pull_request?.number;
+      if (!repoName || !prNumber) break;
+
+      // Skip hive repo (self-improvement PRs are handled differently)
+      if (repoName === "hive") break;
+
+      // Check if this is a company repo
+      const [company] = await sql`SELECT slug FROM companies WHERE slug = ${repoName}`;
+      if (!company) break;
+
+      // Dispatch CEO review event
+      await dispatchEvent("ceo_review", {
+        source: "github_webhook",
+        company: company.slug,
+        pr_number: prNumber,
+        trigger: "pr_opened"
+      });
+
+      // Log the PR for tracking
+      await sql`
+        INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+        VALUES (
+          (SELECT id FROM companies WHERE slug = ${company.slug}),
+          'webhook',
+          'pr_opened',
+          ${`PR #${prNumber} opened, dispatching CEO review`},
+          'success',
+          now(),
+          now()
+        )
+      `;
+      break;
+    }
+
     case "issues": {
       // Detect new hive-directive issues created directly on GitHub
       if (body.action !== "opened") break;
