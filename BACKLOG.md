@@ -66,6 +66,9 @@ Also needs `CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}` added to CEO age
 ### 🟡 P1 — Groq rate limit backoff
 Concurrent Ops dispatches hit Groq 429 rate limits. Need exponential backoff + jitter in `/api/agents/dispatch` for Groq provider, or stagger Ops dispatches in Sentinel with delays between companies.
 
+### 🟡 P1 — Cost-risk gate for backlog dispatch
+Backlog items that could impact costs must require manual approval before dispatch. In `backlog/dispatch/route.ts`, after scoring the top item, check title+description against cost-risk keywords (SDK, API key, paid, billing, stripe, model routing, provider, migration, architecture). If matched, create a `spend_approval` gate with item details + Telegram notification, then skip to the next non-risky item. Same pattern as the manual-work keyword filter already in place.
+
 ### 🟡 P1 — CEO micro-plan before backlog dispatch
 Backlog items go straight to Engineer with a one-line description — no plan, no acceptance criteria, no file-level instructions. This is why 73% of cascade dispatches fail. Fix: insert a lightweight CEO planning step (5 turns max) before Engineer. Flow: `backlog/dispatch` → CEO micro-plan (reads item + codebase context, outputs structured `engineering_tasks[{id, task, files, acceptance}]`) → Engineer (executes plan). Implementation: add a `plan` step to `hive-engineer.yml` that runs CEO with a slim planning prompt when `source=backlog_chain`, stores plan in the dispatch payload. This is what makes the normal company cycle work — CEO plans, Engineer executes.
 
