@@ -337,10 +337,26 @@ export async function GET(req: Request) {
     WHERE gate_type = 'new_company' AND status = 'pending'
   `;
 
-  // Auto-cleanup stale Scout proposals when pipeline is clogged (>5 pending)
+  // Check for stale proposals (>48h old) - moved up for cleanup logic
+  const [staleProposals] = await sql`
+    SELECT COUNT(*) as cnt FROM approvals
+    WHERE gate_type = 'new_company' AND status = 'pending'
+    AND created_at < NOW() - INTERVAL '48 hours'
+  `;
+
+  // More aggressive auto-cleanup of stale Scout proposals
   let proposalCleanupCount = 0;
-  if (parseInt(pendingProposals.cnt) > 5) {
-    console.log(`[sentinel] Pipeline clogged: ${pendingProposals.cnt} pending Scout proposals`);
+
+  // Trigger cleanup more aggressively: >3 pending proposals or any stale proposals
+  const shouldCleanup = parseInt(pendingProposals.cnt) > 3 || parseInt(staleProposals.cnt) > 0;
+
+  if (shouldCleanup) {
+    const reason = parseInt(pendingProposals.cnt) > 10 ?
+      "Aggressive cleanup by Sentinel: Scout pipeline severely clogged, prioritizing company execution" :
+      "Auto-cleanup by Sentinel: Scout proposals accumulating, focusing on existing companies";
+
+    console.log(`[sentinel] Scout cleanup triggered: ${pendingProposals.cnt} pending, ${staleProposals.cnt} stale proposals`);
+
     try {
       const cleanupRes = await fetch("https://hive-phi.vercel.app/api/approvals/scout-cleanup", {
         method: "POST",
@@ -349,9 +365,9 @@ export async function GET(req: Request) {
           "Authorization": `Bearer ${process.env.CRON_SECRET}`
         },
         body: JSON.stringify({
-          max_pending: 3,
-          min_age_hours: 48,
-          reason: "Auto-cleanup by Sentinel: too many Scout proposals blocking company execution"
+          max_pending: parseInt(pendingProposals.cnt) > 10 ? 2 : 3, // More aggressive when severely clogged
+          min_age_hours: parseInt(pendingProposals.cnt) > 10 ? 24 : 48, // Faster expiry when clogged
+          reason
         }),
         signal: AbortSignal.timeout(10000),
       });
@@ -364,13 +380,6 @@ export async function GET(req: Request) {
       console.log(`[sentinel] Scout cleanup failed: ${e instanceof Error ? e.message : "unknown"}`);
     }
   }
-
-  // Check for stale proposals (>48h old)
-  const [staleProposals] = await sql`
-    SELECT COUNT(*) as cnt FROM approvals
-    WHERE gate_type = 'new_company' AND status = 'pending'
-    AND created_at < NOW() - INTERVAL '48 hours'
-  `;
 
   // Scout blocked if too many pending proposals or any stale proposals exist
   const scoutBlocked = parseInt(pendingProposals.cnt) > 3 || parseInt(staleProposals.cnt) > 0;

@@ -27,8 +27,8 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 
 ## Planned
 
-### ✅ P1 — Bulk Scout proposal cleanup system (DONE — 2026-03-24)
-Scout proposals were accumulating while existing companies couldn't execute properly. Implemented auto-cleanup when pipeline is clogged (>5 pending proposals) and Scout blocking when >3 pending or any stale proposals (>48h) exist. Added `/api/approvals/scout-cleanup` for gradual cleanup and `/api/admin/scout-reset` for emergency pipeline reset. Prioritizes company execution over new ideas.
+### ✅ P1 — Enhanced Scout proposal cleanup system (DONE — 2026-03-24)
+Scout proposals were accumulating while existing companies couldn't execute properly. Enhanced auto-cleanup system with more aggressive thresholds: triggers at >3 pending proposals (was >5), faster expiry when severely clogged (24h vs 48h), and keeps fewer proposals (2 vs 3 when >10 pending). Added dashboard cleanup buttons when >5 proposals for manual intervention: "Cleanup" (gradual) and "Reset All" (nuclear option). Sentinel now prioritizes company execution over new Scout ideas.
 
 ### ✅ P1 — CEO PR review: add UI/UX quality gate (DONE — 2026-03-23)
 Added STEP 4b (design quality scan) to hive-ceo.yml PR review. Checks: no gradients, no raw hex, no duplicate sections, max 2 font weights, no placeholder content, landing page CTA rules. Design violations add +2 risk. Removed -2 discount for UI-only PRs — UI changes now get proper scrutiny.

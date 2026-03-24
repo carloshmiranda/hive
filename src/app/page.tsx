@@ -521,6 +521,86 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {/* Scout cleanup warning when too many proposals */}
+          {ideas.length > 5 && (
+            <div style={{
+              padding: "12px 16px", marginBottom: 20, borderRadius: 10,
+              background: "var(--hive-red-bg)", border: "1px solid var(--hive-red-border)",
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 14 }}>⚠️</span>
+                <span style={{ fontSize: 13, color: "var(--hive-red)" }}>
+                  {ideas.length} Scout proposals pending — pipeline clogged, blocking company execution
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={async () => {
+                    if (confirm(`Expire old Scout proposals, keeping only 2 newest?`)) {
+                      try {
+                        const res = await fetch('/api/approvals/scout-cleanup', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            max_pending: 2,
+                            min_age_hours: 24,
+                            reason: 'Manual cleanup by Carlos via dashboard'
+                          })
+                        });
+                        if (res.ok) {
+                          const data = await res.json();
+                          alert(`✅ Cleanup complete: expired ${data.expired_count} proposals`);
+                          window.location.reload();
+                        } else {
+                          alert('❌ Cleanup failed');
+                        }
+                      } catch (e) {
+                        alert('❌ Cleanup failed');
+                      }
+                    }
+                  }}
+                  style={{
+                    padding: "6px 12px", fontSize: 12, fontWeight: 500, borderRadius: 6,
+                    background: "var(--hive-red)", color: "white", border: "none", cursor: "pointer"
+                  }}
+                >
+                  Cleanup
+                </button>
+                <button
+                  onClick={async () => {
+                    if (confirm('⚠️ NUCLEAR OPTION: Expire ALL Scout proposals and kill ALL idea companies?')) {
+                      try {
+                        const res = await fetch('/api/admin/scout-reset', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            reason: 'Manual Scout reset by Carlos via dashboard'
+                          })
+                        });
+                        if (res.ok) {
+                          const data = await res.json();
+                          alert(`🔴 Scout reset complete: ${data.expired_proposals} proposals expired, ${data.killed_companies} companies killed`);
+                          window.location.reload();
+                        } else {
+                          alert('❌ Reset failed');
+                        }
+                      } catch (e) {
+                        alert('❌ Reset failed');
+                      }
+                    }
+                  }}
+                  style={{
+                    padding: "6px 12px", fontSize: 12, fontWeight: 500, borderRadius: 6,
+                    background: "#8b0000", color: "white", border: "none", cursor: "pointer"
+                  }}
+                >
+                  Reset All
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Portfolio */}
           <div style={{ marginBottom: 28 }}>
             <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
