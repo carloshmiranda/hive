@@ -110,10 +110,14 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
   }
 
-  // Fetch ready backlog items (exclude manually-blocked items)
+  // Fetch ready backlog items (exclude manually-blocked items and recently-failed items)
   const backlogItems = await sql`
     SELECT * FROM hive_backlog
     WHERE status IN ('ready', 'approved')
+    AND NOT (
+      notes ILIKE '%[attempt %]%'
+      AND updated_at > NOW() - INTERVAL '30 minutes'
+    )
     ORDER BY
       CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
       created_at ASC
