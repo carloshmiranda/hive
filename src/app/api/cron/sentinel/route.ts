@@ -3,6 +3,7 @@ import { getSettingValue } from "@/lib/settings";
 import { getBoilerplateGaps } from "@/lib/capabilities";
 import { SCHEMA_MAP, getExpectedTables } from "@/lib/schema-map";
 import { findCapabilityForProblem } from "@/lib/hive-capabilities";
+import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import boilerplateManifest from "../../../../../templates/boilerplate-manifest.json";
 
 export const dynamic = "force-dynamic";
@@ -1661,6 +1662,163 @@ export async function GET(req: Request) {
     }
   }
 
+  // 36. Test coverage health — detect companies with no tests or broken tests
+  let testCoverageIssues = 0;
+  const testCompanies = await sql`
+    SELECT c.id, c.slug, c.github_repo, c.capabilities,
+      COALESCE((SELECT COUNT(*) FROM cycles cy WHERE cy.company_id = c.id AND cy.status = 'completed'), 0)::int as total_cycles
+    FROM companies c
+    WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
+  `;
+
+  for (const tc of testCompanies) {
+    const repo = tc.github_repo as string;
+    const companyId = tc.id as string;
+    const slug = tc.slug as string;
+    const totalCycles = tc.total_cycles as number;
+
+    let hasTestDir = false;
+    let hasPlaywrightConfig = false;
+    let hasTestFiles = false;
+    let latestTestRun: { conclusion: string | null } | null = null;
+
+    // Check if tests/ directory exists
+    try {
+      const testsRes = await fetch(`https://api.github.com/repos/${repo}/contents/tests`, {
+        headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (testsRes.ok) {
+        hasTestDir = true;
+        hasTestFiles = true;
+      }
+    } catch { /* non-blocking */ }
+
+    // Check if playwright.config.ts exists
+    try {
+      const playwrightRes = await fetch(`https://api.github.com/repos/${repo}/contents/playwright.config.ts`, {
+        headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (playwrightRes.ok) {
+        hasPlaywrightConfig = true;
+        hasTestFiles = true;
+      }
+    } catch { /* non-blocking */ }
+
+    // Also check src/__tests__ directory
+    if (!hasTestFiles) {
+      try {
+        const srcTestsRes = await fetch(`https://api.github.com/repos/${repo}/contents/src/__tests__`, {
+          headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (srcTestsRes.ok) {
+          hasTestFiles = true;
+        }
+      } catch { /* non-blocking */ }
+    }
+
+    // Check latest post-deploy.yml run (test workflow)
+    if (hasTestFiles) {
+      try {
+        const runsRes = await fetch(
+          `https://api.github.com/repos/${repo}/actions/workflows/post-deploy.yml/runs?per_page=1&status=completed`,
+          {
+            headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+            signal: AbortSignal.timeout(5000),
+          }
+        );
+        if (runsRes.ok) {
+          const runsData = await runsRes.json();
+          const latestRun = runsData.workflow_runs?.[0];
+          if (latestRun) {
+            latestTestRun = { conclusion: latestRun.conclusion };
+          }
+        }
+      } catch { /* non-blocking */ }
+    }
+
+    // Update company capabilities with test info
+    const testCapabilities = {
+      smoke: hasPlaywrightConfig || hasTestDir,
+      unit: false, // Would need deeper analysis
+      e2e: hasPlaywrightConfig,
+    };
+    try {
+      await sql`
+        UPDATE companies SET
+          capabilities = jsonb_set(COALESCE(capabilities, '{}'), '{tests}', ${JSON.stringify(testCapabilities)}::jsonb),
+          updated_at = NOW()
+        WHERE id = ${companyId}
+      `;
+    } catch { /* non-blocking */ }
+
+    // Create engineering tasks for issues
+    if (!hasTestFiles && totalCycles >= 3) {
+      // No test files at all — company has had enough cycles to warrant tests
+      const taskTitle = `Add smoke tests for ${slug}`;
+      const [existingTask] = await sql`
+        SELECT id FROM company_tasks
+        WHERE company_id = ${companyId} AND title = ${taskTitle}
+        AND status NOT IN ('done', 'dismissed')
+        LIMIT 1
+      `;
+      if (!existingTask) {
+        await sql`
+          INSERT INTO company_tasks (company_id, title, description, category, priority, status, source)
+          VALUES (
+            ${companyId},
+            ${taskTitle},
+            ${"This company has no test files (no tests/ directory, no playwright.config.ts, no src/__tests__/). Add Playwright smoke tests that verify: 1) Homepage loads with 200 status, 2) Key pages return 200, 3) API routes respond correctly. Use the boilerplate pattern from templates/boilerplate/ as reference. Install @playwright/test as devDependency and add a post-deploy.yml workflow."},
+            'qa', 2, 'proposed', 'sentinel'
+          )
+        `;
+        testCoverageIssues++;
+        dispatches.push({
+          type: "internal",
+          target: "test_coverage",
+          payload: { company: slug, issue: "no_tests", task_created: true },
+        });
+      }
+    } else if (hasTestFiles && latestTestRun && latestTestRun.conclusion !== "success") {
+      // Tests exist but are failing
+      const taskTitle = `Fix failing tests for ${slug}`;
+      const [existingTask] = await sql`
+        SELECT id FROM company_tasks
+        WHERE company_id = ${companyId} AND title = ${taskTitle}
+        AND status NOT IN ('done', 'dismissed')
+        LIMIT 1
+      `;
+      if (!existingTask) {
+        await sql`
+          INSERT INTO company_tasks (company_id, title, description, category, priority, status, source)
+          VALUES (
+            ${companyId},
+            ${taskTitle},
+            ${"The post-deploy.yml test workflow is failing (conclusion: " + (latestTestRun.conclusion || "unknown") + "). Investigate and fix the test suite. Common issues: 1) Playwright not installed in CI, 2) Missing env vars in workflow, 3) Tests targeting removed/changed pages, 4) Timeout issues. Check the latest GitHub Actions run logs for details."},
+            'qa', 1, 'proposed', 'sentinel'
+          )
+        `;
+        testCoverageIssues++;
+        dispatches.push({
+          type: "internal",
+          target: "test_coverage",
+          payload: { company: slug, issue: "tests_failing", conclusion: latestTestRun.conclusion, task_created: true },
+        });
+      }
+    }
+  }
+
+  if (testCoverageIssues > 0) {
+    await sql`
+      INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+      VALUES ('sentinel', 'test_coverage_check',
+        ${`Test coverage check: ${testCoverageIssues} issues found across ${testCompanies.length} companies`},
+        'success', NOW(), NOW())
+    `.catch(() => {});
+  }
+
   // --- HTTP health checks (parallel) ---
   const companiesWithUrls = await sql`
     SELECT slug, COALESCE('https://' || domain, vercel_url) as check_url FROM companies
@@ -2241,6 +2399,257 @@ export async function GET(req: Request) {
     console.warn("Check 29 (playbook consolidation) failed:", msg);
   }
 
+  // 34. Agent performance regression detection
+  // Compare per-agent success rates: last 7 days vs previous 7 days.
+  // If any agent drops >15pp → create evolver_proposal (outcome gap).
+  // If any agent has <30% success rate for 7+ days → create escalation approval.
+  let agentRegressions = 0;
+  let agentEscalations = 0;
+
+  try {
+    const agentRecentStats = await sql`
+      SELECT agent,
+        COUNT(*) FILTER (WHERE status = 'success')::int as successes,
+        COUNT(*)::int as total
+      FROM agent_actions
+      WHERE status IN ('success', 'failed')
+        AND finished_at > NOW() - INTERVAL '7 days'
+      GROUP BY agent
+      HAVING COUNT(*) >= 5
+    `;
+
+    const agentPriorStats = await sql`
+      SELECT agent,
+        COUNT(*) FILTER (WHERE status = 'success')::int as successes,
+        COUNT(*)::int as total
+      FROM agent_actions
+      WHERE status IN ('success', 'failed')
+        AND finished_at BETWEEN NOW() - INTERVAL '14 days' AND NOW() - INTERVAL '7 days'
+      GROUP BY agent
+      HAVING COUNT(*) >= 5
+    `;
+
+    const priorRates: Record<string, number> = {};
+    for (const r of agentPriorStats) {
+      priorRates[r.agent as string] = Number(r.successes) / Number(r.total);
+    }
+
+    for (const r of agentRecentStats) {
+      const agent = r.agent as string;
+      const recentRate = Number(r.successes) / Number(r.total);
+      const priorRate = priorRates[agent];
+
+      // Check for >15pp regression
+      if (priorRate !== undefined && priorRate - recentRate > 0.15) {
+        // Dedup: check if an evolver_proposal already exists for this agent regression
+        const [existingProposal] = await sql`
+          SELECT id FROM evolver_proposals
+          WHERE title ILIKE ${"%" + agent + "%" + "regression%"}
+            AND status IN ('pending', 'approved')
+            AND created_at > NOW() - INTERVAL '7 days'
+          LIMIT 1
+        `;
+        if (!existingProposal) {
+          await sql`
+            INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, proposed_fix, status)
+            VALUES (
+              'outcome',
+              'high',
+              ${`Agent performance regression: ${agent}`},
+              ${`${agent} success rate dropped from ${Math.round(priorRate * 100)}% to ${Math.round(recentRate * 100)}% (${Math.round((priorRate - recentRate) * 100)}pp drop over 7 days). Sample size: ${r.total} actions.`},
+              'sentinel_agent_regression',
+              ${JSON.stringify({
+                action: `Investigate ${agent} agent failures and improve prompt or retry logic`,
+                agent,
+                recent_rate: Math.round(recentRate * 100),
+                prior_rate: Math.round(priorRate * 100),
+                drop_pp: Math.round((priorRate - recentRate) * 100),
+              })}::jsonb,
+              'pending'
+            )
+          `;
+          agentRegressions++;
+          dispatches.push({
+            type: "evolver_proposal",
+            target: "agent_regression",
+            payload: { agent, recent: Math.round(recentRate * 100), prior: Math.round(priorRate * 100) },
+          });
+        }
+      }
+
+      // Check for sustained <30% success rate
+      if (recentRate < 0.3) {
+        // Dedup: check if an escalation approval already exists for this agent
+        const [existingEscalation] = await sql`
+          SELECT id FROM approvals
+          WHERE gate_type = 'escalation'
+            AND status = 'pending'
+            AND title ILIKE ${"%" + agent + "%" + "success rate%"}
+          LIMIT 1
+        `;
+        if (!existingEscalation) {
+          await sql`
+            INSERT INTO approvals (gate_type, title, description, context)
+            VALUES (
+              'escalation',
+              ${`Agent critically underperforming: ${agent} at ${Math.round(recentRate * 100)}% success rate`},
+              ${`The ${agent} agent has a ${Math.round(recentRate * 100)}% success rate over the last 7 days (${r.successes}/${r.total} actions succeeded). This is below the 30% critical threshold. Review agent configuration, API keys, and prompt quality.`},
+              ${JSON.stringify({
+                agent,
+                success_rate: Math.round(recentRate * 100),
+                successes: Number(r.successes),
+                total: Number(r.total),
+                detected_by: "sentinel",
+              })}::jsonb
+            )
+          `;
+          agentEscalations++;
+          dispatches.push({
+            type: "escalation",
+            target: "agent_underperforming",
+            payload: { agent, success_rate: Math.round(recentRate * 100) },
+          });
+        }
+      }
+    }
+
+    if (agentRegressions > 0 || agentEscalations > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'agent_performance_check',
+          ${`Agent performance check: ${agentRegressions} regressions detected, ${agentEscalations} critical escalations`},
+          'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("Check 34 (agent performance regression) failed:", msg);
+  }
+
+  // 37. Self-improvement proposals — analyze operational patterns and propose Hive improvements
+  // Hive should build its own backlog from operational data, not wait for human sessions.
+  // Each pattern check creates an evolver_proposal with gap_type 'capability' if it identifies
+  // a systemic issue that could be fixed by a code/infrastructure change.
+  let selfImprovementProposals = 0;
+  try {
+    const MAX_PROPOSALS_PER_RUN = 2;
+    const proposals: Array<{ title: string; diagnosis: string; fix: string; severity: string }> = [];
+
+    // Pattern A: Recurring errors without known fixes (>3 occurrences, no fix in error_patterns)
+    const recurringErrors = await sql`
+      SELECT error, agent, COUNT(*)::int as occurrences,
+        COUNT(DISTINCT company_id)::int as affected_companies
+      FROM agent_actions
+      WHERE status = 'failed' AND error IS NOT NULL
+        AND finished_at > NOW() - INTERVAL '7 days'
+      GROUP BY error, agent
+      HAVING COUNT(*) >= 3
+      ORDER BY COUNT(*) DESC LIMIT 5
+    `.catch(() => []);
+
+    for (const re of recurringErrors) {
+      if (proposals.length >= MAX_PROPOSALS_PER_RUN) break;
+      // Check if we already have a fix for this pattern
+      const errorNorm = (re.error as string).slice(0, 200);
+      const [knownFix] = await sql`
+        SELECT id FROM error_patterns WHERE resolved = true AND pattern ILIKE ${"%" + errorNorm.slice(0, 80) + "%"} LIMIT 1
+      `.catch(() => []);
+      if (!knownFix) {
+        proposals.push({
+          title: `Recurring unfixed error in ${re.agent}: ${errorNorm.slice(0, 60)}`,
+          diagnosis: `${re.agent} has failed ${re.occurrences} times in 7 days across ${re.affected_companies} companies with: "${errorNorm}". No known fix exists in error_patterns.`,
+          fix: `Investigate root cause of ${re.agent} error, implement fix, and record in error_patterns for future auto-resolution.`,
+          severity: Number(re.occurrences) >= 10 ? "high" : "medium",
+        });
+      }
+    }
+
+    // Pattern B: Companies with zero metrics for 7+ days (metrics pipeline not delivering value)
+    const zeroMetricsCompanies = await sql`
+      SELECT c.slug, MAX(m.page_views)::int as max_views
+      FROM companies c
+      LEFT JOIN metrics m ON m.company_id = c.id AND m.date > CURRENT_DATE - 7
+      WHERE c.status IN ('mvp', 'active')
+      GROUP BY c.slug
+      HAVING COALESCE(MAX(m.page_views), 0) = 0
+    `.catch(() => []);
+    if (zeroMetricsCompanies.length > 0 && proposals.length < MAX_PROPOSALS_PER_RUN) {
+      proposals.push({
+        title: `${zeroMetricsCompanies.length} companies have zero metrics for 7+ days`,
+        diagnosis: `Companies with no pageview data: ${zeroMetricsCompanies.map((c) => c.slug).join(", ")}. The metrics pipeline (company /api/stats → Hive metrics cron) is not delivering value.`,
+        fix: `Ensure all company repos have working /api/stats endpoints with pageview middleware. Consider adding Vercel Analytics drain as backup data source.`,
+        severity: "high",
+      });
+    }
+
+    // Pattern C: Agents with >50% timeout failures (need longer timeouts or architecture change)
+    const timeoutAgents = await sql`
+      SELECT agent, COUNT(*)::int as timeouts,
+        (COUNT(*)::float / NULLIF((SELECT COUNT(*) FROM agent_actions WHERE agent = aa.agent AND finished_at > NOW() - INTERVAL '7 days'), 0))::float as timeout_pct
+      FROM agent_actions aa
+      WHERE status = 'failed' AND error ILIKE '%timeout%'
+        AND finished_at > NOW() - INTERVAL '7 days'
+      GROUP BY agent
+      HAVING COUNT(*) >= 3
+    `.catch(() => []);
+    for (const ta of timeoutAgents) {
+      if (proposals.length >= MAX_PROPOSALS_PER_RUN) break;
+      if (Number(ta.timeout_pct) > 0.5) {
+        proposals.push({
+          title: `${ta.agent} has ${Math.round(Number(ta.timeout_pct) * 100)}% timeout rate`,
+          diagnosis: `${ta.agent} timed out ${ta.timeouts} times in 7 days (${Math.round(Number(ta.timeout_pct) * 100)}% of all failures). This suggests the allocated time/turns is insufficient for the work being assigned.`,
+          fix: `Increase max_turns or timeout for ${ta.agent}, or break tasks into smaller steps that complete within the current budget.`,
+          severity: "medium",
+        });
+      }
+    }
+
+    // Pattern D: Tasks stuck in proposed/approved for >14 days (backlog not being executed)
+    const stuckTasks = await sql`
+      SELECT COUNT(*)::int as stuck_count,
+        COUNT(DISTINCT company_id)::int as affected_companies
+      FROM company_tasks
+      WHERE status IN ('proposed', 'approved')
+        AND created_at < NOW() - INTERVAL '14 days'
+    `.catch(() => [{ stuck_count: 0, affected_companies: 0 }]);
+    if (Number(stuckTasks[0]?.stuck_count) > 5 && proposals.length < MAX_PROPOSALS_PER_RUN) {
+      proposals.push({
+        title: `${stuckTasks[0].stuck_count} tasks stuck for 14+ days across ${stuckTasks[0].affected_companies} companies`,
+        diagnosis: `Tasks are being created (by Sentinel, CEO, etc.) but not executed by Engineer/Growth. This means self-healing checks create tasks that never get done.`,
+        fix: `Review task dispatch flow: are CEO cycles planning these tasks? Is Engineer picking them up? Consider auto-dispatching high-priority tasks directly to Engineer.`,
+        severity: "high",
+      });
+    }
+
+    // Write proposals as evolver_proposals (dedup by title)
+    for (const p of proposals) {
+      const [existing] = await sql`
+        SELECT id FROM evolver_proposals
+        WHERE title ILIKE ${p.title.slice(0, 50) + "%"}
+          AND status IN ('pending', 'approved')
+          AND created_at > NOW() - INTERVAL '14 days'
+        LIMIT 1
+      `;
+      if (!existing) {
+        await sql`
+          INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, proposed_fix, status)
+          VALUES ('capability', ${p.severity}, ${p.title}, ${p.diagnosis}, 'sentinel_self_improvement', ${p.fix}, 'pending')
+        `;
+        selfImprovementProposals++;
+      }
+    }
+
+    if (selfImprovementProposals > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'self_improvement', ${`Created ${selfImprovementProposals} self-improvement proposals`}, 'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("Check 37 (self-improvement proposals) failed:", msg);
+  }
+
   return Response.json({
     ok: true,
     trace_id: traceId,
@@ -2267,6 +2676,10 @@ export async function GET(req: Request) {
     stale_records_fixed: staleRecordsFixed,
     playbook_merged: playbookMerged,
     playbook_composites: playbookComposites,
+    agent_regressions: agentRegressions,
+    agent_escalations: agentEscalations,
+    test_coverage_issues: testCoverageIssues,
+    self_improvement_proposals: selfImprovementProposals,
     details: dispatches,
   });
 

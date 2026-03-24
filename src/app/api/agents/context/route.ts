@@ -4,6 +4,7 @@ import { getDb, json, err } from "@/lib/db";
 import { computeValidationScore, normalizeBusinessType } from "@/lib/validation";
 import { getCapabilitySummary } from "@/lib/hive-capabilities";
 import { checkForbidden } from "@/lib/phase-gate";
+import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
@@ -246,10 +247,62 @@ async function fixContext(sql: any, company: any) {
     `.catch(() => []),
   ]);
 
+  // Look up known fixes from error_patterns for each recent error
+  const SIMILARITY_THRESHOLD = 0.6;
+  type KnownFix = {
+    error_pattern: string;
+    fix_summary: string;
+    fix_detail: string | null;
+    occurrences: number;
+    auto_fixable: boolean;
+    similarity: number;
+  };
+  const knownFixes: KnownFix[] = [];
+
+  if (errors.length > 0) {
+    const resolvedPatterns = await sql`
+      SELECT pattern, agent, fix_summary, fix_detail, occurrences, auto_fixable
+      FROM error_patterns
+      WHERE resolved = true
+      ORDER BY occurrences DESC, last_seen_at DESC
+      LIMIT 100
+    `.catch(() => []);
+
+    if (resolvedPatterns.length > 0) {
+      const seenPatterns = new Set<string>();
+      for (const error of errors) {
+        if (!error.error) continue;
+        const normalized = normalizeError(error.error as string);
+        if (!normalized) continue;
+
+        for (const rp of resolvedPatterns) {
+          const rpPattern = rp.pattern as string;
+          if (seenPatterns.has(rpPattern)) continue;
+          const sim = errorSimilarity(normalized, rpPattern);
+          if (sim >= SIMILARITY_THRESHOLD) {
+            seenPatterns.add(rpPattern);
+            knownFixes.push({
+              error_pattern: rpPattern,
+              fix_summary: rp.fix_summary as string,
+              fix_detail: (rp.fix_detail as string) || null,
+              occurrences: rp.occurrences as number,
+              auto_fixable: rp.auto_fixable as boolean,
+              similarity: Math.round(sim * 100) / 100,
+            });
+          }
+        }
+      }
+      // Sort by similarity DESC, limit to top 5
+      knownFixes.sort((a, b) => b.similarity - a.similarity || b.occurrences - a.occurrences);
+      knownFixes.splice(5);
+    }
+  }
+
   return {
     errors,
     previous_fixes: fixes.map((f: { description: string }) => f.description),
     cross_company_patterns: patterns.map((p: { description: string }) => p.description),
+    ...(knownFixes.length > 0 ? { known_fixes: knownFixes } : {}),
     hive_capabilities: getCapabilitySummary(),
   };
 }

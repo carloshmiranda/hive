@@ -369,3 +369,23 @@ CREATE TABLE IF NOT EXISTS company_tasks (
 
 CREATE INDEX idx_company_tasks_company ON company_tasks(company_id, status);
 CREATE INDEX idx_company_tasks_status ON company_tasks(status);
+
+-- Error patterns: cross-session error→fix mapping (ReasoningBank-lite)
+-- When an error is fixed, the pattern is stored so next time the same error occurs,
+-- the fix is suggested immediately instead of re-deriving it.
+CREATE TABLE error_patterns (
+  id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  pattern         TEXT NOT NULL,           -- normalized error (stripped of UUIDs, timestamps, paths)
+  agent           TEXT NOT NULL,           -- which agent typically hits this
+  fix_summary     TEXT NOT NULL,           -- what fixed it (one line)
+  fix_detail      TEXT,                    -- detailed fix steps / code changes
+  source_action_id TEXT,                   -- agent_action that first resolved this
+  occurrences     INT DEFAULT 1,          -- how many times this pattern has been seen
+  last_seen_at    TIMESTAMPTZ DEFAULT now(),
+  resolved        BOOLEAN DEFAULT false,  -- true if a fix exists
+  auto_fixable    BOOLEAN DEFAULT false,  -- true if Hive can fix without human intervention
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_error_patterns_pattern ON error_patterns USING gin (to_tsvector('english', pattern));
+CREATE INDEX idx_error_patterns_agent ON error_patterns(agent);
+CREATE INDEX idx_error_patterns_resolved ON error_patterns(resolved) WHERE resolved = true;
