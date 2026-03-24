@@ -95,6 +95,26 @@ jobs:
             set_output "payload" "{\"mode\":\"${{ github.event.inputs.mode }}\",\"company\":\"${{ github.event.inputs.company }}\"}"
           fi
 
+      - name: Check pending proposals
+        id: gate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          PENDING=$(node -e "
+            const { neon } = require('@neondatabase/serverless');
+            const sql = neon(process.env.DATABASE_URL);
+            sql\`SELECT COUNT(*)::int as cnt FROM approvals WHERE gate_type = 'new_company' AND status = 'pending'\`
+              .then(r => console.log(r[0].cnt)).catch(() => console.log('0'));
+          " 2>/dev/null || echo "0")
+          echo "pending_proposals=$PENDING" >> $GITHUB_OUTPUT
+          TRIGGER="${{ steps.context.outputs.trigger }}"
+          if [ "$PENDING" -ge 5 ] && [ "$TRIGGER" != "research_request" ]; then
+            echo "skip_ideas=true" >> $GITHUB_OUTPUT
+            echo "Scout: $PENDING pending proposals (>=5) — skipping idea generation, research only"
+          else
+            echo "skip_ideas=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run Scout agent
         id: agent
         uses: anthropics/claude-code-action@v1
@@ -106,6 +126,15 @@ jobs:
 
             TRIGGER: ${{ steps.context.outputs.trigger }}
             PAYLOAD: ${{ steps.context.outputs.payload }}
+            SKIP_IDEAS: ${{ steps.gate.outputs.skip_ideas }}
+            PENDING_PROPOSALS: ${{ steps.gate.outputs.pending_proposals }}
+
+            ## IDEA GENERATION GATE
+            If SKIP_IDEAS is "true", there are already 5+ business proposals pending review.
+            DO NOT generate new business ideas or create new_company approvals.
+            Instead, focus ONLY on research tasks: market research, competitive analysis, SEO keywords
+            for existing companies. If the trigger is pipeline_low or company_killed AND SKIP_IDEAS is true,
+            pick an active company that hasn't had research in 7+ days and do a competitive refresh instead.
 
             ## STEP 1: Read your full prompt and context
             1. Read `prompts/scout.md` — this contains your COMPLETE research methodology, business model categories, output format, and constraints. Follow it exactly.

@@ -382,7 +382,7 @@ export async function GET(req: Request) {
   }
 
   // Scout blocked if too many pending proposals or any stale proposals exist
-  const scoutBlocked = parseInt(pendingProposals.cnt) > 3 || parseInt(staleProposals.cnt) > 0;
+  const scoutBlocked = parseInt(pendingProposals.cnt) >= 5 || parseInt(staleProposals.cnt) > 0;
   const pipelineLow = parseInt(pipeline.cnt) < 3 && parseInt(pendingIdeas.cnt) === 0 && !scoutBlocked;
 
   // 2. Stale content (no growth success in 7 days)
