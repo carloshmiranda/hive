@@ -419,3 +419,26 @@ CREATE TABLE hive_backlog (
 );
 CREATE INDEX idx_hive_backlog_status ON hive_backlog(status);
 CREATE INDEX idx_hive_backlog_priority ON hive_backlog(priority);
+
+-- Routing weights: dynamic model routing based on task success rates
+-- Tracks success/failure rates per (task_type, model) to auto-promote failing models
+CREATE TABLE routing_weights (
+  id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  task_type     TEXT NOT NULL,           -- e.g. 'cycle_plan', 'execute_task', 'scaffold_company'
+  model         TEXT NOT NULL,           -- e.g. 'claude-sonnet', 'gemini-flash', 'groq-llama'
+  agent         TEXT NOT NULL,           -- which agent performs this task type
+  successes     INTEGER DEFAULT 0,       -- count of successful completions
+  failures      INTEGER DEFAULT 0,       -- count of failed completions
+  success_rate  NUMERIC(5,4) GENERATED ALWAYS AS (
+                  CASE WHEN (successes + failures) = 0 THEN 0.5
+                       ELSE successes::numeric / (successes + failures)
+                  END
+                ) STORED,                 -- computed success rate (0.0-1.0)
+  last_updated  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(task_type, model, agent)
+);
+
+CREATE INDEX idx_routing_weights_task_model ON routing_weights(task_type, model);
+CREATE INDEX idx_routing_weights_agent ON routing_weights(agent);
+CREATE INDEX idx_routing_weights_success_rate ON routing_weights(success_rate);

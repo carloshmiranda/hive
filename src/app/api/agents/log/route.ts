@@ -45,5 +45,56 @@ export async function POST(req: NextRequest) {
       NOW() - INTERVAL '20 minutes', NOW())
   `;
 
+  // Update routing weights on agent completion (post-hook)
+  await updateRoutingWeights(sql, action_type, agent, status, metadata);
+
   return json({ logged: true });
+}
+
+// Update routing weights based on agent action completion
+async function updateRoutingWeights(sql: any, action_type: string, agent: string, status: string, metadata: any) {
+  // Extract model from metadata, fall back to default models per agent
+  const model = metadata?.model || getDefaultModel(agent);
+
+  // Only track completion statuses that indicate success/failure
+  if (!['success', 'failed'].includes(status)) {
+    return;
+  }
+
+  const isSuccess = status === 'success';
+
+  try {
+    // Upsert routing weights record
+    await sql`
+      INSERT INTO routing_weights (task_type, model, agent, successes, failures, last_updated)
+      VALUES (${action_type}, ${model}, ${agent},
+        ${isSuccess ? 1 : 0}, ${isSuccess ? 0 : 1}, NOW())
+      ON CONFLICT (task_type, model, agent)
+      DO UPDATE SET
+        successes = routing_weights.successes + ${isSuccess ? 1 : 0},
+        failures = routing_weights.failures + ${isSuccess ? 0 : 1},
+        last_updated = NOW()
+    `;
+  } catch (error) {
+    // Log error but don't fail the main request
+    console.error('Failed to update routing weights:', error);
+  }
+}
+
+// Get default model for each agent type
+function getDefaultModel(agent: string): string {
+  const defaults: Record<string, string> = {
+    'ceo': 'claude-opus',
+    'scout': 'claude-opus',
+    'engineer': 'claude-sonnet',
+    'evolver': 'claude-opus',
+    'growth': 'gemini-flash',
+    'outreach': 'gemini-flash',
+    'ops': 'groq-llama',
+    'healer': 'claude-sonnet',
+    'orchestrator': 'none', // orchestrator doesn't use LLMs
+    'sentinel': 'none'      // sentinel doesn't use LLMs
+  };
+
+  return defaults[agent] || 'unknown';
 }
