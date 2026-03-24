@@ -10,6 +10,7 @@ export interface BacklogItem {
   category: string;       // bugfix, feature, refactor, infra, quality, research
   status: string;
   created_at: string;
+  notes?: string;         // attempt tracking, dispatch notes
 }
 
 export interface BacklogSignals {
@@ -20,6 +21,7 @@ export interface BacklogSignals {
   blocksAgents: string[];       // which agents this blocks (e.g., ['engineer', 'growth'])
   daysSinceCreated: number;     // age of the item
   totalCompanies: number;       // total active companies (for normalization)
+  previousAttempts: number;     // how many times this item has been attempted and failed
 }
 
 export interface ScoredBacklogItem extends BacklogItem {
@@ -80,9 +82,15 @@ export function computeBacklogScore(item: BacklogItem, signals: BacklogSignals):
     ? Math.min(100, signals.blocksAgents.length * 25 + 20)
     : 0;
 
-  // 5. NOVELTY PENALTY (multiplier 0.5-1.0)
-  // Avoid retrying things that already failed
-  const novelty = signals.hasSimilarFailed ? 0.6 : 1.0;
+  // 5. NOVELTY PENALTY (multiplier 0.3-1.0)
+  // Deprioritize items that keep failing — let other work go first
+  // Each failed attempt reduces score: attempt 1 → 0.7, attempt 2 → 0.5, attempt 3+ → 0.3
+  // Also penalizes if a similar (different) item failed recently
+  const attemptPenalty = signals.previousAttempts > 0
+    ? Math.max(0.3, 1.0 - (signals.previousAttempts * 0.25))
+    : 1.0;
+  const similarPenalty = signals.hasSimilarFailed ? 0.8 : 1.0;
+  const novelty = attemptPenalty * similarPenalty;
 
   // Weighted sum × category × novelty
   const rawScore = (

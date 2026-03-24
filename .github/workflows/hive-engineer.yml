@@ -871,7 +871,23 @@ jobs:
           OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
+
+          # Extract the actual error from Claude's execution output
+          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          if [ ! -f "$EXEC_FILE" ] || [ -z "$EXEC_FILE" ]; then
+            EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+          fi
+          # Get the last error/result from Claude's output
+          ERROR_MSG=$(jq -r '[.[] | select(.type == "result" or .type == "error")] | last | .error // .result // "unknown"' "$EXEC_FILE" 2>/dev/null | head -c 500 || echo "unknown")
+          SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+          TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+          TASK=$(echo '${{ needs.context.outputs.payload }}' | jq -r '.task // "Hive-internal work"' 2>/dev/null | head -c 100 || echo "unknown")
+
+          # Escape for JSON
+          ERROR_ESCAPED=$(echo "$ERROR_MSG" | jq -Rs '.' | sed 's/^"//;s/"$//')
+          TASK_ESCAPED=$(echo "$TASK" | jq -Rs '.' | sed 's/^"//;s/"$//')
+
           curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"failed\",\"description\":\"Hive-internal build failed\"}" || true
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"failed\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns)\"}" || true

@@ -1584,6 +1584,7 @@ export async function GET(req: Request) {
 
           const blocksAgents = detectBlockedAgents(item.title, item.description);
           const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
+          const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
 
           scored.push(computeBacklogScore(item as Parameters<typeof computeBacklogScore>[0], {
             relatedErrors,
@@ -1593,6 +1594,7 @@ export async function GET(req: Request) {
             blocksAgents,
             daysSinceCreated,
             totalCompanies,
+            previousAttempts,
           }));
         }
 

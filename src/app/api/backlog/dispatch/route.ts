@@ -223,6 +223,7 @@ export async function POST(req: Request) {
 
     const blocksAgents = detectBlockedAgents(item.title, item.description);
     const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
+    const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
 
     const scored = computeBacklogScore(item as BacklogItem, {
       relatedErrors,
@@ -232,6 +233,7 @@ export async function POST(req: Request) {
       blocksAgents,
       daysSinceCreated,
       totalCompanies,
+      previousAttempts,
     });
 
     if (scored.priority_score > topScore) {
@@ -250,6 +252,37 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "no_github_token" });
   }
 
+  // Check for previous failed attempts — inject error context so Engineer learns
+  const attemptMatch = (topItem.notes || "").match(/\[attempt \d+\]/g);
+  const attemptCount = attemptMatch?.length || 0;
+  let previousErrors = "";
+  if (attemptCount > 0) {
+    // Find the most recent Engineer failures related to this backlog item
+    const failures = await sql`
+      SELECT error, description, finished_at
+      FROM agent_actions
+      WHERE agent = 'engineer' AND status = 'failed'
+      AND company_id IS NULL
+      AND finished_at > NOW() - INTERVAL '7 days'
+      AND (description ILIKE ${"%" + topItem.title.slice(0, 30) + "%"}
+           OR output::text ILIKE ${"%" + (topItem.id || "") + "%"})
+      ORDER BY finished_at DESC
+      LIMIT 3
+    `.catch(() => []);
+
+    if (failures.length > 0) {
+      previousErrors = failures
+        .map((f, i) => `Attempt ${i + 1}: ${(f.error || f.description || "unknown error").slice(0, 300)}`)
+        .join("\n");
+    }
+  }
+
+  // Build task with failure context
+  let taskDescription = topItem.description;
+  if (previousErrors) {
+    taskDescription += `\n\n⚠️ PREVIOUS ATTEMPTS FAILED (attempt ${attemptCount + 1}):\n${previousErrors}\n\nDo NOT repeat the same approach. Analyze why it failed and try a different strategy.`;
+  }
+
   const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
     method: "POST",
     headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
@@ -258,11 +291,12 @@ export async function POST(req: Request) {
       client_payload: {
         source: "backlog_chain",
         company: "_hive",
-        task: topItem.description,
+        task: taskDescription,
         backlog_id: topItem.id,
         priority: topItem.priority,
         priority_score: topItem.priority_score,
-        chain_next: true, // Tell Engineer to call back when done
+        attempt: attemptCount + 1,
+        chain_next: true,
       },
     }),
     signal: AbortSignal.timeout(10000),

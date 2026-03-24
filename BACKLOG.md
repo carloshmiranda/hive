@@ -48,6 +48,9 @@ Most cycles complete without CEO review scores. This breaks validation scoring (
 ### 🟡 P1 — Groq rate limit backoff
 Concurrent Ops dispatches hit Groq 429 rate limits. Need exponential backoff + jitter in `/api/agents/dispatch` for Groq provider, or stagger Ops dispatches in Sentinel with delays between companies.
 
+### 🟡 P1 — Model escalation on backlog retry
+When a backlog item fails twice on Sonnet, the third attempt should escalate to Opus. Pass `model_override` in the dispatch payload so `hive-engineer.yml` can use it. Cheap way to avoid wasting retries — harder tasks need stronger reasoning. Implementation: `backlog/dispatch/route.ts` checks attempt count, adds `model: "opus"` to `client_payload` when attempt ≥ 3; `hive-engineer.yml` reads `model` from payload and overrides the `model` input on `claude-code-action`.
+
 ### 🟢 P2 — Performance-driven model routing
 Track per-agent success rates by model. If Gemini Flash has >90% success on Growth tasks, keep it. If Groq starts failing Ops checks, auto-escalate to Claude. The routing table should be dynamic, not static. Inspired by Ruflo's Q-Learning router that tracks outcomes and improves routing over time.
 

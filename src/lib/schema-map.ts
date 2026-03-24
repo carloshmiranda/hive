@@ -341,6 +341,23 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
     ],
   },
 
+  error_patterns: {
+    columns: {
+      id: { type: "TEXT", nullable: false, hasDefault: true },
+      pattern: { type: "TEXT", nullable: false, hasDefault: false },
+      agent: { type: "TEXT", nullable: false, hasDefault: false },
+      fix_summary: { type: "TEXT", nullable: false, hasDefault: false },
+      fix_detail: { type: "TEXT", nullable: true, hasDefault: false },
+      source_action_id: { type: "TEXT", nullable: true, hasDefault: false },
+      occurrences: { type: "INTEGER", nullable: true, hasDefault: true },
+      last_seen_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: true },
+      resolved: { type: "BOOLEAN", nullable: true, hasDefault: true },
+      auto_fixable: { type: "BOOLEAN", nullable: true, hasDefault: true },
+      created_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: true },
+    },
+    checks: [],
+  },
+
   company_tasks: {
     columns: {
       id: { type: "TEXT", nullable: false, hasDefault: true },
