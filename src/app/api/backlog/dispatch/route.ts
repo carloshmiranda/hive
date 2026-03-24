@@ -59,7 +59,19 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "engineer_busy", running_id: running.id });
   }
 
-  // Fetch ready backlog items
+  // Check for recently dispatched backlog items (covers the race window
+  // between dispatch and the Engineer registering as 'running' in agent_actions)
+  const [recentDispatch] = await sql`
+    SELECT id, title FROM hive_backlog
+    WHERE status = 'dispatched'
+    AND dispatched_at > NOW() - INTERVAL '10 minutes'
+    LIMIT 1
+  `.catch(() => []);
+  if (recentDispatch) {
+    return json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
+  }
+
+  // Fetch ready backlog items (exclude manually-blocked items)
   const backlogItems = await sql`
     SELECT * FROM hive_backlog
     WHERE status IN ('ready', 'approved')
@@ -69,8 +81,54 @@ export async function POST(req: Request) {
     LIMIT 10
   `.catch(() => []);
 
-  if (backlogItems.length === 0) {
-    return json({ dispatched: false, reason: "backlog_empty" });
+  // Filter out items that require manual/human work (can't be automated)
+  const MANUAL_KEYWORDS = /\b(manual|buy domain|DNS records|sign up|create account|register|purchase|human|carlos)\b/i;
+  const automatable = [];
+  const manualItems = [];
+  for (const item of backlogItems) {
+    if (MANUAL_KEYWORDS.test(item.description) || MANUAL_KEYWORDS.test(item.title)) {
+      manualItems.push(item);
+    } else {
+      automatable.push(item);
+    }
+  }
+
+  // Mark manual items as blocked so they don't get re-evaluated every cycle
+  for (const item of manualItems) {
+    if (item.status === "ready") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', notes = COALESCE(notes, '') || ' [auto] Requires manual action — skipped by dispatch.'
+        WHERE id = ${item.id} AND status = 'ready'
+      `.catch(() => {});
+    }
+  }
+
+  // Notify about manual items that were blocked
+  if (manualItems.length > 0) {
+    const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+    const titles = manualItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
+    await fetch(`${baseUrl}/api/notify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.CRON_SECRET}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent: "backlog",
+        action: "manual_blocked",
+        company: "hive",
+        status: "needs_carlos",
+        summary: `${manualItems.length} backlog item(s) need manual action:\n${titles}`,
+      }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  }
+
+  const backlogItemsFiltered = automatable;
+
+  if (backlogItemsFiltered.length === 0) {
+    return json({ dispatched: false, reason: "backlog_empty", manual_blocked: manualItems.length });
   }
 
   // Score items
@@ -91,7 +149,7 @@ export async function POST(req: Request) {
   let topItem = null;
   let topScore = -1;
 
-  for (const item of backlogItems) {
+  for (const item of backlogItemsFiltered) {
     const keywords = item.title.split(/\s+/).filter((w: string) => w.length > 4).slice(0, 3);
     let relatedErrors = 0;
     let companiesAffected = 0;

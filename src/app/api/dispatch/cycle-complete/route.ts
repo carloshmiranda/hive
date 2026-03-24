@@ -90,6 +90,18 @@ export async function POST(req: Request) {
     return json({ chained: false, reason: "no_github_token" });
   }
 
+  // Dedup: check for recently dispatched cycle_start (covers the race window
+  // between dispatch and the CEO registering as 'running' in agent_actions)
+  const [recentCycleDispatch] = await sql`
+    SELECT id FROM agent_actions
+    WHERE agent = 'dispatch' AND action_type = 'chain_cycle'
+    AND started_at > NOW() - INTERVAL '10 minutes'
+    LIMIT 1
+  `.catch(() => []);
+  if (recentCycleDispatch) {
+    return json({ chained: false, reason: "recent_cycle_dispatched" });
+  }
+
   // Find companies needing cycles (same logic as Sentinel Check 13c)
   const candidates = await sql`
     SELECT c.id, c.slug, c.status, c.github_repo,
@@ -209,6 +221,14 @@ export async function POST(req: Request) {
   });
 
   if (res.ok || res.status === 204) {
+    // Log dispatch for dedup (so concurrent calls don't double-dispatch)
+    await sql`
+      INSERT INTO agent_actions (agent, action_type, status, description, company_id, started_at, finished_at)
+      VALUES ('dispatch', 'chain_cycle', 'success',
+        ${`Chain dispatch: ${company || "unknown"} → ${next.slug} (score ${next.priority_score})`},
+        ${next.id}, NOW(), NOW())
+    `.catch(() => {});
+
     // Notify via Telegram
     await fetch(`${HIVE_URL}/api/notify`, {
       method: "POST",
