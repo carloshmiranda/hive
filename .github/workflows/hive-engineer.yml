@@ -855,7 +855,8 @@ jobs:
             echo "  Backlog result: $BACKLOG_RESULT"
 
             # If no backlog items left, chain to next company cycle
-            DISPATCHED=$(echo "$BACKLOG_RESULT" | jq -r '.dispatched // false' 2>/dev/null || echo "false")
+            # Response is wrapped: {ok: true, data: {dispatched: true, ...}}
+            DISPATCHED=$(echo "$BACKLOG_RESULT" | jq -r '.data.dispatched // .dispatched // false' 2>/dev/null || echo "false")
             if [ "$DISPATCHED" != "true" ]; then
               echo "No backlog items — chaining to company cycle..."
               curl -s -X POST "$HIVE_URL/api/dispatch/cycle-complete" \

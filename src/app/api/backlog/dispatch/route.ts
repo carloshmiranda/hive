@@ -310,6 +310,24 @@ export async function POST(req: Request) {
       WHERE id = ${topItem.id}
     `.catch(() => {});
 
+    // Notify via Telegram
+    const baseUrlNotify = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+    await fetch(`${baseUrlNotify}/api/notify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cronSecret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent: "backlog",
+        action: "dispatch",
+        company: "_hive",
+        status: "started",
+        summary: `[${topItem.priority}] "${topItem.title}" dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
+      }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+
     return json({
       dispatched: true,
       item: { id: topItem.id, title: topItem.title, priority: topItem.priority, priority_score: topItem.priority_score },
