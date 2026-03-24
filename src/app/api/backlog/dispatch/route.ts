@@ -85,31 +85,34 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100) });
   }
 
-  // Check for consecutive Claude failures (weekly/session limit hits)
-  // If recent runs are failing with rate limit errors, stop dispatching
-  const [recentFailureRow] = await sql`
-    SELECT COUNT(*)::int as total,
-           COUNT(*) FILTER (WHERE status = 'failed')::int as failed,
-           COUNT(*) FILTER (WHERE status = 'failed'
-             AND (error ILIKE '%rate limit%' OR error ILIKE '%session limit%'
-               OR error ILIKE '%usage cap%' OR error ILIKE '%too many%'
-               OR error ILIKE '%quota%' OR error ILIKE '%limit reached%'
-               OR error ILIKE '%max_tokens%' OR error ILIKE '%capacity%'))::int as rate_limited
+  // Check for rate-limit failures (2h window — these indicate weekly/session cap)
+  const [rateLimitRow] = await sql`
+    SELECT COUNT(*) FILTER (WHERE status = 'failed'
+      AND (error ILIKE '%rate limit%' OR error ILIKE '%session limit%'
+        OR error ILIKE '%usage cap%' OR error ILIKE '%too many%'
+        OR error ILIKE '%quota%' OR error ILIKE '%limit reached%'
+        OR error ILIKE '%max_tokens%' OR error ILIKE '%capacity%'))::int as rate_limited
     FROM agent_actions
     WHERE agent IN ('ceo', 'scout', 'engineer', 'evolver', 'healer')
     AND started_at > NOW() - INTERVAL '2 hours'
-  `.catch(() => [{ total: 0, failed: 0, rate_limited: 0 }]);
-  const rateLimited = Number((recentFailureRow as Record<string, number>)?.rate_limited || 0);
-  const recentFailed = Number((recentFailureRow as Record<string, number>)?.failed || 0);
-  const recentTotal = Number((recentFailureRow as Record<string, number>)?.total || 0);
-
-  // If 2+ rate-limit failures in 2h, pause for safety
+  `.catch(() => [{ rate_limited: 0 }]);
+  const rateLimited = Number((rateLimitRow as Record<string, number>)?.rate_limited || 0);
   if (rateLimited >= 2) {
     return json({ dispatched: false, reason: "claude_rate_limited", rate_limit_failures: rateLimited, window: "2h" });
   }
-  // If >60% of recent runs failed (any reason), circuit-break
-  if (recentTotal >= 4 && recentFailed / recentTotal > 0.6) {
-    return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100) });
+
+  // Circuit breaker: short 30-min window so it recovers quickly after limit resets
+  const [recentFailureRow] = await sql`
+    SELECT COUNT(*)::int as total,
+           COUNT(*) FILTER (WHERE status = 'failed')::int as failed
+    FROM agent_actions
+    WHERE agent IN ('ceo', 'scout', 'engineer', 'evolver', 'healer')
+    AND started_at > NOW() - INTERVAL '30 minutes'
+  `.catch(() => [{ total: 0, failed: 0 }]);
+  const recentFailed = Number((recentFailureRow as Record<string, number>)?.failed || 0);
+  const recentTotal = Number((recentFailureRow as Record<string, number>)?.total || 0);
+  if (recentTotal >= 3 && recentFailed / recentTotal > 0.6) {
+    return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100), window: "30m" });
   }
 
   // Check for running Hive Engineer jobs (dedup)
