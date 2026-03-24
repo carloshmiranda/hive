@@ -6,13 +6,27 @@ import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
 
 // Retry wrapper for transient LLM API failures (429, 5xx, network errors)
+// Implements exponential backoff with jitter for rate limiting (429) responses
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const res = await fetch(url, options);
       if (res.ok || [400, 401, 403, 404].includes(res.status)) return res;
+
       if (attempt < maxRetries) {
-        const delay = attempt === 0 ? 1000 : 3000;
+        let delay: number;
+        if (res.status === 429) {
+          // Exponential backoff with jitter for rate limits: 2^attempt * base + random jitter
+          const baseDelay = 1000; // 1 second base
+          const exponentialDelay = baseDelay * Math.pow(2, attempt);
+          const jitter = Math.random() * 1000; // 0-1 second jitter
+          delay = exponentialDelay + jitter;
+          console.log(`Rate limit hit (429), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+        } else {
+          // Regular retry for other errors
+          delay = attempt === 0 ? 1000 : 3000;
+        }
+
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
@@ -431,6 +445,7 @@ async function callGroq(prompt: string, model: string): Promise<string> {
   const apiKey = await getSettingValue("groq_api_key");
   if (!apiKey) throw new Error("groq_api_key not configured in settings");
 
+  // Use more aggressive retry for Groq due to rate limiting
   const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -440,7 +455,7 @@ async function callGroq(prompt: string, model: string): Promise<string> {
       max_tokens: 8192,
       temperature: 0.7,
     }),
-  });
+  }, 4); // Increase retries from 2 to 4 for rate limit resilience
 
   if (!res.ok) {
     const body = await res.text();

@@ -1130,7 +1130,8 @@ export async function GET(req: Request) {
   }
 
   // 2. Stale content → Growth on company repo (free Actions) with Vercel fallback
-  for (const r of staleContent) {
+  for (let i = 0; i < staleContent.length; i++) {
+    const r = staleContent[i];
     // Circuit breaker: skip if growth has 3+ failures for this company in 24h
     const [staleCompany] = await sql`SELECT id FROM companies WHERE slug = ${r.slug} LIMIT 1`;
     if (staleCompany && await isCircuitOpen(sql, "growth", staleCompany.id as string)) {
@@ -1159,12 +1160,23 @@ export async function GET(req: Request) {
     }
     await dispatchToWorker("growth", r.slug, "sentinel_stale_content");
     dispatches.push({ type: "worker", target: "growth", payload: { company: r.slug } });
+
+    // Add 1-second stagger between Growth dispatches to avoid API rate limits
+    if (i < staleContent.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
 
   // 3. Stale leads → Outreach worker
-  for (const r of staleLeads) {
+  for (let i = 0; i < staleLeads.length; i++) {
+    const r = staleLeads[i];
     await dispatchToWorker("outreach", r.slug, "sentinel_stale_leads");
     dispatches.push({ type: "worker", target: "outreach", payload: { company: r.slug } });
+
+    // Add 1-second stagger between Outreach dispatches to avoid API rate limits
+    if (i < staleLeads.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
 
   // 4. No CEO review → CEO brain
@@ -1174,10 +1186,16 @@ export async function GET(req: Request) {
     dispatches.push({ type: "brain", target: "ceo_review", payload: { company: slug } });
   }
 
-  // 5. Unverified deploys → Ops worker
-  for (const r of unverifiedDeploys) {
+  // 5. Unverified deploys → Ops worker (staggered to avoid Groq rate limits)
+  for (let i = 0; i < unverifiedDeploys.length; i++) {
+    const r = unverifiedDeploys[i];
     await dispatchToWorker("ops", r.slug, "sentinel_unverified_deploy");
     dispatches.push({ type: "worker", target: "health_check", payload: { company: r.slug } });
+
+    // Add 2-second stagger between concurrent Ops dispatches to avoid Groq 429s
+    if (i < unverifiedDeploys.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
   }
 
   // 6. Evolve due → Evolver brain
