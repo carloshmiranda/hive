@@ -64,6 +64,12 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-24 [code] Task complexity classifier implementation (P1 backlog item)
+- **Task classifier created**: Implemented `src/lib/task-classifier.ts` to optimize model routing by analyzing task complexity. Classifies tasks as mechanical (no LLM needed), standard (Sonnet/Gemini), or complex (Opus required).
+- **Model routing optimization**: Reduces Claude Max usage by routing simple tasks to cheaper providers. Pattern matching detects mechanical operations (git, SQL, file ops), complex tasks (architecture, AI/ML, strategy), and uses keyword analysis with agent-specific biases.
+- **Integration ready**: Provides `classifyTask()`, `getTaskComplexity()`, and `getRecommendedProvider()` functions. Compatible with existing `src/lib/llm.ts` routing. Supports confidence scoring and detailed reasoning.
+- **Pull request created**: [PR #16](https://github.com/carloshmiranda/hive/pull/16) on branch `hive/improvement/task-complexity-classifier`. Safe change (new library, no risky dependencies).
+
 ### 2026-03-24 [code] Cascade loop fixes + OIDC auth fix + Ruflo comparison + guardrails
 - **OIDC auth crash fixed**: `new NextRequest(req)` crashed when body was consumed. Changed `validateOIDC` to accept plain Request — fixed 500 errors on all chain dispatch endpoints (backlog/dispatch, cycle-complete, health-gate).
 - **Response envelope unwrap**: Engineer workflow read `.dispatched` but response is `{ok, data: {dispatched}}`. Fixed jq to `.data.dispatched // .dispatched // false`. Chain now correctly processes backlog before falling through to company cycles.
