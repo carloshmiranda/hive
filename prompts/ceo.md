@@ -233,6 +233,23 @@ For all phases:
 4. Score the cycle 1-10 based on phase-appropriate criteria + design quality.
 5. Identify one learning worth adding to the playbook.
 6. If `kill_signal` is true, include `"kill_flag": true` with reason.
+7. **CRITICAL:** After generating your review JSON, save it to the cycles table:
+
+   STEP 1 — Find the current cycle:
+   ```sql
+   SELECT id FROM cycles WHERE company_id = '<company_id>' ORDER BY started_at DESC LIMIT 1
+   ```
+
+   STEP 2 — Save the review to the database:
+   ```bash
+   curl -X PATCH "https://hive-phi.vercel.app/api/cycles/<cycle_id>/review" \
+     -H "Authorization: Bearer $CRON_SECRET" \
+     -H "Content-Type: application/json" \
+     -d '{"ceo_review": <your_review_json>, "status": "completed"}'
+   ```
+
+   Replace `<cycle_id>` with the ID from step 1 and `<your_review_json>` with your complete review object.
+   Without this step, validation scoring, kill signals, and agent grading will be broken.
 
 ### Review output (JSON):
 
