@@ -31,8 +31,13 @@ export async function sendTelegramMessage(
       }),
       signal: AbortSignal.timeout(5000),
     });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.warn(`[telegram] sendMessage failed: HTTP ${res.status} — ${body.slice(0, 200)}`);
+    }
     return res.ok;
-  } catch {
+  } catch (e) {
+    console.error("[telegram] sendMessage error:", e instanceof Error ? e.message : String(e));
     return false;
   }
 }
@@ -136,10 +141,16 @@ export async function notifyHive(event: NotificationEvent): Promise<boolean> {
   try {
     const botToken = await getSettingValue("telegram_bot_token");
     const chatId = await getSettingValue("telegram_chat_id");
-    if (!botToken || !chatId) return false;
+    if (!botToken || !chatId) {
+      console.warn(`[telegram] notifyHive: missing settings — bot_token=${!!botToken}, chat_id=${!!chatId}`);
+      return false;
+    }
     const message = formatAgentNotification(event);
-    return sendTelegramMessage(botToken, chatId, message);
-  } catch {
+    const sent = await sendTelegramMessage(botToken, chatId, message);
+    if (!sent) console.warn("[telegram] notifyHive: sendTelegramMessage returned false");
+    return sent;
+  } catch (e) {
+    console.error("[telegram] notifyHive error:", e instanceof Error ? e.message : String(e));
     return false;
   }
 }

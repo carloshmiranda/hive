@@ -28,12 +28,15 @@ export async function POST(req: NextRequest) {
     return err("Missing required fields: agent, action, status, summary", 400);
   }
 
-  const validStatuses = ["started", "success", "failed"];
-  if (!validStatuses.includes(status)) {
-    return err(`Invalid status. Must be one of: ${validStatuses.join(", ")}`, 400);
-  }
+  // Accept any status — agents use various statuses (dispatched, needs_carlos, etc.)
+  // Normalize to the closest valid NotificationEvent status for formatting
+  const statusMap: Record<string, "started" | "success" | "failed"> = {
+    started: "started", success: "success", failed: "failed",
+    dispatched: "success", needs_carlos: "failed", error: "failed",
+  };
+  const normalizedStatus = statusMap[status] || "success";
 
-  const sent = await notifyHive({ agent, action, company, status, summary, details });
+  const sent = await notifyHive({ agent, action, company, status: normalizedStatus, summary, details });
 
   return json({ sent });
 }
