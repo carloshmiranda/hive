@@ -33,29 +33,27 @@ export async function POST(req: Request) {
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
     } else {
-      // Failed: check attempt count. Retry once (back to 'ready'), block on 2nd failure.
+      // Failed: always retry. Hive learns from failures.
+      // "blocked" is ONLY for items that need manual/human action.
+      // Track attempts in notes so the Engineer gets failure context on retry.
       const [item] = await sql`
-        SELECT id, notes FROM hive_backlog WHERE id = ${completed_id}
+        SELECT id, title, notes FROM hive_backlog WHERE id = ${completed_id}
       `.catch(() => []);
       const prevAttempts = (item?.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+      const attempt = prevAttempts + 1;
 
-      if (prevAttempts < 1) {
-        // First failure → back to ready for retry
-        await sql`
-          UPDATE hive_backlog
-          SET status = 'ready', dispatched_at = NULL,
-              notes = COALESCE(notes, '') || ${` [attempt ${prevAttempts + 1}] Failed — will retry.`}
-          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-        `.catch(() => {});
-      } else {
-        // 2nd+ failure → blocked permanently, notify
-        await sql`
-          UPDATE hive_backlog
-          SET status = 'blocked', completed_at = NOW(),
-              notes = COALESCE(notes, '') || ${` [attempt ${prevAttempts + 1}] Failed again — blocked.`}
-          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-        `.catch(() => {});
-        // Notify Carlos about permanently blocked item
+      // Back to ready with attempt context — the scoring engine will
+      // deprioritize via the novelty penalty (hasSimilarFailed check)
+      // so it won't burn budget retrying the same item in a loop
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'ready', dispatched_at = NULL,
+            notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
+        WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+      `.catch(() => {});
+
+      // After 3 failures, notify Carlos (but still keep retrying)
+      if (attempt >= 3) {
         const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
         await fetch(`${baseUrl}/api/notify`, {
           method: "POST",
@@ -65,10 +63,10 @@ export async function POST(req: Request) {
           },
           body: JSON.stringify({
             agent: "backlog",
-            action: "blocked_after_retry",
+            action: "repeated_failure",
             company: "hive",
             status: "failed",
-            summary: `Backlog item failed twice, now blocked: ${item?.notes?.match(/^[^[]+/)?.[0]?.trim() || completed_id}`,
+            summary: `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
           }),
           signal: AbortSignal.timeout(5000),
         }).catch(() => {});
