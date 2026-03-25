@@ -166,8 +166,8 @@ export async function POST(req: Request) {
       ) as last_cycle,
       (SELECT COUNT(*)::int FROM company_tasks
        WHERE company_id = c.id AND status = 'pending') as pending_tasks,
-      (SELECT score FROM cycles
-       WHERE company_id = c.id
+      (SELECT (ceo_review->'review'->>'score')::int FROM cycles
+       WHERE company_id = c.id AND ceo_review IS NOT NULL
        ORDER BY created_at DESC LIMIT 1) as last_score,
       (SELECT COUNT(*)::int FROM cycles WHERE company_id = c.id) as cycle_count
     FROM companies c
