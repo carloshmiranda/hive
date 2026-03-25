@@ -341,6 +341,60 @@ server.registerTool(
   }
 );
 
+// ── SQL Mutate ──────────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_sql_mutate",
+  {
+    description: "Execute a mutation SQL query (UPDATE, INSERT, DELETE) against the Hive Neon database. Use for bulk fixes and data corrections.",
+    inputSchema: {
+      query: z.string().describe("SQL mutation query (UPDATE/INSERT/DELETE)"),
+    },
+  },
+  async ({ query }) => {
+    const normalized = query.trim().toUpperCase();
+    // Block dangerous operations
+    if (normalized.includes("DROP ") || normalized.includes("TRUNCATE ") || normalized.includes("ALTER ")) {
+      return { content: [{ type: "text", text: "DDL operations (DROP, TRUNCATE, ALTER) are blocked. Use schema.sql for schema changes." }] };
+    }
+    if (!normalized.startsWith("UPDATE") && !normalized.startsWith("INSERT") && !normalized.startsWith("DELETE") && !normalized.startsWith("WITH")) {
+      return { content: [{ type: "text", text: "Only UPDATE/INSERT/DELETE/WITH queries allowed." }] };
+    }
+    const rows = await sql.query(query);
+    return { content: [{ type: "text", text: JSON.stringify({ affected: rows.length, rows }, null, 2) }] };
+  }
+);
+
+// ── Company Tasks ───────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_tasks",
+  {
+    description: "Query company tasks (company_tasks table). View pending work for companies.",
+    inputSchema: {
+      company_slug: z.string().optional().describe("Filter by company slug"),
+      status: z.enum(["proposed", "approved", "in_progress", "done", "dismissed", "all"]).default("all").describe("Filter by status"),
+      limit: z.number().default(50).describe("Max rows"),
+    },
+  },
+  async ({ company_slug, status, limit }) => {
+    const where = [];
+    if (company_slug) where.push(`c.slug = '${company_slug}'`);
+    if (status && status !== "all") where.push(`t.status = '${status}'`);
+    const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    const rows = await sql.query(`
+      SELECT t.id, c.slug as company, t.category, t.title, t.status, t.priority, t.source,
+             t.created_at, t.updated_at
+      FROM company_tasks t
+      JOIN companies c ON c.id = t.company_id
+      ${whereClause}
+      ORDER BY t.priority ASC, t.created_at DESC
+      LIMIT ${limit}
+    `);
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
 // ── PRs ─────────────────────────────────────────────────────────────────
 
 server.registerTool(

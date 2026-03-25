@@ -434,11 +434,22 @@ export async function GET(req: Request) {
   `;
 
   // 9c. MVPs with missing Neon DB (have some infra but no neon_project_id)
+  // Skip companies with Vercel-managed DBs (neon_project_id is always NULL for those)
+  // Also dedup: skip if repair was attempted in last 24h
   const missingNeonDb = await sql`
     SELECT c.slug FROM companies c
     WHERE c.status IN ('mvp', 'active')
     AND c.neon_project_id IS NULL
     AND c.github_repo IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM infra i WHERE i.company_id = c.id AND i.service = 'vercel'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM agent_actions aa
+      WHERE aa.company_id = c.id
+      AND aa.action_type = 'infra_repair'
+      AND aa.started_at > NOW() - INTERVAL '24 hours'
+    )
   `;
 
   // 10. Max turns exhaustion
@@ -667,6 +678,8 @@ export async function GET(req: Request) {
     INNER JOIN companies c ON c.id = aa.company_id
     WHERE aa.status = 'failed'
     AND aa.company_id IS NOT NULL
+    AND c.status IN ('mvp', 'active')
+    AND c.github_repo IS NOT NULL
     AND aa.error ILIKE '%exhausted after 0 turns%'
     AND aa.finished_at > NOW() - INTERVAL '6 hours'
     AND NOT EXISTS (
@@ -907,6 +920,7 @@ export async function GET(req: Request) {
   const companiesMissingSpec = await sql`
     SELECT c.id, c.slug FROM companies c
     WHERE c.status IN ('mvp', 'active')
+    AND c.github_repo IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM research_reports rr
       WHERE rr.company_id = c.id AND rr.report_type = 'product_spec'
@@ -936,6 +950,7 @@ export async function GET(req: Request) {
   const companiesNoTasks = await sql`
     SELECT c.id, c.slug FROM companies c
     WHERE c.status IN ('mvp', 'active')
+    AND c.github_repo IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM company_tasks ct
       WHERE ct.company_id = c.id AND ct.status NOT IN ('done', 'dismissed')
@@ -1443,15 +1458,20 @@ export async function GET(req: Request) {
     }
   }
 
-  // 6. Evolve due → Evolver brain
-  if (evolveDue) {
+  // 6. Evolve due → Evolver brain (dedup: max 1 per 24h)
+  const [lastEvolverDispatch] = await sql`
+    SELECT MAX(started_at) as last_run FROM agent_actions
+    WHERE agent = 'evolver' AND started_at > NOW() - INTERVAL '24 hours'
+  `;
+  if (evolveDue && !lastEvolverDispatch?.last_run) {
     await dispatchToActions("evolve_trigger", { source: "sentinel", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { source: "sentinel" } });
   }
 
   // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)
   // Guard: check Healer hasn't run in last 6h (prevents re-dispatch loop when Healer itself fails)
-  if (highFailureRate) {
+  // Guard: check Evolver hasn't run in last 12h (urgent but still rate-limited)
+  if (highFailureRate && !lastEvolverDispatch?.last_run) {
     await dispatchToActions("evolve_trigger", { source: "sentinel", reason: "high_failure_rate", trace_id: traceId }, ghPat);
     dispatches.push({ type: "brain", target: "evolve_trigger", payload: { reason: "high_failure_rate" } });
 

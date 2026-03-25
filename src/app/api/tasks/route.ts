@@ -76,12 +76,15 @@ export async function POST(req: Request) {
     `;
     if (existing) continue;
 
+    // CEO-sourced tasks are auto-approved (already validated by phase gate above)
+    const taskStatus = (source || "ceo") === "ceo" ? "approved" : "proposed";
     const [task] = await sql`
-      INSERT INTO company_tasks (company_id, category, title, description, priority, source, prerequisites, acceptance)
+      INSERT INTO company_tasks (company_id, category, title, description, priority, source, prerequisites, acceptance, status)
       VALUES (
         ${company_id}, ${category}, ${title}, ${description},
         ${priority ?? 2}, ${source || "ceo"},
-        ${prerequisites || []}, ${acceptance || null}
+        ${prerequisites || []}, ${acceptance || null},
+        ${taskStatus}
       )
       RETURNING *
     `;
