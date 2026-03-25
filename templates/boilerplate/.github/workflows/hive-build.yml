@@ -106,6 +106,42 @@ jobs:
           echo "$CTX" >> $GITHUB_OUTPUT
           echo "CTXEOF" >> $GITHUB_OUTPUT
 
+      - name: Mark tasks as in progress
+        id: mark_progress
+        run: |
+          # Extract task IDs from payload and mark them as in_progress
+          PAYLOAD='${{ github.event.inputs.payload }}'
+          echo "Payload: $PAYLOAD"
+
+          # Try to extract task_id from payload or task field
+          TASK_ID=$(echo "$PAYLOAD" | jq -r '.task_id // .id // empty' 2>/dev/null)
+          if [ -z "$TASK_ID" ]; then
+            # Try alternative parsing for different payload formats
+            TASK_ID=$(echo "$PAYLOAD" | grep -oP '"(?:task_)?id":\s*"?\K[a-f0-9-]+' | head -1 || echo "")
+          fi
+
+          if [ -n "$TASK_ID" ]; then
+            OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+              | jq -r '.value')
+
+            TASK_UPDATE=$(curl -s -X PATCH "https://hive-phi.vercel.app/api/tasks/${TASK_ID}" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"status":"in_progress"}' 2>/dev/null || echo "{}")
+
+            UPDATE_SUCCESS=$(echo "$TASK_UPDATE" | jq -r '.id // empty')
+            if [ -n "$UPDATE_SUCCESS" ]; then
+              echo "Task ${TASK_ID} marked as in_progress"
+              echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+            else
+              echo "WARNING: Failed to mark task ${TASK_ID} as in_progress: $(echo "$TASK_UPDATE" | jq -r '.error // "unknown"')"
+              echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT  # Still set the ID for later use
+            fi
+          else
+            echo "No task_id found in payload - proceeding without task tracking"
+          fi
+
       - name: Run build agent
         id: agent
         env:
@@ -284,7 +320,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"company_slug\":\"${{ github.event.inputs.company_slug }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"$STATUS\",\"description\":\"Build workflow on company repo ($STATUS)\"}" || true
 
-      - name: Chain dispatch to CEO
+      - name: Mark task completed and dispatch to CEO
         if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
@@ -297,26 +333,47 @@ jobs:
           RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "$EXEC_FILE" 2>/dev/null || echo "{}")
 
           PR_NUM=$(echo "$RESULT" | grep -oP '"?pr_number"?\s*[:=]\s*"?\K\d+' | head -1 || echo "0")
+          PR_OPENED=$(echo "$RESULT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true' && echo "true" || echo "false")
 
-          if echo "$RESULT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true'; then
-            # Extract task_id and update task status to completed
+          # Use task_id from earlier step first, then try to extract from result
+          TASK_ID="${{ steps.mark_progress.outputs.task_id }}"
+          if [ -z "$TASK_ID" ]; then
             TASK_ID=$(echo "$RESULT" | grep -oP '"?task_id"?\s*[:=]\s*"?\K[a-f0-9-]+' | head -1)
-            if [ -n "$TASK_ID" ]; then
-              OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-                "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
-                | jq -r '.value')
+          fi
+
+          echo "PR opened: $PR_OPENED, PR number: $PR_NUM, Task ID: $TASK_ID"
+
+          # Mark task as done if PR was opened and we have a task_id
+          if [ "$PR_OPENED" = "true" ] && [ -n "$TASK_ID" ]; then
+            OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+              | jq -r '.value')
+
+            if [ -n "$OIDC_TOKEN" ] && [ "$OIDC_TOKEN" != "null" ]; then
               TASK_UPDATE=$(curl -s -X PATCH "https://hive-phi.vercel.app/api/tasks/${TASK_ID}" \
                 -H "Authorization: Bearer $OIDC_TOKEN" \
                 -H "Content-Type: application/json" \
                 -d '{"status":"done"}' 2>/dev/null || echo "{}")
+
               UPDATE_SUCCESS=$(echo "$TASK_UPDATE" | jq -r '.id // empty')
               if [ -n "$UPDATE_SUCCESS" ]; then
-                echo "Task ${TASK_ID} marked as completed (PR #${PR_NUM} opened)"
+                echo "✅ Task ${TASK_ID} marked as done (PR #${PR_NUM} opened)"
               else
-                echo "WARNING: Failed to update task ${TASK_ID} status: $(echo "$TASK_UPDATE" | jq -r '.error // "unknown"')"
+                ERROR_MSG=$(echo "$TASK_UPDATE" | jq -r '.error // "unknown error"')
+                echo "❌ WARNING: Failed to update task ${TASK_ID} status: $ERROR_MSG"
+                echo "Full response: $TASK_UPDATE"
               fi
+            else
+              echo "❌ WARNING: Failed to get OIDC token for task status update"
             fi
+          elif [ "$PR_OPENED" = "true" ]; then
+            echo "⚠️ PR opened but no task_id found - task tracking skipped"
+          elif [ -n "$TASK_ID" ]; then
+            echo "⚠️ Task ${TASK_ID} found but no PR opened - leaving in in_progress state"
+          fi
 
+          # Only run anti-drift validation and dispatch CEO if PR was opened
+          if [ "$PR_OPENED" = "true" ]; then
             # Anti-drift validation: check if Engineer work aligns with validation phase
             WORK_SUMMARY=$(echo "$RESULT" | head -c 500 | tr '"' "'" | tr '\n' ' ')
             DRIFT_CHECK=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/validate-drift" \
@@ -333,6 +390,8 @@ jobs:
             curl -s -X POST "https://api.github.com/repos/carloshmiranda/hive/dispatches" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
-              -d "{\"event_type\":\"ceo_review\",\"client_payload\":{\"source\":\"engineer\",\"company\":\"${{ github.event.inputs.company_slug }}\",\"pr_number\":${PR_NUM:-0},\"drift_detected\":${DRIFT_PASSED:-true}}}"
-            echo "Dispatched CEO review for PR #${PR_NUM}"
+              -d "{\"event_type\":\"ceo_review\",\"client_payload\":{\"source\":\"engineer\",\"company\":\"${{ github.event.inputs.company_slug }}\",\"pr_number\":${PR_NUM:-0},\"drift_detected\":${DRIFT_PASSED:-true},\"task_id\":\"${TASK_ID}\"}}"
+            echo "✅ Dispatched CEO review for PR #${PR_NUM}"
+          else
+            echo "⚠️ No PR opened - CEO review dispatch skipped"
           fi
