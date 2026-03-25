@@ -121,6 +121,12 @@ export async function POST(req: Request) {
 
   // Backlog circuit breaker: check last 5 Engineer backlog runs
   // If >50% failed, pause cascade for 1 hour to prevent cascading failures
+  // Bypass: P0 items always dispatch, and force=true skips the breaker
+  const hasP0Ready = await sql`
+    SELECT id FROM hive_backlog WHERE priority = 'P0' AND status IN ('ready', 'approved', 'planning') LIMIT 1
+  `.catch(() => []);
+  const forceDispatch = body.force === true || hasP0Ready.length > 0;
+
   const recentBacklogRuns = await sql`
     SELECT status, finished_at
     FROM agent_actions
@@ -136,7 +142,7 @@ export async function POST(req: Request) {
     const failedCount = recentBacklogRuns.filter(run => run.status === 'failed').length;
     const failureRate = failedCount / recentBacklogRuns.length;
 
-    if (failureRate > 0.5) {
+    if (failureRate > 0.5 && !forceDispatch) {
       // Check if the most recent failure was within the last hour (circuit breaker window)
       const mostRecentFailure = recentBacklogRuns.find(run => run.status === 'failed');
       if (mostRecentFailure) {
