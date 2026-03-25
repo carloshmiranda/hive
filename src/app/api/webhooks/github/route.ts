@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { createHmac, timingSafeEqual } from "crypto";
 import { dispatchEvent } from "@/lib/dispatch";
+import { analyzePR, autoMergePR } from "@/lib/pr-risk-scoring";
 
 // Receives GitHub webhook events
 // Auth: HMAC-SHA256 signature verification via GITHUB_WEBHOOK_SECRET
@@ -149,65 +150,202 @@ export async function POST(req: Request) {
     }
 
     case "pull_request": {
-      // PR merged → mark matching backlog items as done
-      // PR closed without merge → reset to ready for re-dispatch
-      if (body.action !== "closed") break;
       const pr = body.pull_request;
       if (!pr) break;
 
       const prRepo = body.repository?.name;
       const prNumber = pr.number;
-      const prBranch = pr.head?.ref || "";
-      const merged = pr.merged === true;
+      const prOwner = body.repository?.owner?.login;
+      const action = body.action;
 
-      // Only handle Hive repo PRs (backlog items are Hive self-improvement)
-      if (prRepo !== "hive") break;
+      // Handle PR auto-merge for opened/updated PRs (all repos)
+      if (action === "opened" || action === "synchronize" || action === "ready_for_review") {
+        // Skip draft PRs
+        if (pr.draft) break;
 
-      // Find backlog items in pr_open status that match this PR
-      // Match by pr_number if stored, or by title similarity with PR title
-      const prTitle = (pr.title || "").slice(0, 50);
-      const matchingItems = await sql`
-        SELECT id, title FROM hive_backlog
-        WHERE status = 'pr_open'
-        AND (
-          pr_number = ${prNumber}
-          OR title ILIKE ${"%" + prTitle.replace(/^feat: |^fix: |^refactor: |^chore: /i, "").slice(0, 40) + "%"}
-        )
-      `.catch(() => []);
+        // Get GitHub token from environment
+        const ghToken = process.env.GITHUB_PAT || process.env.GH_PAT;
+        if (!ghToken) {
+          console.warn('No GitHub token available for auto-merge');
+          break;
+        }
 
-      const itemIds = matchingItems.map((i: Record<string, string>) => i.id);
-      const itemTitles = matchingItems.map((i: Record<string, string>) => i.title);
+        try {
+          // Analyze PR for auto-merge eligibility
+          const analysis = await analyzePR(prOwner, prRepo, prNumber, ghToken);
 
-      if (itemIds.length > 0) {
-        if (merged) {
+          // Log PR analysis
+          let companyId: string | null = null;
+          if (prRepo !== "hive") {
+            const [company] = await sql`SELECT id FROM companies WHERE slug = ${prRepo}`;
+            companyId = company?.id || null;
+          }
+
           await sql`
-            UPDATE hive_backlog
-            SET status = 'done', completed_at = NOW(),
-                pr_number = ${prNumber}, pr_url = ${pr.html_url || ""},
-                notes = COALESCE(notes, '') || ${` PR #${prNumber} merged.`}
-            WHERE id = ANY(${itemIds})
-            AND status = 'pr_open'
-          `.catch(() => {});
+            INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+            VALUES (
+              ${companyId}, 'auto_merge', 'pr_analysis',
+              ${`PR #${prNumber}: ${analysis.decision} (risk ${analysis.riskScore})`},
+              'success',
+              ${JSON.stringify({
+                pr_number: prNumber,
+                risk_score: analysis.riskScore,
+                risk_factors: analysis.riskFactors,
+                decision: analysis.decision,
+                hard_gates_passed: analysis.hardGatesPassed,
+                ci_passed: analysis.ciPassed
+              })}::jsonb,
+              now(), now()
+            )
+          `;
 
-          // Notify
-          import("@/lib/telegram").then(({ notifyHive }) =>
-            notifyHive({
-              agent: "webhook",
-              action: "backlog_merged",
-              company: "_hive",
-              status: "success",
-              summary: `PR #${prNumber} merged → ${itemTitles.join(", ")}`,
-            })
-          ).catch(() => {});
-        } else {
-          // Closed without merge — reset to ready
+          // Auto-merge if eligible
+          if (analysis.decision === 'auto_merge') {
+            const mergeResult = await autoMergePR(prOwner, prRepo, prNumber, ghToken);
+
+            if (mergeResult.success) {
+              // Log successful auto-merge
+              await sql`
+                INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+                VALUES (
+                  ${companyId}, 'auto_merge', 'pr_merge',
+                  ${`PR #${prNumber} auto-merged (risk ${analysis.riskScore})`},
+                  'success', now(), now()
+                )
+              `;
+
+              // Telegram notification for auto-merge
+              import("@/lib/telegram").then(({ notifyHive }) =>
+                notifyHive({
+                  agent: "auto_merge",
+                  action: "pr_merged",
+                  company: prRepo === "hive" ? "_hive" : prRepo,
+                  status: "success",
+                  summary: `PR #${prNumber} auto-merged (risk ${analysis.riskScore}, CI ✅)`,
+                })
+              ).catch(() => {});
+
+            } else {
+              // Log merge failure
+              await sql`
+                INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
+                VALUES (
+                  ${companyId}, 'auto_merge', 'pr_merge',
+                  ${`PR #${prNumber} merge failed: ${mergeResult.message}`},
+                  'failed', ${mergeResult.message || 'Unknown error'}, now(), now()
+                )
+              `;
+            }
+          } else if (analysis.decision === 'escalate') {
+            // Create approval gate for high-risk PRs
+            const company = companyId ? await sql`SELECT slug FROM companies WHERE id = ${companyId}` : null;
+            const companySlug = company?.[0]?.slug || prRepo;
+
+            await sql`
+              INSERT INTO approvals (company_id, gate_type, title, description, context)
+              VALUES (
+                ${companyId},
+                'pr_review',
+                ${`${companySlug}: High-risk PR #${prNumber}`},
+                ${`PR requires manual review (risk score ${analysis.riskScore}). Issues: ${analysis.hardGateIssues.join(', ') || analysis.riskFactors.join(', ')}`},
+                ${JSON.stringify({
+                  pr_number: prNumber,
+                  pr_url: pr.html_url,
+                  risk_score: analysis.riskScore,
+                  risk_factors: analysis.riskFactors,
+                  hard_gate_issues: analysis.hardGateIssues,
+                  company: companySlug
+                })}
+              )
+            `;
+
+            // Telegram notification for escalated PR
+            import("@/lib/telegram").then(({ notifyHive }) =>
+              notifyHive({
+                agent: "auto_merge",
+                action: "pr_escalated",
+                company: prRepo === "hive" ? "_hive" : prRepo,
+                status: "warning",
+                summary: `PR #${prNumber} escalated (risk ${analysis.riskScore}) - needs manual review`,
+              })
+            ).catch(() => {});
+          }
+
+        } catch (error) {
+          // Log analysis failure
           await sql`
-            UPDATE hive_backlog
-            SET status = 'ready', dispatched_at = NULL,
-                notes = COALESCE(notes, '') || ${` PR #${prNumber} closed without merge — will retry.`}
-            WHERE id = ANY(${itemIds})
-            AND status = 'pr_open'
-          `.catch(() => {});
+            INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
+            VALUES (
+              ${companyId}, 'auto_merge', 'pr_analysis',
+              ${`PR #${prNumber} analysis failed`},
+              'failed', ${String(error)}, now(), now()
+            )
+          `;
+        }
+      }
+
+      // Handle PR closure (existing logic for backlog items)
+      if (action === "closed") {
+        const merged = pr.merged === true;
+
+        // Only handle Hive repo PRs for backlog tracking (backlog items are Hive self-improvement)
+        if (prRepo === "hive") {
+          // Find backlog items in pr_open status that match this PR
+          const prTitle = (pr.title || "").slice(0, 50);
+          const matchingItems = await sql`
+            SELECT id, title FROM hive_backlog
+            WHERE status = 'pr_open'
+            AND (
+              pr_number = ${prNumber}
+              OR title ILIKE ${"%" + prTitle.replace(/^feat: |^fix: |^refactor: |^chore: /i, "").slice(0, 40) + "%"}
+            )
+          `.catch(() => []);
+
+          const itemIds = matchingItems.map((i: Record<string, string>) => i.id);
+          const itemTitles = matchingItems.map((i: Record<string, string>) => i.title);
+
+          if (itemIds.length > 0) {
+            if (merged) {
+              await sql`
+                UPDATE hive_backlog
+                SET status = 'done', completed_at = NOW(),
+                    pr_number = ${prNumber}, pr_url = ${pr.html_url || ""},
+                    notes = COALESCE(notes, '') || ${` PR #${prNumber} merged.`}
+                WHERE id = ANY(${itemIds})
+                AND status = 'pr_open'
+              `.catch(() => {});
+
+              // Only notify if not already auto-merged (avoid duplicate notifications)
+              const wasAutoMerged = await sql`
+                SELECT 1 FROM agent_actions
+                WHERE agent = 'auto_merge' AND action_type = 'pr_merge'
+                AND description LIKE ${`PR #${prNumber}%`} AND status = 'success'
+                AND started_at > now() - INTERVAL '1 hour'
+                LIMIT 1
+              `;
+
+              if (wasAutoMerged.length === 0) {
+                import("@/lib/telegram").then(({ notifyHive }) =>
+                  notifyHive({
+                    agent: "webhook",
+                    action: "backlog_merged",
+                    company: "_hive",
+                    status: "success",
+                    summary: `PR #${prNumber} merged → ${itemTitles.join(", ")}`,
+                  })
+                ).catch(() => {});
+              }
+            } else {
+              // Closed without merge — reset to ready
+              await sql`
+                UPDATE hive_backlog
+                SET status = 'ready', dispatched_at = NULL,
+                    notes = COALESCE(notes, '') || ${` PR #${prNumber} closed without merge — will retry.`}
+                WHERE id = ANY(${itemIds})
+                AND status = 'pr_open'
+              `.catch(() => {});
+            }
+          }
         }
       }
       break;
