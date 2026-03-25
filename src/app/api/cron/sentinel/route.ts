@@ -1004,19 +1004,48 @@ export async function GET(req: Request) {
 
     if (schemaDrift.length > 0) {
       console.warn(`Schema drift detected (${schemaDrift.length} issues):`, schemaDrift);
-      // Log as an agent action so it's visible in the dashboard + Healer can pick it up
-      await sql`
-        INSERT INTO agent_actions (agent, action_type, description, status, error, started_at, finished_at)
-        VALUES (
-          'sentinel', 'schema_drift_check',
-          ${`Schema drift: ${schemaDrift.length} mismatches found`},
-          'failed',
-          ${JSON.stringify(schemaDrift)},
-          NOW(), NOW()
-        )
+
+      // Check if the same drift was reported in the last run (deduplication)
+      const currentDriftHash = JSON.stringify(schemaDrift.map(d => `${d.table}:${d.issue}`).sort());
+      const lastDriftCheck = await sql`
+        SELECT error FROM agent_actions
+        WHERE agent = 'sentinel' AND action_type = 'schema_drift_check'
+        AND started_at > NOW() - INTERVAL '6 hours'
+        ORDER BY started_at DESC
+        LIMIT 1
       `;
-      // If systemic (3+ issues), dispatch Healer
-      if (schemaDrift.length >= 3) {
+
+      let shouldLogFailure = true;
+      if (lastDriftCheck.length > 0) {
+        try {
+          const lastDrift = JSON.parse(lastDriftCheck[0].error);
+          const lastDriftHash = JSON.stringify(lastDrift.map((d: any) => `${d.table}:${d.issue}`).sort());
+          if (currentDriftHash === lastDriftHash) {
+            console.log('Schema drift deduplication: same issues as last run, skipping log');
+            shouldLogFailure = false;
+          }
+        } catch (e) {
+          // If we can't parse the last drift, log this one to be safe
+          console.log('Could not parse last drift check for deduplication, logging anyway');
+        }
+      }
+
+      if (shouldLogFailure) {
+        // Log as an agent action so it's visible in the dashboard + Healer can pick it up
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, error, started_at, finished_at)
+          VALUES (
+            'sentinel', 'schema_drift_check',
+            ${`Schema drift: ${schemaDrift.length} mismatches found`},
+            'failed',
+            ${JSON.stringify(schemaDrift)},
+            NOW(), NOW()
+          )
+        `;
+      }
+
+      // If systemic (3+ issues), dispatch Healer (only if we logged the failure)
+      if (shouldLogFailure && schemaDrift.length >= 3) {
         await dispatchToActions("healer_trigger", {
           source: "sentinel",
           error_class: "schema_mismatch",
