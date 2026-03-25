@@ -2,6 +2,8 @@ import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
+import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
+import { filterBacklogItemsByCooldown } from "@/lib/backlog-planner";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -56,6 +58,9 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const { completed_id, completed_status } = body;
 
+  // Periodic cleanup of expired cooldown entries
+  cleanupFailedItemsCache();
+
   // If a completed item was passed, update its status
   if (completed_id && completed_status) {
     if (completed_status === "success") {
@@ -77,6 +82,11 @@ export async function POST(req: Request) {
       const attempt = prevAttempts + 1;
       const errorMsg = body.error || "";
       const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns");
+
+      // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
+      if (item && attempt < 5) {
+        trackFailedBacklogItem(item.id, attempt);
+      }
 
       // On max_turns failure (attempt 2+): auto-decompose instead of blind retry
       let decomposed = false;
@@ -383,6 +393,10 @@ export async function POST(req: Request) {
     }
   }
 
+  // Apply cooldown filter to remove recently failed items
+  const automatableFiltered = filterBacklogItemsByCooldown(automatable);
+  const cooldownCount = automatable.length - automatableFiltered.length;
+
   // Mark manual items as blocked so they don't get re-evaluated every cycle
   for (const item of manualItems) {
     if (item.status === "ready") {
@@ -415,10 +429,16 @@ export async function POST(req: Request) {
     }).catch(() => {});
   }
 
-  const backlogItemsFiltered = automatable;
+  const backlogItemsFiltered = automatableFiltered;
 
   if (backlogItemsFiltered.length === 0) {
-    return json({ dispatched: false, reason: "backlog_empty", manual_blocked: manualItems.length });
+    return json({
+      dispatched: false,
+      reason: "backlog_empty",
+      manual_blocked: manualItems.length,
+      cooldown_blocked: cooldownCount,
+      items_in_cooldown: getFailedItemsInCooldown().length
+    });
   }
 
   // Score items
@@ -674,6 +694,9 @@ export async function POST(req: Request) {
       SET status = 'dispatched', dispatched_at = NOW()
       WHERE id = ${topItem.id}
     `.catch(() => {});
+
+    // Reset cooldown for successfully dispatched item
+    resetBacklogItemCooldown(topItem.id);
 
     // Notify via Telegram
     const baseUrlNotify = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
