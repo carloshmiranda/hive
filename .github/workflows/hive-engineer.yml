@@ -1001,3 +1001,11 @@ jobs:
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"${LOG_STATUS}\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns) ${RUN_URL}\"}" || true
+
+          # Send enriched Telegram notification for failures (skip ghost runs)
+          if [ "$LOG_STATUS" = "failed" ]; then
+            curl -s -X POST "https://hive-phi.vercel.app/api/notify" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"agent\":\"engineer\",\"action\":\"feature_request\",\"company\":\"${{ needs.context.outputs.company }}\",\"status\":\"failed\",\"summary\":\"${SUBTYPE} after ${TURNS} turns\",\"error\":\"${ERROR_ESCAPED:0:200}\",\"run_url\":\"$RUN_URL\",\"task_title\":\"${TASK_ESCAPED:0:100}\",\"duration_s\":$((TURNS * 60))}" || true
+          fi

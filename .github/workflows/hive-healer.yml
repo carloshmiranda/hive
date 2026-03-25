@@ -218,3 +218,11 @@ jobs:
           log().catch(e => console.error('DB log failed:', e.message));
           "
           echo "Logged Healer failure: $SUBTYPE ($TURNS turns) — ${ERROR_MSG:0:100}"
+
+          # Send enriched Telegram notification for failures (skip ghost runs)
+          if [ "$LOG_STATUS" = "failed" ]; then
+            ESCAPED_ERR=$(echo "$ERROR_MSG" | sed 's/"/\\"/g' | head -c 200)
+            curl -s -X POST "https://hive-phi.vercel.app/api/notify" \
+              -H "Content-Type: application/json" \
+              -d "{\"agent\":\"healer\",\"action\":\"error_fix\",\"status\":\"failed\",\"summary\":\"${SUBTYPE} after ${TURNS} turns\",\"error\":\"$ESCAPED_ERR\",\"run_url\":\"$RUN_URL\",\"duration_s\":$((TURNS * 60))}" || true
+          fi

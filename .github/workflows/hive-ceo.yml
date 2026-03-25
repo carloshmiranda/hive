@@ -193,6 +193,16 @@ jobs:
           "
           echo "Logged CEO failure: $SUBTYPE ($TURNS turns) — ${ERROR_MSG:0:100}"
 
+          # Send enriched Telegram notification for failures (skip ghost runs)
+          if [ "$LOG_STATUS" = "failed" ]; then
+            COMPANY=$(echo '${{ steps.context.outputs.payload }}' | jq -r '.company // ""' 2>/dev/null || echo "")
+            ESCAPED_ERR=$(echo "$ERROR_MSG" | sed 's/"/\\"/g' | head -c 200)
+            curl -s -X POST "https://hive-phi.vercel.app/api/notify" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              -d "{\"agent\":\"ceo\",\"action\":\"${{ steps.context.outputs.trigger }}\",\"company\":\"$COMPANY\",\"status\":\"failed\",\"summary\":\"${SUBTYPE} after ${TURNS} turns (\$${COST})\",\"error\":\"$ESCAPED_ERR\",\"run_url\":\"$RUN_URL\",\"duration_s\":$((TURNS * 60))}" || true
+          fi
+
       - name: Chain dispatch
         if: always() && steps.agent.outcome == 'success'
         env:
@@ -345,5 +355,16 @@ jobs:
               -d "{\"agent\":\"ceo\",\"company\":\"$COMPANY\",\"status\":\"cycle_complete\",\"action_type\":\"cycle_review\"}")
             echo "  Chain result: $CHAIN_RESULT"
           fi
+
+          # Notify success via Telegram
+          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          if [ -z "$EXEC_FILE" ]; then EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"; fi
+          CEO_TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+          CEO_COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -s -X POST "$HIVE_URL/api/notify" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"agent\":\"ceo\",\"action\":\"$TRIGGER\",\"company\":\"$COMPANY\",\"status\":\"success\",\"summary\":\"Completed in ${CEO_TURNS} turns (\$${CEO_COST})\",\"run_url\":\"$RUN_URL\",\"duration_s\":$((CEO_TURNS * 60))}" || true
 
           echo "Chain dispatch complete"
