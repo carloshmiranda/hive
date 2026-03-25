@@ -118,6 +118,12 @@ export function computeBacklogScore(item: BacklogItem, signals: BacklogSignals):
 }
 
 // Determine which agents a backlog item might block based on keywords
+// Check if a priority is considered high priority (P0 or P1)
+// Used by cascade dispatch to filter items that auto-dispatch
+export function isHighPriority(priority: string): boolean {
+  return priority === 'P0' || priority === 'P1';
+}
+
 export function detectBlockedAgents(title: string, description: string): string[] {
   const text = `${title} ${description}`.toLowerCase();
   const blocked: string[] = [];

@@ -1,6 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
-import { computeBacklogScore, detectBlockedAgents } from "@/lib/backlog-priority";
+import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -236,6 +236,8 @@ export async function POST(req: Request) {
   // Fetch ready backlog items
   // Cooldown: items with recent attempt failures wait 30min before retry.
   // Uses dispatched_at (reset on failure) as proxy for "last attempt time".
+  // When called from chain (completed_id present), filter to P0/P1 only
+  const isChainDispatch = !!completed_id;
   const backlogItems = await sql`
     SELECT * FROM hive_backlog
     WHERE (
@@ -246,6 +248,7 @@ export async function POST(req: Request) {
       notes ILIKE '%[attempt %]%'
       AND dispatched_at > NOW() - INTERVAL '30 minutes'
     )
+    ${isChainDispatch ? sql`AND priority IN ('P0', 'P1')` : sql``}
     ORDER BY
       CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
       created_at ASC
