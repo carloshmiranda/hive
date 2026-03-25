@@ -3,7 +3,7 @@ import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
-import { filterBacklogItemsByCooldown } from "@/lib/backlog-planner";
+import { filterBacklogItemsByCooldown, checkBacklogCircuitBreaker } from "@/lib/backlog-planner";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -245,40 +245,9 @@ export async function POST(req: Request) {
   `.catch(() => []);
   const forceDispatch = body.force === true || hasP0Ready.length > 0;
 
-  const recentBacklogRuns = await sql`
-    SELECT status, finished_at
-    FROM agent_actions
-    WHERE agent = 'engineer'
-    AND action_type = 'feature_request'
-    AND (company_id IS NULL OR company_id = (SELECT id FROM companies WHERE slug = '_hive'))
-    AND finished_at > NOW() - INTERVAL '24 hours'
-    ORDER BY finished_at DESC
-    LIMIT 5
-  `.catch(() => []);
-
-  if (recentBacklogRuns.length >= 3) {
-    const failedCount = recentBacklogRuns.filter(run => run.status === 'failed').length;
-    const failureRate = failedCount / recentBacklogRuns.length;
-
-    if (failureRate > 0.5 && !forceDispatch) {
-      // Check if the most recent failure was within the last hour (circuit breaker window)
-      const mostRecentFailure = recentBacklogRuns.find(run => run.status === 'failed');
-      if (mostRecentFailure) {
-        const hoursSinceFailure = (Date.now() - new Date(mostRecentFailure.finished_at).getTime()) / (1000 * 60 * 60);
-
-        if (hoursSinceFailure <= 1) {
-          return json({
-            dispatched: false,
-            reason: "circuit_breaker",
-            detail: "backlog_failures",
-            failed_runs: failedCount,
-            total_runs: recentBacklogRuns.length,
-            failure_rate: Math.round(failureRate * 100),
-            cooldown_remaining_minutes: Math.round(60 - (hoursSinceFailure * 60))
-          });
-        }
-      }
-    }
+  const circuitBreakerResult = await checkBacklogCircuitBreaker(sql, forceDispatch);
+  if (!circuitBreakerResult.dispatched) {
+    return json(circuitBreakerResult);
   }
 
   // Check budget — don't dispatch if Claude budget is exhausted
