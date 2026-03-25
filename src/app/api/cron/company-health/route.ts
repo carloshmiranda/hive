@@ -7,7 +7,8 @@ export const maxDuration = 60;
 
 // Extracted from Sentinel: HTTP-heavy company health checks that were causing timeouts.
 // Sentinel fires this as non-blocking fetch. Each check logs results to agent_actions.
-// Checks: 31 (stats endpoints), 32 (language), 33 (stale records), 36 (tests), 38 (PR merge), 30 (broken deploys)
+// Checks: 31 (stats endpoints), 32 (language), 33 (stale records), 36 (tests), 38 (PR merge), 30 (broken deploys),
+//         43 (dispatch verification), 44 (stale cycle safety net), 45 (stuck PRs with green CI)
 
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization");
@@ -472,6 +473,216 @@ export async function GET(req: Request) {
     console.warn("[company-health] Check 30 failed:", e.message);
   }
 
+  // --- Check 43: Dispatch verification — detect silent workflow failures ---
+  if (ghPat) try {
+    let silentFailures = 0;
+    // Find recent dispatches that never produced an agent_action
+    const unverifiedDispatches = await sql`
+      SELECT aa.id, aa.agent, aa.action_type, aa.company_id, aa.started_at,
+        c.slug as company_slug
+      FROM agent_actions aa
+      LEFT JOIN companies c ON c.id = aa.company_id
+      WHERE aa.agent = 'sentinel'
+        AND aa.action_type IN ('cycle_start_dispatch', 'feature_dispatch', 'research_dispatch')
+        AND aa.status = 'success'
+        AND aa.started_at > NOW() - INTERVAL '6 hours'
+        AND aa.started_at < NOW() - INTERVAL '30 minutes'
+    `;
+
+    for (const d of unverifiedDispatches) {
+      // Check if the target agent produced any action after the dispatch
+      const targetAgent = (d.action_type as string).replace('_dispatch', '').replace('cycle_start', 'ceo');
+      const [hasAction] = await sql`
+        SELECT id FROM agent_actions
+        WHERE agent = ${targetAgent}
+          AND started_at > ${d.started_at}
+          AND (company_id = ${d.company_id} OR company_id IS NULL)
+        LIMIT 1
+      `;
+      if (!hasAction) {
+        // Also check GitHub Actions for recent workflow runs
+        const workflowMap: Record<string, string> = {
+          ceo: 'hive-ceo.yml',
+          engineer: 'hive-engineer.yml',
+          scout: 'hive-scout.yml',
+        };
+        const workflowFile = workflowMap[targetAgent] || '';
+        let runFound = false;
+        if (workflowFile) {
+          try {
+            const runsRes = await fetch(
+              `https://api.github.com/repos/carloshmiranda/hive/actions/workflows/${workflowFile}/runs?per_page=3&created=>=${new Date(d.started_at as string).toISOString().split('T')[0]}`,
+              {
+                headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+                signal: AbortSignal.timeout(5000),
+              }
+            );
+            if (runsRes.ok) {
+              const runsData = await runsRes.json();
+              runFound = (runsData.total_count || 0) > 0;
+            }
+          } catch { /* API error — assume not found */ }
+        }
+
+        if (!runFound) {
+          silentFailures++;
+          await sql`
+            INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
+            VALUES ('sentinel', 'dispatch_verification',
+              ${`Silent failure: ${d.action_type} for ${d.company_slug || 'unknown'} dispatched at ${d.started_at} — no workflow run or agent action found`},
+              'failed',
+              ${JSON.stringify({ original_dispatch: d.id, target_agent: targetAgent, company: d.company_slug })}::jsonb,
+              NOW(), NOW())
+          `.catch(() => {});
+        }
+      }
+    }
+    results.silent_failures = silentFailures;
+  } catch (e: any) {
+    console.warn("[company-health] Check 43 failed:", e.message);
+  }
+
+  // --- Check 44: Stale company safety net — dispatch cycle_start for companies stale >6h ---
+  try {
+    let staleCyclesDispatched = 0;
+    const staleCompanies = await sql`
+      SELECT c.id, c.slug, c.status,
+        (SELECT MAX(started_at) FROM cycles WHERE company_id = c.id) as last_cycle,
+        (SELECT MAX(started_at) FROM agent_actions WHERE company_id = c.id AND agent = 'ceo') as last_ceo
+      FROM companies c
+      WHERE c.status IN ('mvp', 'active')
+        AND c.github_repo IS NOT NULL
+    `;
+
+    for (const sc of staleCompanies) {
+      const lastActivity = sc.last_ceo || sc.last_cycle;
+      if (!lastActivity) continue;
+      const hoursSinceActivity = (Date.now() - new Date(lastActivity as string).getTime()) / (1000 * 60 * 60);
+
+      // Only dispatch if stale >6h AND no recent dispatch for this company
+      if (hoursSinceActivity > 6) {
+        const [recentDispatch] = await sql`
+          SELECT id FROM agent_actions
+          WHERE agent = 'sentinel'
+            AND action_type = 'stale_cycle_dispatch'
+            AND company_id = ${sc.id}
+            AND started_at > NOW() - INTERVAL '6 hours'
+          LIMIT 1
+        `;
+        if (recentDispatch) continue;
+
+        // Check budget before dispatching
+        const [recentCeoRuns] = await sql`
+          SELECT COUNT(*)::int as cnt FROM agent_actions
+          WHERE agent = 'ceo' AND started_at > NOW() - INTERVAL '4 hours'
+        `;
+        if ((recentCeoRuns?.cnt || 0) >= 3) continue; // Don't exceed budget
+
+        // Dispatch via GitHub Actions
+        if (ghPat) {
+          await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+            method: "POST",
+            headers: {
+              Authorization: `token ${ghPat}`,
+              Accept: "application/vnd.github.v3+json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_type: "cycle_start",
+              client_payload: { source: "sentinel_stale", company: sc.slug },
+            }),
+          });
+
+          await sql`
+            INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
+            VALUES ('sentinel', 'stale_cycle_dispatch',
+              ${`Safety net: dispatched cycle_start for ${sc.slug} (stale ${Math.round(hoursSinceActivity)}h)`},
+              'success', ${sc.id}, NOW(), NOW())
+          `.catch(() => {});
+
+          staleCyclesDispatched++;
+        }
+      }
+    }
+    results.stale_cycles_dispatched = staleCyclesDispatched;
+  } catch (e: any) {
+    console.warn("[company-health] Check 44 failed:", e.message);
+  }
+
+  // --- Check 45: Detect company repo PRs with green CI that aren't being merged ---
+  if (ghPat) try {
+    let stuckPRs = 0;
+    const prCompanies = await sql`
+      SELECT c.id, c.slug, c.github_repo
+      FROM companies c
+      WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
+    `;
+
+    for (const pc of prCompanies) {
+      try {
+        const prListRes = await fetch(
+          `https://api.github.com/repos/${pc.github_repo}/pulls?state=open&per_page=10`,
+          {
+            headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+            signal: AbortSignal.timeout(5000),
+          }
+        );
+        if (!prListRes.ok) continue;
+        const openPRs = await prListRes.json();
+
+        for (const pr of openPRs) {
+          // Check if PR is old enough to be considered stuck (>2h)
+          const prAge = (Date.now() - new Date(pr.created_at).getTime()) / (1000 * 60 * 60);
+          if (prAge < 2) continue;
+
+          // Check CI status
+          const checksRes = await fetch(
+            `https://api.github.com/repos/${pc.github_repo}/commits/${pr.head.sha}/check-runs`,
+            {
+              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+              signal: AbortSignal.timeout(5000),
+            }
+          );
+          if (!checksRes.ok) continue;
+          const checksData = await checksRes.json();
+          const allPassed = checksData.check_runs?.length > 0 &&
+            checksData.check_runs.every((cr: any) => cr.conclusion === "success");
+
+          if (allPassed) {
+            stuckPRs++;
+            // Dispatch CEO review for this PR
+            await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+              method: "POST",
+              headers: {
+                Authorization: `token ${ghPat}`,
+                Accept: "application/vnd.github.v3+json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                event_type: "ceo_review",
+                client_payload: {
+                  source: "sentinel_stuck_pr",
+                  company: pc.slug,
+                  pr_number: pr.number,
+                },
+              }),
+            });
+
+            await sql`
+              INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
+              VALUES ('sentinel', 'stuck_pr_dispatch',
+                ${`Stuck PR: ${pc.github_repo}#${pr.number} "${pr.title}" — CI green for ${Math.round(prAge)}h, dispatched CEO review`},
+                'success', ${pc.id}, NOW(), NOW())
+            `.catch(() => {});
+          }
+        }
+      } catch { /* Per-company API errors — skip */ }
+    }
+    results.stuck_prs_dispatched = stuckPRs;
+  } catch (e: any) {
+    console.warn("[company-health] Check 45 failed:", e.message);
+  }
+
   // Log overall run
   await sql`
     INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
@@ -490,6 +701,9 @@ export async function GET(req: Request) {
     if (results.test_coverage_issues) parts.push(`${results.test_coverage_issues} test issues`);
     if (results.prs_merged) parts.push(`${results.prs_merged} PRs merged`);
     if (results.broken_deploys) parts.push(`${results.broken_deploys} broken deploys`);
+    if (results.silent_failures) parts.push(`${results.silent_failures} silent dispatch failures`);
+    if (results.stale_cycles_dispatched) parts.push(`${results.stale_cycles_dispatched} stale cycles dispatched`);
+    if (results.stuck_prs_dispatched) parts.push(`${results.stuck_prs_dispatched} stuck PRs dispatched`);
     if (parts.length > 0) {
       await notifyHive({
         agent: "sentinel",
