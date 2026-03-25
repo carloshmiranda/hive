@@ -22,6 +22,20 @@
 **Prevention:** NEVER use `'${{ toJson(...) }}'` in bash blocks. Always pass structured data through `env:` vars with `${{ toJson() }}` — GitHub evaluates the expression at YAML level (safe), and bash receives it as a normal env var (no quoting issues). Add to workflow YAML rules in CLAUDE.md.
 **Affects:** hive
 
+### 2026-03-25 Error extraction was silently broken in all 4 agent workflows
+**What happened:** 118 Engineer failures logged as "unknown (0 turns)", 80+ Sentinel NULL errors, auto-decompose never triggered despite being implemented. 5 P0s were blocked because Hive couldn't see what was going wrong.
+**Root cause:** Three bugs in the "Log failure" step across hive-engineer, hive-ceo, hive-healer, hive-scout: (1) No file existence check — when Claude never starts, execution_file doesn't exist, jq silently returns empty. (2) jq selector filtered for `.type == "result" or "error"` but missed `.type == "system"` (used for max_turns). (3) No fallback to capture GitHub Actions-level errors. Healer had a hardcoded "Healer workflow failed" string with zero context.
+**Fix applied:** Rewrote error extraction in all 4 workflows: file existence check → correct jq with .error/.result + system/error type scan → "workflow_crash" subtype when no exec file → GitHub Actions run URL in every error.
+**Prevention:** (1) Error callbacks must always have a fallback for missing files. (2) Test error paths, not just happy paths. (3) When adding a new error subtype, verify the jq selector matches it.
+**Affects:** hive
+
+### 2026-03-25 MCP server broke on @neondatabase/serverless v1.x upgrade
+**What happened:** All MCP tools using dynamic SQL queries (`hive_backlog`, `hive_actions`, `hive_failure_summary`, `hive_sql`) returned errors. Tagged-template queries still worked.
+**Root cause:** `@neondatabase/serverless` v1.0.2 changed `neon()` to return a tagged-template-only function. Dynamic queries using `sql(string)` broke — need `sql.query(string)` instead.
+**Fix applied:** Changed all `sql(...)` calls to `sql.query(...)` in mcp/server.js (12 occurrences).
+**Prevention:** Pin major versions in package.json, or test after npm install. When a DB driver changes API, check all query patterns.
+**Affects:** hive (local tooling)
+
 ### 2026-03-25 Healer wastes max_turns on settings/config issues
 **What happened:** Healer was dispatched for "Neon API key not configured" (systemic, 4 companies). Spent all 35 turns trying to fix it in code, but the issue is a missing setting in /settings — requires manual action, not code changes.
 **Root cause:** Healer has no classification step to distinguish "code bug" from "missing configuration." It treats all errors as fixable by code changes.

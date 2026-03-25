@@ -10,10 +10,10 @@
 - **Architecture:** 7 agents, event-driven, 3 Vercel crons (metrics 2x/day, sentinel every 4h, digest daily 8am). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
-  - VerdeDesk — status: mvp, 18+ cycles, last CEO score 5/10, building waitlist + IRS guide
-  - Senhorio — status: mvp, 4 cycles, last CEO score 3/10, built tax calculator at /calculadora
-  - Flolio — status: mvp, 4 cycles (imported, iterating autonomously), global market
-  - CiberPME — status: mvp, blog (converted from SaaS), Portuguese market, cybersecurity for SMBs
+  - VerdeDesk — status: mvp, 26 cycles, last CEO score 2/10, waitlist + IRS guide (April 1 deadline)
+  - Senhorio — status: mvp, 11 cycles, built tax calculator at /calculadora
+  - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
+  - CiberPME — status: mvp, 4 cycles, blog (converted from SaaS), Portuguese market, cybersecurity for SMBs
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
@@ -39,27 +39,35 @@
 - **Blocked on:**
   - Resend domain verification (need a real domain for outreach emails)
 - **Known issues:**
-  - 15 Scout proposals pending approval (auto-expiry disabled — manual review only)
-  - All 3 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration)
-  - CEO reviews not being recorded — most cycles complete without CEO scores
-  - Engineer 68% failure rate is polling timeouts (20min), not real failures
-  - Zero metrics across all 3 companies — stats endpoints broken at company level
+  - 33+ Scout proposals pending approval (auto-expiry disabled — manual review only)
+  - All 4 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration)
+  - Zero metrics across all companies — stats endpoints broken at company level
   - Groq rate limiting (429) on concurrent Ops dispatches
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
-  - ~70 backlog items queued — cascade actively draining but volume is high
+  - 136 backlog items total (91 ready) — cascade actively draining
+  - Schema drift: evolver_proposals.decided_at missing from DB
+  - 3 cycles stuck in "running" forever (Senhorio 11, Flolio 10, VerdeDesk 26) — no timeout cleanup
 - **Recently fixed:**
-  - Cascade stall — toJson quoting break in all workflow YAML files (env var pattern)
-  - Stale dispatch cleanup — items stuck >30 min auto-reset to ready
-  - Max-attempt guard — 5+ failed attempts auto-blocked (prevents 104-attempt runaways)
-  - Circuit breaker P0 bypass — second breaker now respects forceDispatch
+  - Error extraction in all 4 agent workflows — was silently losing all error info (root cause of 5 blocked P0s)
+  - Auto-decompose on max_turns unblocked — was dead code because error propagation was broken
+  - MCP server neon driver — sql() → sql.query() for dynamic queries
+  - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
+  - Cascade stall — toJson quoting break in all workflow YAML files
   - Planning phase — Qwen Coder specs before Engineer dispatch
-  - Unified LLM layer — provider routing with failover + rate limit retry
-  - Sentinel dispatch loop — 94 dispatches in 48h (Check 25 skip list + Check 17 dedup + expiry reduction)
-  - Healer self-reinforcing loop fix (6h cooldown + excluded from failure rate)
+  - Sentinel dispatch loop — 94 dispatches in 48h fixed
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-25 [code] Error extraction fix + P0 triage + MCP repair
+Session focused on root cause diagnosis and backlog cleanup:
+- **Error extraction fixed across all 4 workflows** (engineer, ceo, healer, scout): 3 bugs — missing exec file check, wrong jq selector, no Actions-level fallback. Every error now includes GitHub Actions run URL. This was root cause of 5 blocked P0s.
+- **Auto-decompose unblocked**: Code existed but never triggered because error_type was always empty. Now fires on max_turns failures.
+- **MCP server fixed**: `@neondatabase/serverless` v1.x broke `sql()` → migrated to `sql.query()` for dynamic queries.
+- **P0 triage via MCP**: 18 P0s → 3 actionable (metrics zeros, CEO cycle-complete, chain dispatch DOA). 9 resolved (deduped into unified fix), 2 demoted to P1.
+- **Backlog directives added**: Dashboard redesign (P1, real-time visualization + backlog pipeline view + layout fix), Telegram notification enrichment (P1), naming clarity overhaul (P1, legacy agent/task/workflow names are confusing).
+- **Loop status**: VerdeDesk cycle 26 completed end-to-end (score 2/10). Sentinel active. Evolver skipping new proposals (28 pending). Healer correctly classifying config vs code issues.
 
 ### 2026-03-25 [code] Cost-only escalation model + cascade self-healing fixes
 Session focused on making the cascade loop truly autonomous:
@@ -365,12 +373,13 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-2. **Fix CEO review recording** — most cycles complete without CEO scores, breaking validation scoring and kill signal detection
-3. **Fix stats endpoints at company level** — all 3 companies return broken /api/stats, metrics pipeline collects zeros. Check 31 creates tasks but Engineer needs to execute them
-4. **PR auto-merge for company repos** — stale PRs accumulate because nobody merges them
-5. **Add Groq backoff/retry** — concurrent Ops dispatches hit 429 rate limits
-6. ~~**Triage 15 idea-status companies**~~ — ✅ **FIXED 2026-03-24:** Enhanced Scout cleanup system with more aggressive auto-cleanup (triggers at >3 vs >5 proposals, 24h expiry when clogged) and dashboard cleanup buttons
+1. **Observe error extraction quality** — monitor next few cycles to confirm errors are captured properly and auto-decompose fires
+2. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
+3. **Metrics pipeline zeros (P0)** — stats endpoints broken at company level, Hive cascade will attempt
+4. **CEO cycle-complete chain dispatch (P0)** — cycles don't chain to next company, Hive cascade will attempt
+5. **Chain dispatch DOA (P0)** — CEO repository_dispatch 12/12 failed, needs prompt size reduction
+6. **Dashboard redesign (P1)** — Carlos directive: real-time visualization, backlog pipeline view, compact alerts, richer activity
+7. **Telegram enrichment + naming clarity (P1)** — Carlos directive: human-readable notifications, rename legacy agent/task terminology
 
 ## Open Questions
 

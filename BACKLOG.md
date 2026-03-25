@@ -27,6 +27,9 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 
 ## Planned
 
+### ✅ P0 — Fix error extraction in all 4 agent workflows (DONE — 2026-03-25)
+Root cause of 5 blocked P0s. Three bugs in failure callbacks across hive-engineer, hive-ceo, hive-healer, hive-scout: (1) no exec file existence check, (2) jq selector missed system-type errors, (3) no Actions-level fallback. Fixed all 4 workflows. Also unblocked auto-decompose which was dead code. Also fixed MCP server neon driver (sql→sql.query).
+
 ### ✅ P1 — Enhanced Scout proposal cleanup system (DONE — 2026-03-24)
 Scout proposals were accumulating while existing companies couldn't execute properly. Enhanced auto-cleanup system with more aggressive thresholds: triggers at >3 pending proposals (was >5), faster expiry when severely clogged (24h vs 48h), and keeps fewer proposals (2 vs 3 when >10 pending). Added dashboard cleanup buttons when >5 proposals for manual intervention: "Cleanup" (gradual) and "Reset All" (nuclear option). Sentinel now prioritizes company execution over new Scout ideas.
 
