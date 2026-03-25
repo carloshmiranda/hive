@@ -531,7 +531,9 @@ export async function GET(req: Request) {
         -- Has revenue (active paying customers)
         EXISTS(SELECT 1 FROM metrics m
           WHERE m.company_id = c.id AND m.mrr > 0
-          AND m.date > NOW() - INTERVAL '30 days') AS has_revenue
+          AND m.date > NOW() - INTERVAL '30 days') AS has_revenue,
+        -- Database capability exists check
+        COALESCE((c.capabilities->'database'->>'exists')::boolean, false) AS database_exists
       FROM companies c
       WHERE c.status IN ('mvp', 'active')
       AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
@@ -542,7 +544,7 @@ export async function GET(req: Request) {
         AND cy.started_at > NOW() - INTERVAL '24 hours'
       )
     )
-    SELECT slug, company_id,
+    SELECT slug, company_id, database_exists,
       (
         (pending_tasks * 2)
         + (LEAST(days_since_cycle, 14) * 3)
@@ -553,8 +555,54 @@ export async function GET(req: Request) {
         - (LEAST(total_cycles, 20) * 0.5)
       ) AS priority_score
     FROM company_signals
+    WHERE database_exists = true
     ORDER BY priority_score DESC
   `;
+
+  // 13a. Companies without database capabilities — trigger infra_repair
+  const companiesWithoutDatabase = await sql`
+    SELECT c.slug, c.id as company_id
+    FROM companies c
+    WHERE c.status IN ('mvp', 'active')
+    AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
+    AND COALESCE((c.capabilities->'database'->>'exists')::boolean, false) = false
+    AND NOT EXISTS (
+      SELECT 1 FROM agent_actions aa
+      WHERE aa.company_id = c.id
+      AND aa.action_type = 'infra_repair'
+      AND aa.started_at > NOW() - INTERVAL '24 hours'
+    )
+  `;
+
+  for (const company of companiesWithoutDatabase) {
+    try {
+      console.warn(`Database missing for ${company.slug}, triggering infra repair instead of cycle`);
+
+      // Call the infra repair endpoint
+      const repairRes = await fetch(`${process.env.VERCEL_URL || 'https://hive-phi.vercel.app'}/api/agents/repair-infra`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.CRON_SECRET}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ company_slug: company.slug }),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (repairRes.ok) {
+        const repairData = await repairRes.json();
+        dispatches.push({
+          type: "internal",
+          target: "infra_repair",
+          payload: { company: company.slug, result: repairData, reason: "missing_database" }
+        });
+      } else {
+        console.error(`Infra repair failed for ${company.slug}: ${repairRes.status}`);
+      }
+    } catch (e: any) {
+      console.error(`Infra repair failed for ${company.slug}: ${e.message}`);
+    }
+  }
 
   // 13b. Stuck cycles (running >2h, auto-cleanup)
   // Get stuck cycles before cleanup
