@@ -11,9 +11,11 @@ export interface PRAnalysis {
   ciPassed: boolean;
   riskScore: number;
   riskFactors: string[];
-  decision: 'auto_merge' | 'manual_review' | 'escalate';
+  decision: 'auto_merge' | 'escalate';
   hardGatesPassed: boolean;
   hardGateIssues: string[];
+  costImpact: boolean;
+  costFactors: string[];
 }
 
 export interface PRDiff {
@@ -67,7 +69,7 @@ export async function analyzePR(
   const ciPassed = checks.check_runs.length === 0 ||
     checks.check_runs.every((check: any) => check.conclusion === 'success' || check.conclusion === 'neutral');
 
-  // Hard gates analysis
+  // Safety gates — block merge entirely (security risks)
   const hardGateIssues: string[] = [];
 
   if (!ciPassed) {
@@ -107,6 +109,10 @@ export async function analyzePR(
 
   // File-based risk factors
   const changedFiles = await getChangedFiles(owner, repo, prNumber, ghToken);
+
+  // Cost gates — escalate to Carlos only when operational costs are affected
+  const costFactors: string[] = [];
+  const costImpact = detectCostImpact(changedFiles, diff, costFactors);
 
   if (changedFiles.some(f => f.includes('auth') || f.includes('payment') || f.includes('user'))) {
     riskScore += 3;
@@ -159,16 +165,19 @@ export async function analyzePR(
   // Ensure minimum score of 0
   riskScore = Math.max(0, riskScore);
 
-  // Decision logic (same as CEO agent)
+  // Decision logic — cost-only escalation model
+  // Carlos only reviews changes that impact operational costs.
+  // All quality-risk PRs auto-merge if CI passes (safety gates block, not score).
   let decision: PRAnalysis['decision'];
   if (!hardGatesPassed) {
+    // Safety gates failed (secrets, conflicts, CI, destructive SQL, huge diff) — block
     decision = 'escalate';
-  } else if (riskScore <= 3) {
-    decision = 'auto_merge';
-  } else if (riskScore <= 6) {
-    decision = 'manual_review';
+  } else if (costImpact) {
+    // Cost-impacting changes always need Carlos's review
+    decision = 'escalate';
   } else {
-    decision = 'escalate';
+    // CI passed + no safety issues + no cost impact → auto-merge regardless of score
+    decision = 'auto_merge';
   }
 
   return {
@@ -184,7 +193,9 @@ export async function analyzePR(
     riskFactors,
     decision,
     hardGatesPassed,
-    hardGateIssues
+    hardGateIssues,
+    costImpact,
+    costFactors,
   };
 }
 
@@ -224,6 +235,66 @@ function checkDesignViolations(diff: string): string[] {
   return violations;
 }
 
+/**
+ * Detects whether a PR has cost impact — the only reason to escalate to Carlos.
+ * Cost triggers: new paid services, workflow minute burns, model routing to more expensive LLMs,
+ * Vercel config changes, new npm dependencies that could be paid.
+ */
+function detectCostImpact(files: string[], diff: string, costFactors: string[]): boolean {
+  // New or modified GitHub Actions workflows burn private repo minutes
+  if (files.some(f => f.includes('.github/workflows/'))) {
+    // Only flag new workflows, not edits to existing ones
+    if (diff.includes('+name:') && /^\+.*\.yml$|^\+.*\.yaml$/m.test(diff)) {
+      costFactors.push('New GitHub Actions workflow (burns private minutes)');
+    }
+    // Check for changes to runs-on (e.g., switching to larger runners)
+    if (/\+\s*runs-on:.*(?:xlarge|large|macos)/i.test(diff)) {
+      costFactors.push('Upgraded runner size (higher cost per minute)');
+    }
+  }
+
+  // Model routing changes — switching to more expensive LLMs
+  if (files.some(f => f.includes('model') || f.includes('llm') || f.includes('provider'))) {
+    if (/\+.*opus/i.test(diff) && !/\-.*opus/i.test(diff)) {
+      costFactors.push('Added Opus model usage (most expensive tier)');
+    }
+  }
+
+  // Vercel config changes that could trigger Pro upgrade
+  if (files.some(f => f === 'vercel.json' || f === 'next.config.mjs' || f === 'next.config.js')) {
+    if (/\+.*cron/i.test(diff)) {
+      costFactors.push('New Vercel cron job (may require Pro plan)');
+    }
+    if (/\+.*maxDuration/i.test(diff)) {
+      costFactors.push('Changed function duration limits (may require Pro plan)');
+    }
+  }
+
+  // New paid npm dependencies (stripe, resend, neon, etc. are already used — flag truly new ones)
+  if (files.includes('package.json')) {
+    const paidServicePatterns = [
+      /\+\s*"@aws-sdk/i, /\+\s*"firebase/i, /\+\s*"@google-cloud/i,
+      /\+\s*"twilio/i, /\+\s*"sendgrid/i, /\+\s*"@sentry/i,
+      /\+\s*"datadog/i, /\+\s*"newrelic/i, /\+\s*"@supabase/i,
+    ];
+    for (const pattern of paidServicePatterns) {
+      if (pattern.test(diff)) {
+        costFactors.push('New paid service dependency added');
+        break;
+      }
+    }
+  }
+
+  // Schema changes that could cause downtime (data loss = operational cost)
+  if (files.some(f => f.includes('schema.sql') || f.includes('migration'))) {
+    if (/ALTER\s+TABLE.*DROP/i.test(diff) || /TRUNCATE/i.test(diff)) {
+      costFactors.push('Schema change with potential data loss');
+    }
+  }
+
+  return costFactors.length > 0;
+}
+
 function isContentOnlyChange(files: string[], diff: string): boolean {
   // Check if only markdown, text, or content files changed
   const contentExtensions = ['.md', '.txt', '.json'];
@@ -259,8 +330,8 @@ export async function autoMergePR(
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        commit_title: `Auto-merge PR #${prNumber} (risk score: low)`,
-        commit_message: 'Automatically merged by Hive auto-merge system (risk score 0-3, CI passed)',
+        commit_title: `Auto-merge PR #${prNumber}`,
+        commit_message: 'Automatically merged by Hive (CI passed, no cost impact)',
         merge_method: mergeMethod
       })
     });

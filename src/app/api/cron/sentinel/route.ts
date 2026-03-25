@@ -2336,21 +2336,19 @@ export async function GET(req: Request) {
                 });
               } catch {}
             }
-          } else if (analysis.decision === "manual_review") {
-            queued++;
-            dispatches.push({ type: "internal", target: "pr_queued_review", payload: { pr: pr.number, title: pr.title, risk: analysis.riskScore, factors: analysis.riskFactors } });
           } else if (analysis.decision === "escalate") {
-            // Check if we already have a pending approval for this PR
+            // Escalated = safety gate failed OR cost impact detected
             const [existingApproval] = await sql`
               SELECT id FROM approvals WHERE gate_type = 'pr_review' AND status = 'pending'
                 AND context->>'pr_number' = ${String(pr.number)}
             `;
             if (!existingApproval) {
+              const issues = [...analysis.hardGateIssues, ...analysis.costFactors, ...analysis.riskFactors];
               await sql`
                 INSERT INTO approvals (gate_type, title, description, context, status)
                 VALUES ('pr_review', ${`PR #${pr.number}: ${pr.title}`},
-                  ${`Risk score ${analysis.riskScore}. Issues: ${[...analysis.hardGateIssues, ...analysis.riskFactors].join(", ")}`},
-                  ${JSON.stringify({ pr_number: pr.number, risk_score: analysis.riskScore, hard_gates: analysis.hardGateIssues, risk_factors: analysis.riskFactors })}::jsonb,
+                  ${`Risk score ${analysis.riskScore}. ${analysis.costImpact ? 'COST IMPACT: ' + analysis.costFactors.join(', ') + '. ' : ''}Issues: ${issues.join(", ")}`},
+                  ${JSON.stringify({ pr_number: pr.number, risk_score: analysis.riskScore, hard_gates: analysis.hardGateIssues, cost_factors: analysis.costFactors, risk_factors: analysis.riskFactors })}::jsonb,
                   'pending')
               `;
               escalated++;
