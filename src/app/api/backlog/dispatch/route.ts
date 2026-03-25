@@ -172,7 +172,7 @@ export async function POST(req: Request) {
       const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns");
 
       // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
-      if (item && attempt < 5) {
+      if (item && attempt < 3) {
         trackFailedBacklogItem(item.id, attempt);
       }
 
@@ -244,8 +244,8 @@ export async function POST(req: Request) {
       }
 
       if (!decomposed) {
-        // Auto-block: 2 attempts for max_turns (task is too big), 5 for other errors
-        const blockThreshold = isMaxTurns ? 2 : 5;
+        // Auto-block: 3 attempts for all error types to prevent infinite retries
+        const blockThreshold = 3;
         if (attempt >= blockThreshold) {
           await sql`
             UPDATE hive_backlog

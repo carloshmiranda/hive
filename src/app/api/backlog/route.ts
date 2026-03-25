@@ -12,6 +12,16 @@ export async function GET(req: Request) {
   const priority = searchParams.get("priority"); // P0, P1, P2, P3
 
   const sql = getDb();
+
+  // Auto-block items with 3+ failed attempts that are still in ready/approved status
+  await sql`
+    UPDATE hive_backlog
+    SET status = 'blocked',
+        notes = COALESCE(notes, '') || ' [auto-blocked] 3+ failed attempts detected — needs decomposition or manual review.'
+    WHERE status IN ('ready', 'approved')
+    AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NOT NULL
+         AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) >= 3)
+  `.catch(() => {});
   let items;
 
   if (status === "all") {
