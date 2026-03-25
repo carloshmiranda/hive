@@ -49,6 +49,8 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       updated_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
       killed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
       kill_reason: { type: "TEXT", nullable: true, hasDefault: false },
+      market: { type: "TEXT", nullable: true, hasDefault: false },
+      content_language: { type: "TEXT", nullable: true, hasDefault: false },
     },
     checks: [
       { column: "status", allowedValues: ["idea", "approved", "provisioning", "mvp", "active", "paused", "killed"] },
@@ -90,8 +92,8 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       tokens_used: { type: "INTEGER", nullable: true, hasDefault: false },
     },
     checks: [
-      { column: "agent", allowedValues: ["ceo", "scout", "engineer", "ops", "growth", "outreach", "evolver", "healer", "orchestrator", "sentinel"] },
-      { column: "status", allowedValues: ["pending", "running", "success", "failed", "skipped", "escalated", "pending_manual"] },
+      { column: "agent", allowedValues: ["ceo", "scout", "engineer", "ops", "growth", "outreach", "evolver", "healer", "orchestrator", "sentinel", "auto_merge", "dispatch", "webhook", "system", "admin"] },
+      { column: "status", allowedValues: ["pending", "running", "success", "failed", "skipped", "escalated", "pending_manual", "completed"] },
     ],
   },
 
@@ -109,7 +111,7 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       decision_note: { type: "TEXT", nullable: true, hasDefault: false },
     },
     checks: [
-      { column: "gate_type", allowedValues: ["new_company", "growth_strategy", "spend_approval", "kill_company", "prompt_upgrade", "escalation", "outreach_batch", "vercel_pro_upgrade", "social_account", "first_revenue", "capability_migration"] },
+      { column: "gate_type", allowedValues: ["new_company", "growth_strategy", "spend_approval", "kill_company", "prompt_upgrade", "escalation", "outreach_batch", "vercel_pro_upgrade", "social_account", "first_revenue", "capability_migration", "pr_review"] },
       { column: "status", allowedValues: ["pending", "approved", "rejected", "expired"] },
     ],
   },
@@ -316,6 +318,7 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
       reviewed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
       implemented_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
+      decided_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
       notes: { type: "TEXT", nullable: true, hasDefault: false },
     },
     checks: [
