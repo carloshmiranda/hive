@@ -450,3 +450,19 @@ CREATE TABLE routing_weights (
 CREATE INDEX idx_routing_weights_task_model ON routing_weights(task_type, model);
 CREATE INDEX idx_routing_weights_agent ON routing_weights(agent);
 CREATE INDEX idx_routing_weights_success_rate ON routing_weights(success_rate);
+
+-- Context cache: cache agent context responses to reduce duplicate DB queries
+-- Unlogged table for performance (data lost on crash, but cache can be rebuilt)
+CREATE UNLOGGED TABLE context_cache (
+  cache_key     TEXT PRIMARY KEY,           -- format: "company_id:agent_type:cycle_id"
+  agent_type    TEXT NOT NULL CHECK (agent_type IN ('build', 'growth', 'fix')),
+  company_id    TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  cycle_id      TEXT REFERENCES cycles(id) ON DELETE CASCADE,
+  context_data  JSONB NOT NULL,             -- cached context response
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at    TIMESTAMPTZ NOT NULL DEFAULT (now() + INTERVAL '10 minutes')
+);
+
+CREATE INDEX idx_context_cache_expires ON context_cache(expires_at);
+CREATE INDEX idx_context_cache_company ON context_cache(company_id);
+CREATE INDEX idx_context_cache_cycle ON context_cache(cycle_id);
