@@ -19,6 +19,15 @@ type AgentProfile = {
   by_company: Record<string, { success_rate: number }>;
   strengths: string[];
   weaknesses: string[];
+  recent_implementations?: Array<{
+    pr_number?: number;
+    pr_url?: string;
+    branch_name?: string;
+    changed_files?: string[];
+    commit_sha?: string;
+    backlog_id?: string;
+    finished_at: string;
+  }>;
 };
 
 export type AgentProfilesResult = {
@@ -40,6 +49,7 @@ export async function getAgentProfiles(): Promise<AgentProfilesResult> {
       aa.status,
       aa.error,
       aa.company_id,
+      aa.output,
       c.slug,
       EXTRACT(EPOCH FROM (aa.finished_at - aa.started_at))::int as duration_s,
       aa.finished_at
@@ -175,6 +185,35 @@ export async function getAgentProfiles(): Promise<AgentProfilesResult> {
       else if (stats.success_rate < 0.5) weaknesses.push(at);
     }
 
+    // Extract recent implementation details (for engineers and backlog callbacks)
+    let recent_implementations;
+    if (agent === 'engineer' || agent === 'backlog_callback') {
+      recent_implementations = agentActions
+        .filter(a => a.status === 'success' && a.output)
+        .slice(0, 10)
+        .map(a => {
+          try {
+            const output = typeof a.output === 'string' ? JSON.parse(a.output) : a.output;
+            if (output && (output.pr_number || output.pr_url || output.branch_name || output.changed_files)) {
+              return {
+                pr_number: output.pr_number || undefined,
+                pr_url: output.pr_url || undefined,
+                branch_name: output.branch_name || undefined,
+                changed_files: Array.isArray(output.changed_files) ? output.changed_files : undefined,
+                commit_sha: output.commit_sha || undefined,
+                backlog_id: output.backlog_id || undefined,
+                finished_at: a.finished_at,
+              };
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+          return null;
+        })
+        .filter(impl => impl !== null)
+        .slice(0, 5); // Limit to 5 most recent
+    }
+
     profiles[agent] = {
       overall_success_rate: Math.round(overallRate * 100) / 100,
       trend,
@@ -183,6 +222,7 @@ export async function getAgentProfiles(): Promise<AgentProfilesResult> {
       by_company: companyStats,
       strengths,
       weaknesses,
+      ...(recent_implementations && recent_implementations.length > 0 && { recent_implementations }),
     };
 
     // Generate recommendations

@@ -54,7 +54,7 @@ export async function POST(req: Request) {
 
   const sql = getDb();
   const body = await req.json().catch(() => ({}));
-  const { completed_id, completed_status } = body;
+  const { completed_id, completed_status, pr_number, pr_url, branch_name, changed_files, commit_sha } = body;
 
   // If a completed item was passed, update its status
   if (completed_id && completed_status) {
@@ -62,12 +62,55 @@ export async function POST(req: Request) {
       // Engineer "success" means PR created, NOT code merged.
       // Move to 'pr_open' so it stays visible until PR is merged.
       // Sentinel or a webhook will mark 'done' after merge.
+
+      // Build notes with implementation details
+      let successNotes = ' PR created via chain dispatch — awaiting merge.';
+      if (pr_number || pr_url || branch_name || changed_files || commit_sha) {
+        successNotes += ' Implementation details:';
+        if (pr_number) successNotes += ` PR #${pr_number}`;
+        if (pr_url) successNotes += ` (${pr_url})`;
+        if (branch_name) successNotes += ` branch=${branch_name}`;
+        if (commit_sha) successNotes += ` commit=${commit_sha}`;
+        if (changed_files && Array.isArray(changed_files) && changed_files.length > 0) {
+          successNotes += ` files=${changed_files.slice(0, 5).join(', ')}${changed_files.length > 5 ? '...' : ''}`;
+        }
+      }
+
       await sql`
         UPDATE hive_backlog
         SET status = 'pr_open', dispatched_at = NOW(),
-            notes = COALESCE(notes, '') || ' PR created via chain dispatch — awaiting merge.'
+            notes = COALESCE(notes, '') || ${successNotes},
+            pr_number = ${pr_number || null},
+            pr_url = ${pr_url || null}
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
+
+      // Log the completion details to agent_actions
+      if (pr_number || pr_url || branch_name || changed_files || commit_sha) {
+        const implementationDetails = {
+          pr_number: pr_number || null,
+          pr_url: pr_url || null,
+          branch_name: branch_name || null,
+          changed_files: changed_files || null,
+          commit_sha: commit_sha || null,
+          backlog_id: completed_id
+        };
+
+        await sql`
+          INSERT INTO agent_actions (
+            agent, action_type, company_id, status, output,
+            started_at, finished_at
+          ) VALUES (
+            'backlog_callback', 'engineer_completion',
+            (SELECT id FROM companies WHERE slug = '_hive'),
+            'success',
+            ${JSON.stringify(implementationDetails)},
+            NOW(), NOW()
+          )
+        `.catch((e) => {
+          console.warn("[backlog] Failed to log completion details:", e);
+        });
+      }
     } else {
       // Failed: always retry. Hive learns from failures.
       // "blocked" is ONLY for items that need manual/human action.

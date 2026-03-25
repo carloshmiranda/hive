@@ -59,7 +59,7 @@ CREATE TABLE agent_actions (
   company_id    TEXT REFERENCES companies(id),
   agent         TEXT NOT NULL CHECK (agent IN (
                   'ceo', 'scout', 'engineer', 'ops', 'growth', 'outreach', 'evolver',
-                  'healer', 'orchestrator', 'sentinel'
+                  'healer', 'orchestrator', 'sentinel', 'backlog_callback'
                 )),
   action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
   description   TEXT,
