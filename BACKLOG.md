@@ -23,13 +23,13 @@
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
 
-### 🟡 P1 — Phase 1: Replace GitHub Actions cron proxy with Vercel native crons (ADR-031)
-The `hive-crons.yml` workflow is a GitHub Actions cron that curls 3 Vercel endpoints — a pointless middleman consuming private repo Actions minutes (~24 runs/day). Replace with native `vercel.json` cron entries pointing directly at `/api/cron/sentinel`, `/api/cron/metrics`, `/api/cron/digest`. Vercel Crons are free on Pro, support per-minute precision, and eliminate the GitHub Actions dependency. Implementation: add `crons` array to `vercel.json`, delete `hive-crons.yml`, verify CRON_SECRET auth works with Vercel's native cron header. ~30 min.
+### ✅ P1 — Phase 1: Replace GitHub Actions cron proxy with Vercel native crons (DONE — 2026-03-25)
+Added `crons` array to `vercel.json` (sentinel hourly, metrics 2x/day, digest daily 8am). Removed schedule triggers from `hive-crons.yml`, kept as manual-only fallback. Vercel sends `Authorization: Bearer CRON_SECRET` natively — no code changes needed. Saves ~24 GitHub Actions runs/day on private repo quota. ADR-031 Phase 1.
 
 ### 🟡 P1 — Phase 2: Split Sentinel into urgent/dispatch/janitor + lazy checks (ADR-031)
 Split the 2933-line Sentinel monolith into 3 focused endpoints by urgency: `sentinel-urgent` (every 2h: stuck cycles/actions, provisions), `sentinel-dispatch` (every 4h: company cycles safety net, budget check), `sentinel-janitor` (daily: stale content/leads/research, evolve, healer, assess). Move ~12 checks to event-driven: approval expiry → check-on-read, schema drift → post-deploy hook, anomaly detection → metrics cron, agent regression → digest, dispatch loop detection → inline in dispatchToActions(). Reduces cron invocations from 24/day to ~10/day.
 
-### 🟢 P2 — Phase 3: Upstash QStash for guaranteed chain dispatch delivery (ADR-031)
+### ⚪ P3 — Phase 3: Upstash QStash for guaranteed chain dispatch delivery (ADR-031)
 Chain dispatch uses fire-and-forget HTTP calls — if the target is down or slow, the message is lost and Sentinel must catch it on next run. Replace with Upstash QStash for retry guarantees and delayed delivery. Use delayed messages for "check back later" patterns (verify provision after 2h, verify deploy after 30min) instead of frequent polling. Free tier: 500-1,000 msgs/day. Only implement if chain dispatch proves unreliable.
 
 ---
@@ -362,6 +362,12 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-25 — Loop quality fixes: cycle cleanup, phantom pr_open, schema drift, max_turns cap (P1)
+Four fixes to improve loop efficiency: (1) Fixed stuck cycle cleanup — Sentinel was using raw `VERCEL_URL` (missing `https://`), cycles stayed "running" forever. Changed to `NEXT_PUBLIC_URL`. (2) Added Check 40: phantom pr_open cleanup — resets backlog items marked pr_open with no actual pr_number. (3) Added `hive_backlog.theme` + `docs` category to schema-map.ts, eliminating ~19 false schema drift failures/day. (4) Lowered max_turns auto-block threshold from 5 to 2 attempts — saves ~108 wasted Claude turns/day.
+
+### ✅ 2026-03-25 — MCP server: hive_backlog_create tool (P2)
+Added `hive_backlog_create` tool to MCP server with dedup check, parameterized queries, and theme support. Also added `theme` parameter to `/api/backlog` POST endpoint.
 
 ### ✅ 2026-03-23 — Venture Brain activation (P2)
 Sentinel check 28: (a) Cross-pollination — finds high-confidence playbook entries from company A that company B hasn't seen, creates directive. (b) Score decline detection — flags companies with declining CEO scores, references rising peers. (c) Error correlation — if company A fixed an error that company B still has, creates directive. Max 3 directives per run, 7-day cooldown per company.
