@@ -204,7 +204,9 @@ export async function POST(req: Request) {
   `.catch(() => []);
 
   // Filter out items that require manual/human work (can't be automated)
-  const MANUAL_KEYWORDS = /\b(manual|buy domain|DNS records|sign up|create account|register|purchase|human|carlos)\b/i;
+  // Only match terms that genuinely indicate non-automatable work.
+  // "manual" alone is too broad — it matches "manual review" in technical contexts.
+  const MANUAL_KEYWORDS = /\b(buy domain|DNS records|sign up manually|create account manually|register manually|purchase|human intervention)\b/i;
   const automatable = [];
   const manualItems = [];
   for (const item of backlogItems) {

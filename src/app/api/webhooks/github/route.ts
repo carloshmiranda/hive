@@ -163,23 +163,24 @@ export async function POST(req: Request) {
         // Skip draft PRs
         if (pr.draft) break;
 
-        // Get GitHub token from environment
-        const ghToken = process.env.GITHUB_PAT || process.env.GH_PAT;
+        // Get GitHub token from settings DB (encrypted) or env var fallback
+        const { getSettingValue } = await import("@/lib/settings");
+        const ghToken = await getSettingValue("github_token").catch(() => null)
+          || process.env.GITHUB_PAT || process.env.GH_PAT;
         if (!ghToken) {
           console.warn('No GitHub token available for auto-merge');
           break;
         }
 
+        let companyId: string | null = null;
+        if (prRepo !== "hive") {
+          const [company] = await sql`SELECT id FROM companies WHERE slug = ${prRepo}`.catch(() => []);
+          companyId = company?.id || null;
+        }
+
         try {
           // Analyze PR for auto-merge eligibility
           const analysis = await analyzePR(prOwner, prRepo, prNumber, ghToken);
-
-          // Log PR analysis
-          let companyId: string | null = null;
-          if (prRepo !== "hive") {
-            const [company] = await sql`SELECT id FROM companies WHERE slug = ${prRepo}`;
-            companyId = company?.id || null;
-          }
 
           await sql`
             INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
@@ -265,7 +266,7 @@ export async function POST(req: Request) {
                 agent: "auto_merge",
                 action: "pr_escalated",
                 company: prRepo === "hive" ? "_hive" : prRepo,
-                status: "warning",
+                status: "started",
                 summary: `PR #${prNumber} escalated (risk ${analysis.riskScore}) - needs manual review`,
               })
             ).catch(() => {});
