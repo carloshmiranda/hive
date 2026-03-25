@@ -80,7 +80,9 @@ export async function POST(req: Request) {
   return json(item, 201);
 }
 
-// PATCH /api/backlog — dispatch a specific backlog item or next ready item to hive-engineer.yml
+// PATCH /api/backlog — MANUAL dispatch a specific backlog item or next ready item to hive-engineer.yml
+// This endpoint is for deliberate human-initiated dispatch, NOT for cascade auto-dispatch
+// Used by: dashboard manual triggers, debugging, overriding cascade filtering
 export async function PATCH(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
@@ -158,7 +160,7 @@ export async function PATCH(req: Request) {
     }
   }
 
-  // Dispatch to GitHub Actions
+  // Dispatch to GitHub Actions with full context matching auto-dispatch
   const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
     method: "POST",
     headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
@@ -170,8 +172,9 @@ export async function PATCH(req: Request) {
         task: taskDescription,
         backlog_id: targetItem.id,
         priority: targetItem.priority,
+        priority_score: 100, // Manual dispatch gets max score to ensure processing
         attempt: attemptCount + 1,
-        chain_next: false, // Manual dispatch - don't auto-chain
+        chain_next: false, // Manual dispatch - don't auto-chain to prevent cascade
         spec: targetItem.spec || undefined,
       },
     }),
@@ -182,9 +185,12 @@ export async function PATCH(req: Request) {
     // Mark as dispatched
     await sql`
       UPDATE hive_backlog
-      SET status = 'dispatched', dispatched_at = NOW()
+      SET status = 'dispatched', dispatched_at = NOW(),
+          notes = COALESCE(notes, '') || ' [manual] Dispatched via dashboard PATCH endpoint.'
       WHERE id = ${targetItem.id}
     `.catch(() => {});
+
+    console.log(`[backlog] Manual dispatch: "${targetItem.title}" (${targetItem.priority}) attempt ${attemptCount + 1}`);
 
     return json({
       dispatched: true,
@@ -197,5 +203,6 @@ export async function PATCH(req: Request) {
     });
   }
 
-  return err("GitHub dispatch failed", res.status);
+  console.error(`[backlog] Manual dispatch failed: ${res.status} for item "${targetItem.title}"`);
+  return err(`GitHub dispatch failed: ${res.status}`, res.status);
 }

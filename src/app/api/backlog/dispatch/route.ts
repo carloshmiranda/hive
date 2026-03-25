@@ -422,6 +422,8 @@ export async function POST(req: Request) {
   let backlogItems: any[];
   try {
     if (isChainDispatch) {
+      // CRITICAL: Cascade auto-dispatch ONLY processes P0 items to prevent waste
+      // Non-P0 items must be dispatched manually or via Sentinel for deliberate scheduling
       backlogItems = await sql`
         SELECT * FROM hive_backlog
         WHERE (
@@ -441,6 +443,9 @@ export async function POST(req: Request) {
           created_at ASC
         LIMIT 10
       `;
+
+      // Log cascade dispatch decision for debugging
+      console.log(`[backlog] Chain dispatch: filtering to P0 only (was triggered by completion of ${completed_id})`);
     } else {
       backlogItems = await sql`
         SELECT * FROM hive_backlog
@@ -540,12 +545,17 @@ export async function POST(req: Request) {
   const backlogItemsFiltered = automatableFiltered;
 
   if (backlogItemsFiltered.length === 0) {
+    // For chain dispatch, specifically report when no P0 items are available
+    const reason = isChainDispatch ? "no_p0_items" : "backlog_empty";
+    const extra = isChainDispatch ? { chain_dispatch: true } : {};
+
     return json({
       dispatched: false,
-      reason: "backlog_empty",
+      reason,
       manual_blocked: manualItems.length,
       cooldown_blocked: cooldownCount,
-      items_in_cooldown: getFailedItemsInCooldown().length
+      items_in_cooldown: getFailedItemsInCooldown().length,
+      ...extra
     });
   }
 
@@ -796,15 +806,25 @@ export async function POST(req: Request) {
   });
 
   if (res.ok || res.status === 204) {
-    // Mark as dispatched
-    await sql`
+    // Mark as dispatched with race condition protection
+    const updateResult = await sql`
       UPDATE hive_backlog
       SET status = 'dispatched', dispatched_at = NOW()
-      WHERE id = ${topItem.id}
-    `.catch(() => {});
+      WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
+      RETURNING id
+    `.catch(() => []);
+
+    if (updateResult.length === 0) {
+      console.warn(`[backlog] Race condition: item ${topItem.id} was already dispatched by another process`);
+      return json({ dispatched: false, reason: "already_dispatched", item_id: topItem.id });
+    }
 
     // Reset cooldown for successfully dispatched item
     resetBacklogItemCooldown(topItem.id);
+
+    // Log successful dispatch
+    const dispatchType = isChainDispatch ? "chain" : "manual";
+    console.log(`[backlog] ${dispatchType} dispatch: "${topItem.title}" (${topItem.priority}, score: ${topItem.priority_score})${attemptCount > 0 ? ` attempt ${attemptCount + 1}` : ""}`);
 
     // Notify via Telegram
     const baseUrlNotify = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -831,5 +851,6 @@ export async function POST(req: Request) {
     });
   }
 
-  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status });
+  console.error(`[backlog] GitHub dispatch failed: ${res.status} for "${topItem.title}" (${topItem.priority})`);
+  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title });
 }
