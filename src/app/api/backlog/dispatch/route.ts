@@ -246,6 +246,7 @@ export async function POST(req: Request) {
     )
     AND NOT (
       notes ILIKE '%[attempt %]%'
+      AND dispatched_at IS NOT NULL
       AND dispatched_at > NOW() - INTERVAL '30 minutes'
     )
     ${isChainDispatch ? sql`AND priority IN ('P0', 'P1')` : sql``}
