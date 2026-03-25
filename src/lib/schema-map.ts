@@ -41,6 +41,8 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       domain: { type: "TEXT", nullable: true, hasDefault: false },
       capabilities: { type: "JSONB", nullable: true, hasDefault: true },
       company_type: { type: "TEXT", nullable: true, hasDefault: true },
+      market: { type: "TEXT", nullable: true, hasDefault: true },
+      content_language: { type: "TEXT", nullable: true, hasDefault: true },
       imported: { type: "BOOLEAN", nullable: true, hasDefault: true },
       last_assessed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
       created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
