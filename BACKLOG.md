@@ -134,11 +134,11 @@ Backlog items that could impact costs must require manual approval before dispat
 ### ✅ DONE — Spec-driven dispatch: CEO micro-plan with file scope + acceptance criteria
 Enhanced CEO and Engineer prompts with bounded context file restrictions. CEO now generates detailed specs with `files_allowed`, `files_forbidden`, `acceptance_criteria`, `specialist`, and `complexity`. Engineer enforces file scope restrictions and reports verification of acceptance criteria. Prevents cross-domain pollution where simple tasks accidentally break auth/payments. Implemented 2026-03-24.
 
-### 🟡 P1 — Cascade failure circuit breaker
-The cascade loop keeps dispatching even when most items fail, burning Claude quota on P3 items that need decomposition. Fix: if >50% of the last 5 backlog dispatches failed, pause the cascade for 1 hour. Implementation: in `backlog/dispatch/route.ts`, query `agent_actions` for recent `engineer` backlog runs, compute rolling failure rate, return `{dispatched: false, reason: "circuit_breaker"}` when tripped. Resets automatically after 1h or on a manual dispatch.
+### ✅ P1 — Cascade failure circuit breaker (DONE — 2026-03-25)
+Circuit breaker in `backlog/dispatch/route.ts` blocks dispatches when >60% failure rate in 30min window. Enhanced: P0 items now bypass circuit breaker (deferred check after item selection). Prevents wasting turns on failing items while preserving critical work.
 
-### 🟡 P1 — Priority floor for cascade dispatch
-The cascade auto-dispatches P3 items like "Claude Agent SDK migration" that are aspirational, not urgent. These should wait for Sentinel's 4h window or a manual trigger. Fix: cascade only auto-dispatches P0/P1 items. P2/P3 items require either Sentinel dispatch or `approved` status. Implementation: add priority check in `backlog/dispatch/route.ts` — when called from chain (`completed_id` present), filter to `priority IN ('P0', 'P1')` only.
+### ✅ P1 — Priority floor for cascade dispatch (DONE — 2026-03-25)
+Chain dispatch now filters to P0+P1 only (was P0-only after PR #35, previously dispatched all priorities). P2/P3 items only dispatched by Sentinel's scheduled runs or manual trigger. Saves Claude turns on aspirational items.
 
 ### 🟡 P1 — Failed item cooldown period
 Failed items get re-dispatched within minutes (LTV/CAC failed at 11:59, retried at 12:05). The novelty penalty lowers the score but the item still wins if others score lower. Fix: add a 30-minute cooldown after failure — items with `[attempt N]` note updated in the last 30min are excluded from dispatch. Implementation: in `backlog/dispatch/route.ts`, add WHERE clause `AND (notes NOT LIKE '%attempt%' OR updated_at < NOW() - INTERVAL '30 minutes')` to the ready items query.
@@ -362,6 +362,12 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-25 — 5 loop quality improvements: circuit breaker, retry caps, evolver gate, PR verification (P1)
+Five fixes to improve autonomous loop efficiency: (1) Fix A: chain dispatch priority floor P0→P0+P1. (2) Fix B: auto_resolve_escalation counts ALL attempts (not just failed), stopping 80+ retry loops from "successful" resolves that don't fix root cause. (3) Fix C: evolver proposal quality gate — rejects vague proposals lacking file paths or actionable verbs before routing to backlog. (4) Fix D: Sentinel Check 41 — PR verification against GitHub API, merged PRs→done, closed/missing PRs→reset. (5) Fix E: circuit breaker P0 bypass. Also lowered max_attempts query-time cap from 5 to 3.
+
+### ✅ 2026-03-25 — Merged 4 PRs: sentinel DB check (#23), validation system (#34), context caching (#29), cascade dispatch fix (#35)
+Merged 4 open PRs with green CI: PR #23 prevents dispatch to companies without DB, PR #34 adds fix-validation-system and migrate-stats endpoints, PR #29 adds context API caching with 10min TTL, PR #35 strengthens P0-only filtering in cascade dispatch. Closed 2 conflicting PRs (#31, #38) — changes superseded by direct fixes.
 
 ### ✅ 2026-03-25 — Loop quality fixes: cycle cleanup, phantom pr_open, schema drift, max_turns cap (P1)
 Four fixes to improve loop efficiency: (1) Fixed stuck cycle cleanup — Sentinel was using raw `VERCEL_URL` (missing `https://`), cycles stayed "running" forever. Changed to `NEXT_PUBLIC_URL`. (2) Added Check 40: phantom pr_open cleanup — resets backlog items marked pr_open with no actual pr_number. (3) Added `hive_backlog.theme` + `docs` category to schema-map.ts, eliminating ~19 false schema drift failures/day. (4) Lowered max_turns auto-block threshold from 5 to 2 attempts — saves ~108 wasted Claude turns/day.

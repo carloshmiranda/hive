@@ -44,21 +44,28 @@
   - Zero metrics across all companies — stats endpoints broken at company level
   - Groq rate limiting (429) on concurrent Ops dispatches
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
-  - 136 backlog items total (91 ready) — cascade actively draining
-  - Schema drift: evolver_proposals.decided_at missing from DB
-  - 3 cycles stuck in "running" forever (Senhorio 11, Flolio 10, VerdeDesk 26) — no timeout cleanup
+  - Groq rate limiting (429) on concurrent Ops dispatches
+  - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
 - **Recently fixed:**
-  - Error extraction in all 4 agent workflows — was silently losing all error info (root cause of 5 blocked P0s)
-  - Auto-decompose on max_turns unblocked — was dead code because error propagation was broken
-  - MCP server neon driver — sql() → sql.query() for dynamic queries
+  - 5 loop quality improvements: circuit breaker P0 bypass, auto_resolve retry cap (all statuses), evolver proposal quality gate, Sentinel Check 41 PR verification, max_attempts 5→3
+  - Merged 4 PRs (#23 sentinel DB check, #29 context caching, #34 validation system, #35 cascade dispatch fix)
+  - Stuck cycle cleanup — VERCEL_URL missing https://, now uses NEXT_PUBLIC_URL
+  - Phantom pr_open cleanup (Check 40) + schema drift noise reduction
+  - Error extraction in all 4 agent workflows
   - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
-  - Cascade stall — toJson quoting break in all workflow YAML files
-  - Planning phase — Qwen Coder specs before Engineer dispatch
   - Sentinel dispatch loop — 94 dispatches in 48h fixed
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-25 [code] Loop quality fixes + PR review/merge
+Session focused on improving autonomous loop efficiency and clearing PR backlog:
+- **5 loop quality fixes committed**: (A) chain dispatch P0+P1 priority floor, (B) auto_resolve_escalation counts ALL attempts (not just failed) — stops 80+ retry loops, (C) evolver proposal quality gate rejects vague proposals lacking file paths/actionable verbs, (D) Sentinel Check 41 verifies pr_open items against GitHub API (merged→done, closed→reset), (E) circuit breaker deferred so P0 items bypass.
+- **Max attempts lowered 5→3** across query-time caps in backlog dispatch.
+- **4 PRs merged**: #23 (sentinel DB check), #29 (context API caching), #34 (validation system endpoints), #35 (cascade dispatch fix). 2 conflicting PRs (#31, #38) closed as superseded.
+- **11 backlog items marked done** in hive_backlog DB — cascade dispatch fixes, circuit breaker steps, priority floor, retry cap, PR verification, evolver gate.
+- **Vercel native crons deployed**: sentinel hourly, metrics 2x/day, digest daily 8am via vercel.json.
 
 ### 2026-03-25 [code] Error extraction fix + P0 triage + MCP repair
 Session focused on root cause diagnosis and backlog cleanup:
