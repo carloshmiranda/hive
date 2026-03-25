@@ -67,6 +67,8 @@ jobs:
 
       - name: Build Healer context
         id: context
+        env:
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           set_output() {
             local key="$1" value="$2"
@@ -76,7 +78,7 @@ jobs:
           }
 
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            PAYLOAD='${{ toJson(github.event.client_payload) }}'
+            PAYLOAD="${DISPATCH_PAYLOAD}"
             set_output "trigger" "${{ github.event.action }}"
             set_output "payload" "${PAYLOAD}"
           else

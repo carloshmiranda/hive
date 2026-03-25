@@ -61,10 +61,42 @@ export async function POST(req: Request) {
 
   // 3. System failure rate (last 6h — short window so old retry storms don't block recovery)
   const [failRate] = await sql`
-    SELECT COUNT(*) FILTER (WHERE status = 'failed')::float /
-      NULLIF(COUNT(*), 0)::float as rate,
-      COUNT(*) FILTER (WHERE status = 'failed')::int as failures,
-      COUNT(*)::int as total
+    SELECT COUNT(*) FILTER (WHERE status = 'failed'
+        AND NOT (
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )
+      )::float /
+      NULLIF(COUNT(*) FILTER (WHERE NOT (
+        (tokens_used = 0 OR tokens_used IS NULL)
+        AND (error ILIKE '%unknown (0 turns)%'
+             OR error ILIKE '%exhausted after 0 turns%'
+             OR error ILIKE '%workflow file issue%'
+             OR error ILIKE '%syntax error%'
+             OR description ILIKE '%unknown (0 turns)%')
+      )), 0)::float as rate,
+      COUNT(*) FILTER (WHERE status = 'failed'
+        AND NOT (
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )
+      )::int as failures,
+      COUNT(*) FILTER (WHERE NOT (
+        (tokens_used = 0 OR tokens_used IS NULL)
+        AND (error ILIKE '%unknown (0 turns)%'
+             OR error ILIKE '%exhausted after 0 turns%'
+             OR error ILIKE '%workflow file issue%'
+             OR error ILIKE '%syntax error%'
+             OR description ILIKE '%unknown (0 turns)%')
+      ))::int as total
     FROM agent_actions
     WHERE agent NOT IN ('sentinel', 'healer')
     AND finished_at > NOW() - INTERVAL '6 hours'

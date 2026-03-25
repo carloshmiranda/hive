@@ -1,5 +1,90 @@
 import { getSettingValue } from "./settings";
 
+interface FailedBacklogItem {
+  id: string;
+  failedAt: number;
+  cooldownHours: number;
+  attemptCount: number;
+}
+
+// In-memory cache for failed backlog items (2h cooldown by default)
+const failedItemsCache = new Map<string, FailedBacklogItem>();
+const COOLDOWN_HOURS = 2;
+const MAX_CACHE_SIZE = 1000;
+
+/**
+ * Track a backlog item as recently failed with cooldown period
+ */
+export function trackFailedBacklogItem(itemId: string, attemptCount: number = 1): void {
+  const now = Date.now();
+  failedItemsCache.set(itemId, {
+    id: itemId,
+    failedAt: now,
+    cooldownHours: COOLDOWN_HOURS,
+    attemptCount,
+  });
+
+  // Cleanup if cache gets too large
+  if (failedItemsCache.size > MAX_CACHE_SIZE) {
+    cleanupFailedItemsCache();
+  }
+}
+
+/**
+ * Check if a backlog item is in cooldown period
+ */
+export function isBacklogItemInCooldown(itemId: string): boolean {
+  const failedItem = failedItemsCache.get(itemId);
+  if (!failedItem) return false;
+
+  const now = Date.now();
+  const cooldownMs = failedItem.cooldownHours * 60 * 60 * 1000;
+  return (now - failedItem.failedAt) < cooldownMs;
+}
+
+/**
+ * Reset cooldown for a successfully dispatched backlog item
+ */
+export function resetBacklogItemCooldown(itemId: string): void {
+  failedItemsCache.delete(itemId);
+}
+
+/**
+ * Get failed items that are still in cooldown
+ */
+export function getFailedItemsInCooldown(): string[] {
+  const now = Date.now();
+  const inCooldown: string[] = [];
+
+  for (const [itemId, failedItem] of failedItemsCache.entries()) {
+    const cooldownMs = failedItem.cooldownHours * 60 * 60 * 1000;
+    if ((now - failedItem.failedAt) < cooldownMs) {
+      inCooldown.push(itemId);
+    }
+  }
+
+  return inCooldown;
+}
+
+/**
+ * Periodically clean up expired entries from failed items cache
+ */
+export function cleanupFailedItemsCache(): void {
+  const now = Date.now();
+  const expiredIds: string[] = [];
+
+  for (const [itemId, failedItem] of failedItemsCache.entries()) {
+    const cooldownMs = failedItem.cooldownHours * 60 * 60 * 1000;
+    if ((now - failedItem.failedAt) >= cooldownMs) {
+      expiredIds.push(itemId);
+    }
+  }
+
+  for (const id of expiredIds) {
+    failedItemsCache.delete(id);
+  }
+}
+
 /**
  * Dispatch a repository_dispatch event to trigger GitHub Actions workflows.
  * Reads the GitHub PAT from settings (encrypted in DB), falling back to env var.

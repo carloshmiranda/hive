@@ -4,19 +4,19 @@ import { requireAuth } from "@/lib/auth";
 /**
  * POST /api/approvals/scout-cleanup
  *
- * Aggressively clean up stale Scout proposals when the pipeline is clogged.
- * This is more aggressive than the normal 7-day auto-expiry.
- *
- * Parameters:
- * - max_pending: Maximum number of new_company approvals to keep (default: 3)
- * - min_age_hours: Minimum age in hours before a proposal can be expired (default: 48)
- * - dry_run: If true, return what would be cleaned up without actually doing it
+ * DISABLED — Scout proposals are never auto-expired. Carlos reviews them manually.
+ * This endpoint previously caused 14 proposals to be dismissed without approval.
+ * Only dry_run mode is allowed (for dashboards/monitoring).
  */
 export async function POST(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
+  if (!body.dry_run) {
+    return err("Auto-cleanup is disabled. Scout proposals require manual review. Use dry_run:true for monitoring only.", 403);
+  }
+
   const {
     max_pending = 3,
     min_age_hours = 48,

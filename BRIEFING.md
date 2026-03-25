@@ -39,30 +39,53 @@
 - **Blocked on:**
   - Resend domain verification (need a real domain for outreach emails)
 - **Known issues:**
-  - 15 Scout proposals pending approval (auto-expiry planned but accumulating faster)
+  - 15 Scout proposals pending approval (auto-expiry disabled — manual review only)
   - All 3 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration)
   - CEO reviews not being recorded — most cycles complete without CEO scores
   - Engineer 68% failure rate is polling timeouts (20min), not real failures
   - Zero metrics across all 3 companies — stats endpoints broken at company level
   - Groq rate limiting (429) on concurrent Ops dispatches
+  - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
+  - ~70 backlog items queued — cascade actively draining but volume is high
 - **Recently fixed:**
+  - Cascade stall — toJson quoting break in all workflow YAML files (env var pattern)
+  - Stale dispatch cleanup — items stuck >30 min auto-reset to ready
+  - Max-attempt guard — 5+ failed attempts auto-blocked (prevents 104-attempt runaways)
+  - Circuit breaker P0 bypass — second breaker now respects forceDispatch
+  - Planning phase — Qwen Coder specs before Engineer dispatch
+  - Unified LLM layer — provider routing with failover + rate limit retry
   - Sentinel dispatch loop — 94 dispatches in 48h (Check 25 skip list + Check 17 dedup + expiry reduction)
-  - Self-healing stats endpoint probe (Sentinel Check 31) — auto-creates fix tasks for broken /api/stats
-  - 34 stale noise approvals bulk-expired (escalation + capability_migration)
-  - CiberSegura→CiberPME rebrand complete (repo, Vercel project, code, DB)
-  - Accrue→Flolio Vercel project rename (deleted broken Hive-provisioned project, renamed original)
-  - Autonomous deploy repair (Sentinel check 30: infra-first → circuit breaker → code fix)
-  - UI/UX quality gates across all agent prompts + boilerplate design tokens
-  - Company teardown automation (kill_company approval → deterministic shell teardown)
-  - Venture Brain cross-pollination (Sentinel check 28)
-  - Playbook consolidation with Jaccard similarity (Sentinel check 29)
-  - Domain management API (`/api/companies/[id]/domain`)
-  - Provisioning preflight sets company_type before Claude agent runs
   - Healer self-reinforcing loop fix (6h cooldown + excluded from failure rate)
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-25 [code] Cascade unblock + strategic intelligence + agent specialization
+Major session focused on unblocking cascade and adding strategic depth:
+- **Cascade unblocked**: Went from stalled (48 ready, 0 dispatched, broken workflows) to actively chaining (6 items in 30 min, 3 PRs, chain dispatch working).
+- **toJson quoting fix**: `${{ toJson(github.event.client_payload) }}` broke when task descriptions contained single quotes. Fixed ALL workflow files (hive-engineer.yml, hive-ceo.yml, hive-scout.yml, hive-healer.yml) to use step-level `env:` vars instead of inline `${{ }}` in bash.
+- **Stale dispatch cleanup**: Items stuck in `dispatched` >30 min auto-reset to `ready`. Prevents cascade stalls.
+- **Max-attempt guard**: Items with 5+ failed attempts auto-blocked at query time. Prevents runaway retries (one item hit 104 attempts).
+- **Circuit breaker P0 bypass**: Second circuit breaker (30-min general) now respects `forceDispatch` for P0 items.
+- **30+ strategic backlog items added** across three themes:
+  - Cascade gaps (5): CEO cycle-complete chain, company_tasks completion, Sentinel fallback, stale pr_open reset, completed_task_ids passthrough
+  - Strategic intelligence (10): Portfolio dashboard, WoW growth rates, pivot detection, revenue readiness, competitive refresh, growth experiments, decision journal, RICE scoring, kill criteria, channel matrix
+  - Agent specialization (10): Experience replay, domain-scoped playbook, blame-attributed grading, skill registry, Growth autonomy, Engineer autonomy, domain knowledge cron, Evolver grade reading, subdomain provisioning, domain graduation
+- **Research captured**: Comprehensive venture orchestration research (BML loops, RICE/ICE, pivot detection, portfolio theory, OKR automation, competitive intelligence, growth experiments, revenue optimization) saved to scratch files.
+- **Healer hitting max_turns on config issue**: Healer exhausted 35 turns trying to fix "Neon API key not configured" — a settings issue, not a code bug. Need Healer to classify config-vs-code errors.
+
+### 2026-03-25 [code] Autonomy unblock + planning phase + LLM optimization
+Major session focused on making Hive self-evolving:
+- **Scout auto-cleanup reverted**: 14 dismissed proposals restored. Auto-expiry disabled — Carlos reviews manually. Sentinel still blocks NEW idea generation at >=5 pending.
+- **Auto-merge fix**: GitHub webhook PR handler now reads `github_token` from settings DB (was only checking env vars). Risk scoring: 0-3 auto-merge, 4-6 queued, 7+ escalated.
+- **Planning phase implemented (P0)**: New `src/lib/backlog-planner.ts` generates specs via OpenRouter Qwen Coder (free) before Engineer dispatch. Spec includes acceptance_criteria, affected_files, approach, risks, complexity, estimated_turns. Engineer workflow updated to follow specs directly. Schema updated with `planning` status + `spec JSONB` column.
+- **Circuit breaker bypass**: P0 items and `force=true` skip the 60-min cooldown. Prevents critical items from being blocked by prior failures.
+- **MANUAL_KEYWORDS narrowed**: Regex was blocking automatable items matching "manual" in technical contexts.
+- **Unified LLM layer**: `src/lib/llm.ts` with provider routing (OpenRouter primary for all workers), automatic failover, rate limit retry with exponential backoff.
+- **Loop quality fixes**: 5 P1 items for task decomposition, duplicate retry prevention, PR tracking, circuit breaker bypass, observability.
+- **Ruflo items promoted**: 13 items from BACKLOG.md promoted to hive_backlog DB. 6 caching/optimization items bumped P2/P3 → P1 (ephemeral cache, dedup, reasoning cache, agent-scoped playbook, dynamic prompts, ReasoningBank).
+- **Flolio contamination**: P1 item added to investigate Portuguese content bleed into global-market company.
 
 ### 2026-03-24 [code] Enhanced Scout proposal cleanup system
 **P1 backlog task completed:** Scout proposals were accumulating (15 pending) while existing companies couldn't execute properly. Enhanced auto-cleanup system with more aggressive thresholds: triggers at >3 pending proposals (was >5), faster expiry when severely clogged (24h vs 48h when >10 proposals), and keeps fewer proposals (2 vs 3 when clogged). Added dashboard cleanup UI when >5 proposals: "Cleanup" button for gradual cleanup and "Reset All" for nuclear option. Sentinel now prioritizes company execution over accumulating Scout ideas.

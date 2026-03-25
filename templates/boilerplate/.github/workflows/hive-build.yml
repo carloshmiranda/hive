@@ -299,6 +299,24 @@ jobs:
           PR_NUM=$(echo "$RESULT" | grep -oP '"?pr_number"?\s*[:=]\s*"?\K\d+' | head -1 || echo "0")
 
           if echo "$RESULT" | grep -qiP '"?pr_opened"?\s*[:=]\s*"?true'; then
+            # Extract task_id and update task status to completed
+            TASK_ID=$(echo "$RESULT" | grep -oP '"?task_id"?\s*[:=]\s*"?\K[a-f0-9-]+' | head -1)
+            if [ -n "$TASK_ID" ]; then
+              OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+                | jq -r '.value')
+              TASK_UPDATE=$(curl -s -X PATCH "https://hive-phi.vercel.app/api/tasks/${TASK_ID}" \
+                -H "Authorization: Bearer $OIDC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d '{"status":"done"}' 2>/dev/null || echo "{}")
+              UPDATE_SUCCESS=$(echo "$TASK_UPDATE" | jq -r '.id // empty')
+              if [ -n "$UPDATE_SUCCESS" ]; then
+                echo "Task ${TASK_ID} marked as completed (PR #${PR_NUM} opened)"
+              else
+                echo "WARNING: Failed to update task ${TASK_ID} status: $(echo "$TASK_UPDATE" | jq -r '.error // "unknown"')"
+              fi
+            fi
+
             # Anti-drift validation: check if Engineer work aligns with validation phase
             WORK_SUMMARY=$(echo "$RESULT" | head -c 500 | tr '"' "'" | tr '\n' ' ')
             DRIFT_CHECK=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/validate-drift" \

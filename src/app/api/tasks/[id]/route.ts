@@ -1,9 +1,16 @@
+import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { validateOIDC } from "@/lib/oidc";
 
-export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // Support both session auth (dashboard) and OIDC auth (workflows)
   const session = await requireAuth();
-  if (!session) return err("Unauthorized", 401);
+  if (!session) {
+    // Try OIDC authentication for workflows
+    const oidcClaims = await validateOIDC(req);
+    if (oidcClaims instanceof Response) return oidcClaims;
+  }
 
   const { id } = await params;
   const body = await req.json();

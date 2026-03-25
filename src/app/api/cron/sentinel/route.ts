@@ -344,44 +344,8 @@ export async function GET(req: Request) {
     AND created_at < NOW() - INTERVAL '48 hours'
   `;
 
-  // More aggressive auto-cleanup of stale Scout proposals
-  let proposalCleanupCount = 0;
-
-  // Trigger cleanup more aggressively: >3 pending proposals or any stale proposals
-  const shouldCleanup = parseInt(pendingProposals.cnt) > 3 || parseInt(staleProposals.cnt) > 0;
-
-  if (shouldCleanup) {
-    const reason = parseInt(pendingProposals.cnt) > 10 ?
-      "Aggressive cleanup by Sentinel: Scout pipeline severely clogged, prioritizing company execution" :
-      "Auto-cleanup by Sentinel: Scout proposals accumulating, focusing on existing companies";
-
-    console.log(`[sentinel] Scout cleanup triggered: ${pendingProposals.cnt} pending, ${staleProposals.cnt} stale proposals`);
-
-    try {
-      const cleanupRes = await fetch("https://hive-phi.vercel.app/api/approvals/scout-cleanup", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.CRON_SECRET}`
-        },
-        body: JSON.stringify({
-          max_pending: parseInt(pendingProposals.cnt) > 10 ? 2 : 3, // More aggressive when severely clogged
-          min_age_hours: parseInt(pendingProposals.cnt) > 10 ? 24 : 48, // Faster expiry when clogged
-          reason
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-      if (cleanupRes.ok) {
-        const data = await cleanupRes.json();
-        proposalCleanupCount = data.expired_count || 0;
-        console.log(`[sentinel] Scout cleanup: expired ${proposalCleanupCount} stale proposals`);
-      }
-    } catch (e) {
-      console.log(`[sentinel] Scout cleanup failed: ${e instanceof Error ? e.message : "unknown"}`);
-    }
-  }
-
-  // Scout blocked if too many pending proposals or any stale proposals exist
+  // Scout blocked if too many pending proposals — stops NEW idea generation only.
+  // NEVER auto-expire or auto-dismiss existing proposals. Carlos reviews them manually.
   const scoutBlocked = parseInt(pendingProposals.cnt) >= 5 || parseInt(staleProposals.cnt) > 0;
   const pipelineLow = parseInt(pipeline.cnt) < 3 && parseInt(pendingIdeas.cnt) === 0 && !scoutBlocked;
 
@@ -1615,7 +1579,8 @@ export async function GET(req: Request) {
         AND created_at > NOW() - INTERVAL '14 days'
     `.catch(() => {});
 
-    // (A) Approved self-improvement proposals waiting for dispatch (any source)
+    // (A) Approved self-improvement proposals → route to hive_backlog (not directly to Engineer)
+    // This ensures they go through the planning phase, get specs, and compete on priority.
     const approvedImprovements = await sql`
       SELECT id, title, proposed_fix, severity
       FROM evolver_proposals
@@ -1643,10 +1608,27 @@ export async function GET(req: Request) {
     `.catch(() => []);
 
     // (C) Agent failure rate — if >50% of all agent runs are failing, Hive needs fixing
+    // Exclude 0-turn actions (GitHub Actions dispatch failures, not real agent execution failures)
     const failureRate = await sql`
       SELECT
-        COUNT(*) FILTER (WHERE status = 'failed')::float /
-        NULLIF(COUNT(*), 0)::float as rate
+        COUNT(*) FILTER (WHERE status = 'failed'
+          AND NOT (
+            (tokens_used = 0 OR tokens_used IS NULL)
+            AND (error ILIKE '%unknown (0 turns)%'
+                 OR error ILIKE '%exhausted after 0 turns%'
+                 OR error ILIKE '%workflow file issue%'
+                 OR error ILIKE '%syntax error%'
+                 OR description ILIKE '%unknown (0 turns)%')
+          )
+        )::float /
+        NULLIF(COUNT(*) FILTER (WHERE NOT (
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )), 0)::float as rate
       FROM agent_actions
       WHERE agent NOT IN ('sentinel', 'healer')
         AND finished_at > NOW() - INTERVAL '48 hours'
@@ -1658,24 +1640,38 @@ export async function GET(req: Request) {
       || (systemicErrors.length > 0 && overallFailureRate > 0.4);
 
     if (hiveFixNeeded && remainingSlots > 0) {
-      // Prioritize approved improvement proposals first
+      // Route approved proposals through hive_backlog instead of dispatching directly.
+      // This ensures they get planning phase, specs, complexity estimation, and compete on priority.
       for (const proposal of approvedImprovements) {
-        if (remainingSlots <= 0) break;
-        await dispatchToActions("feature_request", {
-          source: "sentinel_hive_triage",
-          company: "_hive",
-          task: proposal.proposed_fix,
-          proposal_id: proposal.id,
-          severity: proposal.severity,
-          trace_id: traceId,
-        }, ghPat);
+        // Check if already in backlog (prevent duplicates)
+        const [existing] = await sql`
+          SELECT id FROM hive_backlog
+          WHERE title ILIKE ${proposal.title.slice(0, 50) + "%"}
+            AND status NOT IN ('done', 'rejected')
+          LIMIT 1
+        `.catch(() => []);
+        if (existing) continue;
+
+        const priority = proposal.severity === "critical" ? "P0" : proposal.severity === "high" ? "P1" : "P2";
+        await sql`
+          INSERT INTO hive_backlog (title, description, priority, category, status)
+          VALUES (
+            ${(proposal.title as string).slice(0, 200)},
+            ${`Source: evolver proposal ${proposal.id}\n${typeof proposal.proposed_fix === 'string' ? proposal.proposed_fix : JSON.stringify(proposal.proposed_fix)}`},
+            ${priority}, 'infra', 'ready'
+          )
+        `.catch(() => {});
+        await sql`
+          UPDATE evolver_proposals SET implemented_at = NOW(),
+            notes = COALESCE(notes, '') || ' | Routed to hive_backlog for planning + dispatch'
+          WHERE id = ${proposal.id}
+        `.catch(() => {});
         dispatches.push({
           type: "brain",
           target: "hive_self_fix",
-          payload: { proposal_id: proposal.id, title: proposal.title, severity: proposal.severity },
+          payload: { proposal_id: proposal.id, title: proposal.title, severity: proposal.severity, routed: "backlog" },
         });
         hiveFixesDispatched++;
-        remainingSlots--;
       }
 
       // If high systemic failure rate and still have budget, dispatch healer
@@ -1709,136 +1705,34 @@ export async function GET(req: Request) {
     console.warn("Check 13a (hive-first triage) failed:", e instanceof Error ? e.message : String(e));
   }
 
-  // 13b. Scored backlog dispatch — pick highest-scoring Hive improvement if budget allows
-  // Backlog items compete with company cycles for remaining slots.
-  // P0/P1 items auto-dispatch. P2/P3 dispatch only when no company cycles are pending.
+  // 13b. Backlog dispatch — delegate to /api/backlog/dispatch (single source of truth)
+  // This endpoint handles scoring, planning phase (spec generation), complexity estimation,
+  // circuit breaker, dedup, and feasibility checks. Sentinel just triggers it.
   let backlogDispatched = 0;
   try {
     if (remainingSlots > 0) {
-      const { computeBacklogScore, detectBlockedAgents } = await import("@/lib/backlog-priority");
+      const backlogUrl = `${process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app"}/api/backlog/dispatch`;
+      const backlogRes = await fetch(backlogUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cronSecret}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ source: "sentinel" }),
+        signal: AbortSignal.timeout(60000), // 60s — includes planning phase (spec generation)
+      }).catch(() => null);
 
-      // Fetch ready + approved backlog items
-      const backlogItems = await sql`
-        SELECT * FROM hive_backlog
-        WHERE status IN ('ready', 'approved')
-        ORDER BY
-          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
-          created_at ASC
-        LIMIT 10
-      `.catch(() => []);
-
-      if (backlogItems.length > 0) {
-        // Gather signals for scoring
-        const activeCompanyCount = await sql`
-          SELECT COUNT(*)::int as count FROM companies WHERE status IN ('mvp', 'active')
-        `.catch(() => [{ count: 4 }]);
-        const totalCompanies = Number(activeCompanyCount[0]?.count || 4);
-
-        const backlogFailureRate = await sql`
-          SELECT COUNT(*) FILTER (WHERE status = 'failed')::float /
-            NULLIF(COUNT(*), 0)::float as rate
-          FROM agent_actions
-          WHERE agent NOT IN ('sentinel', 'healer')
-          AND finished_at > NOW() - INTERVAL '48 hours'
-        `.catch(() => [{ rate: 0 }]);
-        const overallRate = Number(backlogFailureRate[0]?.rate || 0);
-
-        // Score each item
-        const scored = [];
-        for (const item of backlogItems) {
-          const titleDesc = `${item.title} ${item.description}`;
-          // Count related errors (keyword match in last 7 days)
-          const keywords = item.title.split(/\s+/).filter((w: string) => w.length > 4).slice(0, 3);
-          let relatedErrors = 0;
-          if (keywords.length > 0) {
-            const pattern = keywords.join("|");
-            const [errCount] = await sql`
-              SELECT COUNT(*)::int as count FROM agent_actions
-              WHERE status = 'failed' AND error IS NOT NULL
-              AND finished_at > NOW() - INTERVAL '7 days'
-              AND error ~* ${pattern}
-            `.catch(() => [{ count: 0 }]);
-            relatedErrors = Number(errCount?.count || 0);
-          }
-
-          // Check if similar item was attempted and failed
-          const [failedSimilar] = await sql`
-            SELECT id FROM hive_backlog
-            WHERE status IN ('blocked', 'rejected')
-            AND title ILIKE ${item.title.slice(0, 40) + "%"}
-            AND completed_at > NOW() - INTERVAL '30 days'
-            LIMIT 1
-          `.catch(() => []);
-
-          // Count affected companies
-          let companiesAffected = 0;
-          if (keywords.length > 0) {
-            const pattern = keywords.join("|");
-            const [compCount] = await sql`
-              SELECT COUNT(DISTINCT company_id)::int as count FROM agent_actions
-              WHERE status = 'failed' AND error ~* ${pattern}
-              AND finished_at > NOW() - INTERVAL '7 days'
-              AND company_id IS NOT NULL
-            `.catch(() => [{ count: 0 }]);
-            companiesAffected = Number(compCount?.count || 0);
-          }
-
-          const blocksAgents = detectBlockedAgents(item.title, item.description);
-          const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
-          const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
-
-          scored.push(computeBacklogScore(item as Parameters<typeof computeBacklogScore>[0], {
-            relatedErrors,
-            companiesAffected,
-            systemFailureRate: overallRate,
-            hasSimilarFailed: !!failedSimilar,
-            blocksAgents,
-            daysSinceCreated,
-            totalCompanies,
-            previousAttempts,
-          }));
-        }
-
-        // Sort by score descending
-        scored.sort((a, b) => b.priority_score - a.priority_score);
-        const top = scored[0];
-
-        // Dispatch rules:
-        // P0/P1: always dispatch (they beat company cycles)
-        // P2/P3: only dispatch if no company cycles are pending (idle capacity)
-        const shouldDispatch = top && (
-          (top.priority === "P0" || top.priority === "P1") ||
-          (needsCycle.length === 0)
-        );
-
-        if (shouldDispatch && top && remainingSlots > 0) {
-          await dispatchToActions("feature_request", {
-            source: "sentinel_backlog",
-            company: "_hive",
-            task: top.description,
-            backlog_id: top.id,
-            priority: top.priority,
-            priority_score: top.priority_score,
-            score_breakdown: top.score_breakdown,
-            trace_id: traceId,
-          }, ghPat);
-
-          // Mark as dispatched
-          await sql`
-            UPDATE hive_backlog
-            SET status = 'dispatched', dispatched_at = NOW()
-            WHERE id = ${top.id}
-          `.catch(() => {});
-
+      if (backlogRes?.ok) {
+        const backlogData = await backlogRes.json().catch(() => ({}));
+        if (backlogData?.data?.dispatched) {
           dispatches.push({
             type: "brain",
             target: "hive_backlog_item",
             payload: {
-              backlog_id: top.id,
-              title: top.title,
-              priority: top.priority,
-              priority_score: top.priority_score,
-              score_breakdown: top.score_breakdown,
+              backlog_id: backlogData.data.item?.id,
+              title: backlogData.data.item?.title,
+              priority: backlogData.data.item?.priority,
+              priority_score: backlogData.data.item?.priority_score,
             },
           });
           backlogDispatched++;
@@ -2304,6 +2198,154 @@ export async function GET(req: Request) {
     `.catch(() => {});
   }
 
+  // --- Check 39: Auto-decompose blocked backlog items ---
+  // Items blocked after repeated max_turns failures need decomposition, not more retries.
+  // Uses the planner to generate approach steps, then splits into S-sized sub-tasks.
+  try {
+    const blockedItems = await sql`
+      SELECT id, title, description, priority, category, spec, notes
+      FROM hive_backlog
+      WHERE status = 'blocked'
+        AND notes LIKE '%Too many failed attempts%'
+        AND NOT (notes LIKE '%auto-decomposed%')
+        AND title NOT ILIKE '%email domain%'
+      LIMIT 5
+    `;
+
+    let decomposedCount = 0;
+    for (const item of blockedItems) {
+      try {
+        const { generateSpec } = await import("@/lib/backlog-planner");
+        let spec = item.spec;
+        if (!spec || !spec.approach) {
+          spec = await generateSpec(
+            { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
+            sql
+          );
+        }
+        if (spec && Array.isArray(spec.approach) && spec.approach.length >= 2) {
+          const steps = spec.approach as string[];
+          const subItems: { title: string; description: string }[] = [];
+          for (let i = 0; i < steps.length; i += 2) {
+            const chunk = steps.slice(i, i + 2);
+            const stepNums = chunk.map((_: string, j: number) => i + j + 1).join("-");
+            subItems.push({
+              title: `${item.title} (step ${stepNums}/${steps.length})`,
+              description: `Parent: ${item.title}\n\n${chunk.join("\n")}`,
+            });
+          }
+          if (subItems.length >= 2) {
+            for (const sub of subItems) {
+              await sql`
+                INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+                VALUES (
+                  ${(sub.title as string).slice(0, 200)}, ${(sub.description as string).slice(0, 2000)},
+                  ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
+                  ${JSON.stringify({ complexity: "S", estimated_turns: 15, acceptance_criteria: ["npx next build passes"] })}
+                )
+              `.catch(() => {});
+            }
+            await sql`
+              UPDATE hive_backlog
+              SET notes = COALESCE(notes, '') || ${` [auto-decomposed] Sentinel check 39 split into ${subItems.length} sub-tasks.`}
+              WHERE id = ${item.id}
+            `.catch(() => {});
+            decomposedCount++;
+            dispatches.push({ type: "internal", target: "backlog_decompose", payload: { item_id: item.id, title: item.title, sub_tasks: subItems.length } });
+          }
+        }
+      } catch (decompErr: any) {
+        console.warn(`[sentinel] Check 39: decompose failed for "${item.title}": ${decompErr.message}`);
+      }
+    }
+
+    if (decomposedCount > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'backlog_decompose',
+          ${`Check 39: Decomposed ${decomposedCount} blocked items into sub-tasks`},
+          'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (check39Err: any) {
+    console.warn(`[sentinel] Check 39 failed: ${check39Err.message}`);
+  }
+
+  // --- Check 38: Review and auto-merge open Hive PRs ---
+  if (ghPat) try {
+    const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
+      headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+    });
+    if (prListRes.ok) {
+      const openPRs = await prListRes.json();
+      // Only process PRs on hive/ branches (created by Engineer agent)
+      const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
+      let merged = 0, queued = 0, escalated = 0;
+
+      for (const pr of hivePRs) {
+        try {
+          const { analyzePR: analyzeHivePR, autoMergePR: mergeHivePR } = await import("@/lib/pr-risk-scoring");
+          const analysis = await analyzeHivePR("carloshmiranda", "hive", pr.number, ghPat!);
+
+          if (analysis.decision === "auto_merge") {
+            const result = await mergeHivePR("carloshmiranda", "hive", pr.number, ghPat!, "squash");
+            if (result.success) {
+              merged++;
+              // Update hive_backlog items with matching PR
+              await sql`
+                UPDATE hive_backlog SET status = 'done', notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by Sentinel check 38.`}
+                WHERE status = 'pr_open'
+                  AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
+              `.catch(() => {});
+              dispatches.push({ type: "internal", target: "pr_auto_merged", payload: { pr: pr.number, title: pr.title, risk: analysis.riskScore } });
+
+              // Notify via Telegram
+              try {
+                await fetch(`${baseUrl}/api/notify`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${cronSecret}` },
+                  body: JSON.stringify({ text: `✅ Auto-merged PR #${pr.number}: ${pr.title} (risk: ${analysis.riskScore})` }),
+                });
+              } catch {}
+            }
+          } else if (analysis.decision === "manual_review") {
+            queued++;
+            dispatches.push({ type: "internal", target: "pr_queued_review", payload: { pr: pr.number, title: pr.title, risk: analysis.riskScore, factors: analysis.riskFactors } });
+          } else if (analysis.decision === "escalate") {
+            // Check if we already have a pending approval for this PR
+            const [existingApproval] = await sql`
+              SELECT id FROM approvals WHERE gate_type = 'pr_review' AND status = 'pending'
+                AND context->>'pr_number' = ${String(pr.number)}
+            `;
+            if (!existingApproval) {
+              await sql`
+                INSERT INTO approvals (gate_type, title, description, context, status)
+                VALUES ('pr_review', ${`PR #${pr.number}: ${pr.title}`},
+                  ${`Risk score ${analysis.riskScore}. Issues: ${[...analysis.hardGateIssues, ...analysis.riskFactors].join(", ")}`},
+                  ${JSON.stringify({ pr_number: pr.number, risk_score: analysis.riskScore, hard_gates: analysis.hardGateIssues, risk_factors: analysis.riskFactors })}::jsonb,
+                  'pending')
+              `;
+              escalated++;
+            }
+          }
+        } catch (prErr: any) {
+          console.warn(`[sentinel] PR #${pr.number} analysis failed: ${prErr.message}`);
+        }
+      }
+
+      if (merged > 0 || queued > 0 || escalated > 0) {
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'pr_review_check',
+            ${`PR review check 38: ${hivePRs.length} open PRs — ${merged} auto-merged, ${queued} queued, ${escalated} escalated`},
+            'success', NOW(), NOW())
+        `.catch(() => {});
+      }
+    }
+  } catch (prCheckErr: any) {
+    console.warn(`[sentinel] Check 38 (PR review) failed: ${prCheckErr.message}`);
+  }
+
   // --- HTTP health checks (parallel) ---
   const companiesWithUrls = await sql`
     SELECT slug, COALESCE('https://' || domain, vercel_url) as check_url FROM companies
@@ -2428,10 +2470,9 @@ export async function GET(req: Request) {
     dispatches.push({ type: "auto_approve", target: "evolver_proposal", payload: { id: p.id, title: p.title } });
   }
 
-  // Dispatch approved improvement proposals to Engineer (self-improvement)
-  // Only dispatch capability proposals that haven't been dispatched yet.
-  // Engineer works on Hive's own repo in a branch, creates a PR for review.
-  const approvedImprovements = await sql`
+  // Route approved improvement proposals through hive_backlog (not directly to Engineer).
+  // This ensures they get the planning phase, spec generation, and compete on priority.
+  const approvedSelfImprovements = await sql`
     SELECT id, title, diagnosis, proposed_fix, gap_type, severity
     FROM evolver_proposals
     WHERE status = 'approved'
@@ -2443,23 +2484,32 @@ export async function GET(req: Request) {
       CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
     LIMIT 1
   `;
-  for (const imp of approvedImprovements) {
-    const dispatchKey = `self_improve:${imp.id}`;
-    if (isDuplicate("feature_request", dispatchKey)) continue;
-    // Dispatch Engineer to work on Hive's own repo
-    await dispatchToActions("feature_request", {
-      company: "_hive",
-      task: `Self-improvement: ${imp.title}`,
-      description: `Diagnosis: ${imp.diagnosis}\n\nProposed fix: ${typeof imp.proposed_fix === 'string' ? imp.proposed_fix : JSON.stringify(imp.proposed_fix)}`,
-      proposal_id: imp.id,
-      branch: `hive/improvement/${(imp.title as string).toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
-    }, ghPat);
-    // Mark as dispatched (set implemented_at to prevent re-dispatch, will be updated on completion)
+  for (const imp of approvedSelfImprovements) {
+    // Check if already in backlog
+    const [existing] = await sql`
+      SELECT id FROM hive_backlog
+      WHERE title ILIKE ${(imp.title as string).slice(0, 50) + "%"}
+        AND status NOT IN ('done', 'rejected')
+      LIMIT 1
+    `.catch(() => []);
+    if (existing) continue;
+
+    const priority = imp.severity === "critical" ? "P0" : imp.severity === "high" ? "P1" : "P2";
+    const description = `Diagnosis: ${imp.diagnosis}\n\nProposed fix: ${typeof imp.proposed_fix === 'string' ? imp.proposed_fix : JSON.stringify(imp.proposed_fix)}`;
     await sql`
-      UPDATE evolver_proposals SET implemented_at = NOW(), notes = COALESCE(notes, '') || ' | Dispatched to Engineer'
+      INSERT INTO hive_backlog (title, description, priority, category, status)
+      VALUES (
+        ${(imp.title as string).slice(0, 200)},
+        ${description.slice(0, 2000)},
+        ${priority}, 'infra', 'ready'
+      )
+    `.catch(() => {});
+    await sql`
+      UPDATE evolver_proposals SET implemented_at = NOW(),
+        notes = COALESCE(notes, '') || ' | Routed to hive_backlog for planning + dispatch'
       WHERE id = ${imp.id}
     `;
-    dispatches.push({ type: "self_improvement", target: "engineer", payload: { proposal_id: imp.id, title: imp.title } });
+    dispatches.push({ type: "self_improvement", target: "backlog", payload: { proposal_id: imp.id, title: imp.title, routed: "backlog" } });
   }
 
   // Reminder for critical/high severity proposals pending >48h
@@ -3308,7 +3358,7 @@ export async function GET(req: Request) {
     trace_id: traceId,
     dispatches: dispatches.length,
     approvals_expired: expiredApprovals.length,
-    scout_proposals_cleaned: proposalCleanupCount,
+    scout_proposals_cleaned: 0,
     stuck_cycles_cleaned: stuckCycles.length,
     deploy_drift: drift.drifted,
     broken_deploys: brokenDeploys.length,
