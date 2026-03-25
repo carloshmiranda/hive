@@ -365,7 +365,8 @@ export async function POST(req: Request) {
   // Fetch ready backlog items
   // Cooldown: items with recent attempt failures wait 30min before retry.
   // Uses dispatched_at (reset on failure) as proxy for "last attempt time".
-  // When called from chain (completed_id present), filter to P0/P1 only
+  // When called from chain (completed_id present), only auto-dispatch P0 items
+  // This prevents cascade waste on lower-priority items that can wait for regular dispatch
   const isChainDispatch = !!completed_id;
   let backlogItems: any[];
   try {
@@ -383,7 +384,7 @@ export async function POST(req: Request) {
         )
         AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
              OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 5)
-        AND priority IN ('P0', 'P1')
+        AND priority = 'P0'
         ORDER BY
           CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
           created_at ASC
