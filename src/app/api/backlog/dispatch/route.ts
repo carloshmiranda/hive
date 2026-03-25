@@ -45,6 +45,9 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
 //            Manual trigger from dashboard
 // Auth: CRON_SECRET or OIDC
 export async function POST(req: Request) {
+  // Max attempts before auto-blocking backlog items
+  const MAX_ATTEMPTS = 3;
+
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
 
@@ -84,7 +87,7 @@ export async function POST(req: Request) {
       const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns");
 
       // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
-      if (item && attempt < 5) {
+      if (item && attempt < MAX_ATTEMPTS) {
         trackFailedBacklogItem(item.id, attempt);
       }
 
@@ -156,8 +159,8 @@ export async function POST(req: Request) {
       }
 
       if (!decomposed) {
-        // Auto-block after 5 failed attempts — prevents infinite retry loops
-        if (attempt >= 5) {
+        // Auto-block after 3 failed attempts — prevents infinite retry loops
+        if (attempt >= MAX_ATTEMPTS) {
           await sql`
             UPDATE hive_backlog
             SET status = 'blocked', dispatched_at = NULL,
@@ -382,7 +385,7 @@ export async function POST(req: Request) {
           AND dispatched_at > NOW() - INTERVAL '30 minutes'
         )
         AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
-             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 5)
+             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
         AND priority IN ('P0', 'P1')
         ORDER BY
           CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
@@ -402,7 +405,7 @@ export async function POST(req: Request) {
           AND dispatched_at > NOW() - INTERVAL '30 minutes'
         )
         AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
-             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 5)
+             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
         ORDER BY
           CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
           created_at ASC
@@ -414,11 +417,10 @@ export async function POST(req: Request) {
     backlogItems = [];
   }
 
-  // Auto-block items with 5+ failed attempts at query time (defense-in-depth).
-  // The callback handler (line ~82) also blocks after 5 attempts, but if the
+  // Auto-block items with 3+ failed attempts at query time (defense-in-depth).
+  // The callback handler also blocks after 3 attempts, but if the
   // chain callback never fires (e.g., dispatch lost), items stay in 'ready'
   // and keep getting dispatched. This catches that case.
-  const MAX_ATTEMPTS = 5;
   for (const item of backlogItems) {
     const attemptCount = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
     if (attemptCount >= MAX_ATTEMPTS && item.status !== "blocked") {
@@ -439,11 +441,47 @@ export async function POST(req: Request) {
   // Only match terms that genuinely indicate non-automatable work.
   // "manual" alone is too broad — it matches "manual review" in technical contexts.
   const MANUAL_KEYWORDS = /\b(buy domain|DNS records|sign up manually|create account manually|register manually|purchase|human intervention)\b/i;
+
+  // Detect items that are problem statements rather than actionable code tasks
+  // These need decomposition before they can be implemented
+  const isProblemStatement = (item: any): boolean => {
+    const text = (item.title + " " + item.description).toLowerCase();
+
+    // Problem indicators: describes what's wrong/needed without specific implementation steps
+    const problemIndicators = [
+      /\b(issue|problem|broken|fails?|doesn't work|not working|missing|lacks?|needs?)\b/,
+      /\b(should|could|would|might|may) (be|have|use|support|allow|enable)/,
+      /\b(why|how|when) (is|are|does|do)/,
+      /\b(eliminate|prevent|reduce|improve|enhance|optimize|fix) \w+ \w+(?! by)/,
+      /\b(we need to|should add|should implement|should fix)(?! by|: )/,
+    ];
+
+    // Action indicators: specific implementation steps or clear technical tasks
+    const actionIndicators = [
+      /\b(add|create|implement|update|change|modify|replace|remove|delete)\s+[\w\-\/\.]+/,
+      /\b(write|build|generate|deploy|install|configure)\s+[\w\-\/\.]+/,
+      /\bfile\s*(path)?:?\s*[\w\-\/\.]+/,
+      /\b(route|endpoint|function|component|table|column|field):\s*[\w\-\/\.]+/,
+      /\bstep \d+:/,
+      /^(1\.|2\.|3\.|\-|\*)/m, // numbered or bulleted lists
+    ];
+
+    const hasProblems = problemIndicators.some(regex => regex.test(text));
+    const hasActions = actionIndicators.some(regex => regex.test(text));
+
+    // It's a problem statement if it describes problems/needs without specific actions
+    return hasProblems && !hasActions;
+  };
+
   const automatable = [];
   const manualItems = [];
+  const needsDecomposition = [];
+
   for (const item of backlogItems) {
     if (MANUAL_KEYWORDS.test(item.description) || MANUAL_KEYWORDS.test(item.title)) {
       manualItems.push(item);
+    } else if (isProblemStatement(item)) {
+      needsDecomposition.push(item);
     } else {
       automatable.push(item);
     }
@@ -459,6 +497,17 @@ export async function POST(req: Request) {
       await sql`
         UPDATE hive_backlog
         SET status = 'blocked', notes = COALESCE(notes, '') || ' [auto] Requires manual action — skipped by dispatch.'
+        WHERE id = ${item.id} AND status = 'ready'
+      `.catch(() => {});
+    }
+  }
+
+  // Mark items needing decomposition as blocked with specific note
+  for (const item of needsDecomposition) {
+    if (item.status === "ready") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', notes = COALESCE(notes, '') || ' [needs_decomposition] Problem statement detected — needs breakdown into actionable tasks.'
         WHERE id = ${item.id} AND status = 'ready'
       `.catch(() => {});
     }
@@ -485,6 +534,27 @@ export async function POST(req: Request) {
     }).catch(() => {});
   }
 
+  // Notify about items that need decomposition
+  if (needsDecomposition.length > 0) {
+    const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+    const titles = needsDecomposition.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
+    await fetch(`${baseUrl}/api/notify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.CRON_SECRET}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent: "backlog",
+        action: "decomposition_needed",
+        company: "hive",
+        status: "needs_carlos",
+        summary: `${needsDecomposition.length} backlog item(s) are problem statements needing decomposition:\n${titles}`,
+      }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  }
+
   const backlogItemsFiltered = automatableFiltered;
 
   if (backlogItemsFiltered.length === 0) {
@@ -492,6 +562,7 @@ export async function POST(req: Request) {
       dispatched: false,
       reason: "backlog_empty",
       manual_blocked: manualItems.length,
+      decomposition_needed: needsDecomposition.length,
       cooldown_blocked: cooldownCount,
       items_in_cooldown: getFailedItemsInCooldown().length
     });
