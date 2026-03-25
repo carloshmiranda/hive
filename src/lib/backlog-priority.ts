@@ -11,6 +11,7 @@ export interface BacklogItem {
   status: string;
   created_at: string;
   notes?: string;         // attempt tracking, dispatch notes
+  spec?: Record<string, any>;  // planning phase output (acceptance criteria, affected files, approach)
 }
 
 export interface BacklogSignals {

@@ -792,7 +792,14 @@ jobs:
 
             1. Read CLAUDE.md, BRIEFING.md, MISTAKES.md for context
             2. Parse the task description from PAYLOAD to understand what to build
-            3. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
+            3. **Check PAYLOAD for a `spec` field.** If present, this is a pre-analyzed implementation plan:
+               - `spec.acceptance_criteria`: What "done" looks like — verify ALL criteria before committing
+               - `spec.affected_files`: Read THESE files first (pre-identified as relevant). Do NOT spend turns exploring the codebase.
+               - `spec.approach`: Follow these steps in order. They were designed for this codebase.
+               - `spec.risks`: Be aware of these — test accordingly
+               - `spec.complexity` and `spec.estimated_turns`: Budget your turns. S=quick, M=moderate, L=large.
+               If the spec exists, go straight to implementation. Do NOT explore or re-plan.
+            4. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
                `git checkout -b <branch>`
             4. Implement the change
             5. Run `npx next build` — fix any errors until it passes

@@ -230,7 +230,10 @@ export async function POST(req: Request) {
   // Fetch ready backlog items (exclude manually-blocked items and recently-failed items)
   const backlogItems = await sql`
     SELECT * FROM hive_backlog
-    WHERE status IN ('ready', 'approved')
+    WHERE (
+      status IN ('ready', 'approved')
+      OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
+    )
     AND NOT (
       notes ILIKE '%[attempt %]%'
       AND created_at > NOW() - INTERVAL '30 minutes'
@@ -399,7 +402,42 @@ export async function POST(req: Request) {
     }
   }
 
-  // Build task with failure context
+  // Planning phase — generate spec before dispatching (P0 hotfixes bypass)
+  let spec = topItem.spec || null;
+  if (!spec && topItem.priority !== "P0") {
+    try {
+      await sql`
+        UPDATE hive_backlog SET status = 'planning' WHERE id = ${topItem.id}
+      `.catch(() => {});
+
+      const { generateSpec } = await import("@/lib/backlog-planner");
+      spec = await generateSpec(
+        {
+          id: topItem.id,
+          title: topItem.title,
+          description: topItem.description,
+          priority: topItem.priority,
+          category: topItem.category,
+          notes: topItem.notes,
+        },
+        sql
+      );
+
+      if (spec) {
+        await sql`
+          UPDATE hive_backlog SET spec = ${JSON.stringify(spec)} WHERE id = ${topItem.id}
+        `.catch(() => {});
+        console.log(`[backlog] Spec generated for "${topItem.title}" — complexity: ${spec.complexity}, turns: ${spec.estimated_turns}`);
+      } else {
+        console.log(`[backlog] Spec generation failed for "${topItem.title}" — dispatching without spec`);
+      }
+    } catch (e) {
+      console.warn(`[backlog] Planning phase error:`, e instanceof Error ? e.message : "unknown");
+      // Non-blocking — dispatch proceeds without spec
+    }
+  }
+
+  // Build task with failure context + spec
   let taskDescription = topItem.description;
   if (previousErrors) {
     taskDescription += `\n\n⚠️ PREVIOUS ATTEMPTS FAILED (attempt ${attemptCount + 1}):\n${previousErrors}\n\nDo NOT repeat the same approach. Analyze why it failed and try a different strategy.`;
@@ -419,6 +457,7 @@ export async function POST(req: Request) {
         priority_score: topItem.priority_score,
         attempt: attemptCount + 1,
         chain_next: true,
+        spec: spec || undefined,
       },
     }),
     signal: AbortSignal.timeout(10000),

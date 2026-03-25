@@ -402,6 +402,7 @@ CREATE TABLE hive_backlog (
   status        TEXT NOT NULL DEFAULT 'ready' CHECK (status IN (
                   'ready',         -- available for dispatch
                   'approved',      -- Carlos approved (for P2/P3 needing gate)
+                  'planning',      -- spec generation in progress
                   'dispatched',    -- sent to Engineer
                   'in_progress',   -- Engineer is working on it
                   'pr_open',       -- PR created, awaiting merge
@@ -413,6 +414,7 @@ CREATE TABLE hive_backlog (
   dispatch_id   TEXT,              -- agent_action id when dispatched
   pr_number     INTEGER,           -- PR created for risky changes
   pr_url        TEXT,
+  spec          JSONB,             -- planning phase output (acceptance criteria, affected files, approach)
   notes         TEXT,              -- resolution notes, blockers, etc.
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   dispatched_at TIMESTAMPTZ,
