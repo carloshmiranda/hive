@@ -19,6 +19,7 @@ type AgentProfile = {
   by_company: Record<string, { success_rate: number }>;
   strengths: string[];
   weaknesses: string[];
+  recent_prs: Array<{ pr_number: number; branch: string; changed_files?: string[]; finished_at: string }>;
 };
 
 export type AgentProfilesResult = {
@@ -40,6 +41,7 @@ export async function getAgentProfiles(): Promise<AgentProfilesResult> {
       aa.status,
       aa.error,
       aa.company_id,
+      aa.output,
       c.slug,
       EXTRACT(EPOCH FROM (aa.finished_at - aa.started_at))::int as duration_s,
       aa.finished_at
@@ -175,6 +177,30 @@ export async function getAgentProfiles(): Promise<AgentProfilesResult> {
       else if (stats.success_rate < 0.5) weaknesses.push(at);
     }
 
+    // Extract recent PRs from successful actions
+    const recent_prs: Array<{ pr_number: number; branch: string; changed_files?: string[]; finished_at: string }> = [];
+    for (const a of agentActions) {
+      if (a.status === "success" && a.output) {
+        try {
+          const output = typeof a.output === 'string' ? JSON.parse(a.output) : a.output;
+          const prTracking = output?.pr_tracking;
+          if (prTracking && prTracking.pr_number && prTracking.branch) {
+            recent_prs.push({
+              pr_number: Number(prTracking.pr_number),
+              branch: String(prTracking.branch),
+              changed_files: Array.isArray(prTracking.changed_files) ? prTracking.changed_files : undefined,
+              finished_at: a.finished_at
+            });
+          }
+        } catch {
+          // Ignore JSON parse errors
+        }
+      }
+    }
+    // Sort by most recent first and limit to 10
+    recent_prs.sort((a, b) => new Date(b.finished_at).getTime() - new Date(a.finished_at).getTime());
+    recent_prs.splice(10);
+
     profiles[agent] = {
       overall_success_rate: Math.round(overallRate * 100) / 100,
       trend,
@@ -183,6 +209,7 @@ export async function getAgentProfiles(): Promise<AgentProfilesResult> {
       by_company: companyStats,
       strengths,
       weaknesses,
+      recent_prs,
     };
 
     // Generate recommendations
