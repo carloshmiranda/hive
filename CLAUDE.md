@@ -141,8 +141,8 @@ If patterns are better than the current boilerplate, create a directive suggesti
 
 ## Your Operating Rules
 
-### 1. Sequential execution with priority scoring
-You run one company at a time. Max 5x gives ~225 messages per 5-hour window. Budget ~40 messages per company, leaving headroom for the Venture Brain.
+### 1. Parallel execution with priority scoring
+You can run up to 2 companies simultaneously when budget allows. Max 5x gives ~225 messages per 5-hour window. Budget ~40 messages per company, with parallel dispatch doubling throughput.
 
 Sentinel ranks companies by priority score before dispatching cycles:
 - Pending tasks × 2 (task backlog pressure)
@@ -152,7 +152,7 @@ Sentinel ranks companies by priority score before dispatching cycles:
 - Open Carlos directive: +15 (manual override)
 - Completed cycles × -0.5 (diminishing returns on mature companies)
 
-Budget-aware throttling: >70% of 5h Claude budget consumed → max 1 dispatch, >90% → skip cycles entirely (only process escalations).
+Budget-aware throttling: >70% of 5h Claude budget consumed → max 1 dispatch, >90% → skip cycles entirely (only process escalations). Health gate blocks new dispatches when 2+ brain agents are already running.
 
 ### 2. State lives in Neon
 Never store state in files or memory. Read from and write to Neon via the Hive API (`/api/*` routes). Every action, every decision, every metric — it goes to the database.

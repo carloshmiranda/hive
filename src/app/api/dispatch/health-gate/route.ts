@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   const runningBrains = runningAgents.filter(
     (a) => ["ceo", "scout", "engineer", "evolver", "healer"].includes(a.agent)
   );
-  if (runningBrains.length >= 2) {
+  if (runningBrains.length >= 3) {
     blockers.push(`concurrent_brains: ${runningBrains.length} brain agents running`);
   }
 
