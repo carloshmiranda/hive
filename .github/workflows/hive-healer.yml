@@ -76,7 +76,10 @@ jobs:
           }
 
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            PAYLOAD='${{ toJson(github.event.client_payload) }}'
+            # Use heredoc to avoid single-quote / special char breakage in JSON payloads
+            read -r -d '' PAYLOAD <<'PAYLOAD_EOF' || true
+${{ toJson(github.event.client_payload) }}
+PAYLOAD_EOF
             set_output "trigger" "${{ github.event.action }}"
             set_output "payload" "${PAYLOAD}"
           else

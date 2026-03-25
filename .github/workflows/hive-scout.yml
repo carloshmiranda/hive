@@ -87,7 +87,10 @@ jobs:
 
           if [ "$EVENT" = "repository_dispatch" ]; then
             ACTION="${{ github.event.action }}"
-            PAYLOAD='${{ toJson(github.event.client_payload) }}'
+            # Use heredoc to avoid single-quote / special char breakage in JSON payloads
+            read -r -d '' PAYLOAD <<'PAYLOAD_EOF' || true
+${{ toJson(github.event.client_payload) }}
+PAYLOAD_EOF
             set_output "trigger" "${ACTION}"
             set_output "payload" "${PAYLOAD}"
           else
@@ -227,12 +230,18 @@ jobs:
           # Extract company from agent output (handles JSON in code blocks, prose, or raw)
           COMPANY=$(echo "$RESULT" | grep -oP '"company"\s*:\s*"\K[^"]+' | head -1 || echo "")
           if [ -z "$COMPANY" ]; then
-            COMPANY=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company // ""' 2>/dev/null || echo "")
+            COMPANY=$(cat <<'JQEOF' | jq -r '.company // ""' 2>/dev/null || echo ""
+${{ toJson(github.event.client_payload) }}
+JQEOF
+            )
           fi
           # Also extract company_id
           COMPANY_ID=$(echo "$RESULT" | grep -oP '"company_id"\s*:\s*"\K[^"]+' | head -1 || echo "")
           if [ -z "$COMPANY_ID" ]; then
-            COMPANY_ID=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company_id // ""' 2>/dev/null || echo "")
+            COMPANY_ID=$(cat <<'JQEOF' | jq -r '.company_id // ""' 2>/dev/null || echo ""
+${{ toJson(github.event.client_payload) }}
+JQEOF
+            )
           fi
           echo "Company: $COMPANY | Company ID: $COMPANY_ID"
 
