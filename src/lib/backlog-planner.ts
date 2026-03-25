@@ -104,13 +104,14 @@ function findRelevantFiles(
 /**
  * Filter backlog items to exclude those in cooldown period
  * Also performs cleanup of expired cooldown entries
+ * P0 items bypass cooldown filtering
  */
 export function filterBacklogItemsByCooldown(items: BacklogItem[]): BacklogItem[] {
   // Clean up expired entries first
   cleanupFailedItemsCache();
 
-  // Filter out items that are in cooldown
-  return items.filter(item => !isBacklogItemInCooldown(item.id));
+  // Filter out items that are in cooldown, except P0 items which bypass cooldown
+  return items.filter(item => item.priority === 'P0' || !isBacklogItemInCooldown(item.id));
 }
 
 // Generate a spec for a backlog item using a cheap LLM call

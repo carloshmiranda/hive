@@ -67,12 +67,16 @@ export async function POST(req: Request) {
       // Engineer "success" means PR created, NOT code merged.
       // Move to 'pr_open' so it stays visible until PR is merged.
       // Sentinel or a webhook will mark 'done' after merge.
+      // Also reset cooldown for this successful item (helps with circuit breaker reset logic)
       await sql`
         UPDATE hive_backlog
         SET status = 'pr_open', dispatched_at = NOW(),
             notes = COALESCE(notes, '') || ' PR created via chain dispatch — awaiting merge.'
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
+
+      // Reset cooldown for successfully completed item (circuit breaker reset)
+      resetBacklogItemCooldown(completed_id);
     } else {
       // Failed: learn from it. Track attempts, decompose if too big.
       const [item] = await sql`
@@ -181,44 +185,64 @@ export async function POST(req: Request) {
     }
   }
 
-  // Backlog circuit breaker: check last 5 Engineer backlog runs
-  // If >50% failed, pause cascade for 1 hour to prevent cascading failures
+  // Backlog circuit breaker: check unique failed items, not total runs
+  // If 5+ unique items failed in 24h, pause cascade for 15 minutes to prevent cascading failures
   // Bypass: P0 items always dispatch, and force=true skips the breaker
   const hasP0Ready = await sql`
     SELECT id FROM hive_backlog WHERE priority = 'P0' AND status IN ('ready', 'approved', 'planning') LIMIT 1
   `.catch(() => []);
   const forceDispatch = body.force === true || hasP0Ready.length > 0;
 
-  const recentBacklogRuns = await sql`
-    SELECT status, finished_at
+  // Get unique failed backlog items in last 24h (not total run count)
+  const recentFailedItems = await sql`
+    SELECT DISTINCT
+      COALESCE((output->>'backlog_id')::text, 'unknown') as backlog_id,
+      MAX(finished_at) as most_recent_failure
     FROM agent_actions
     WHERE agent = 'engineer'
     AND action_type = 'feature_request'
     AND (company_id IS NULL OR company_id = (SELECT id FROM companies WHERE slug = '_hive'))
+    AND status = 'failed'
     AND finished_at > NOW() - INTERVAL '24 hours'
-    ORDER BY finished_at DESC
-    LIMIT 5
+    GROUP BY COALESCE((output->>'backlog_id')::text, 'unknown')
   `.catch(() => []);
 
-  if (recentBacklogRuns.length >= 3) {
-    const failedCount = recentBacklogRuns.filter(run => run.status === 'failed').length;
-    const failureRate = failedCount / recentBacklogRuns.length;
+  if (recentFailedItems.length >= 5 && !forceDispatch) {
+    // Check if any failure was within the last 15 minutes (circuit breaker window)
+    const mostRecentFailure = recentFailedItems.reduce((latest, item) => {
+      return new Date(item.most_recent_failure) > new Date(latest.most_recent_failure) ? item : latest;
+    });
 
-    if (failureRate > 0.5 && !forceDispatch) {
-      // Check if the most recent failure was within the last hour (circuit breaker window)
-      const mostRecentFailure = recentBacklogRuns.find(run => run.status === 'failed');
-      if (mostRecentFailure) {
-        const hoursSinceFailure = (Date.now() - new Date(mostRecentFailure.finished_at).getTime()) / (1000 * 60 * 60);
+    if (mostRecentFailure) {
+      const minutesSinceFailure = (Date.now() - new Date(mostRecentFailure.most_recent_failure).getTime()) / (1000 * 60);
 
-        if (hoursSinceFailure <= 1) {
+      if (minutesSinceFailure <= 15) {
+        // Circuit breaker is tripped, but check if it should reset due to recent success of a different item
+        const recentSuccess = await sql`
+          SELECT
+            COALESCE((output->>'backlog_id')::text, 'unknown') as backlog_id,
+            finished_at
+          FROM agent_actions
+          WHERE agent = 'engineer'
+          AND action_type = 'feature_request'
+          AND (company_id IS NULL OR company_id = (SELECT id FROM companies WHERE slug = '_hive'))
+          AND status = 'success'
+          AND finished_at > NOW() - INTERVAL '15 minutes'
+          ORDER BY finished_at DESC
+          LIMIT 1
+        `.catch(() => []);
+
+        // Reset breaker if a different item succeeded recently
+        const hasRecentSuccess = recentSuccess.length > 0;
+        const isDifferentItem = hasRecentSuccess && recentSuccess[0].backlog_id !== mostRecentFailure.backlog_id;
+
+        if (!isDifferentItem) {
           return json({
             dispatched: false,
             reason: "circuit_breaker",
-            detail: "backlog_failures",
-            failed_runs: failedCount,
-            total_runs: recentBacklogRuns.length,
-            failure_rate: Math.round(failureRate * 100),
-            cooldown_remaining_minutes: Math.round(60 - (hoursSinceFailure * 60))
+            detail: "unique_backlog_failures",
+            unique_failed_items: recentFailedItems.length,
+            cooldown_remaining_minutes: Math.round(15 - minutesSinceFailure)
           });
         }
       }
@@ -508,7 +532,7 @@ export async function POST(req: Request) {
     `.catch(() => []);
 
     const blocksAgents = detectBlockedAgents(item.title, item.description);
-    const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
+    const daysSinceCreated = Math.max(0, (Date.now() - new Date((item as any).created_at).getTime()) / 86400000);
     const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
 
     const scored = computeBacklogScore(item as BacklogItem, {
