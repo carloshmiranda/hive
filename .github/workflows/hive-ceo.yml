@@ -199,14 +199,31 @@ jobs:
         if: always() && steps.agent.outcome == 'failure'
         run: |
           npm install --no-save postgres 2>/dev/null
-          # Try action output first, then known fallback path
           EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
-          if [ ! -f "$EXEC_FILE" ] || [ -z "$EXEC_FILE" ]; then
+          if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
             EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
           fi
-          SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
-          TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
-          COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
+            SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+            TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+            COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+            ERROR_MSG=$(jq -r '
+              (.[-1].error // null) as $e1 |
+              (.[-1].result // null) as $e2 |
+              ([.[] | select(.type == "system" or .type == "error")] | last | .error // .result // null) as $e3 |
+              ($e1 // $e2 // $e3 // "No error detail in execution output") | tostring | .[0:300]
+            ' "$EXEC_FILE" 2>/dev/null || echo "Failed to parse execution file")
+          else
+            SUBTYPE="workflow_crash"
+            TURNS="0"
+            COST="0"
+            ERROR_MSG="No execution output — CEO agent never started. Run: ${RUN_URL}"
+          fi
+
+          ERROR_FULL="error_${SUBTYPE}: ${ERROR_MSG} (${TURNS} turns) ${RUN_URL}"
 
           node -e "
           const postgres = require('postgres');
@@ -215,15 +232,15 @@ jobs:
             await sql\`
               INSERT INTO agent_actions (agent, action_type, status, error, output, started_at, finished_at)
               VALUES ('ceo', '${{ steps.context.outputs.trigger }}', 'failed',
-                \${'error_' + '${SUBTYPE}' + ': exhausted after ${TURNS} turns'},
-                \${JSON.stringify({subtype: '${SUBTYPE}', turns: parseInt('${TURNS}'), cost: parseFloat('${COST}')})}::jsonb,
+                \${process.env.ERROR_FULL},
+                \${JSON.stringify({subtype: '${SUBTYPE}', turns: parseInt('${TURNS}'), cost: parseFloat('${COST}'), run_url: '${RUN_URL}'})}::jsonb,
                 NOW() - INTERVAL '${TURNS} minutes', NOW())
             \`;
             await sql.end();
           }
           log().catch(e => console.error('DB log failed:', e.message));
           "
-          echo "Logged CEO failure: $SUBTYPE ($TURNS turns)"
+          echo "Logged CEO failure: $SUBTYPE ($TURNS turns) — ${ERROR_MSG:0:100}"
 
       - name: Chain dispatch
         if: always() && steps.agent.outcome == 'success'

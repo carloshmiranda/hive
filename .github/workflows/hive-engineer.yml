@@ -859,15 +859,36 @@ jobs:
           HIVE_URL="https://hive-phi.vercel.app"
           COMPANY=$(echo "${PAYLOAD_JSON}" | jq -r '.company // empty' 2>/dev/null || echo "")
 
-          # Extract error subtype for decompose logic (e.g., error_max_turns)
+          # Extract error subtype and message for decompose logic + chain propagation
           ERROR_TYPE=""
+          ERROR_DETAIL=""
           if [ "$STATUS" = "failed" ]; then
             EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
             if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
               EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
             fi
-            ERROR_TYPE=$(jq -r '.[-1].subtype // ""' "$EXEC_FILE" 2>/dev/null || echo "")
-            echo "  Error type: $ERROR_TYPE"
+
+            if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
+              # Get subtype from last entry (works for all exit types)
+              ERROR_TYPE=$(jq -r '.[-1].subtype // ""' "$EXEC_FILE" 2>/dev/null || echo "")
+              # Get error message: try .error, .result, then scan for any error in the array
+              ERROR_DETAIL=$(jq -r '(.[-1].error // .[-1].result // ([.[] | select(.type == "system" or .type == "error" or .type == "result")] | last | .error // .result // "")) | tostring | .[0:300]' "$EXEC_FILE" 2>/dev/null || echo "")
+              TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+              echo "  Error type: $ERROR_TYPE | Detail: ${ERROR_DETAIL:0:100} | Turns: $TURNS"
+            else
+              # Claude never started — no execution file produced
+              ERROR_TYPE="workflow_crash"
+              ERROR_DETAIL="No execution output file — Claude agent never started. Check workflow logs."
+              echo "  Error type: $ERROR_TYPE (no exec file at $EXEC_FILE)"
+            fi
+
+            # Fallback: if still empty, capture GitHub Actions step conclusion
+            if [ -z "$ERROR_TYPE" ]; then
+              ERROR_TYPE="error_unknown"
+            fi
+            if [ -z "$ERROR_DETAIL" ]; then
+              ERROR_DETAIL="Agent step outcome=${{ steps.agent.outcome }}, conclusion=${{ steps.agent.conclusion }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            fi
           fi
 
           if [ -n "$BACKLOG_ID" ] || [ "$(echo "${PAYLOAD_JSON}" | jq -r '.chain_next // false')" = "true" ]; then
@@ -876,7 +897,7 @@ jobs:
             BACKLOG_RESULT=$(curl -s -X POST "$HIVE_URL/api/backlog/dispatch" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\",\"error\":\"${ERROR_TYPE}\"}" || echo "{}")
+              -d "{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\",\"error\":\"${ERROR_TYPE}: ${ERROR_DETAIL:0:200}\"}" || echo "{}")
             echo "  Backlog result: $BACKLOG_RESULT"
 
             # If no backlog items left, chain to next company cycle
@@ -900,22 +921,41 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
 
-          # Extract the actual error from Claude's execution output
+          # Extract error from Claude's execution output
           EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
-          if [ ! -f "$EXEC_FILE" ] || [ -z "$EXEC_FILE" ]; then
+          if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
             EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
           fi
-          # Get the last error/result from Claude's output
-          ERROR_MSG=$(jq -r '[.[] | select(.type == "result" or .type == "error")] | last | .error // .result // "unknown"' "$EXEC_FILE" 2>/dev/null | head -c 500 || echo "unknown")
-          SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
-          TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
+            # File exists — extract from last entry (covers all exit types: result, error, system)
+            SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+            TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+            # Try multiple error locations: .error on last, .result on last, scan for system/error types
+            ERROR_MSG=$(jq -r '
+              (.[-1].error // null) as $e1 |
+              (.[-1].result // null) as $e2 |
+              ([.[] | select(.type == "system" or .type == "error")] | last | .error // .result // null) as $e3 |
+              ($e1 // $e2 // $e3 // "No error message in execution output") | tostring | .[0:500]
+            ' "$EXEC_FILE" 2>/dev/null || echo "Failed to parse execution file")
+          else
+            # No execution file — Claude never started
+            SUBTYPE="workflow_crash"
+            TURNS="0"
+            ERROR_MSG="No execution output file produced. Claude agent never started. Likely: payload too large, workflow syntax error, or GitHub Actions resource issue. Run: ${RUN_URL}"
+          fi
+
           TASK=$(echo "${PAYLOAD_JSON}" | jq -r '.task // "Hive-internal work"' 2>/dev/null | head -c 100 || echo "unknown")
 
           # Escape for JSON
           ERROR_ESCAPED=$(echo "$ERROR_MSG" | jq -Rs '.' | sed 's/^"//;s/"$//')
           TASK_ESCAPED=$(echo "$TASK" | jq -Rs '.' | sed 's/^"//;s/"$//')
 
+          echo "Logging failure: subtype=$SUBTYPE turns=$TURNS error=${ERROR_MSG:0:100}"
+
           curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"failed\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns)\"}" || true
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"failed\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns) ${RUN_URL}\"}" || true
