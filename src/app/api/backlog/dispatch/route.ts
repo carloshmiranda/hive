@@ -511,10 +511,6 @@ export async function POST(req: Request) {
     }
   }
 
-  // Apply cooldown filter to remove recently failed items
-  const automatableFiltered = filterBacklogItemsByCooldown(automatable);
-  const cooldownCount = automatable.length - automatableFiltered.length;
-
   // Mark manual items as blocked so they don't get re-evaluated every cycle
   for (const item of manualItems) {
     if (item.status === "ready") {
@@ -547,6 +543,85 @@ export async function POST(req: Request) {
     }).catch(() => {});
   }
 
+  // Detect items that need decomposition (problem statements vs actionable tasks)
+  // Problem statements describe what's wrong without specifying what to build/fix,
+  // causing Claude to exhaust at 0 turns. Flag these for manual decomposition.
+  const decompositionItems: any[] = [];
+  const actionableItems: any[] = [];
+  for (const item of automatable) {
+    const description = (item.description || '').toLowerCase();
+    const title = (item.title || '').toLowerCase();
+    const combined = `${title} ${description}`;
+
+    // Indicators of problem statements (what's wrong, not what to do)
+    const problemIndicators = [
+      /\b(error|bug|issue|problem|broken|failing|not working|doesn't work)\b/,
+      /\b(97\+ wasted|eliminate|unblock)\b/,  // From this specific task
+      /\b(causing .* to exhaust|exhausted after 0 turns)\b/,
+      /\b(problems?:|issues?:|errors?:)\b/,
+      /\b(we have|there is|there are) .* (error|issue|problem)/,
+    ];
+
+    // Indicators of actionable tasks (what to build/fix)
+    const actionIndicators = [
+      /\b(add|create|build|implement|update|fix|refactor|remove|delete)\b/,
+      /\b(write|generate|install|configure|setup|deploy)\b/,
+      /\b(change .* to|replace .* with|move .* to)\b/,
+      /\b(in .*(\.ts|\.js|\.tsx|\.jsx|\.md|\.sql|\.yml|\.yaml))\b/,  // Mentions specific files
+    ];
+
+    const hasProblemIndicators = problemIndicators.some(pattern => pattern.test(combined));
+    const hasActionIndicators = actionIndicators.some(pattern => pattern.test(combined));
+
+    // Flag as needing decomposition if:
+    // 1. Has problem indicators but no clear action indicators, OR
+    // 2. Description is very short (< 50 chars) and vague
+    const isVague = description.length < 50 && !hasActionIndicators;
+    const isProblemStatement = hasProblemIndicators && !hasActionIndicators;
+
+    if (isProblemStatement || isVague) {
+      decompositionItems.push(item);
+    } else {
+      actionableItems.push(item);
+    }
+  }
+
+  // Mark decomposition items as needing manual breakdown
+  for (const item of decompositionItems) {
+    if (item.status === "ready") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', notes = COALESCE(notes, '') || ' [needs_decomposition] Problem statement without actionable task — needs breakdown before dispatch.'
+        WHERE id = ${item.id} AND status = 'ready'
+      `.catch(() => {});
+    }
+  }
+
+  // Notify about items that need decomposition
+  if (decompositionItems.length > 0) {
+    const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+    const titles = decompositionItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
+    await fetch(`${baseUrl}/api/notify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.CRON_SECRET}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent: "backlog",
+        action: "decomposition_needed",
+        company: "hive",
+        status: "needs_breakdown",
+        summary: `${decompositionItems.length} backlog item(s) need decomposition (problem statements):\n${titles}`,
+      }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  }
+
+  // Apply cooldown filter to remove recently failed items from actionable items
+  const automatableFiltered = filterBacklogItemsByCooldown(actionableItems);
+  const cooldownCount = actionableItems.length - automatableFiltered.length;
+
   const backlogItemsFiltered = automatableFiltered;
 
   if (backlogItemsFiltered.length === 0) {
@@ -558,6 +633,7 @@ export async function POST(req: Request) {
       dispatched: false,
       reason,
       manual_blocked: manualItems.length,
+      decomposition_blocked: decompositionItems.length,
       cooldown_blocked: cooldownCount,
       items_in_cooldown: getFailedItemsInCooldown().length,
       ...extra
