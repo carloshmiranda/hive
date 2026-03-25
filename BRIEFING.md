@@ -44,20 +44,27 @@
   - Zero metrics across all companies — stats endpoints broken at company level
   - Groq rate limiting (429) on concurrent Ops dispatches
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
-  - Groq rate limiting (429) on concurrent Ops dispatches
-  - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
 - **Recently fixed:**
-  - 5 loop quality improvements: circuit breaker P0 bypass, auto_resolve retry cap (all statuses), evolver proposal quality gate, Sentinel Check 41 PR verification, max_attempts 5→3
-  - Merged 4 PRs (#23 sentinel DB check, #29 context caching, #34 validation system, #35 cascade dispatch fix)
-  - Stuck cycle cleanup — VERCEL_URL missing https://, now uses NEXT_PUBLIC_URL
-  - Phantom pr_open cleanup (Check 40) + schema drift noise reduction
-  - Error extraction in all 4 agent workflows
+  - CEO dispatch DOA fixed: prompt reduced 67% (removed CLAUDE.md read, extracted PR review to file, trigger-specific context)
+  - Engineer PR tracking in chain callback (extracts PR# from execution output)
+  - 3 new company-health checks: dispatch verification (43), stale safety net (44), stuck PRs (45)
+  - Evolver quality gate + problem statement detection (PR #42)
+  - Backlog retry loop eliminated (max_attempts=3, problem detection, circuit breaker)
+  - 5 loop quality improvements: circuit breaker P0 bypass, auto_resolve retry cap, evolver quality gate, Check 41 PR verification, max_attempts 5→3
+  - Error extraction in all 4 agent workflows + 0-turn ghost fix (log as 'skipped')
   - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
-  - Sentinel dispatch loop — 94 dispatches in 48h fixed
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-25 [code] CEO dispatch fix + Engineer PR tracking + 3 health checks + backlog cleanup
+- **CEO dispatch DOA fixed (P0)**: Root cause was 1576 lines of context loading burning all turns. Removed CLAUDE.md read (670 lines), extracted PR review to `prompts/ceo-review.md`, made context trigger-specific. 67% reduction for ceo_review, 43% for cycle_start.
+- **Engineer PR tracking**: Chain callback now extracts PR number from execution output and passes to backlog dispatch. Enables automatic pr_open status tracking.
+- **3 new company-health checks**: Check 43 (dispatch verification — detect silent failures), Check 44 (stale company safety net — dispatch after 6h inactivity), Check 45 (stuck PRs with green CI — dispatch CEO review).
+- **Problem statement detection**: PR #42 merged — `isProblemStatement()` in backlog-planner.ts flags vague items as needing decomposition. Prevents dispatch of unactionable items.
+- **25+ P0 items marked done**: CEO cycle-complete dispatch, Engineer PR tracking (all sub-tasks), improvement loop dead-end (all sub-tasks), backlog retry re-dispatch, dispatch verification, stale safety net, stuck PRs.
+- **P0 count reduced from 20+ to 1** (email domain — manual/blocked). Sentinel event-driven migration downgraded P0→P1.
 
 ### 2026-03-25 [code] CEO review saving + pr_open enforcement + Telegram enrichment + 0-turn fix
 - **CEO review saving**: workflow now provides CRON_SECRET + HIVE_URL and instructs CEO to save review JSON via API. Fixes broken validation scoring, kill signals, agent grading.

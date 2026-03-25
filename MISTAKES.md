@@ -459,6 +459,13 @@
 **Fix applied:** Fixed all 3 queries, added try/catch error boundary that returns the actual error message and stack trace, updated live DB constraint.
 **Prevention:** (1) Always add error boundaries to cron handlers — silent 500s are undebuggable. (2) After writing SQL queries, verify column names against `information_schema.columns`. (3) When adding new enum values to schema.sql, also run the ALTER on the live DB or add a migration step.
 
+### 2026-03-25 CEO repository_dispatch 12/12 failed — prompt too large for max_turns
+**What happened:** CEO agent via repository_dispatch failed 12/12 times since 3/21 (100% failure rate). cycle_task (direct Vercel call) worked fine.
+**Root cause:** The inline prompt told the agent to read BRIEFING.md (454 lines) + CLAUDE.md (670 lines) + prompts/ceo.md (452 lines) = 1,576 lines of context before starting work. The agent burned 10-15 of its 40 turns just reading files and making DB queries, leaving insufficient turns for actual work.
+**Fix applied:** Removed CLAUDE.md read (CEO doesn't need architecture details). Extracted 62-line PR review block into `prompts/ceo-review.md` (only loaded for ceo_review trigger). Made context loading trigger-specific (skip BRIEFING.md for simple triggers). Reduced inline prompt from ~100 to 41 lines. Context reduction: 67% for ceo_review, 43% for cycle_start.
+**Prevention:** When writing agent prompts for GitHub Actions, calculate total context size (inline + referenced files + DB queries) and ensure it fits within ~50% of max_turns. The other 50% is for actual work. Never tell agents to read files they don't need for the specific trigger.
+**Affects:** hive
+
 ### 2026-03-25 Schema-map drift breaks all PR CI
 **What happened:** All open PRs (10+) failed CI because `scripts/lint-sql.ts` uses `src/lib/schema-map.ts` as a static copy of DB schema constraints. When agents added new values (agent names, gate types, columns), the map wasn't updated → every PR failed the SQL lint check.
 **Root cause:** `schema-map.ts` is manually maintained — no sync mechanism with `schema.sql`. Agent-generated code adds new enum values to schema.sql but never touches schema-map.ts.

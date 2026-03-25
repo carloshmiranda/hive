@@ -66,6 +66,27 @@ Hive has no public-facing documentation. CLAUDE.md is agent-focused, not human-r
 ### ✅ P1 — Fix CEO review not recording scores (DONE — 2026-03-25)
 CEO workflow now has `CRON_SECRET` + `HIVE_URL` env vars and explicit instructions to save review via `/api/cycles/[id]/review` after scoring. Review endpoint validates score (1-10), agent_grades, kill_flag, validation_phase.
 
+### ✅ P0 — Fix CEO dispatch DOA: 12/12 failed since 3/21 (DONE — 2026-03-25)
+Root cause: CEO agent burned all turns loading context (1576 lines across BRIEFING.md + CLAUDE.md + prompts/ceo.md). Fix: removed CLAUDE.md read, extracted PR review block to `prompts/ceo-review.md`, made context loading trigger-specific. Context reduction: 67% for ceo_review, 43% for cycle_start.
+
+### ✅ P0 — Engineer PR tracking in chain callback (DONE — 2026-03-25)
+Engineer workflow now extracts PR number from claude-code-action execution output and passes it to `/api/backlog/dispatch`. Enables automatic `pr_open` status tracking when Engineer creates PRs for backlog items. Also fixed parent item and all 3 decomposed sub-tasks.
+
+### ✅ P0 — Improvement loop dead-end: evolver quality gate (DONE — 2026-03-25)
+Evolver proposals now validated by quality gate (regex for file paths + actionable verbs). Vague proposals auto-rejected at Sentinel Check 38. Also added problem statement detection in `backlog-planner.ts` (PR #42 merged).
+
+### ✅ P0 — Backlog retry re-dispatch loop (DONE — 2026-03-25)
+Fixed by max_attempts=3 cap + problem statement detection (PR #42) + circuit breaker. 97 zero-turn failures on same item eliminated.
+
+### ✅ P1 — Dispatch verification: detect silent failures (DONE — 2026-03-25)
+Check 43 in company-health: detects dispatches that never produced a workflow run or agent action. Logs silent failures for debugging.
+
+### ✅ P1 — Sentinel stale company safety net (DONE — 2026-03-25)
+Check 44 in company-health: dispatches cycle_start for companies with no activity for >6h. Budget guard prevents excessive dispatches (max 3 CEO runs per 4h).
+
+### ✅ P1 — Detect PRs with green CI not merging (DONE — 2026-03-25)
+Check 45 in company-health: finds company repo PRs with all CI checks passing but open >2h. Dispatches CEO review to unblock them.
+
 ### 🟡 P1 — Engineer polling timeout false failures
 68% of Engineer failures are 20-minute GitHub Actions polling timeouts, not actual build failures. The build may succeed on the company repo but Hive's Engineer workflow times out waiting. Options: (1) increase polling timeout, (2) webhook-based callback from company repo, (3) don't count polling timeouts as failures in success rate calculations.
 
