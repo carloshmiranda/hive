@@ -36,17 +36,18 @@ server.registerTool(
     inputSchema: {
       status: z.enum(["ready", "approved", "planning", "dispatched", "in_progress", "pr_open", "done", "blocked", "rejected", "all"]).default("all").describe("Filter by status, or 'all'"),
       priority: z.enum(["P0", "P1", "P2", "P3", "all"]).default("all").describe("Filter by priority, or 'all'"),
+      theme: z.string().optional().describe("Filter by roadmap theme (e.g. 'dispatch_chain', 'self_improving')"),
       limit: z.number().default(50).describe("Max rows to return"),
     },
   },
-  async ({ status, priority }) => {
+  async ({ status, priority, theme }) => {
     const conditions = [];
-    const params = [];
     if (status !== "all") { conditions.push(`status = '${status}'`); }
     if (priority !== "all") { conditions.push(`priority = '${priority}'`); }
+    if (theme) { conditions.push(`theme = '${theme.replace(/'/g, "''")}'`); }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = await sql.query(`
-      SELECT id, priority, title, category, status, source, notes, pr_number,
+      SELECT id, priority, title, category, status, source, theme, notes, pr_number,
              created_at::date as created, dispatched_at, completed_at
       FROM hive_backlog ${where}
       ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END, created_at
@@ -65,13 +66,45 @@ server.registerTool(
   async () => {
     const byStatus = await sql`SELECT status, count(*)::int as count FROM hive_backlog GROUP BY status ORDER BY count DESC`;
     const byPriority = await sql`SELECT priority, status, count(*)::int as count FROM hive_backlog WHERE status NOT IN ('done','rejected') GROUP BY priority, status ORDER BY priority, status`;
+    const byTheme = await sql`SELECT COALESCE(theme, 'untagged') as theme, count(*)::int as total, count(*) FILTER (WHERE status = 'done')::int as done FROM hive_backlog GROUP BY theme ORDER BY total DESC`;
     const total = await sql`SELECT count(*)::int as total FROM hive_backlog`;
     return {
       content: [{
         type: "text",
-        text: JSON.stringify({ total: total[0].total, by_status: byStatus, by_priority: byPriority }, null, 2),
+        text: JSON.stringify({ total: total[0].total, by_status: byStatus, by_priority: byPriority, by_theme: byTheme }, null, 2),
       }],
     };
+  }
+);
+
+server.registerTool(
+  "hive_backlog_create",
+  {
+    description: "Create a new backlog item. Deduplicates by title prefix.",
+    inputSchema: {
+      title: z.string().describe("Short title for the backlog item"),
+      description: z.string().describe("Detailed description of the work"),
+      priority: z.enum(["P0", "P1", "P2", "P3"]).default("P2").describe("Priority level"),
+      category: z.enum(["feature", "bug", "refactor", "infra", "docs", "research"]).default("feature").describe("Category"),
+      source: z.string().default("brainstorm").describe("Origin (brainstorm, sentinel, evolver, manual)"),
+      theme: z.string().optional().describe("Roadmap theme (e.g. 'zero_intervention', 'dispatch_chain')"),
+    },
+  },
+  async ({ title, description, priority, category, source, theme }) => {
+    // Dedup check
+    const prefix = title.slice(0, 50);
+    const [existing] = await sql.query(
+      `SELECT id, title, status FROM hive_backlog WHERE status IN ('ready','approved','dispatched','in_progress') AND title ILIKE $1 LIMIT 1`,
+      [prefix + "%"]
+    );
+    if (existing) {
+      return { content: [{ type: "text", text: `Duplicate: "${existing.title}" (${existing.status}, id: ${existing.id})` }] };
+    }
+    const [item] = await sql.query(
+      `INSERT INTO hive_backlog (priority, title, description, category, source, theme) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, priority, title, status, theme`,
+      [priority, title, description, category, source, theme || null]
+    );
+    return { content: [{ type: "text", text: JSON.stringify(item, null, 2) }] };
   }
 );
 
@@ -83,17 +116,19 @@ server.registerTool(
       id: z.string().describe("Backlog item ID"),
       status: z.enum(["ready", "approved", "planning", "dispatched", "in_progress", "pr_open", "done", "blocked", "rejected"]).optional().describe("New status"),
       priority: z.enum(["P0", "P1", "P2", "P3"]).optional().describe("New priority"),
+      theme: z.string().optional().describe("Roadmap theme (e.g. 'dispatch_chain', 'self_improving')"),
       notes: z.string().optional().describe("Append to notes"),
     },
   },
-  async ({ id, status, priority, notes }) => {
+  async ({ id, status, priority, theme, notes }) => {
     const sets = [];
     if (status) sets.push(`status = '${status}'`);
     if (priority) sets.push(`priority = '${priority}'`);
+    if (theme) sets.push(`theme = '${theme.replace(/'/g, "''")}'`);
     if (notes) sets.push(`notes = COALESCE(notes, '') || ' ${notes.replace(/'/g, "''")}'`);
     if (status === "done") sets.push(`completed_at = NOW()`);
     if (sets.length === 0) return { content: [{ type: "text", text: "No updates specified" }] };
-    const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = '${id}' RETURNING id, title, status, priority, notes`);
+    const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = '${id}' RETURNING id, title, status, priority, theme, notes`);
     return { content: [{ type: "text", text: row ? JSON.stringify(row, null, 2) : `Item ${id} not found` }] };
   }
 );

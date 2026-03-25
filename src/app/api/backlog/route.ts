@@ -45,7 +45,7 @@ export async function POST(req: Request) {
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
-  const { priority, title, description, category, source } = body;
+  const { priority, title, description, category, source, theme } = body;
 
   if (!title || !description) {
     return err("title and description are required");
@@ -65,13 +65,14 @@ export async function POST(req: Request) {
   }
 
   const [item] = await sql`
-    INSERT INTO hive_backlog (priority, title, description, category, source)
+    INSERT INTO hive_backlog (priority, title, description, category, source, theme)
     VALUES (
       ${priority || "P2"},
       ${title},
       ${description},
       ${category || "feature"},
-      ${source || "brainstorm"}
+      ${source || "brainstorm"},
+      ${theme || null}
     )
     RETURNING *
   `;

@@ -7,7 +7,7 @@
 ## Current State
 
 - **Phase:** Two companies actively iterating. System operational.
-- **Architecture:** 7 agents, event-driven, 3 Vercel crons (metrics 2x/day, sentinel every 4h, digest daily 8am). Mac not required.
+- **Architecture:** 7 agents, event-driven, 3 scheduled crons + 1 delegated (metrics 2x/day, sentinel hourly, digest daily 8am; company-health fired by sentinel). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 26 cycles, last CEO score 2/10, waitlist + IRS guide (April 1 deadline)
@@ -33,7 +33,7 @@
 
 - **Events**: Stripe payments, deploys, GitHub issues/PRs → trigger agents directly
 - **Chains**: Agent A finishes → dispatches Agent B (brain agents via `repository_dispatch`, worker agents directly to Vercel `/api/agents/dispatch`)
-- **Data conditions**: Sentinel runs as Vercel cron every 4h → dispatches agents whose work conditions are met
+- **Data conditions**: Sentinel runs as Vercel cron hourly → dispatches agents whose work conditions are met
 - **Worker dispatch**: Growth/Outreach/Ops called directly from chain dispatch steps (no GitHub Actions proxy)
 
 - **Blocked on:**
@@ -91,6 +91,16 @@ Major session focused on unblocking cascade and adding strategic depth:
   - Agent specialization (10): Experience replay, domain-scoped playbook, blame-attributed grading, skill registry, Growth autonomy, Engineer autonomy, domain knowledge cron, Evolver grade reading, subdomain provisioning, domain graduation
 - **Research captured**: Comprehensive venture orchestration research (BML loops, RICE/ICE, pivot detection, portfolio theory, OKR automation, competitive intelligence, growth experiments, revenue optimization) saved to scratch files.
 - **Healer hitting max_turns on config issue**: Healer exhausted 35 turns trying to fix "Neon API key not configured" — a settings issue, not a code bug. Need Healer to classify config-vs-code errors.
+
+### 2026-03-25 [code] Roadmap restructuring + Sentinel split + Scout/UI gap analysis
+Major session focused on strategic infrastructure and unblocking the autonomous loop:
+- **Outcome-based roadmap**: Rewrote ROADMAP.md from checkbox-based to outcome-based. 8 themes (`dispatch_chain`, `first_revenue`, `zero_intervention`, `self_healing`, `self_improving`, `code_quality`, `portfolio_intelligence`, `full_autonomy`) linked to `hive_backlog.theme` column. Progress auto-computed from DB.
+- **Theme system**: Added `theme` column to hive_backlog schema. Tagged 147/158 backlog items via 3-pass ILIKE matching. MCP server updated with theme filters. `/api/roadmap/progress` endpoint returns per-theme and per-phase progress.
+- **Portfolio roadmap integration**: Portfolio API and consolidation endpoint now include theme progress data.
+- **Sentinel monolith split (ADR-030)**: Extracted 6 HTTP-heavy checks (stats endpoints, language, stale records, test coverage, PR auto-merge, broken deploys) from Sentinel (3426→2933 lines) into new `/api/cron/company-health` endpoint. Sentinel fires it as non-blocking fetch. Both get their own 60s timeout — previously checks after line ~1900 never executed due to Vercel timeout.
+- **Scout gap analysis**: Identified 10 gaps in scouting pipeline (disconfirming evidence, source triangulation, TAM estimation, time-decay scoring, etc.). Added as backlog items.
+- **UI/UX gap analysis**: Identified 8 gaps (design system tokens, component library, accessibility, responsive testing, etc.). Added as backlog items with opportunistic migration pattern for existing companies.
+- **Orphan PR fix**: Found 10 `pr_open` items clogging pipeline with no actual PRs. Linked 4 real PRs, reset 6 orphans to `ready`.
 
 ### 2026-03-25 [code] Autonomy unblock + planning phase + LLM optimization
 Major session focused on making Hive self-evolving:

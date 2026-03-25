@@ -177,33 +177,39 @@ Only these workflow files can request tokens:
 
 ---
 
-## Sentinel: Health Monitor (every 4 hours)
+## Sentinel: Health Monitor (hourly)
 
-The Sentinel is the only scheduled cron. It checks 20 health conditions and dispatches the right agent.
+Sentinel is the primary scheduled cron. It runs 39 checks split across two endpoints for timeout safety (ADR-030).
 
+**Sentinel** (`/api/cron/sentinel`, 2933 lines) — 33 DB-only checks, runs hourly:
 ```
-Sentinel runs (GitHub Actions cron)
+Sentinel runs (GitHub Actions cron → Vercel endpoint)
   │
-  ├── Check 1: Pipeline low?              ──► Scout (research new ideas)
-  ├── Check 2: Stale content? (7d)        ──► Growth (company repo)
-  ├── Check 3: Stale leads? (5d)          ──► Outreach (Vercel worker)
-  ├── Check 4: No CEO review? (48h)       ──► CEO
-  ├── Check 5: Unverified deploys? (24h)  ──► Ops
-  ├── Check 6: Evolve due? (10+ cycles)   ──► Evolver
-  ├── Check 7: High failure rate? (>20%)  ──► Evolver
-  ├── Check 8: Stale research? (14d)      ──► Scout
-  ├── Check 9: Stuck in approved? (1h)    ──► Engineer (company repo)
-  ├── Check 10: Rate-limited? (0 turns)   ──► Re-dispatch original
-  ├── Check 11: Chain gaps?               ──► Engineer (company repo)
-  ├── Check 12: Deploy drift?             ──► Engineer (company repo)
-  ├── Check 13: Failed tasks?             ──► Engineer/Growth (company repo)
-  ├── Check 14: Orphaned MVPs?            ──► Engineer (provision)
-  ├── Check 15: Broken deploys? (HTTP)    ──► Ops
-  ├── Check 16: Missing metrics?          ──► Ops
-  ├── Check 17: Content performance?      ──► Growth (company repo)
-  ├── Check 18: Anomaly detection?        ──► Evolver
-  ├── Check 19: Pending proposals?        ──► CEO
-  └── Check 20: Boilerplate migration?    ──► Engineer
+  ├── Dispatch: Priority-scored company cycles + backlog items
+  ├── Approval management: expiry, auto-approve safe proposals
+  ├── Stuck cycle/action cleanup + stale dispatch reclaim
+  ├── Schema drift detection (vs schema-map.ts)
+  ├── Anomaly detection (2σ rolling average)
+  ├── Error pattern auto-learning (Check 35)
+  ├── Agent performance regression (Check 34)
+  ├── Playbook maintenance: decay, prune, consolidate (Checks 27, 29)
+  ├── Venture Brain: cross-company intelligence (Check 28)
+  ├── Self-improvement proposals (Check 37)
+  ├── Auto-decompose blocked items (Check 39)
+  ├── Deploy drift check
+  └── Fire company-health (non-blocking)
+```
+
+**Company-Health** (`/api/cron/company-health`, ~500 lines) — 6 HTTP-heavy checks, fired by Sentinel:
+```
+Company-health runs (fired by Sentinel, own 60s window)
+  │
+  ├── Check 31: Stats endpoint health      ──► Create fix tasks
+  ├── Check 32: Language consistency        ──► Create fix tasks
+  ├── Check 33: Stale record reconciliation ──► Auto-fix DB records
+  ├── Check 36: Test coverage health        ──► Create test tasks
+  ├── Check 38: PR review + auto-merge     ──► Merge or escalate
+  └── Check 30: Broken deploys + repair    ──► Infra repair → code fix
 ```
 
 ---

@@ -67,12 +67,12 @@ No scheduled crons - agents work on-demand via three triggers:
 
 - **Events** — Payments, deploys, GitHub issues trigger instant responses
 - **Chains** — Agents dispatch each other: Scout → Growth → CEO Review
-- **Conditions** — Sentinel checks every 4h for work that needs doing
+- **Conditions** — Sentinel checks hourly for work that needs doing
 
 ```
 ┌─────────────┐    ┌──────────────┐    ┌─────────────────┐
 │   Events    │    │    Chains    │    │   Conditions    │
-│ (payments,  │───▶│ Scout → CEO  │───▶│ Sentinel (4h)   │
+│ (payments,  │───▶│ Scout → CEO  │───▶│ Sentinel (1h)   │
 │  deploys)   │    │ CEO → Growth │    │ (health checks) │
 └─────────────┘    └──────────────┘    └─────────────────┘
                            │                     │
@@ -195,7 +195,7 @@ hive/
 │   ├── hive-ceo.yml        # Strategic planning & portfolio management
 │   ├── hive-scout.yml      # Market research & idea generation
 │   ├── hive-engineer.yml   # Code implementation & deployments
-│   └── hive-sentinel.yml   # Health monitoring (every 4h)
+│   └── hive-sentinel.yml   # Health monitoring (hourly, legacy fallback)
 ├── 🎯 src/app/
 │   ├── api/agents/         # Worker agent dispatch & OIDC auth
 │   ├── api/webhooks/       # Stripe/GitHub event handlers

@@ -188,17 +188,37 @@ export async function POST(req: Request) {
     }
   }
 
+  // --- 4. Compute roadmap theme progress ---
+  let themeProgress: Record<string, number> = {};
+  try {
+    const themeRows = await sql`
+      SELECT COALESCE(theme, 'uncategorized') as theme,
+        count(*)::int as total,
+        count(*) FILTER (WHERE status = 'done')::int as done,
+        count(*) FILTER (WHERE status NOT IN ('done', 'rejected'))::int as active
+      FROM hive_backlog
+      WHERE theme IS NOT NULL AND theme != 'uncategorized'
+      GROUP BY theme
+    `;
+    for (const r of themeRows) {
+      const total = r.done + r.active;
+      themeProgress[r.theme] = total > 0 ? Math.round((r.done / total) * 100) : 0;
+    }
+  } catch { /* non-critical */ }
+
   // Log the consolidation
   await sql`
-    INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+    INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
     VALUES (
       ${cycle.company_id}, 'sentinel', 'cycle_consolidation',
       ${`Cycle ${cycle.cycle_number} (score: ${score}): ${results.playbook_entries_created} entries written, ${results.confidence_boosts} boosts, ${results.confidence_decays} decays`},
-      'success', NOW(), NOW()
+      'success',
+      ${JSON.stringify({ ...results, theme_progress: themeProgress })}::jsonb,
+      NOW(), NOW()
     )
   `.catch(() => {});
 
-  return json({ ok: true, ...results });
+  return json({ ok: true, ...results, theme_progress: themeProgress });
 }
 
 function inferDomain(text: string): string {

@@ -61,6 +61,23 @@ export async function GET() {
     SELECT started_at FROM cycles ORDER BY started_at DESC LIMIT 1
   `;
 
+  // Roadmap theme progress
+  const themeProgress = await sql`
+    SELECT COALESCE(theme, 'uncategorized') as theme,
+      count(*) FILTER (WHERE status = 'done')::int as done,
+      count(*) FILTER (WHERE status NOT IN ('done', 'rejected'))::int as active
+    FROM hive_backlog
+    WHERE theme IS NOT NULL AND theme != 'uncategorized'
+    GROUP BY theme ORDER BY active DESC
+  `.catch(() => []);
+
+  const roadmap = themeProgress.map((r: any) => ({
+    theme: r.theme,
+    done: r.done,
+    active: r.active,
+    pct: (r.done + r.active) > 0 ? Math.round(r.done / (r.done + r.active) * 100) : 0,
+  }));
+
   return json({
     live_companies: Number(counts.live_companies),
     total_companies: Number(counts.total_companies),
@@ -74,5 +91,6 @@ export async function GET() {
     est_cost_24h: Math.round(estCost24h * 100) / 100,
     budget_utilization_pct: Math.round((Number(turns5h.cnt) / 225) * 100),
     last_cycle_at: lastCycle?.started_at || null,
+    roadmap,
   });
 }

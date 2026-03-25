@@ -253,7 +253,7 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Keep everything on GitHub Actions: works but burns 10+ unnecessary runs/day, approaching quota limit at scale
 - Move brain agents to Vercel too: 60s timeout too short for Claude reasoning
 - Remove legacy workflows entirely: lose manual trigger capability for debugging
-**Consequences:** ~10-12 fewer Actions runs per day. Sentinel on Vercel can dispatch workers directly (no Actions proxy). Vercel cron is free on Hobby tier. Brain agent runs are shorter (fewer turns = less quota burn). Trade-off: Vercel Hobby has 60s function timeout — Sentinel must complete all 16 checks + HTTP health checks within that window (parallelized with Promise.all).
+**Consequences:** ~10-12 fewer Actions runs per day. Sentinel on Vercel can dispatch workers directly (no Actions proxy). Vercel cron is free on Hobby tier. Brain agent runs are shorter (fewer turns = less quota burn). Trade-off: Vercel Hobby has 60s function timeout — Sentinel grew to 39 checks and hit this limit, resolved by ADR-030 (company-health extraction).
 
 ### ADR-021: Public company repos + build dispatch for unlimited Actions minutes
 **Date:** 2026-03-21
@@ -312,7 +312,7 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Round-robin (fair but ignores urgency): doesn't prioritize where value is highest
 - Manual priority setting (Carlos ranks companies): doesn't scale, adds friction
 - Time-based only (oldest first): ignores task backlog and lifecycle stage
-**Consequences:** Companies with more pending work, open directives, or struggling scores get dispatched first. Budget is protected — high usage automatically reduces dispatch volume. The priority_score is logged in dispatches for observability. Trade-off: the scoring query is more complex (CTE with 7 subqueries), but runs only every 4h in Sentinel so performance impact is negligible.
+**Consequences:** Companies with more pending work, open directives, or struggling scores get dispatched first. Budget is protected — high usage automatically reduces dispatch volume. The priority_score is logged in dispatches for observability. Trade-off: the scoring query is more complex (CTE with 7 subqueries), but runs only hourly in Sentinel so performance impact is negligible.
 
 ---
 
@@ -389,3 +389,49 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - AI reviewer agent (LLM reviews medium-risk PRs): burns tokens for quality checks that CI already covers
 - Dashboard review queue: still requires Carlos to actively check — defeats autonomy goal
 **Consequences:** Fully autonomous PR merging for quality-risk changes. Carlos only sees PRs with cost implications. Risk: a high-score PR that introduces bugs will auto-merge — but CI is the safety net, and Healer can self-fix post-merge. Trade-off is intentional: autonomy > perfectionism.
+
+### ADR-030: Sentinel monolith split — company-health extraction
+**Date:** 2026-03-25
+**Status:** accepted
+**Context:** Sentinel grew to 3426 lines with 39 checks. Vercel serverless has a 60s timeout. HTTP-heavy checks (fetching company stats endpoints, GitHub API for tests/PRs, Vercel API for stale records) after line ~1900 likely never executed — they'd timeout before reaching them. Critical checks like PR auto-merge (check 38) and broken deploy repair (check 30) were silently dead.
+**Decision:** Extract 6 HTTP-heavy checks (31, 32, 33, 36, 38, 30) into a new `/api/cron/company-health` endpoint (~500 lines). Sentinel fires it as a non-blocking `fetch()` with 5s timeout (fire-and-forget). Each endpoint gets its own 60s execution window. Company-health logs results to `agent_actions` and sends its own Telegram notifications.
+**Alternatives considered:**
+- Increase Vercel timeout: Requires Pro plan upgrade, still a bandaid — checks would keep growing
+- Sequential cron calls: Vercel cron can't chain calls, would need external scheduler
+- Split into 3+ endpoints: More granular but adds routing complexity for marginal benefit
+- Priority-order checks: Move critical checks earlier — helps short-term but doesn't solve growth
+**Consequences:** Sentinel reduced from 3426 to 2933 lines. All 39 checks now execute within timeout. Company-health runs independently — if it fails, Sentinel still completes. Trade-off: dispatch dedup doesn't share state between the two endpoints (company-health does its own GitHub API calls for dispatching fixes). Acceptable since they dispatch to different targets.
+
+### ADR-031: Sentinel scheduling strategy — Vercel Crons + lazy checks
+**Date:** 2026-03-25
+**Status:** accepted (phases 1-2), proposed (phases 3-4)
+**Context:** Sentinel runs hourly via a GitHub Actions cron that curls Vercel endpoints — an unnecessary middleman. ADR-029 introduced continuous event-driven dispatch (chain callbacks), making Sentinel's dispatch role redundant for the happy path. But Sentinel still runs 33 DB-only checks, many of which don't need hourly polling: approval expiry checks time windows of 2-14 days, stale content uses 7-day windows, research staleness is 14 days. Meanwhile, some checks (stuck cycles, stale running actions) DO need frequent attention.
+
+**Decision:** Four-phase migration from cron-heavy to event-driven:
+
+**Phase 1 — Vercel native crons (immediate):** Replace `hive-crons.yml` GitHub Actions proxy with `vercel.json` cron entries. Sentinel, Metrics, Digest already exist as Vercel endpoints. This eliminates the GitHub Actions middleman — zero new dependencies, zero cost (Vercel Crons are free, Pro plan allows per-minute precision, 100 jobs max).
+
+**Phase 2 — Sentinel split + lazy checks:** Split Sentinel into 3 focused endpoints by urgency:
+- `/api/cron/sentinel-urgent` (every 2h): stuck cycles/actions, unverified provisions, stuck approved
+- `/api/cron/sentinel-dispatch` (every 4h): company cycle dispatch (safety net), budget check, chain gaps, failed retries
+- `/api/cron/sentinel-janitor` (daily 2am): stale content/leads/research, evolve trigger, healer trigger, company assessment
+Move ~12 checks to event-driven (no cron):
+- Approval expiry → check-on-read (WHERE clause in approval queries)
+- Schema drift → post-deploy webhook trigger
+- Dispatch loop detection → inline in dispatchToActions()
+- Anomaly detection → compute in metrics cron or on dashboard load
+- Agent regression → compute in digest or on dashboard load
+- Missing spec/tasks → check during CEO cycle start
+- Recurring escalation detection → trigger on escalation creation
+- Auto-dismiss escalations → check-on-read when list loaded
+
+**Phase 3 — Upstash QStash for guaranteed delivery (if chain dispatch proves unreliable):** Replace chain dispatch `fetch()` calls with QStash publish for retry guarantees. Use delayed messages for "check back later" patterns (e.g., verify provision after 2h) instead of polling. Free tier: 500-1,000 msgs/day — sufficient for Hive's volume.
+
+**Phase 4 — Vercel Queues (when GA):** Evaluate native Vercel Queues to replace QStash and chain dispatch HTTP calls with managed, durable event streaming.
+
+**Alternatives rejected:**
+- Neon pg_cron/pg_net: pg_net not available on Neon — can only run SQL, can't trigger HTTP endpoints
+- Inngest / Trigger.dev: Full orchestration platforms — overkill when Hive already has its own orchestration layer (GitHub Actions + Sentinel + chain dispatch). High migration cost, adds critical dependency.
+- Keep GitHub Actions cron: Works but wastes private repo minutes on a curl proxy. Vercel Crons are strictly better.
+
+**Consequences:** Phase 1 eliminates ~24 GitHub Actions runs/day. Phase 2 reduces total cron invocations from 24/day to ~10/day and moves half of Sentinel's checks to event-driven. Phase 3 makes chain dispatch durable (currently fire-and-forget HTTP). The system becomes progressively more event-driven without big-bang rewrites.

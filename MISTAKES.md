@@ -29,6 +29,13 @@
 **Prevention:** (1) Error callbacks must always have a fallback for missing files. (2) Test error paths, not just happy paths. (3) When adding a new error subtype, verify the jq selector matches it.
 **Affects:** hive
 
+### 2026-03-25 Sentinel checks after line ~1900 silently never executed
+**What happened:** PR auto-merge (check 38), backlog decompose (check 39), playbook consolidation (check 29), portfolio analysis (check 28), and broken deploy repair (check 30) appeared to work but never actually ran. These checks were positioned after ~1900 lines of sequential execution in a 3426-line function with a 60s Vercel timeout.
+**Root cause:** Sentinel grew organically from 16 to 39 checks without considering cumulative execution time. HTTP-heavy checks (fetching company endpoints, GitHub API, Vercel API) consumed the full 60s budget before reaching later checks. No monitoring detected this because the function returned 500 (timeout) which Vercel doesn't log as a structured response.
+**Fix applied:** Extracted 6 HTTP-heavy checks (31, 32, 33, 36, 38, 30) into `/api/cron/company-health` endpoint (ADR-030). Sentinel fires it as non-blocking fetch. Both get their own 60s window.
+**Prevention:** (1) Monitor Sentinel execution time — if >45s, consider splitting. (2) Order checks by criticality, not by when they were added. (3) Large serverless functions should have internal timing — abort gracefully at 50s instead of hard timeout.
+**Affects:** hive
+
 ### 2026-03-25 MCP server broke on @neondatabase/serverless v1.x upgrade
 **What happened:** All MCP tools using dynamic SQL queries (`hive_backlog`, `hive_actions`, `hive_failure_summary`, `hive_sql`) returned errors. Tagged-template queries still worked.
 **Root cause:** `@neondatabase/serverless` v1.0.2 changed `neon()` to return a tagged-template-only function. Dynamic queries using `sql(string)` broke — need `sql.query(string)` instead.

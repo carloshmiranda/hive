@@ -210,7 +210,7 @@ Once everything is set up:
 
 Once running, your Hive instance will:
 
-1. **Monitor continuously** via Sentinel (every 4 hours)
+1. **Monitor continuously** via Sentinel (hourly)
 2. **Generate business ideas** when pipeline is low
 3. **Build companies** autonomously with AI agents
 4. **Track metrics** and performance

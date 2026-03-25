@@ -23,9 +23,24 @@
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
 
+### 🟡 P1 — Phase 1: Replace GitHub Actions cron proxy with Vercel native crons (ADR-031)
+The `hive-crons.yml` workflow is a GitHub Actions cron that curls 3 Vercel endpoints — a pointless middleman consuming private repo Actions minutes (~24 runs/day). Replace with native `vercel.json` cron entries pointing directly at `/api/cron/sentinel`, `/api/cron/metrics`, `/api/cron/digest`. Vercel Crons are free on Pro, support per-minute precision, and eliminate the GitHub Actions dependency. Implementation: add `crons` array to `vercel.json`, delete `hive-crons.yml`, verify CRON_SECRET auth works with Vercel's native cron header. ~30 min.
+
+### 🟡 P1 — Phase 2: Split Sentinel into urgent/dispatch/janitor + lazy checks (ADR-031)
+Split the 2933-line Sentinel monolith into 3 focused endpoints by urgency: `sentinel-urgent` (every 2h: stuck cycles/actions, provisions), `sentinel-dispatch` (every 4h: company cycles safety net, budget check), `sentinel-janitor` (daily: stale content/leads/research, evolve, healer, assess). Move ~12 checks to event-driven: approval expiry → check-on-read, schema drift → post-deploy hook, anomaly detection → metrics cron, agent regression → digest, dispatch loop detection → inline in dispatchToActions(). Reduces cron invocations from 24/day to ~10/day.
+
+### 🟢 P2 — Phase 3: Upstash QStash for guaranteed chain dispatch delivery (ADR-031)
+Chain dispatch uses fire-and-forget HTTP calls — if the target is down or slow, the message is lost and Sentinel must catch it on next run. Replace with Upstash QStash for retry guarantees and delayed delivery. Use delayed messages for "check back later" patterns (verify provision after 2h, verify deploy after 30min) instead of frequent polling. Free tier: 500-1,000 msgs/day. Only implement if chain dispatch proves unreliable.
+
 ---
 
 ## Planned
+
+### ✅ P1 — Sentinel monolith split (DONE — 2026-03-25)
+Sentinel was 3426 lines with 39 checks, hitting Vercel's 60s timeout. Checks after line ~1900 silently never executed (PR auto-merge, broken deploy repair, test coverage). Extracted 6 HTTP-heavy checks into `/api/cron/company-health` endpoint (~500 lines). Sentinel fires it as non-blocking fetch. Both get their own 60s timeout. ADR-030.
+
+### ✅ P1 — Outcome-based roadmap with theme tracking (DONE — 2026-03-25)
+Rewrote ROADMAP.md from checkbox-based to outcome-based. Added `theme` column to hive_backlog. 8 themes across 4 phases. Progress auto-computed from DB via `/api/roadmap/progress`. Portfolio and consolidation endpoints include theme progress. MCP server updated with theme filters. 147/158 items tagged.
 
 ### ✅ P0 — Fix error extraction in all 4 agent workflows (DONE — 2026-03-25)
 Root cause of 5 blocked P0s. Three bugs in failure callbacks across hive-engineer, hive-ceo, hive-healer, hive-scout: (1) no exec file existence check, (2) jq selector missed system-type errors, (3) no Actions-level fallback. Fixed all 4 workflows. Also unblocked auto-decompose which was dead code. Also fixed MCP server neon driver (sql→sql.query).

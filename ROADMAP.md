@@ -1,144 +1,108 @@
 # Hive Platform Roadmap
 
-> Strategic roadmap for Hive as a platform. Not task-level (that's BACKLOG.md). This tracks phases, milestones, and the long-term vision.
+> Strategic outcomes for Hive. Each outcome links to `hive_backlog` items via `theme`.
+> Progress is computed from theme completion rates — no manual checkboxes.
 >
-> Updated during brainstorming sessions. The orchestrator reads this to understand strategic direction but doesn't modify it — only Carlos and Chat/Code sessions update this file.
+> Updated by: Carlos + Chat/Code sessions (strategic direction), Step 9 (progress numbers).
 
 ## Vision
 
-Hive is a **fully AI-centric autonomous venture orchestrator**. It spawns businesses, builds them, grows them, and kills failures — all autonomously. Carlos approves 4 gates (new company, growth strategy, spend >€20, kill) and nothing else. The businesses themselves are fully autonomous.
+Hive is a **fully AI-centric autonomous venture orchestrator**. It spawns businesses, builds them, grows them, and kills failures — all autonomously. Carlos approves 4 gates (new company, growth strategy, spend >€20, kill) and nothing else.
 
-**Key principle: free tiers first.** MVP companies use only free infrastructure (Vercel Hobby, Neon free, Gemini free, Groq free, public repos for free Actions). Better infra (Vercel Pro, dedicated DBs, paid APIs) only after revenue proves the business works.
+**Key principle: free tiers first.** MVP companies use only free infrastructure. Better infra only after revenue proves the business works.
 
 **Target state:** A portfolio of 10+ self-running micro-businesses generating €10K+ MRR total, managed entirely by AI agents, requiring <15 min/day of Carlos's attention.
 
-## Current Phase: 🟡 Phase 1 — First Revenue
+---
 
-### Milestone: Companies iterating autonomously ✅
-- [x] Build Hive dashboard + orchestrator
-- [x] Deploy to Vercel
-- [x] Multi-provider routing (Claude for brain, Gemini/Groq for workers)
-- [x] Cross-company learning architecture (playbook, error correlation)
-- [x] Run Idea Scout → 3 proposals (9 proposals generated)
-- [x] First nightly cycles complete (VerdeDesk 18+, Senhorio 4, Flolio 4)
-- [x] Companies deployed to production (3 live on Vercel)
-- [x] Company-side workflows running on free public repos
-- [x] Task tracking system (company_tasks table + dashboard + agent integration)
+## Phase 1 — First Revenue
 
-### Milestone: Dispatch chain working end-to-end
-- [x] CEO → Engineer dispatch (repository_dispatch)
-- [x] Engineer → company repo dispatch (workflow_dispatch) — fixed 422 payload bug
-- [x] Company repo hive-build.yml completes a real feature build
-- [ ] Company repo hive-growth.yml creates real content
-- [ ] Growth dispatches to company repo with Vercel fallback
-- [ ] Full chain verified: CEO plan → Engineer build → Growth content → Ops verify
+### `dispatch_chain` — Reliable end-to-end work execution
+**Success criteria:** CEO plan → Engineer build → Growth content → Ops verify completes without manual intervention in 90%+ of cycles.
 
-### Milestone: First revenue
-- [ ] Email sending domain verified (Resend)
-- [x] Stripe products created per company (auto-provision)
-- [ ] Outreach pipeline sending real emails
-- [ ] Any Hive company receives first Stripe payment
-- [ ] MVP → active transition triggers (first_revenue approval)
-- [ ] Validated that the autonomous loop generates revenue
+Key outcomes:
+- Chain dispatch fires reliably after every agent step
+- Error context propagates through the full callback chain
+- Task completion status flows back to CEO for review scoring
+- Growth dispatches to company repo with Vercel fallback
 
-## Phase 2 — Portfolio at Scale (target: 5-10 companies)
+### `first_revenue` — Any Hive company earns money
+**Success criteria:** At least one company receives a Stripe payment. Outreach pipeline sends real emails. Metrics pipeline captures real data.
 
-### Milestone: Free-tier-first company infra
-- [ ] Per-company Neon databases (free tier: 10 projects)
-- [ ] Automatic Vercel Hobby → Pro upgrade on first revenue
-- [ ] Companies use Gemini/Groq for all worker tasks (zero Claude burn)
-- [ ] Cost tracking visible in dashboard + digest
-- [ ] Budget alerts when approaching free tier limits
+Key outcomes:
+- Email sending domain verified (Resend)
+- Outreach pipeline sends and tracks real emails
+- Metrics pipeline captures page views, pricing clicks, affiliate clicks
+- Validation scoring reflects actual company state
 
-### Milestone: Zero-intervention operation
-- [ ] PR auto-merge for company repos (hive/* branches after build passes)
-- [ ] Scout proposal auto-expiry (7 days without review → rejected)
-- [ ] Secret scanning before repos go public
-- [ ] Failed task auto-retry verified working (Sentinel check 13c)
-- [ ] Stuck cycle auto-cleanup verified (Sentinel 2h guard)
-- [ ] Batch approve/reject in dashboard inbox
+---
 
-### Milestone: Revenue scaling
-- [ ] Combined MRR reaches €500/mo
-- [ ] At least 2 companies with paying customers
-- [ ] Combined MRR reaches €2,000/mo
-- [ ] First company killed based on data (Venture Brain recommendation)
-- [ ] Capital reallocation: shift resources from failing to growing companies
+## Phase 2 — Portfolio at Scale (5-10 companies)
 
-### Milestone: Data-driven growth intelligence ✅
-- [x] GSC API integrated, keyword positions tracked
-- [x] IndexNow fires on every content publish
-- [x] LLM citation tracker running every 3 cycles
-- [x] Content performance feedback loop (stale content auto-refreshed)
-- [x] Growth agent never creates content without visibility data
+### `zero_intervention` — System runs without babysitting
+**Success criteria:** Carlos spends <15 min/day. No manual retries, no stuck cycles, no silent failures lasting >6 hours.
+
+Key outcomes:
+- PR auto-merge for company repos (hive/* branches after build passes)
+- Failed tasks auto-retry with circuit breakers that don't block critical work
+- Stale cycles auto-cleanup, stuck dispatches auto-reset
+- Dashboard shows actionable alerts, not noise
+- Telegram notifications are clear and linked to source
+
+### `self_healing` — Hive fixes its own bugs
+**Success criteria:** 80%+ of recurring errors are auto-fixed by Healer within 48h without manual intervention.
+
+Key outcomes:
+- Error patterns detected and correlated across companies
+- Healer dispatches targeted fixes to company repos
+- Fix patterns written to playbook for future prevention
+
+---
 
 ## Phase 3 — Intelligence & Self-Improvement
 
-### Milestone: Self-improving Hive
-- [ ] Orchestrator proposes and implements improvements to its own codebase (from BACKLOG.md)
-- [ ] Evolver measurably improves an agent's success rate (before/after comparison)
-- [ ] Hive writes a MISTAKES.md entry and Healer auto-applies the fix
-- [ ] Playbook entries auto-applied to struggling companies (no manual directive needed)
-- [ ] Performance-driven model routing (success rate → model selection)
-- [ ] Playbook confidence decay/boost based on cycle outcomes
-- [ ] CLAUDE.md rules enforced mechanically (policy gates), not just via prompts
-- [ ] Anti-drift mid-cycle validation (Engineer output checked against CEO plan)
-- [ ] Context optimization for agents hitting max_turns
-- [ ] Knowledge graph replaces flat playbook queries (PageRank-ranked context injection)
+### `self_improving` — Hive gets smarter over time
+**Success criteria:** Agent success rates measurably improve quarter-over-quarter. Playbook entries drive real behavioral changes.
 
-### Milestone: Closed-loop learning system (Ruflo-inspired)
-- [ ] Dispatch dedup / claims system — no double-dispatches
-- [ ] Task stealability — failed agent runs release tasks for retry
-- [ ] Post-cycle consolidation — outcomes systematically feed back into playbook
-- [ ] Playbook consolidation worker — merge duplicates, distill, prune
-- [ ] Cost-based provider routing — cheapest capable provider wins
-- [ ] Agent specialization profiles — learned performance per task type
-- [ ] CRDT-style concurrent write resolution for metrics/playbook
+Key outcomes:
+- Evolver detects gaps and proposes prompt improvements
+- Playbook entries auto-applied to struggling companies
+- Backlog items auto-decomposed when too complex
+- Context optimization prevents max_turns exhaustion
+- Model routing adapts based on task success rates
 
-### Milestone: Advanced portfolio intelligence
-- [ ] Portfolio-level charts (MRR trends, company comparison, funnel metrics)
-- [ ] Venture Brain makes a correct kill recommendation
-- [ ] Cross-company pattern matching ("company A solved this, apply to company B")
-- [ ] Cycle score correlation analysis (what agent behaviors lead to higher scores)
-- [ ] Company health score (composite: revenue trend + traffic + error rate + cycle scores)
+### `code_quality` — Companies ship reliable code
+**Success criteria:** Zero security vulnerabilities in deployed code. All company repos have CI, linting, and basic test coverage.
 
-### Milestone: Full business autonomy
-- [ ] Companies handle their own customer support (FAQ bot, email replies)
-- [ ] Companies run their own A/B tests and optimize conversion
-- [ ] Companies detect and respond to competitor moves
-- [ ] Churn prediction and win-back sequences
-- [ ] LTV/CAC tracking per company
+Key outcomes:
+- Pre-push workflow YAML validation
+- Inline code review within Engineer workflow
+- Security scanning on ongoing deploys
+- Prompt injection defense for agent inputs
 
-### Milestone: Company code quality & observability
-- [ ] Test coverage tracking for company repos (flag zero-test companies)
-- [ ] Automated security scanning on ongoing deploys (not just provisioning)
-- [ ] Performance profiling — Lighthouse scores, Core Web Vitals on deploy
-- [ ] Codebase structure mapping — auto-generated architecture maps per company
-- [ ] Browser automation for Growth verification (rendered pages, SEO, CTAs)
-- [ ] Event-sourced audit trail for agent decision replay
+### `portfolio_intelligence` — Data-driven portfolio decisions
+**Success criteria:** Venture Brain correctly identifies underperformers and recommends kills based on data, not gut.
+
+Key outcomes:
+- Portfolio-level charts (MRR trends, company comparison)
+- Cross-company pattern matching for knowledge transfer
+- Kill decisions backed by multi-signal consensus
+
+---
 
 ## Phase 4 — Scale & Platform
 
-### Milestone: Cloud-native orchestration
-- [ ] Claude Agent SDK replaces GitHub Actions turn limits
-- [ ] VPS or Lambda as intelligence runtime (GitHub Actions as fallback)
-- [ ] Parallel company processing (not sequential)
-- [ ] 20+ companies manageable without quota exhaustion
+### `full_autonomy` — 10+ companies, <15 min/day
+**Success criteria:** Portfolio of 10+ companies generating €10K+ MRR total. Infrastructure costs covered by revenue.
 
-### Milestone: Full autonomy
-- [ ] Telegram/WhatsApp approval bot (approve from phone)
-- [ ] Multi-framework boilerplate (Next.js, Astro, SvelteKit — CEO picks based on use case)
-- [ ] Hive generates, tests, and deploys improvements to itself
-- [ ] 10+ companies, <15 min/day human involvement
-- [ ] Combined portfolio MRR €10K+
-- [ ] Self-funded: portfolio revenue covers all infrastructure costs
+Key outcomes:
+- Claude Agent SDK replaces GitHub Actions turn limits
+- Companies handle their own customer support
+- Multi-framework boilerplate (Next.js, Astro, SvelteKit)
+- Telegram/WhatsApp approval bot
+- Business model diversity (SaaS, blogs, affiliates, newsletters)
 
-### Milestone: Business model diversity
-- [ ] SaaS companies (subscription revenue)
-- [ ] Content/affiliate sites (ad/affiliate revenue)
-- [ ] Faceless YouTube/social channels (ad revenue)
-- [ ] Newsletter businesses (sponsorship revenue)
-- [ ] API/tool businesses (usage-based revenue)
+---
 
 ## Key Decisions Log
 

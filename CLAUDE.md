@@ -102,7 +102,8 @@ All orchestration runs in the cloud via GitHub Actions + Vercel serverless. No M
 - **Stripe webhook** (`/api/webhooks/stripe`): Logs payments, updates MRR, counts customers, detects first revenue → dispatches CEO via `repository_dispatch`
 - **GitHub webhook** (`/api/webhooks/github`): Logs deploys, detects failures → escalates after 3 failures in 24h, captures GitHub Issues with `hive-directive` label as directives
 - **Metrics cron** (`/api/cron/metrics`): Runs at 8am + 6pm, scrapes Vercel Analytics for page views
-- **Sentinel cron** (`/api/cron/sentinel`): Runs every 4h, 16 health checks, dispatches brain agents via GitHub API and workers directly to `/api/agents/dispatch`
+- **Sentinel cron** (`/api/cron/sentinel`): Runs hourly, 33 checks (DB-only), dispatches brain agents via GitHub API and workers directly to `/api/agents/dispatch`. Fires company-health as non-blocking delegate.
+- **Company-health** (`/api/cron/company-health`): Fired by Sentinel (not scheduled independently). 6 HTTP-heavy checks: stats endpoints, language consistency, stale record reconciliation, test coverage, PR auto-merge, broken deploy repair. Gets its own 60s execution window.
 - **Digest cron** (`/api/cron/digest`): Runs daily at 8am UTC, sends portfolio summary email via Resend
 
 ### Tier 2: GitHub Actions brain agents (event-driven, Claude Code)
@@ -115,7 +116,7 @@ Company repos are PUBLIC — GitHub gives unlimited Actions minutes. Each compan
 Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Called directly from brain agent chain dispatch steps or from Sentinel cron.
 
 ### Continuous dispatch (chain callbacks)
-Work chains automatically without waiting for Sentinel's 4h poll:
+Work chains automatically without waiting for Sentinel's hourly poll:
 - **CEO cycle_complete** → calls `/api/dispatch/cycle-complete` → health gate → score companies → dispatch next cycle
 - **Engineer backlog done** → calls `/api/backlog/dispatch` → if empty, falls through to `/api/dispatch/cycle-complete`
 - **Health gate** (`/api/dispatch/health-gate`): checks Claude budget, concurrent agents, failure rate, Hive backlog priority. Returns dispatch/wait/stop.

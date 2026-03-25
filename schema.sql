@@ -418,6 +418,7 @@ CREATE TABLE hive_backlog (
   dispatch_id   TEXT,              -- agent_action id when dispatched
   pr_number     INTEGER,           -- PR created for risky changes
   pr_url        TEXT,
+  theme         TEXT,              -- links to ROADMAP.md milestone (e.g. 'dispatch_chain', 'self_improving')
   spec          JSONB,             -- planning phase output (acceptance criteria, affected files, approach)
   notes         TEXT,              -- resolution notes, blockers, etc.
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),

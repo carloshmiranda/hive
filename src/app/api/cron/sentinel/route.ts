@@ -185,28 +185,6 @@ async function dispatchToCompanyWorkflow(
   ).catch(() => {});
 }
 
-async function checkHttpHealth(
-  companies: Array<{ slug: string; url: string }>
-): Promise<Array<{ slug: string; url: string; status: number; error?: string }>> {
-  const results = await Promise.all(
-    companies.map(async (c) => {
-      try {
-        const res = await fetch(c.url, {
-          redirect: "follow",
-          signal: AbortSignal.timeout(10000),
-        });
-        if (res.status >= 400) {
-          return { slug: c.slug, url: c.url, status: res.status };
-        }
-        return null;
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : "unknown";
-        return { slug: c.slug, url: c.url, status: 0, error: msg };
-      }
-    })
-  );
-  return results.filter((r): r is NonNullable<typeof r> => r !== null);
-}
 
 async function checkDeployDrift(vercelToken: string | null, ghPat: string | null): Promise<{
   drifted: boolean;
@@ -1932,328 +1910,12 @@ export async function GET(req: Request) {
     });
   }
 
-  // 31. Stats endpoint health — probe /api/stats on each company, create fix tasks for broken ones
-  let statsEndpointsBroken = 0;
-  const statsCompanies = await sql`
-    SELECT c.id, c.slug, COALESCE('https://' || c.domain, c.vercel_url) as app_url, c.github_repo
-    FROM companies c
-    WHERE c.status IN ('mvp', 'active') AND c.vercel_url IS NOT NULL
-  `;
-  for (const sc of statsCompanies) {
-    if (!sc.app_url) continue;
-    const statsUrl = `${sc.app_url}/api/stats`;
-    try {
-      const res = await fetch(statsUrl, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (!data.ok || typeof data.views !== "number") {
-        throw new Error("Invalid response format: missing ok/views fields");
-      }
-      // Stats endpoint is healthy — no action needed
-    } catch (e: any) {
-      statsEndpointsBroken++;
-      // Check if we already have a pending fix task for this
-      const [existingTask] = await sql`
-        SELECT id FROM company_tasks
-        WHERE company_id = ${sc.id} AND title LIKE '%stats endpoint%'
-        AND status IN ('proposed', 'in_progress')
-        LIMIT 1
-      `;
-      if (!existingTask) {
-        // Create an engineering task to fix the stats endpoint
-        await sql`
-          INSERT INTO company_tasks (company_id, title, description, category, priority, status)
-          VALUES (
-            ${sc.id},
-            'Fix /api/stats endpoint for metrics collection',
-            ${`The /api/stats endpoint at ${statsUrl} is broken (${e.message}). This endpoint must return JSON: { ok: true, views: number, pricing_clicks: number, affiliate_clicks: number }. Copy the boilerplate from templates/boilerplate/src/app/api/stats/route.ts. Ensure the page_views, pricing_clicks, and affiliate_clicks tables exist in the company DB. Also ensure middleware.ts tracks pageviews by POSTing to /api/stats on each page navigation.`},
-            'engineering', 2, 'proposed'
-          )
-        `;
-        dispatches.push({
-          type: "internal",
-          target: "stats_endpoint_fix",
-          payload: { company: sc.slug, error: e.message, task_created: true },
-        });
-      }
-    }
-  }
-
-  // 32. Language consistency check — verify deployed site language matches content_language
-  let languageMismatches = 0;
-  const langCompanies = await sql`
-    SELECT c.id, c.slug, c.content_language, COALESCE('https://' || c.domain, c.vercel_url) as app_url
-    FROM companies c
-    WHERE c.status IN ('mvp', 'active') AND c.vercel_url IS NOT NULL AND c.content_language IS NOT NULL
-  `;
-  for (const lc of langCompanies) {
-    if (!lc.app_url) continue;
-    try {
-      const res = await fetch(lc.app_url as string, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) continue;
-      const html = await res.text();
-      const htmlLang = html.match(/<html[^>]*lang="([^"]+)"/)?.[1] || "";
-      const expectedLang = lc.content_language as string;
-
-      // Check html lang attribute
-      const langMismatch = htmlLang && !htmlLang.startsWith(expectedLang);
-
-      // Simple heuristic: check for common wrong-language patterns
-      const isExpectedPt = expectedLang === "pt";
-      const hasEnglishPatterns = /\b(Get started|Learn more|Sign up|Features|How it works|Ready to get started)\b/i.test(html);
-      const hasPortuguesePatterns = /\b(Começar|Saber mais|Funcionalidades|Como funciona|Pronto para começar)\b/i.test(html);
-
-      const contentMismatch = isExpectedPt ? hasEnglishPatterns && !hasPortuguesePatterns : hasPortuguesePatterns && !hasEnglishPatterns;
-
-      if (langMismatch || contentMismatch) {
-        languageMismatches++;
-        const issue = langMismatch ? `html lang="${htmlLang}" but expected "${expectedLang}"` : `content appears to be in wrong language (expected ${expectedLang})`;
-        const [existingTask] = await sql`
-          SELECT id FROM company_tasks
-          WHERE company_id = ${lc.id} AND title LIKE '%language%consistency%'
-          AND status IN ('proposed', 'in_progress')
-          LIMIT 1
-        `;
-        if (!existingTask) {
-          await sql`
-            INSERT INTO company_tasks (company_id, title, description, category, priority, status)
-            VALUES (${lc.id}, 'Fix language consistency — wrong content language detected',
-              ${`The deployed site at ${lc.app_url} has a language issue: ${issue}. All user-facing content must be in ${isExpectedPt ? "Portuguese" : "English"}. Check: html lang attribute, page text, meta tags, button labels, headings, error messages.`},
-              'engineering', 2, 'proposed')
-          `;
-        }
-      }
-    } catch {
-      // Site may be down — other checks handle this
-    }
-  }
-
-  // 33. Stale record reconciliation — verify DB records match actual Vercel/GitHub state
-  // Detects: renamed repos, renamed Vercel projects, stale URLs after rebrand
-  let staleRecordsFixed = 0;
-  if (vercelToken) {
-    const teamId = await getSettingValue("vercel_team_id").catch(() => null);
-    const teamParam = teamId ? `?teamId=${teamId}` : "";
-    const reconCompanies = await sql`
-      SELECT id, slug, vercel_project_id, vercel_url, github_repo
-      FROM companies WHERE status IN ('mvp', 'active') AND vercel_project_id IS NOT NULL
-    `;
-    for (const rc of reconCompanies) {
-      try {
-        // Check Vercel project — get actual name and domains
-        const vRes = await fetch(`https://api.vercel.com/v9/projects/${rc.vercel_project_id}${teamParam}`, {
-          headers: { Authorization: `Bearer ${vercelToken}` },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (vRes.ok) {
-          const vProject = await vRes.json();
-          const actualName = vProject.name;
-          const actualAlias = (vProject.alias || []).find((a: string) => a.endsWith(".vercel.app"));
-          const actualUrl = actualAlias ? `https://${actualAlias}` : `https://${actualName}.vercel.app`;
-          const storedUrl = rc.vercel_url as string;
-
-          if (storedUrl && actualUrl !== storedUrl && !storedUrl.includes(actualName)) {
-            // DB has wrong URL — update it
-            await sql`UPDATE companies SET vercel_url = ${actualUrl}, updated_at = NOW() WHERE id = ${rc.id}`;
-            staleRecordsFixed++;
-            await sql`
-              INSERT INTO agent_actions (agent, action_type, status, company_id, output)
-              VALUES ('sentinel', 'stale_record_fix', 'success', ${rc.id},
-                ${JSON.stringify({ field: "vercel_url", old: storedUrl, new: actualUrl })}::jsonb)
-            `;
-          }
-        }
-
-        // Check GitHub repo — verify it exists at the stored path
-        if (rc.github_repo && ghPat) {
-          const ghRes = await fetch(`https://api.github.com/repos/${rc.github_repo}`, {
-            headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github+json" },
-            signal: AbortSignal.timeout(5000),
-          });
-          if (ghRes.status === 301 || ghRes.status === 404) {
-            // Repo was renamed or deleted — try to find it by slug
-            const findRes = await fetch(`https://api.github.com/repos/carloshmiranda/${rc.slug}`, {
-              headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github+json" },
-              signal: AbortSignal.timeout(5000),
-            });
-            if (findRes.ok) {
-              const repoData = await findRes.json();
-              const actualRepo = repoData.full_name;
-              if (actualRepo !== rc.github_repo) {
-                await sql`UPDATE companies SET github_repo = ${actualRepo}, updated_at = NOW() WHERE id = ${rc.id}`;
-                await sql`UPDATE infra SET resource_id = ${actualRepo} WHERE resource_id = ${rc.github_repo} AND service = 'github'`;
-                staleRecordsFixed++;
-                await sql`
-                  INSERT INTO agent_actions (agent, action_type, status, company_id, output)
-                  VALUES ('sentinel', 'stale_record_fix', 'success', ${rc.id},
-                    ${JSON.stringify({ field: "github_repo", old: rc.github_repo, new: actualRepo })}::jsonb)
-                `;
-              }
-            }
-          }
-        }
-      } catch {
-        // API errors — skip this company, will retry next run
-      }
-    }
-  }
-
-  // 36. Test coverage health — detect companies with no tests or broken tests
-  let testCoverageIssues = 0;
-  const testCompanies = await sql`
-    SELECT c.id, c.slug, c.github_repo, c.capabilities,
-      COALESCE((SELECT COUNT(*) FROM cycles cy WHERE cy.company_id = c.id AND cy.status = 'completed'), 0)::int as total_cycles
-    FROM companies c
-    WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
-  `;
-
-  for (const tc of testCompanies) {
-    const repo = tc.github_repo as string;
-    const companyId = tc.id as string;
-    const slug = tc.slug as string;
-    const totalCycles = tc.total_cycles as number;
-
-    let hasTestDir = false;
-    let hasPlaywrightConfig = false;
-    let hasTestFiles = false;
-    let latestTestRun: { conclusion: string | null } | null = null;
-
-    // Check if tests/ directory exists
-    try {
-      const testsRes = await fetch(`https://api.github.com/repos/${repo}/contents/tests`, {
-        headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (testsRes.ok) {
-        hasTestDir = true;
-        hasTestFiles = true;
-      }
-    } catch { /* non-blocking */ }
-
-    // Check if playwright.config.ts exists
-    try {
-      const playwrightRes = await fetch(`https://api.github.com/repos/${repo}/contents/playwright.config.ts`, {
-        headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (playwrightRes.ok) {
-        hasPlaywrightConfig = true;
-        hasTestFiles = true;
-      }
-    } catch { /* non-blocking */ }
-
-    // Also check src/__tests__ directory
-    if (!hasTestFiles) {
-      try {
-        const srcTestsRes = await fetch(`https://api.github.com/repos/${repo}/contents/src/__tests__`, {
-          headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (srcTestsRes.ok) {
-          hasTestFiles = true;
-        }
-      } catch { /* non-blocking */ }
-    }
-
-    // Check latest post-deploy.yml run (test workflow)
-    if (hasTestFiles) {
-      try {
-        const runsRes = await fetch(
-          `https://api.github.com/repos/${repo}/actions/workflows/post-deploy.yml/runs?per_page=1&status=completed`,
-          {
-            headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
-            signal: AbortSignal.timeout(5000),
-          }
-        );
-        if (runsRes.ok) {
-          const runsData = await runsRes.json();
-          const latestRun = runsData.workflow_runs?.[0];
-          if (latestRun) {
-            latestTestRun = { conclusion: latestRun.conclusion };
-          }
-        }
-      } catch { /* non-blocking */ }
-    }
-
-    // Update company capabilities with test info
-    const testCapabilities = {
-      smoke: hasPlaywrightConfig || hasTestDir,
-      unit: false, // Would need deeper analysis
-      e2e: hasPlaywrightConfig,
-    };
-    try {
-      await sql`
-        UPDATE companies SET
-          capabilities = jsonb_set(COALESCE(capabilities, '{}'), '{tests}', ${JSON.stringify(testCapabilities)}::jsonb),
-          updated_at = NOW()
-        WHERE id = ${companyId}
-      `;
-    } catch { /* non-blocking */ }
-
-    // Create engineering tasks for issues
-    if (!hasTestFiles && totalCycles >= 3) {
-      // No test files at all — company has had enough cycles to warrant tests
-      const taskTitle = `Add smoke tests for ${slug}`;
-      const [existingTask] = await sql`
-        SELECT id FROM company_tasks
-        WHERE company_id = ${companyId} AND title = ${taskTitle}
-        AND status NOT IN ('done', 'dismissed')
-        LIMIT 1
-      `;
-      if (!existingTask) {
-        await sql`
-          INSERT INTO company_tasks (company_id, title, description, category, priority, status, source)
-          VALUES (
-            ${companyId},
-            ${taskTitle},
-            ${"This company has no test files (no tests/ directory, no playwright.config.ts, no src/__tests__/). Add Playwright smoke tests that verify: 1) Homepage loads with 200 status, 2) Key pages return 200, 3) API routes respond correctly. Use the boilerplate pattern from templates/boilerplate/ as reference. Install @playwright/test as devDependency and add a post-deploy.yml workflow."},
-            'qa', 2, 'proposed', 'sentinel'
-          )
-        `;
-        testCoverageIssues++;
-        dispatches.push({
-          type: "internal",
-          target: "test_coverage",
-          payload: { company: slug, issue: "no_tests", task_created: true },
-        });
-      }
-    } else if (hasTestFiles && latestTestRun && latestTestRun.conclusion !== "success") {
-      // Tests exist but are failing
-      const taskTitle = `Fix failing tests for ${slug}`;
-      const [existingTask] = await sql`
-        SELECT id FROM company_tasks
-        WHERE company_id = ${companyId} AND title = ${taskTitle}
-        AND status NOT IN ('done', 'dismissed')
-        LIMIT 1
-      `;
-      if (!existingTask) {
-        await sql`
-          INSERT INTO company_tasks (company_id, title, description, category, priority, status, source)
-          VALUES (
-            ${companyId},
-            ${taskTitle},
-            ${"The post-deploy.yml test workflow is failing (conclusion: " + (latestTestRun.conclusion || "unknown") + "). Investigate and fix the test suite. Common issues: 1) Playwright not installed in CI, 2) Missing env vars in workflow, 3) Tests targeting removed/changed pages, 4) Timeout issues. Check the latest GitHub Actions run logs for details."},
-            'qa', 1, 'proposed', 'sentinel'
-          )
-        `;
-        testCoverageIssues++;
-        dispatches.push({
-          type: "internal",
-          target: "test_coverage",
-          payload: { company: slug, issue: "tests_failing", conclusion: latestTestRun.conclusion, task_created: true },
-        });
-      }
-    }
-  }
-
-  if (testCoverageIssues > 0) {
-    await sql`
-      INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
-      VALUES ('sentinel', 'test_coverage_check',
-        ${`Test coverage check: ${testCoverageIssues} issues found across ${testCompanies.length} companies`},
-        'success', NOW(), NOW())
-    `.catch(() => {});
-  }
+  // Checks 31, 32, 33, 36, 38, 30 extracted to /api/cron/company-health (fire-and-forget)
+  // These are HTTP-heavy checks that were causing Sentinel timeouts.
+  fetch(`${baseUrl}/api/cron/company-health`, {
+    headers: { Authorization: `Bearer ${cronSecret}` },
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => { console.log("[sentinel] company-health fire-and-forget sent"); });
 
   // --- Check 39: Auto-decompose blocked backlog items ---
   // Items blocked after repeated max_turns failures need decomposition, not more retries.
@@ -2328,154 +1990,7 @@ export async function GET(req: Request) {
     console.warn(`[sentinel] Check 39 failed: ${check39Err.message}`);
   }
 
-  // --- Check 38: Review and auto-merge open Hive PRs ---
-  if (ghPat) try {
-    const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
-      headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
-    });
-    if (prListRes.ok) {
-      const openPRs = await prListRes.json();
-      // Only process PRs on hive/ branches (created by Engineer agent)
-      const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
-      let merged = 0, queued = 0, escalated = 0;
-
-      for (const pr of hivePRs) {
-        try {
-          const { analyzePR: analyzeHivePR, autoMergePR: mergeHivePR } = await import("@/lib/pr-risk-scoring");
-          const analysis = await analyzeHivePR("carloshmiranda", "hive", pr.number, ghPat!);
-
-          if (analysis.decision === "auto_merge") {
-            const result = await mergeHivePR("carloshmiranda", "hive", pr.number, ghPat!, "squash");
-            if (result.success) {
-              merged++;
-              // Update hive_backlog items with matching PR
-              await sql`
-                UPDATE hive_backlog SET status = 'done', notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by Sentinel check 38.`}
-                WHERE status = 'pr_open'
-                  AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
-              `.catch(() => {});
-              dispatches.push({ type: "internal", target: "pr_auto_merged", payload: { pr: pr.number, title: pr.title, risk: analysis.riskScore } });
-
-              // Notify via Telegram
-              try {
-                await fetch(`${baseUrl}/api/notify`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${cronSecret}` },
-                  body: JSON.stringify({ text: `✅ Auto-merged PR #${pr.number}: ${pr.title} (risk: ${analysis.riskScore})` }),
-                });
-              } catch {}
-            }
-          } else if (analysis.decision === "escalate") {
-            // Escalated = safety gate failed OR cost impact detected
-            const [existingApproval] = await sql`
-              SELECT id FROM approvals WHERE gate_type = 'pr_review' AND status = 'pending'
-                AND context->>'pr_number' = ${String(pr.number)}
-            `;
-            if (!existingApproval) {
-              const issues = [...analysis.hardGateIssues, ...analysis.costFactors, ...analysis.riskFactors];
-              await sql`
-                INSERT INTO approvals (gate_type, title, description, context, status)
-                VALUES ('pr_review', ${`PR #${pr.number}: ${pr.title}`},
-                  ${`Risk score ${analysis.riskScore}. ${analysis.costImpact ? 'COST IMPACT: ' + analysis.costFactors.join(', ') + '. ' : ''}Issues: ${issues.join(", ")}`},
-                  ${JSON.stringify({ pr_number: pr.number, risk_score: analysis.riskScore, hard_gates: analysis.hardGateIssues, cost_factors: analysis.costFactors, risk_factors: analysis.riskFactors })}::jsonb,
-                  'pending')
-              `;
-              escalated++;
-            }
-          }
-        } catch (prErr: any) {
-          console.warn(`[sentinel] PR #${pr.number} analysis failed: ${prErr.message}`);
-        }
-      }
-
-      if (merged > 0 || queued > 0 || escalated > 0) {
-        await sql`
-          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
-          VALUES ('sentinel', 'pr_review_check',
-            ${`PR review check 38: ${hivePRs.length} open PRs — ${merged} auto-merged, ${queued} queued, ${escalated} escalated`},
-            'success', NOW(), NOW())
-        `.catch(() => {});
-      }
-    }
-  } catch (prCheckErr: any) {
-    console.warn(`[sentinel] Check 38 (PR review) failed: ${prCheckErr.message}`);
-  }
-
-  // --- HTTP health checks (parallel) ---
-  const companiesWithUrls = await sql`
-    SELECT slug, COALESCE('https://' || domain, vercel_url) as check_url FROM companies
-    WHERE status IN ('mvp', 'active') AND vercel_url IS NOT NULL AND github_repo IS NOT NULL
-  `;
-  const brokenDeploys = await checkHttpHealth(
-    companiesWithUrls.map((r) => ({ slug: r.slug as string, url: r.check_url as string }))
-  );
-  // 30. Broken deploys → try infra repair FIRST, then code fix as fallback
-  // This prevents burning Claude tokens on hive-fix.yml when the issue is infrastructure
-  // (duplicate Vercel projects, missing env vars, failed deploys — not code bugs)
-  let infraRepairsAttempted = 0;
-  for (const b of brokenDeploys) {
-    // Step 1: Try infrastructure repair (free, no LLM)
-    try {
-      const repairRes = await fetch(`${baseUrl}/api/agents/repair-infra`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ company_slug: b.slug, repair_type: "stale_escalation" }),
-        signal: AbortSignal.timeout(30000),
-      });
-      const repairData = await repairRes.json();
-      infraRepairsAttempted++;
-
-      const repaired = repairData.repairs?.vercel_duplicates?.action === "unlinked_duplicates"
-        || repairData.repairs?.vercel_deploy?.action === "redeployed";
-
-      dispatches.push({
-        type: "internal",
-        target: "deploy_repair",
-        payload: { company: b.slug, http_status: b.status, infra_repaired: repaired, repairs: repairData.repairs },
-      });
-
-      if (repaired) {
-        // Infra repair handled it — skip code fix dispatch
-        continue;
-      }
-    } catch (e: any) {
-      console.warn(`Infra repair failed for ${b.slug}: ${e.message}`);
-    }
-
-    // Step 2: Infra repair didn't fix it — check circuit breaker before dispatching code fix
-    const [failCount] = await sql`
-      SELECT COUNT(*)::int as cnt FROM agent_actions
-      WHERE company_id = (SELECT id FROM companies WHERE slug = ${b.slug})
-        AND agent = 'engineer' AND status = 'failed'
-        AND action_type IN ('error_fix', 'feature_request')
-        AND started_at > NOW() - INTERVAL '24 hours'
-    `;
-    if ((failCount?.cnt || 0) >= 3) {
-      // Circuit breaker: too many failed fixes, don't waste more tokens
-      dispatches.push({ type: "circuit_break", target: "deploy_fix_skipped", payload: { company: b.slug, failures_24h: failCount?.cnt } });
-      continue;
-    }
-
-    // Step 3: Dispatch code fix to company repo
-    const [co] = await sql`SELECT github_repo FROM companies WHERE slug = ${b.slug} LIMIT 1`;
-    if (co?.github_repo) {
-      await dispatchToCompanyWorkflow(co.github_repo as string, "hive-fix.yml", {
-        company_slug: b.slug,
-        error_summary: `Deploy broken (HTTP ${b.status}) — infra repair attempted, issue appears to be code-level`,
-        source: "sentinel",
-      }, ghPat);
-      dispatches.push({ type: "company_actions", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
-    } else {
-      await dispatchToActions("ops_escalation", {
-        source: "sentinel",
-        company: b.slug,
-        reason: "deploy_broken",
-        http_status: b.status,
-        trace_id: traceId,
-      }, ghPat);
-      dispatches.push({ type: "brain", target: "ops_escalation", payload: { company: b.slug, http_status: b.status } });
-    }
-  }
+  // Checks 38, 30 moved to /api/cron/company-health (fired above)
 
   // --- Deploy drift check ---
   const drift = await checkDeployDrift(vercelToken, ghPat);
@@ -2657,7 +2172,7 @@ export async function GET(req: Request) {
   `.catch(() => []);
 
   for (const entry of stalePlaybook) {
-    // Decay: -0.02 per Sentinel run (runs every 4h, so ~0.12/day, but capped by 30-day window)
+    // Decay: -0.02 per Sentinel run (runs hourly, so ~0.48/day, but capped by 30-day window)
     const newConfidence = Math.max(0, Number(entry.confidence) - 0.02);
     await sql`
       UPDATE playbook SET confidence = ${newConfidence} WHERE id = ${entry.id}
@@ -3429,19 +2944,16 @@ export async function GET(req: Request) {
   // Send Telegram notification if something interesting happened
   try {
     const { notifyHive } = await import("@/lib/telegram");
-    const interesting = dispatches.length > 0 || staleRecordsFixed > 0 ||
-      selfImprovementProposals > 0 || agentRegressions > 0 || statsEndpointsBroken > 0 ||
-      languageMismatches > 0 || hiveFixesDispatched > 0 || backlogDispatched > 0;
+    const interesting = dispatches.length > 0 ||
+      selfImprovementProposals > 0 || agentRegressions > 0 ||
+      hiveFixesDispatched > 0 || backlogDispatched > 0;
     if (interesting) {
       const parts: string[] = [];
       if (hiveFixesDispatched > 0) parts.push(`🔧 ${hiveFixesDispatched} Hive fixes (priority)`);
       if (backlogDispatched > 0) parts.push(`📋 ${backlogDispatched} backlog item dispatched`);
       if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
-      if (staleRecordsFixed > 0) parts.push(`${staleRecordsFixed} stale records fixed`);
       if (selfImprovementProposals > 0) parts.push(`${selfImprovementProposals} improvement proposals`);
       if (agentRegressions > 0) parts.push(`${agentRegressions} agent regressions`);
-      if (statsEndpointsBroken > 0) parts.push(`${statsEndpointsBroken} broken stats endpoints`);
-      if (languageMismatches > 0) parts.push(`${languageMismatches} language mismatches`);
 
       await notifyHive({
         agent: "sentinel",
@@ -3461,7 +2973,7 @@ export async function GET(req: Request) {
     scout_proposals_cleaned: 0,
     stuck_cycles_cleaned: stuckCycles.length,
     deploy_drift: drift.drifted,
-    broken_deploys: brokenDeploys.length,
+    company_health: "delegated",
     anomalies_detected: anomalies.length,
     schema_drift: schemaDrift.length,
     recurring_escalations: recurringEscalations.length,
@@ -3475,15 +2987,10 @@ export async function GET(req: Request) {
     playbook_decayed: playbookDecayed,
     playbook_pruned: playbookPruned,
     venture_brain_directives: ventureBrainDirectives,
-    infra_repairs_attempted: infraRepairsAttempted,
-    stats_endpoints_broken: statsEndpointsBroken,
-    language_mismatches: languageMismatches,
-    stale_records_fixed: staleRecordsFixed,
     playbook_merged: playbookMerged,
     playbook_composites: playbookComposites,
     agent_regressions: agentRegressions,
     agent_escalations: agentEscalations,
-    test_coverage_issues: testCoverageIssues,
     self_improvement_proposals: selfImprovementProposals,
     hive_fixes_dispatched: hiveFixesDispatched,
     backlog_dispatched: backlogDispatched,
