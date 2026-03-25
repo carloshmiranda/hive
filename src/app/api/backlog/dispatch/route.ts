@@ -69,35 +69,85 @@ export async function POST(req: Request) {
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
     } else {
-      // Failed: always retry. Hive learns from failures.
-      // "blocked" is ONLY for items that need manual/human action.
-      // Track attempts in notes so the Engineer gets failure context on retry.
+      // Failed: learn from it. Track attempts, decompose if too big.
       const [item] = await sql`
-        SELECT id, title, notes FROM hive_backlog WHERE id = ${completed_id}
+        SELECT id, title, description, notes, priority, category, spec FROM hive_backlog WHERE id = ${completed_id}
       `.catch(() => []);
       const prevAttempts = (item?.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
       const attempt = prevAttempts + 1;
+      const errorMsg = body.error || "";
+      const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns");
 
-      // Auto-block after 5 failed attempts — prevents infinite retry loops
-      if (attempt >= 5) {
-        await sql`
-          UPDATE hive_backlog
-          SET status = 'blocked', dispatched_at = NULL,
-              notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Auto-blocked after ${attempt} failures — needs decomposition or manual review.`}
-          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-        `.catch(() => {});
-      } else {
-        // Back to ready with attempt context — the scoring engine will
-        // deprioritize via the novelty penalty (hasSimilarFailed check)
-        await sql`
-          UPDATE hive_backlog
-          SET status = 'ready', dispatched_at = NULL,
-              notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
-          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-        `.catch(() => {});
+      // On max_turns failure (attempt 2+): auto-decompose instead of blind retry
+      let decomposed = false;
+      if (isMaxTurns && attempt >= 2 && item) {
+        try {
+          const { generateSpec } = await import("@/lib/backlog-planner");
+          let spec = item.spec;
+          if (!spec || !spec.approach) {
+            spec = await generateSpec(
+              { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
+              sql
+            );
+          }
+          if (spec && Array.isArray(spec.approach) && spec.approach.length >= 2) {
+            const steps = spec.approach as string[];
+            const subItems: { title: string; description: string }[] = [];
+            for (let i = 0; i < steps.length; i += 2) {
+              const chunk = steps.slice(i, i + 2);
+              const stepNums = chunk.map((_, j) => i + j + 1).join("-");
+              subItems.push({
+                title: `${item.title} (step ${stepNums}/${steps.length})`,
+                description: `Parent: ${item.title}\n\n${chunk.join("\n")}`,
+              });
+            }
+            if (subItems.length >= 2) {
+              for (const sub of subItems) {
+                await sql`
+                  INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+                  VALUES (
+                    ${sub.title.slice(0, 200)}, ${sub.description.slice(0, 2000)},
+                    ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
+                    ${JSON.stringify({ complexity: "S", estimated_turns: 15, acceptance_criteria: ["npx next build passes"] })}
+                  )
+                `.catch(() => {});
+              }
+              await sql`
+                UPDATE hive_backlog
+                SET status = 'blocked', dispatched_at = NULL,
+                    notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [auto-decomposed] Hit max_turns ${attempt}x — split into ${subItems.length} sub-tasks.`}
+                WHERE id = ${completed_id}
+              `.catch(() => {});
+              decomposed = true;
+              console.log(`[backlog] Auto-decomposed "${item.title}" into ${subItems.length} sub-tasks after max_turns failure`);
+            }
+          }
+        } catch (e) {
+          console.warn("[backlog] Auto-decompose failed:", e instanceof Error ? e.message : "unknown");
+        }
       }
 
-      // After 3 failures, notify Carlos (but still keep retrying)
+      if (!decomposed) {
+        // Auto-block after 5 failed attempts — prevents infinite retry loops
+        if (attempt >= 5) {
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'blocked', dispatched_at = NULL,
+                notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Auto-blocked after ${attempt} failures — needs decomposition or manual review.`}
+            WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+          `.catch(() => {});
+        } else {
+          // Back to ready with attempt context
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'ready', dispatched_at = NULL,
+                notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
+            WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+          `.catch(() => {});
+        }
+      }
+
+      // After 3 failures, notify Carlos
       if (attempt >= 3) {
         const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
         await fetch(`${baseUrl}/api/notify`, {
@@ -108,10 +158,12 @@ export async function POST(req: Request) {
           },
           body: JSON.stringify({
             agent: "backlog",
-            action: "repeated_failure",
+            action: decomposed ? "auto_decomposed" : "repeated_failure",
             company: "hive",
-            status: "failed",
-            summary: `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
+            status: decomposed ? "decomposed" : "failed",
+            summary: decomposed
+              ? `"${item?.title || completed_id}" hit max_turns ${attempt}x — auto-decomposed into smaller tasks.`
+              : `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
           }),
           signal: AbortSignal.timeout(5000),
         }).catch(() => {});
