@@ -1,5 +1,6 @@
 import { getDb, json } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { invalidateCompanyCache } from "@/lib/cache";
 
 const REPO = "carloshmiranda/hive";
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -75,13 +76,21 @@ export async function POST(req: Request) {
 
   // Log the completion
   if (agent && company) {
-    await sql`
-      INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at, company_id)
-      SELECT ${agent}, ${action_type || "cycle_callback"}, 'success',
-        ${`Chain callback: ${agent} completed ${status || "unknown"} for ${company}`},
-        NOW(), NOW(),
-        (SELECT id FROM companies WHERE slug = ${company} LIMIT 1)
-    `.catch(() => {});
+    const [companyRecord] = await sql`
+      SELECT id FROM companies WHERE slug = ${company} LIMIT 1
+    `.catch(() => []);
+
+    if (companyRecord) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at, company_id)
+        VALUES (${agent}, ${action_type || "cycle_callback"}, 'success',
+          ${`Chain callback: ${agent} completed ${status || "unknown"} for ${company}`},
+          NOW(), NOW(), ${companyRecord.id})
+      `.catch(() => {});
+
+      // Invalidate cache for the completed company since cycle state changed
+      await invalidateCompanyCache(companyRecord.id);
+    }
   }
 
   // Step 1: Health gate check

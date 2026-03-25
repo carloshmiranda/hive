@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { invalidateCycleCache, invalidateCompanyCache } from "@/lib/cache";
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -19,5 +20,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     RETURNING *
   `;
   if (!cycle) return err("Cycle not found", 404);
+
+  // Invalidate context cache since cycle data changed
+  await Promise.all([
+    invalidateCycleCache(id),
+    invalidateCompanyCache(cycle.company_id)
+  ]);
+
   return json(cycle);
 }

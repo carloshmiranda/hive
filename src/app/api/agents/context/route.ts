@@ -5,6 +5,7 @@ import { computeValidationScore, normalizeBusinessType } from "@/lib/validation"
 import { getCapabilitySummary } from "@/lib/hive-capabilities";
 import { checkForbidden } from "@/lib/phase-gate";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
+import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
@@ -19,6 +20,10 @@ export async function GET(req: NextRequest) {
     return err("Missing agent or company_slug query params", 400);
   }
 
+  if (!['build', 'growth', 'fix'].includes(agent)) {
+    return err(`Unknown agent type: ${agent}`, 400);
+  }
+
   const sql = getDb();
 
   const [company] = await sql`
@@ -30,15 +35,38 @@ export async function GET(req: NextRequest) {
     return json({});
   }
 
-  if (agent === "build") {
-    return json(await buildContext(sql, company));
-  } else if (agent === "growth") {
-    return json(await growthContext(sql, company));
-  } else if (agent === "fix") {
-    return json(await fixContext(sql, company));
+  // Get the current running cycle ID for cache key
+  const [currentCycle] = await sql`
+    SELECT id FROM cycles
+    WHERE company_id = ${company.id} AND status = 'running'
+    ORDER BY started_at DESC LIMIT 1
+  `.catch(() => []);
+
+  const cycleId = currentCycle?.id || null;
+  const agentType = agent as AgentType;
+
+  // Try cache first
+  const cached = await getCachedContext(company.id, agentType, cycleId);
+  if (cached) {
+    return json(cached);
   }
 
-  return err(`Unknown agent type: ${agent}`, 400);
+  // Cache miss - compute context from DB
+  let contextData;
+  if (agent === "build") {
+    contextData = await buildContext(sql, company);
+  } else if (agent === "growth") {
+    contextData = await growthContext(sql, company);
+  } else if (agent === "fix") {
+    contextData = await fixContext(sql, company);
+  } else {
+    return err(`Unknown agent type: ${agent}`, 400);
+  }
+
+  // Store in cache for future requests
+  await setCachedContext(company.id, agentType, contextData, cycleId);
+
+  return json(contextData);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
