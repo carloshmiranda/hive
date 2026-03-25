@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
+import { TimeSeriesChart, ComparisonChart, ChartControls } from "@/components/charts";
 
 // === TYPES ===
 type Company = {
@@ -150,6 +151,71 @@ function TabButton({ label, active, count, onClick }: { label: string; active: b
   );
 }
 
+// === CHARTS TAB ===
+function ChartsTab() {
+  const [selectedMetric, setSelectedMetric] = useState("mrr");
+  const [selectedDays, setSelectedDays] = useState(30);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "var(--hive-text)", marginBottom: 4 }}>Portfolio Analytics</div>
+        <div style={{ fontSize: 13, color: "var(--hive-text-secondary)" }}>Time-series data and company comparisons across your portfolio.</div>
+      </div>
+
+      <ChartControls
+        metric={selectedMetric}
+        onMetricChange={setSelectedMetric}
+        days={selectedDays}
+        onDaysChange={setSelectedDays}
+      />
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+        <div style={{ padding: 24, background: "var(--hive-surface)", borderRadius: 12, border: "1px solid var(--hive-border)" }}>
+          <TimeSeriesChart
+            metric={selectedMetric}
+            days={selectedDays}
+            className="w-full"
+          />
+        </div>
+
+        <div style={{ padding: 24, background: "var(--hive-surface)", borderRadius: 12, border: "1px solid var(--hive-border)" }}>
+          <ComparisonChart
+            metric={selectedMetric}
+            className="w-full"
+          />
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+        <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
+          <TimeSeriesChart
+            metric="page_views"
+            days={30}
+            className="w-full h-48"
+          />
+        </div>
+
+        <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
+          <TimeSeriesChart
+            metric="customers"
+            days={30}
+            className="w-full h-48"
+          />
+        </div>
+
+        <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
+          <TimeSeriesChart
+            metric="signups"
+            days={30}
+            className="w-full h-48"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // === MAIN DASHBOARD ===
 export default function DashboardPage() {
   const { data: session } = useSession();
@@ -160,7 +226,7 @@ export default function DashboardPage() {
   const [playbook, setPlaybook] = useState<PlaybookEntry[]>([]);
   const [cycles, setCycles] = useState<Cycle[]>([]);
   const [evolverProposals, setEvolverProposals] = useState<EvolverProposal[]>([]);
-  const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence" | "charts">("overview");
   const [activityFilter, setActivityFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [cmdInput, setCmdInput] = useState("");
@@ -391,6 +457,7 @@ export default function DashboardPage() {
         <TabButton label="Inbox" active={activeTab === "inbox"} count={inboxCount} onClick={() => setActiveTab("inbox")} />
         <TabButton label="Activity" active={activeTab === "activity"} onClick={() => setActiveTab("activity")} />
         <TabButton label="Intelligence" active={activeTab === "intelligence"} onClick={() => setActiveTab("intelligence")} />
+        <TabButton label="Charts" active={activeTab === "charts"} onClick={() => setActiveTab("charts")} />
       </div>
 
       {/* ==================== OVERVIEW TAB ==================== */}
@@ -1274,6 +1341,13 @@ export default function DashboardPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ==================== CHARTS TAB ==================== */}
+      {activeTab === "charts" && (
+        <div className="animate-in">
+          <ChartsTab />
         </div>
       )}
 
