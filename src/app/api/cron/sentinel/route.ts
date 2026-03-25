@@ -2226,6 +2226,79 @@ export async function GET(req: Request) {
     `.catch(() => {});
   }
 
+  // --- Check 39: Auto-decompose blocked backlog items ---
+  // Items blocked after repeated max_turns failures need decomposition, not more retries.
+  // Uses the planner to generate approach steps, then splits into S-sized sub-tasks.
+  try {
+    const blockedItems = await sql`
+      SELECT id, title, description, priority, category, spec, notes
+      FROM hive_backlog
+      WHERE status = 'blocked'
+        AND notes LIKE '%Too many failed attempts%'
+        AND NOT (notes LIKE '%auto-decomposed%')
+        AND title NOT ILIKE '%email domain%'
+      LIMIT 5
+    `;
+
+    let decomposedCount = 0;
+    for (const item of blockedItems) {
+      try {
+        const { generateSpec } = await import("@/lib/backlog-planner");
+        let spec = item.spec;
+        if (!spec || !spec.approach) {
+          spec = await generateSpec(
+            { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
+            sql
+          );
+        }
+        if (spec && Array.isArray(spec.approach) && spec.approach.length >= 2) {
+          const steps = spec.approach as string[];
+          const subItems: { title: string; description: string }[] = [];
+          for (let i = 0; i < steps.length; i += 2) {
+            const chunk = steps.slice(i, i + 2);
+            const stepNums = chunk.map((_: string, j: number) => i + j + 1).join("-");
+            subItems.push({
+              title: `${item.title} (step ${stepNums}/${steps.length})`,
+              description: `Parent: ${item.title}\n\n${chunk.join("\n")}`,
+            });
+          }
+          if (subItems.length >= 2) {
+            for (const sub of subItems) {
+              await sql`
+                INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+                VALUES (
+                  ${(sub.title as string).slice(0, 200)}, ${(sub.description as string).slice(0, 2000)},
+                  ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
+                  ${JSON.stringify({ complexity: "S", estimated_turns: 15, acceptance_criteria: ["npx next build passes"] })}
+                )
+              `.catch(() => {});
+            }
+            await sql`
+              UPDATE hive_backlog
+              SET notes = COALESCE(notes, '') || ${` [auto-decomposed] Sentinel check 39 split into ${subItems.length} sub-tasks.`}
+              WHERE id = ${item.id}
+            `.catch(() => {});
+            decomposedCount++;
+            dispatches.push({ type: "internal", target: "backlog_decompose", payload: { item_id: item.id, title: item.title, sub_tasks: subItems.length } });
+          }
+        }
+      } catch (decompErr: any) {
+        console.warn(`[sentinel] Check 39: decompose failed for "${item.title}": ${decompErr.message}`);
+      }
+    }
+
+    if (decomposedCount > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'backlog_decompose',
+          ${`Check 39: Decomposed ${decomposedCount} blocked items into sub-tasks`},
+          'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (check39Err: any) {
+    console.warn(`[sentinel] Check 39 failed: ${check39Err.message}`);
+  }
+
   // --- Check 38: Review and auto-merge open Hive PRs ---
   if (ghPat) try {
     const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {

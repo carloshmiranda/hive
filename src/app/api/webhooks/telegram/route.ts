@@ -37,7 +37,7 @@ export async function POST(req: Request) {
       // Update the approval
       const [approval] = await sql`
         UPDATE approvals
-        SET status = ${decision}, decided_at = NOW(), notes = ${"Decided via Telegram"}
+        SET status = ${decision}, decided_at = NOW(), decision_note = ${"Decided via Telegram"}
         WHERE id = ${approvalId} AND status = 'pending'
         RETURNING id, title, gate_type, company_id
       `;

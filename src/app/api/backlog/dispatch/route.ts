@@ -2,6 +2,8 @@ import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
+import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
+import { filterBacklogItemsByCooldown } from "@/lib/backlog-planner";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -56,18 +58,55 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const { completed_id, completed_status } = body;
 
+  // Periodic cleanup of expired cooldown entries
+  cleanupFailedItemsCache();
+
   // If a completed item was passed, update its status
   if (completed_id && completed_status) {
     if (completed_status === "success") {
       // Engineer "success" means PR created, NOT code merged.
       // Move to 'pr_open' so it stays visible until PR is merged.
-      // Sentinel or a webhook will mark 'done' after merge.
       await sql`
         UPDATE hive_backlog
         SET status = 'pr_open', dispatched_at = NOW(),
             notes = COALESCE(notes, '') || ' PR created via chain dispatch — awaiting merge.'
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
+
+      // Event-driven PR review: review and auto-merge all open hive/ PRs immediately
+      // instead of waiting for Sentinel's 4h cron (Check 38).
+      try {
+        const ghToken = await getSettingValue("github_token");
+        if (ghToken) {
+          const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
+          const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
+            headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+          });
+          if (prListRes.ok) {
+            const openPRs = await prListRes.json();
+            const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
+            for (const pr of hivePRs) {
+              try {
+                const analysis = await analyzePR("carloshmiranda", "hive", pr.number, ghToken);
+                if (analysis.decision === "auto_merge") {
+                  const result = await autoMergePR("carloshmiranda", "hive", pr.number, ghToken, "squash");
+                  if (result.success) {
+                    await sql`
+                      UPDATE hive_backlog SET status = 'done',
+                        notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged on success callback.`}
+                      WHERE status = 'pr_open'
+                        AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
+                    `.catch(() => {});
+                    console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
+                  }
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch (prErr) {
+        console.warn("[backlog] Event-driven PR review failed:", prErr instanceof Error ? prErr.message : "unknown");
+      }
     } else {
       // Failed: learn from it. Track attempts, decompose if too big.
       const [item] = await sql`
@@ -77,6 +116,11 @@ export async function POST(req: Request) {
       const attempt = prevAttempts + 1;
       const errorMsg = body.error || "";
       const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns");
+
+      // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
+      if (item && attempt < 5) {
+        trackFailedBacklogItem(item.id, attempt);
+      }
 
       // On max_turns failure (attempt 2+): auto-decompose instead of blind retry
       let decomposed = false;
@@ -383,6 +427,10 @@ export async function POST(req: Request) {
     }
   }
 
+  // Apply cooldown filter to remove recently failed items
+  const automatableFiltered = filterBacklogItemsByCooldown(automatable);
+  const cooldownCount = automatable.length - automatableFiltered.length;
+
   // Mark manual items as blocked so they don't get re-evaluated every cycle
   for (const item of manualItems) {
     if (item.status === "ready") {
@@ -415,10 +463,16 @@ export async function POST(req: Request) {
     }).catch(() => {});
   }
 
-  const backlogItemsFiltered = automatable;
+  const backlogItemsFiltered = automatableFiltered;
 
   if (backlogItemsFiltered.length === 0) {
-    return json({ dispatched: false, reason: "backlog_empty", manual_blocked: manualItems.length });
+    return json({
+      dispatched: false,
+      reason: "backlog_empty",
+      manual_blocked: manualItems.length,
+      cooldown_blocked: cooldownCount,
+      items_in_cooldown: getFailedItemsInCooldown().length
+    });
   }
 
   // Score items
@@ -488,7 +542,7 @@ export async function POST(req: Request) {
     `.catch(() => []);
 
     const blocksAgents = detectBlockedAgents(item.title, item.description);
-    const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
+    const daysSinceCreated = Math.max(0, item.created_at ? (Date.now() - new Date(item.created_at).getTime()) / 86400000 : 0);
     const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
 
     const scored = computeBacklogScore(item as BacklogItem, {
@@ -674,6 +728,9 @@ export async function POST(req: Request) {
       SET status = 'dispatched', dispatched_at = NOW()
       WHERE id = ${topItem.id}
     `.catch(() => {});
+
+    // Reset cooldown for successfully dispatched item
+    resetBacklogItemCooldown(topItem.id);
 
     // Notify via Telegram
     const baseUrlNotify = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
