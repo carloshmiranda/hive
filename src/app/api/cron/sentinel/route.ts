@@ -2272,6 +2272,40 @@ export async function GET(req: Request) {
     dispatches.push({ type: "self_improvement", target: "backlog", payload: { proposal_id: imp.id, title: imp.title, routed: "backlog" } });
   }
 
+  // Check for approved prompt_update proposals that haven't been implemented
+  // These should be activated immediately (like in /api/evolver approval handler)
+  const approvedPromptUpdates = await sql`
+    SELECT id, title, proposed_fix
+    FROM evolver_proposals
+    WHERE status = 'approved'
+      AND implemented_at IS NULL
+      AND proposed_fix->>'type' = 'prompt_update'
+      AND reviewed_at > NOW() - INTERVAL '14 days'
+    LIMIT 5
+  `;
+
+  for (const prompt of approvedPromptUpdates) {
+    try {
+      // Activate the new prompt version immediately
+      const targetAgent = prompt.proposed_fix?.target;
+      if (targetAgent) {
+        await sql`
+          UPDATE agent_prompts SET is_active = false WHERE agent = ${targetAgent} AND is_active = true
+        `;
+        await sql`
+          UPDATE agent_prompts SET is_active = true
+          WHERE agent = ${targetAgent}
+          AND id = (SELECT id FROM agent_prompts WHERE agent = ${targetAgent} ORDER BY version DESC LIMIT 1)
+        `;
+      }
+      // Mark as implemented immediately
+      await sql`UPDATE evolver_proposals SET status = 'implemented', implemented_at = NOW() WHERE id = ${prompt.id}`;
+      dispatches.push({ type: "prompt_update", target: targetAgent || "unknown", payload: { proposal_id: prompt.id, title: prompt.title, activated: true } });
+    } catch (e) {
+      console.error(`Failed to activate prompt for proposal ${prompt.id}:`, e);
+    }
+  }
+
   // Check for approved setup_action proposals that haven't been implemented
   // These were approved in /api/evolver but only created pending_manual agent_actions
   // Route them through hive_backlog so they get actually implemented by Engineer
