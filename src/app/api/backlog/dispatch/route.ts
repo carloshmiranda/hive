@@ -221,6 +221,17 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "engineer_busy", running_id: running.id });
   }
 
+  // Stale dispatch cleanup: items stuck in 'dispatched' for >30 min
+  // with no Engineer run picking them up — reset to ready so they can be retried.
+  // This prevents items from blocking the cascade indefinitely.
+  await sql`
+    UPDATE hive_backlog
+    SET status = 'ready', dispatched_at = NULL,
+        notes = COALESCE(notes, '') || ' [stale] Dispatch expired after 30min with no callback — reset to ready.'
+    WHERE status = 'dispatched'
+    AND dispatched_at < NOW() - INTERVAL '30 minutes'
+  `.catch(() => {});
+
   // Check for recently dispatched backlog items (covers the race window
   // between dispatch and the Engineer registering as 'running' in agent_actions)
   const [recentDispatch] = await sql`
@@ -280,6 +291,27 @@ export async function POST(req: Request) {
     console.error("[backlog] Query failed:", e instanceof Error ? e.message : String(e));
     backlogItems = [];
   }
+
+  // Auto-block items with 5+ failed attempts at query time (defense-in-depth).
+  // The callback handler (line ~82) also blocks after 5 attempts, but if the
+  // chain callback never fires (e.g., dispatch lost), items stay in 'ready'
+  // and keep getting dispatched. This catches that case.
+  const MAX_ATTEMPTS = 5;
+  for (const item of backlogItems) {
+    const attemptCount = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+    if (attemptCount >= MAX_ATTEMPTS && item.status !== "blocked") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked',
+            notes = COALESCE(notes, '') || ${` [auto-blocked] ${attemptCount} failed attempts — needs decomposition or manual review.`}
+        WHERE id = ${item.id} AND status IN ('ready', 'approved', 'planning')
+      `.catch(() => {});
+    }
+  }
+  backlogItems = backlogItems.filter(item => {
+    const attemptCount = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+    return attemptCount < MAX_ATTEMPTS;
+  });
 
   // Filter out items that require manual/human work (can't be automated)
   // Only match terms that genuinely indicate non-automatable work.
