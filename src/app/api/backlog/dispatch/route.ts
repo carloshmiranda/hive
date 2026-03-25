@@ -238,23 +238,48 @@ export async function POST(req: Request) {
   // Uses dispatched_at (reset on failure) as proxy for "last attempt time".
   // When called from chain (completed_id present), filter to P0/P1 only
   const isChainDispatch = !!completed_id;
-  const backlogItems = await sql`
-    SELECT * FROM hive_backlog
-    WHERE (
-      status IN ('ready', 'approved')
-      OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
-    )
-    AND NOT (
-      notes ILIKE '%[attempt %]%'
-      AND dispatched_at IS NOT NULL
-      AND dispatched_at > NOW() - INTERVAL '30 minutes'
-    )
-    ${isChainDispatch ? sql`AND priority IN ('P0', 'P1')` : sql``}
-    ORDER BY
-      CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
-      created_at ASC
-    LIMIT 10
-  `.catch(() => []);
+  let backlogItems: any[];
+  try {
+    if (isChainDispatch) {
+      backlogItems = await sql`
+        SELECT * FROM hive_backlog
+        WHERE (
+          status IN ('ready', 'approved')
+          OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
+        )
+        AND NOT (
+          notes ILIKE '%[attempt %]%'
+          AND dispatched_at IS NOT NULL
+          AND dispatched_at > NOW() - INTERVAL '30 minutes'
+        )
+        AND priority IN ('P0', 'P1')
+        ORDER BY
+          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+          created_at ASC
+        LIMIT 10
+      `;
+    } else {
+      backlogItems = await sql`
+        SELECT * FROM hive_backlog
+        WHERE (
+          status IN ('ready', 'approved')
+          OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
+        )
+        AND NOT (
+          notes ILIKE '%[attempt %]%'
+          AND dispatched_at IS NOT NULL
+          AND dispatched_at > NOW() - INTERVAL '30 minutes'
+        )
+        ORDER BY
+          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+          created_at ASC
+        LIMIT 10
+      `;
+    }
+  } catch (e) {
+    console.error("[backlog] Query failed:", e instanceof Error ? e.message : String(e));
+    backlogItems = [];
+  }
 
   // Filter out items that require manual/human work (can't be automated)
   // Only match terms that genuinely indicate non-automatable work.
