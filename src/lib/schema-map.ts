@@ -47,7 +47,7 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       updated_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
       killed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
       kill_reason: { type: "TEXT", nullable: true, hasDefault: false },
-      market: { type: "TEXT", nullable: true, hasDefault: false },
+      market: { type: "TEXT", nullable: true, hasDefault: true },
       content_language: { type: "TEXT", nullable: true, hasDefault: false },
     },
     checks: [
@@ -382,6 +382,46 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       { column: "status", allowedValues: ["proposed", "approved", "in_progress", "done", "dismissed"] },
       { column: "source", allowedValues: ["ceo", "sentinel", "evolver", "carlos"] },
     ],
+  },
+
+  hive_backlog: {
+    columns: {
+      id: { type: "TEXT", nullable: false, hasDefault: true },
+      priority: { type: "TEXT", nullable: false, hasDefault: true },
+      title: { type: "TEXT", nullable: false, hasDefault: false },
+      description: { type: "TEXT", nullable: false, hasDefault: false },
+      category: { type: "TEXT", nullable: false, hasDefault: true },
+      status: { type: "TEXT", nullable: false, hasDefault: true },
+      source: { type: "TEXT", nullable: true, hasDefault: true },
+      dispatch_id: { type: "TEXT", nullable: true, hasDefault: false },
+      pr_number: { type: "INTEGER", nullable: true, hasDefault: false },
+      pr_url: { type: "TEXT", nullable: true, hasDefault: false },
+      spec: { type: "JSONB", nullable: true, hasDefault: false },
+      notes: { type: "TEXT", nullable: true, hasDefault: false },
+      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+      dispatched_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
+      completed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
+    },
+    checks: [
+      { column: "priority", allowedValues: ["P0", "P1", "P2", "P3"] },
+      { column: "category", allowedValues: ["bugfix", "feature", "refactor", "infra", "quality", "research"] },
+      { column: "status", allowedValues: ["ready", "approved", "planning", "dispatched", "in_progress", "pr_open", "done", "blocked", "rejected"] },
+    ],
+  },
+
+  routing_weights: {
+    columns: {
+      id: { type: "TEXT", nullable: false, hasDefault: true },
+      task_type: { type: "TEXT", nullable: false, hasDefault: false },
+      model: { type: "TEXT", nullable: false, hasDefault: false },
+      agent: { type: "TEXT", nullable: false, hasDefault: false },
+      successes: { type: "INTEGER", nullable: true, hasDefault: true },
+      failures: { type: "INTEGER", nullable: true, hasDefault: true },
+      success_rate: { type: "NUMERIC(5,4)", nullable: true, hasDefault: false },
+      last_updated: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+    },
+    checks: [],
   },
 };
 
