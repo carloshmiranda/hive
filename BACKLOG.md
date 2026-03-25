@@ -63,23 +63,8 @@ Added Tailwind v4 @theme block to globals.css with constrained tokens: brand/acc
 ### 🟡 P1 — Public documentation for open-source usage
 Hive has no public-facing documentation. CLAUDE.md is agent-focused, not human-readable for someone wanting to fork and run their own venture orchestrator. Need: (1) **README.md** — what Hive does, architecture overview diagram (ASCII or Mermaid), feature highlights, screenshots of dashboard. (2) **ARCHITECTURE.md** — technical deep dive: agent flow, event-driven dispatch, model routing, 3-tier cost optimization, data model (18 tables), cross-company learning, validation-gated builds. (3) **SETUP.md** — step-by-step fork guide: create Neon DB, configure Vercel, add API keys (Claude Max, Gemini, Groq, Resend, Stripe), GitHub Actions setup, first company creation, first cycle. (4) Verify no secrets in code (already clean via OIDC). Implementation: Engineer can generate initial drafts from CLAUDE.md + BRIEFING.md + DECISIONS.md content, then CEO reviews for clarity and completeness.
 
-### 🟡 P1 — Fix CEO review not recording scores (PARTIAL)
-Most cycles complete without CEO review scores. This breaks validation scoring (score stays at 0), kill signal detection (no decline to detect), and agent grading.
-
-**Root cause identified:** CEO agent generates review JSON but never saves it to cycles.ceo_review column.
-
-**Progress:**
-✅ Added `/api/cycles/[id]/review` PATCH endpoint for agent-authorized cycle updates
-🔄 **NEEDS MANUAL REVIEW:** CEO workflow (.github/workflows/hive-ceo.yml) needs update to instruct CEO agent to call the API after generating review. Changes needed:
-
-```diff
-- cycle_complete: Score the cycle 1-10 using phase-appropriate criteria from prompts/ceo.md
-+ cycle_complete: Score the cycle 1-10 using phase-appropriate criteria from prompts/ceo.md. After generating the review JSON, SAVE it to the cycles table:
-+   STEP 1 — Find the current cycle: `SELECT id FROM cycles WHERE company_id = '<company_id>' ORDER BY started_at DESC LIMIT 1`
-+   STEP 2 — Save the review: `curl -X PATCH "https://hive-phi.vercel.app/api/cycles/<cycle_id>/review" -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" -d '{"ceo_review": <your_review_json>, "status": "completed"}'`
-```
-
-Also needs `CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}` added to CEO agent env vars.
+### ✅ P1 — Fix CEO review not recording scores (DONE — 2026-03-25)
+CEO workflow now has `CRON_SECRET` + `HIVE_URL` env vars and explicit instructions to save review via `/api/cycles/[id]/review` after scoring. Review endpoint validates score (1-10), agent_grades, kill_flag, validation_phase.
 
 ### 🟡 P1 — Engineer polling timeout false failures
 68% of Engineer failures are 20-minute GitHub Actions polling timeouts, not actual build failures. The build may succeed on the company repo but Hive's Engineer workflow times out waiting. Options: (1) increase polling timeout, (2) webhook-based callback from company repo, (3) don't count polling timeouts as failures in success rate calculations.
@@ -362,6 +347,9 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-25 — CEO review saving, pr_open enforcement, Telegram enrichment, 0-turn ghost fix (P1)
+Four fixes: (1) CEO workflow now saves review scores to cycles table via `/api/cycles/[id]/review` — was generating scores but never persisting them. (2) Backlog dispatch requires pr_number for pr_open status — no PR number marks as done instead of phantom. Also stores pr_number/pr_url in hive_backlog. (3) Telegram notifications enriched with PR links, task titles, duration, error details, run URLs, human-readable agent/action labels (Carlos directive). (4) All 4 agent workflows log 0-turn failures as 'skipped' instead of 'failed' — stops inflating failure metrics.
 
 ### ✅ 2026-03-25 — 5 loop quality improvements: circuit breaker, retry caps, evolver gate, PR verification (P1)
 Five fixes to improve autonomous loop efficiency: (1) Fix A: chain dispatch priority floor P0→P0+P1. (2) Fix B: auto_resolve_escalation counts ALL attempts (not just failed), stopping 80+ retry loops from "successful" resolves that don't fix root cause. (3) Fix C: evolver proposal quality gate — rejects vague proposals lacking file paths or actionable verbs before routing to backlog. (4) Fix D: Sentinel Check 41 — PR verification against GitHub API, merged PRs→done, closed/missing PRs→reset. (5) Fix E: circuit breaker P0 bypass. Also lowered max_attempts query-time cap from 5 to 3.

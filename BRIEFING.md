@@ -59,6 +59,13 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-25 [code] CEO review saving + pr_open enforcement + Telegram enrichment + 0-turn fix
+- **CEO review saving**: workflow now provides CRON_SECRET + HIVE_URL and instructs CEO to save review JSON via API. Fixes broken validation scoring, kill signals, agent grading.
+- **pr_open enforcement**: backlog dispatch requires pr_number for pr_open status. No PR = done. Prevents phantom pr_open at source.
+- **Telegram enrichment**: human-readable agent/action labels, PR links, task titles, duration, error details, run URLs. Carlos directive.
+- **0-turn ghost fix**: all 4 workflows log 0-turn failures as 'skipped' instead of 'failed'. Stops metric inflation.
+- **17 backlog items marked done** across two batches this session.
+
 ### 2026-03-25 [code] Loop quality fixes + PR review/merge
 Session focused on improving autonomous loop efficiency and clearing PR backlog:
 - **5 loop quality fixes committed**: (A) chain dispatch P0+P1 priority floor, (B) auto_resolve_escalation counts ALL attempts (not just failed) — stops 80+ retry loops, (C) evolver proposal quality gate rejects vague proposals lacking file paths/actionable verbs, (D) Sentinel Check 41 verifies pr_open items against GitHub API (merged→done, closed→reset), (E) circuit breaker deferred so P0 items bypass.
