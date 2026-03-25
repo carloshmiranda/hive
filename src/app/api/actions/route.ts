@@ -56,16 +56,37 @@ export async function POST(req: Request) {
     return err("cycle_id, company_id, agent, and action_type required");
   }
 
-  // Don't log failures for 0-turn workflow dispatch errors - these are GitHub Actions YAML issues, not real agent failures
-  if (status === "failed" && error && (tokens_used === 0 || tokens_used == null)) {
-    const is0TurnError = error.includes("unknown (0 turns)") ||
-                        error.includes("exhausted after 0 turns") ||
-                        error.includes("workflow file issue") ||
-                        error.includes("syntax error") ||
-                        description?.includes("unknown (0 turns)");
+  // Enhanced detection for 0-turn workflow dispatch errors
+  // These are GitHub Actions YAML/dispatch issues, not real agent execution failures
+  if (status === "failed" && error) {
+    const is0TurnError =
+      // Zero or null tokens indicates workflow never started executing
+      (tokens_used === 0 || tokens_used == null) &&
+      (
+        // Known 0-turn error patterns
+        error.includes("unknown (0 turns)") ||
+        error.includes("exhausted after 0 turns") ||
+        error.includes("workflow file issue") ||
+        error.includes("syntax error") ||
+        error.includes("YAML syntax") ||
+        error.includes("workflow dispatch failed") ||
+        error.includes("workflow not found") ||
+        error.includes("invalid workflow") ||
+        description?.includes("unknown (0 turns)") ||
+        description?.includes("dispatch failed")
+      );
 
-    if (is0TurnError) {
+    // Also check for GitHub Actions brain agents that failed without any execution evidence
+    const isBrainAgent = ['ceo', 'scout', 'engineer', 'evolver', 'healer'].includes(agent);
+    const isPreWorkflowLogging =
+      isBrainAgent &&
+      (tokens_used === 0 || tokens_used == null) &&
+      !input && // No input means workflow didn't process the payload
+      (!output || output === '{}' || output === 'null'); // No meaningful output
+
+    if (is0TurnError || isPreWorkflowLogging) {
       console.log(`Skipping 0-turn failure log for ${agent}:${action_type} - GitHub Actions dispatch error, not agent execution failure`);
+      console.log(`Error details: tokens=${tokens_used}, error="${error?.slice(0, 200)}"`);
       return json({ ok: true, skipped: true, reason: "0-turn workflow dispatch error" });
     }
   }
