@@ -508,7 +508,7 @@ export async function POST(req: Request) {
     `.catch(() => []);
 
     const blocksAgents = detectBlockedAgents(item.title, item.description);
-    const daysSinceCreated = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 86400000);
+    const daysSinceCreated = Math.max(0, item.created_at ? (Date.now() - new Date(item.created_at).getTime()) / 86400000 : 0);
     const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
 
     const scored = computeBacklogScore(item as BacklogItem, {

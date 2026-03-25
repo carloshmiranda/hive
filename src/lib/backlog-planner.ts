@@ -18,6 +18,7 @@ interface BacklogItem {
   priority: string;
   category: string;
   notes?: string;
+  created_at?: string;
 }
 
 // Fetch Hive repo file tree from GitHub API (cached per call)
