@@ -56,7 +56,7 @@ export async function POST(req: Request) {
 
   const sql = getDb();
   const body = await req.json().catch(() => ({}));
-  const { completed_id, completed_status } = body;
+  const { completed_id, completed_status, pr_number, branch, changed_files } = body;
 
   // Periodic cleanup of expired cooldown entries
   cleanupFailedItemsCache();
@@ -66,12 +66,43 @@ export async function POST(req: Request) {
     if (completed_status === "success") {
       // Engineer "success" means PR created, NOT code merged.
       // Move to 'pr_open' so it stays visible until PR is merged.
+      let prInfo = '';
+      if (pr_number && branch) {
+        const fileCount = changed_files ? (Array.isArray(changed_files) ? changed_files.length : 0) : 0;
+        prInfo = ` PR #${pr_number} on ${branch} (${fileCount} files) created via chain dispatch — awaiting merge.`;
+      } else {
+        prInfo = ' PR created via chain dispatch — awaiting merge.';
+      }
+
       await sql`
         UPDATE hive_backlog
         SET status = 'pr_open', dispatched_at = NOW(),
-            notes = COALESCE(notes, '') || ' PR created via chain dispatch — awaiting merge.'
+            notes = COALESCE(notes, '') || ${prInfo}
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
+
+      // Store PR tracking data in the agent_actions record
+      if (pr_number && branch) {
+        await sql`
+          UPDATE agent_actions
+          SET output = CASE
+            WHEN output IS NULL THEN
+              ${JSON.stringify({ pr_number, branch, changed_files })}
+            ELSE
+              jsonb_set(
+                COALESCE(output, '{}'),
+                '{pr_tracking}',
+                ${JSON.stringify({ pr_number, branch, changed_files })}
+              )
+          END
+          WHERE agent = 'engineer'
+          AND action_type = 'feature_request'
+          AND status = 'success'
+          AND company_id IS NULL
+          AND started_at > NOW() - INTERVAL '1 hour'
+          AND (output::text ILIKE ${'%' + completed_id + '%'} OR description ILIKE ${'%' + completed_id + '%'})
+        `.catch(() => {});
+      }
 
     } else {
       // Failed: learn from it. Track attempts, decompose if too big.
