@@ -859,13 +859,24 @@ jobs:
           HIVE_URL="https://hive-phi.vercel.app"
           COMPANY=$(echo "${PAYLOAD_JSON}" | jq -r '.company // empty' 2>/dev/null || echo "")
 
+          # Extract error subtype for decompose logic (e.g., error_max_turns)
+          ERROR_TYPE=""
+          if [ "$STATUS" = "failed" ]; then
+            EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+            if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+              EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+            fi
+            ERROR_TYPE=$(jq -r '.[-1].subtype // ""' "$EXEC_FILE" 2>/dev/null || echo "")
+            echo "  Error type: $ERROR_TYPE"
+          fi
+
           if [ -n "$BACKLOG_ID" ] || [ "$(echo "${PAYLOAD_JSON}" | jq -r '.chain_next // false')" = "true" ]; then
             # First try to chain to next backlog item
             echo "Chaining: marking $BACKLOG_ID as $STATUS, dispatching next..."
             BACKLOG_RESULT=$(curl -s -X POST "$HIVE_URL/api/backlog/dispatch" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\"}" || echo "{}")
+              -d "{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\",\"error\":\"${ERROR_TYPE}\"}" || echo "{}")
             echo "  Backlog result: $BACKLOG_RESULT"
 
             # If no backlog items left, chain to next company cycle
