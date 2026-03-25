@@ -96,6 +96,8 @@ jobs:
         id: agent
         env:
           GH_PAT: ${{ steps.auth.outputs.gh_pat }}
+          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
+          HIVE_URL: https://hive-phi.vercel.app
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
@@ -120,7 +122,15 @@ jobs:
                - After planning, ALWAYS save the updated product_spec to research_reports (UPSERT on company_id + report_type = 'product_spec')
             3. Based on the trigger:
                - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
-               - cycle_complete: Score the cycle 1-10 using phase-appropriate criteria from prompts/ceo.md
+               - cycle_complete: Score the cycle 1-10 using phase-appropriate criteria from prompts/ceo.md.
+                 CRITICAL — After generating the review JSON, you MUST save it to the cycles table:
+                 1. Find the current cycle: SELECT id FROM cycles WHERE company_id = '<company_id>' ORDER BY started_at DESC LIMIT 1
+                 2. Save the review via API:
+                    curl -X PATCH "$HIVE_URL/api/cycles/<cycle_id>/review" \
+                      -H "Authorization: Bearer $CRON_SECRET" \
+                      -H "Content-Type: application/json" \
+                      -d '{"ceo_review": {"review": {"score": N, "agent_grades": {...}, "kill_flag": false, "validation_phase": "...", "summary": "...", "next_priorities": [...]}}, "status": "completed"}'
+                 Without this step, the score is lost and validation gating breaks.
                - gate_approved: Route the approval. If gate_type is 'new_company', output needs_provisioning: true so Engineer can scaffold the repo, Vercel project, Neon DB, and Stripe product. Include the company slug.
                - cycle_start: Start a new cycle for the specified company. Load research reports, determine lifecycle mode, create a cycle plan with engineering_tasks and growth_tasks.
                - ceo_review: Review and merge PRs from the Engineer agent. Payload has `company` and `pr_number`.
@@ -225,13 +235,17 @@ jobs:
 
           ERROR_FULL="error_${SUBTYPE}: ${ERROR_MSG} (${TURNS} turns) ${RUN_URL}"
 
+          # 0-turn = ghost run (workflow issue, not real agent failure)
+          LOG_STATUS="failed"
+          if [ "$TURNS" = "0" ]; then LOG_STATUS="skipped"; fi
+
           node -e "
           const postgres = require('postgres');
           const sql = postgres(process.env.DATABASE_URL);
           async function log() {
             await sql\`
               INSERT INTO agent_actions (agent, action_type, status, error, output, started_at, finished_at)
-              VALUES ('ceo', '${{ steps.context.outputs.trigger }}', 'failed',
+              VALUES ('ceo', '${{ steps.context.outputs.trigger }}', '${LOG_STATUS}',
                 \${process.env.ERROR_FULL},
                 \${JSON.stringify({subtype: '${SUBTYPE}', turns: parseInt('${TURNS}'), cost: parseFloat('${COST}'), run_url: '${RUN_URL}'})}::jsonb,
                 NOW() - INTERVAL '${TURNS} minutes', NOW())

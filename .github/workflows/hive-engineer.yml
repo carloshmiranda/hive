@@ -953,9 +953,16 @@ jobs:
           ERROR_ESCAPED=$(echo "$ERROR_MSG" | jq -Rs '.' | sed 's/^"//;s/"$//')
           TASK_ESCAPED=$(echo "$TASK" | jq -Rs '.' | sed 's/^"//;s/"$//')
 
-          echo "Logging failure: subtype=$SUBTYPE turns=$TURNS error=${ERROR_MSG:0:100}"
+          # 0-turn failures are ghost runs (workflow issues, not real agent failures).
+          # Log as 'skipped' to avoid inflating failure rate metrics.
+          LOG_STATUS="failed"
+          if [ "$TURNS" = "0" ]; then
+            LOG_STATUS="skipped"
+          fi
+
+          echo "Logging $LOG_STATUS: subtype=$SUBTYPE turns=$TURNS error=${ERROR_MSG:0:100}"
 
           curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"failed\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns) ${RUN_URL}\"}" || true
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"${LOG_STATUS}\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns) ${RUN_URL}\"}" || true

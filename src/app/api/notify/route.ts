@@ -22,7 +22,8 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { agent, action, company, status, summary, details } = body;
+  const { agent, action, company, status, summary, details,
+    pr_number, pr_url, pr_title, duration_s, task_title, error, run_url } = body;
 
   if (!agent || !action || !status || !summary) {
     return err("Missing required fields: agent, action, status, summary", 400);
@@ -36,7 +37,10 @@ export async function POST(req: NextRequest) {
   };
   const normalizedStatus = statusMap[status] || "success";
 
-  const sent = await notifyHive({ agent, action, company, status: normalizedStatus, summary, details });
+  const sent = await notifyHive({
+    agent, action, company, status: normalizedStatus, summary, details,
+    pr_number, pr_url, pr_title, duration_s, task_title, error, run_url,
+  });
 
   return json({ sent });
 }

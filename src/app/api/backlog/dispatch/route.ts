@@ -114,22 +114,29 @@ export async function POST(req: Request) {
   // If a completed item was passed, update its status
   if (completed_id && completed_status) {
     if (completed_status === "success") {
-      // Engineer "success" means PR created, NOT code merged.
-      // Move to 'pr_open' so it stays visible until PR is merged.
-      let prInfo = '';
-      if (pr_number && branch) {
+      // Engineer "success" means work completed. If PR was created, track it.
+      // pr_open requires pr_number — without it, mark as done (prevents phantom pr_open).
+      if (pr_number) {
         const fileCount = changed_files ? (Array.isArray(changed_files) ? changed_files.length : 0) : 0;
-        prInfo = ` PR #${pr_number} on ${branch} (${fileCount} files) created via chain dispatch — awaiting merge.`;
+        const prInfo = ` PR #${pr_number} on ${branch || 'unknown'} (${fileCount} files) — awaiting merge.`;
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'pr_open', dispatched_at = NOW(),
+              pr_number = ${parseInt(pr_number, 10)},
+              pr_url = ${`https://github.com/carloshmiranda/hive/pull/${pr_number}`},
+              notes = COALESCE(notes, '') || ${prInfo}
+          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+        `.catch(() => {});
       } else {
-        prInfo = ' PR created via chain dispatch — awaiting merge.';
+        // No PR number — Engineer completed via direct commit or the PR info was lost.
+        // Mark as done to prevent phantom pr_open items.
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'done', completed_at = NOW(),
+              notes = COALESCE(notes, '') || ' Completed via chain dispatch (no PR created — direct commit or PR info missing).'
+          WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+        `.catch(() => {});
       }
-
-      await sql`
-        UPDATE hive_backlog
-        SET status = 'pr_open', dispatched_at = NOW(),
-            notes = COALESCE(notes, '') || ${prInfo}
-        WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-      `.catch(() => {});
 
       // Store PR tracking data in the agent_actions record
       if (pr_number && branch) {

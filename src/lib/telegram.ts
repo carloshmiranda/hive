@@ -49,6 +49,49 @@ export type NotificationEvent = {
   status: "started" | "success" | "failed";
   summary: string;
   details?: string;
+  pr_number?: number;
+  pr_url?: string;
+  pr_title?: string;
+  duration_s?: number;
+  task_title?: string;
+  error?: string;
+  run_url?: string;
+};
+
+// Human-readable agent descriptions for Telegram
+const AGENT_LABELS: Record<string, string> = {
+  ceo: "CEO (Strategy)",
+  scout: "Scout (Ideas)",
+  engineer: "Engineer (Code)",
+  evolver: "Evolver (Prompts)",
+  growth: "Growth (Content)",
+  outreach: "Outreach (Email)",
+  ops: "Ops (Health)",
+  sentinel: "Sentinel (Monitor)",
+  healer: "Healer (Fix)",
+  digest: "Digest (Report)",
+  webhook: "Webhook",
+};
+
+// Human-readable action descriptions
+const ACTION_LABELS: Record<string, string> = {
+  cycle_start: "Starting cycle",
+  cycle_complete: "Reviewing cycle",
+  cycle_review: "Reviewing cycle",
+  ceo_review: "Reviewing PR",
+  feature_request: "Building feature",
+  research_request: "Researching market",
+  gate_approved: "Processing approval",
+  stripe_payment: "Payment received",
+  evolve_trigger: "Analyzing prompts",
+  healer_trigger: "Self-healing",
+  ops_escalation: "Handling escalation",
+  deploy_drift: "Fixing deploy drift",
+  phantom_pr_cleanup: "Cleaning phantom PRs",
+  pr_verification: "Verifying PRs",
+  auto_resolve_escalation: "Auto-resolving",
+  hive_triage: "Triaging Hive fixes",
+  backlog_dispatch: "Dispatching backlog",
 };
 
 // Format agent activity as a Telegram notification
@@ -73,12 +116,44 @@ export function formatAgentNotification(event: NotificationEvent): string {
   };
   const icon = icons[event.agent] || "\u{1F916}";
   const statusIcon = statusIcons[event.status] || "\u2753";
+  const agentLabel = AGENT_LABELS[event.agent] || event.agent.toUpperCase();
+  const actionLabel = ACTION_LABELS[event.action] || event.action.replace(/_/g, " ");
 
-  let msg = `${statusIcon} ${icon} <b>${event.agent.toUpperCase()}</b>`;
-  if (event.company) msg += ` \u2192 ${event.company}`;
-  msg += `\n<b>${event.action}</b>`;
+  let msg = `${statusIcon} ${icon} <b>${agentLabel}</b>`;
+  if (event.company) msg += ` \u2192 <b>${event.company}</b>`;
+
+  // Action line — human-readable
+  msg += `\n${actionLabel}`;
+  if (event.task_title) msg += `: ${event.task_title.slice(0, 100)}`;
+
+  // Duration if available
+  if (event.duration_s && event.duration_s > 0) {
+    const mins = Math.floor(event.duration_s / 60);
+    const secs = event.duration_s % 60;
+    msg += `\n\u23F1 ${mins > 0 ? `${mins}m ` : ""}${secs}s`;
+  }
+
+  // Summary
   msg += `\n${event.summary}`;
-  if (event.details) msg += `\n\n<i>${event.details.slice(0, 500)}</i>`;
+
+  // PR info with clickable link
+  if (event.pr_number && event.pr_url) {
+    msg += `\n\u{1F517} <a href="${event.pr_url}">PR #${event.pr_number}</a>`;
+    if (event.pr_title) msg += ` — ${event.pr_title.slice(0, 80)}`;
+  }
+
+  // Error info for failures
+  if (event.status === "failed" && event.error) {
+    msg += `\n\n\u26A0\uFE0F <code>${event.error.slice(0, 300)}</code>`;
+  }
+
+  // Run URL for debugging
+  if (event.run_url) {
+    msg += `\n<a href="${event.run_url}">View run</a>`;
+  }
+
+  // Additional details
+  if (event.details) msg += `\n\n<i>${event.details.slice(0, 300)}</i>`;
   return msg;
 }
 
