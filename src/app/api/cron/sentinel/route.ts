@@ -1656,10 +1656,27 @@ export async function GET(req: Request) {
     `.catch(() => []);
 
     // (C) Agent failure rate — if >50% of all agent runs are failing, Hive needs fixing
+    // Exclude 0-turn actions (GitHub Actions dispatch failures, not real agent execution failures)
     const failureRate = await sql`
       SELECT
-        COUNT(*) FILTER (WHERE status = 'failed')::float /
-        NULLIF(COUNT(*), 0)::float as rate
+        COUNT(*) FILTER (WHERE status = 'failed'
+          AND NOT (
+            (tokens_used = 0 OR tokens_used IS NULL)
+            AND (error ILIKE '%unknown (0 turns)%'
+                 OR error ILIKE '%exhausted after 0 turns%'
+                 OR error ILIKE '%workflow file issue%'
+                 OR error ILIKE '%syntax error%'
+                 OR description ILIKE '%unknown (0 turns)%')
+          )
+        )::float /
+        NULLIF(COUNT(*) FILTER (WHERE NOT (
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )), 0)::float as rate
       FROM agent_actions
       WHERE agent NOT IN ('sentinel', 'healer')
         AND finished_at > NOW() - INTERVAL '48 hours'
@@ -2227,6 +2244,154 @@ export async function GET(req: Request) {
         ${`Test coverage check: ${testCoverageIssues} issues found across ${testCompanies.length} companies`},
         'success', NOW(), NOW())
     `.catch(() => {});
+  }
+
+  // --- Check 39: Auto-decompose blocked backlog items ---
+  // Items blocked after repeated max_turns failures need decomposition, not more retries.
+  // Uses the planner to generate approach steps, then splits into S-sized sub-tasks.
+  try {
+    const blockedItems = await sql`
+      SELECT id, title, description, priority, category, spec, notes
+      FROM hive_backlog
+      WHERE status = 'blocked'
+        AND notes LIKE '%Too many failed attempts%'
+        AND NOT (notes LIKE '%auto-decomposed%')
+        AND title NOT ILIKE '%email domain%'
+      LIMIT 5
+    `;
+
+    let decomposedCount = 0;
+    for (const item of blockedItems) {
+      try {
+        const { generateSpec } = await import("@/lib/backlog-planner");
+        let spec = item.spec;
+        if (!spec || !spec.approach) {
+          spec = await generateSpec(
+            { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
+            sql
+          );
+        }
+        if (spec && Array.isArray(spec.approach) && spec.approach.length >= 2) {
+          const steps = spec.approach as string[];
+          const subItems: { title: string; description: string }[] = [];
+          for (let i = 0; i < steps.length; i += 2) {
+            const chunk = steps.slice(i, i + 2);
+            const stepNums = chunk.map((_: string, j: number) => i + j + 1).join("-");
+            subItems.push({
+              title: `${item.title} (step ${stepNums}/${steps.length})`,
+              description: `Parent: ${item.title}\n\n${chunk.join("\n")}`,
+            });
+          }
+          if (subItems.length >= 2) {
+            for (const sub of subItems) {
+              await sql`
+                INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+                VALUES (
+                  ${(sub.title as string).slice(0, 200)}, ${(sub.description as string).slice(0, 2000)},
+                  ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
+                  ${JSON.stringify({ complexity: "S", estimated_turns: 15, acceptance_criteria: ["npx next build passes"] })}
+                )
+              `.catch(() => {});
+            }
+            await sql`
+              UPDATE hive_backlog
+              SET notes = COALESCE(notes, '') || ${` [auto-decomposed] Sentinel check 39 split into ${subItems.length} sub-tasks.`}
+              WHERE id = ${item.id}
+            `.catch(() => {});
+            decomposedCount++;
+            dispatches.push({ type: "internal", target: "backlog_decompose", payload: { item_id: item.id, title: item.title, sub_tasks: subItems.length } });
+          }
+        }
+      } catch (decompErr: any) {
+        console.warn(`[sentinel] Check 39: decompose failed for "${item.title}": ${decompErr.message}`);
+      }
+    }
+
+    if (decomposedCount > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'backlog_decompose',
+          ${`Check 39: Decomposed ${decomposedCount} blocked items into sub-tasks`},
+          'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (check39Err: any) {
+    console.warn(`[sentinel] Check 39 failed: ${check39Err.message}`);
+  }
+
+  // --- Check 38: Review and auto-merge open Hive PRs ---
+  if (ghPat) try {
+    const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
+      headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+    });
+    if (prListRes.ok) {
+      const openPRs = await prListRes.json();
+      // Only process PRs on hive/ branches (created by Engineer agent)
+      const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
+      let merged = 0, queued = 0, escalated = 0;
+
+      for (const pr of hivePRs) {
+        try {
+          const { analyzePR: analyzeHivePR, autoMergePR: mergeHivePR } = await import("@/lib/pr-risk-scoring");
+          const analysis = await analyzeHivePR("carloshmiranda", "hive", pr.number, ghPat!);
+
+          if (analysis.decision === "auto_merge") {
+            const result = await mergeHivePR("carloshmiranda", "hive", pr.number, ghPat!, "squash");
+            if (result.success) {
+              merged++;
+              // Update hive_backlog items with matching PR
+              await sql`
+                UPDATE hive_backlog SET status = 'done', notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by Sentinel check 38.`}
+                WHERE status = 'pr_open'
+                  AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
+              `.catch(() => {});
+              dispatches.push({ type: "internal", target: "pr_auto_merged", payload: { pr: pr.number, title: pr.title, risk: analysis.riskScore } });
+
+              // Notify via Telegram
+              try {
+                await fetch(`${baseUrl}/api/notify`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${cronSecret}` },
+                  body: JSON.stringify({ text: `✅ Auto-merged PR #${pr.number}: ${pr.title} (risk: ${analysis.riskScore})` }),
+                });
+              } catch {}
+            }
+          } else if (analysis.decision === "manual_review") {
+            queued++;
+            dispatches.push({ type: "internal", target: "pr_queued_review", payload: { pr: pr.number, title: pr.title, risk: analysis.riskScore, factors: analysis.riskFactors } });
+          } else if (analysis.decision === "escalate") {
+            // Check if we already have a pending approval for this PR
+            const [existingApproval] = await sql`
+              SELECT id FROM approvals WHERE gate_type = 'pr_review' AND status = 'pending'
+                AND context->>'pr_number' = ${String(pr.number)}
+            `;
+            if (!existingApproval) {
+              await sql`
+                INSERT INTO approvals (gate_type, title, description, context, status)
+                VALUES ('pr_review', ${`PR #${pr.number}: ${pr.title}`},
+                  ${`Risk score ${analysis.riskScore}. Issues: ${[...analysis.hardGateIssues, ...analysis.riskFactors].join(", ")}`},
+                  ${JSON.stringify({ pr_number: pr.number, risk_score: analysis.riskScore, hard_gates: analysis.hardGateIssues, risk_factors: analysis.riskFactors })}::jsonb,
+                  'pending')
+              `;
+              escalated++;
+            }
+          }
+        } catch (prErr: any) {
+          console.warn(`[sentinel] PR #${pr.number} analysis failed: ${prErr.message}`);
+        }
+      }
+
+      if (merged > 0 || queued > 0 || escalated > 0) {
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'pr_review_check',
+            ${`PR review check 38: ${hivePRs.length} open PRs — ${merged} auto-merged, ${queued} queued, ${escalated} escalated`},
+            'success', NOW(), NOW())
+        `.catch(() => {});
+      }
+    }
+  } catch (prCheckErr: any) {
+    console.warn(`[sentinel] Check 38 (PR review) failed: ${prCheckErr.message}`);
   }
 
   // --- HTTP health checks (parallel) ---

@@ -347,6 +347,64 @@ export async function POST(req: Request) {
               `.catch(() => {});
             }
           }
+        } else {
+          // Handle company repo PRs for task tracking
+          const [company] = await sql`SELECT id FROM companies WHERE slug = ${prRepo}`.catch(() => []);
+          if (company) {
+            // Extract task_id from branch name (pattern: hive/cycle-<N>-<task-id>)
+            const branchName = pr.head?.ref || "";
+            const taskIdMatch = branchName.match(/^hive\/cycle-\d+-(.+)$/);
+            const taskId = taskIdMatch?.[1];
+
+            if (taskId) {
+              if (merged) {
+                // Confirm task is completed on merge
+                await sql`
+                  UPDATE company_tasks
+                  SET status = 'done', updated_at = now()
+                  WHERE id = ${taskId} AND company_id = ${company.id}
+                  AND status IN ('approved', 'in_progress')
+                `.catch(() => {});
+
+                await sql`
+                  INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+                  VALUES (
+                    ${company.id}, 'webhook', 'task_completed',
+                    ${`Task ${taskId} confirmed completed via PR #${prNumber} merge`},
+                    'success', now(), now()
+                  )
+                `.catch(() => {});
+
+                // Telegram notification
+                import("@/lib/telegram").then(({ notifyHive }) =>
+                  notifyHive({
+                    agent: "webhook",
+                    action: "task_completed",
+                    company: prRepo,
+                    status: "success",
+                    summary: `Task ${taskId} completed via PR #${prNumber}`,
+                  })
+                ).catch(() => {});
+              } else {
+                // PR closed without merge - reset task to approved for retry
+                await sql`
+                  UPDATE company_tasks
+                  SET status = 'approved', updated_at = now()
+                  WHERE id = ${taskId} AND company_id = ${company.id}
+                  AND status = 'done'
+                `.catch(() => {});
+
+                await sql`
+                  INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+                  VALUES (
+                    ${company.id}, 'webhook', 'task_reset',
+                    ${`Task ${taskId} reset to approved - PR #${prNumber} closed without merge`},
+                    'success', now(), now()
+                  )
+                `.catch(() => {});
+              }
+            }
+          }
         }
       }
       break;

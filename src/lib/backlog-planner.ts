@@ -1,5 +1,6 @@
 import { callLLM } from "@/lib/llm";
 import { getSettingValue } from "@/lib/settings";
+import { isBacklogItemInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
 
 export interface BacklogSpec {
   acceptance_criteria: string[];
@@ -17,6 +18,7 @@ interface BacklogItem {
   priority: string;
   category: string;
   notes?: string;
+  created_at?: string;
 }
 
 // Fetch Hive repo file tree from GitHub API (cached per call)
@@ -98,6 +100,18 @@ function findRelevantFiles(
     .sort((a, b) => b.score - a.score)
     .slice(0, 15)
     .map((s) => s.file);
+}
+
+/**
+ * Filter backlog items to exclude those in cooldown period
+ * Also performs cleanup of expired cooldown entries
+ */
+export function filterBacklogItemsByCooldown(items: BacklogItem[]): BacklogItem[] {
+  // Clean up expired entries first
+  cleanupFailedItemsCache();
+
+  // Filter out items that are in cooldown
+  return items.filter(item => !isBacklogItemInCooldown(item.id));
 }
 
 // Generate a spec for a backlog item using a cheap LLM call

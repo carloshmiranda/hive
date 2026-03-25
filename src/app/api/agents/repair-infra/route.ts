@@ -33,7 +33,28 @@ export async function POST(req: NextRequest) {
   const repairs: Record<string, unknown> = { company_slug };
 
   // ── Repair 1: Missing Neon database ──
-  if (!company.neon_project_id) {
+  // First check if Vercel already has a DATABASE_URL (Vercel-managed Neon integration)
+  let vercelHasDbUrl = false;
+  if (!company.neon_project_id && company.vercel_project_id) {
+    try {
+      const vercelToken = await getSettingValue("vercel_token");
+      const teamId = await getSettingValue("vercel_team_id");
+      const teamParam = teamId ? `&teamId=${teamId}` : "";
+      const envRes = await fetch(
+        `https://api.vercel.com/v9/projects/${company.vercel_project_id}/env?${teamParam}`,
+        { headers: { Authorization: `Bearer ${vercelToken}` } }
+      );
+      if (envRes.ok) {
+        const envData = await envRes.json();
+        vercelHasDbUrl = envData.envs?.some((e: { key: string }) => e.key === "DATABASE_URL") ?? false;
+      }
+    } catch { /* non-blocking — fall through to Neon API attempt */ }
+  }
+
+  if (!company.neon_project_id && vercelHasDbUrl) {
+    // DB is managed by Vercel integration — no standalone Neon project needed
+    repairs.neon = { skipped: true, reason: "DATABASE_URL exists in Vercel env vars (Vercel-managed Neon integration)" };
+  } else if (!company.neon_project_id) {
     try {
       const neon = await createNeonProject(company_slug);
       repairs.neon = { project_id: neon.projectId, created: true };
