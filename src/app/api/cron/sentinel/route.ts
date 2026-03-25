@@ -1085,6 +1085,34 @@ export async function GET(req: Request) {
   const SKIP_AUTO_RESOLVE = ["capability_migration", "escalation", "ops_escalation", "new_company", "kill_company"];
   for (const esc of recurringEscalations) {
     if (SKIP_AUTO_RESOLVE.includes(esc.gate_type as string)) continue;
+
+    // Check how many failed auto-resolve attempts have been made for this escalation in the last 48h
+    const [retryCount] = await sql`
+      SELECT COUNT(*)::int as attempts
+      FROM agent_actions
+      WHERE company_id = ${esc.company_id}
+        AND agent = 'sentinel'
+        AND action_type = 'auto_resolve_escalation'
+        AND status = 'failed'
+        AND description ILIKE ${'%' + esc.gate_type + '%' + esc.slug + '%'}
+        AND started_at > NOW() - INTERVAL '48 hours'
+    `;
+
+    // Cap retries at 3 attempts - stop trying and keep escalation pending for manual review
+    if (retryCount && retryCount.attempts >= 3) {
+      await sql`
+        INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+        VALUES (
+          ${esc.company_id}, 'sentinel', 'auto_resolve_escalation',
+          ${`Skipped auto-resolve for ${esc.gate_type} on ${esc.slug} - max retries (3) exceeded`},
+          'skipped',
+          ${JSON.stringify({ reason: 'max_retries_exceeded', attempts: retryCount.attempts, gate_type: esc.gate_type })}::jsonb,
+          NOW(), NOW()
+        )
+      `;
+      continue; // Skip this escalation and leave it escalated for manual review
+    }
+
     const description = (esc.latest_description as string) || "";
     const capability = findCapabilityForProblem(description);
 
