@@ -59,7 +59,7 @@ export async function POST(req: Request) {
   const rateLimited = Number((rateLimitRow as Record<string, number>)?.rate_limited || 0);
   if (rateLimited >= 2) blockers.push(`claude_rate_limited: ${rateLimited} failures in 2h (weekly/session cap likely hit)`);
 
-  // 3. System failure rate (last 24h)
+  // 3. System failure rate (last 6h — short window so old retry storms don't block recovery)
   const [failRate] = await sql`
     SELECT COUNT(*) FILTER (WHERE status = 'failed')::float /
       NULLIF(COUNT(*), 0)::float as rate,
@@ -67,7 +67,7 @@ export async function POST(req: Request) {
       COUNT(*)::int as total
     FROM agent_actions
     WHERE agent NOT IN ('sentinel', 'healer')
-    AND finished_at > NOW() - INTERVAL '24 hours'
+    AND finished_at > NOW() - INTERVAL '6 hours'
   `.catch(() => [{ rate: 0, failures: 0, total: 0 }]);
   const sysFailRate = Number(failRate?.rate || 0);
   if (sysFailRate > 0.5) blockers.push(`high_failure_rate: ${Math.round(sysFailRate * 100)}%`);
