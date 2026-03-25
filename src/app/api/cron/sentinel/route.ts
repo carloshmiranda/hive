@@ -344,44 +344,8 @@ export async function GET(req: Request) {
     AND created_at < NOW() - INTERVAL '48 hours'
   `;
 
-  // More aggressive auto-cleanup of stale Scout proposals
-  let proposalCleanupCount = 0;
-
-  // Trigger cleanup more aggressively: >3 pending proposals or any stale proposals
-  const shouldCleanup = parseInt(pendingProposals.cnt) > 3 || parseInt(staleProposals.cnt) > 0;
-
-  if (shouldCleanup) {
-    const reason = parseInt(pendingProposals.cnt) > 10 ?
-      "Aggressive cleanup by Sentinel: Scout pipeline severely clogged, prioritizing company execution" :
-      "Auto-cleanup by Sentinel: Scout proposals accumulating, focusing on existing companies";
-
-    console.log(`[sentinel] Scout cleanup triggered: ${pendingProposals.cnt} pending, ${staleProposals.cnt} stale proposals`);
-
-    try {
-      const cleanupRes = await fetch("https://hive-phi.vercel.app/api/approvals/scout-cleanup", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.CRON_SECRET}`
-        },
-        body: JSON.stringify({
-          max_pending: parseInt(pendingProposals.cnt) > 10 ? 2 : 3, // More aggressive when severely clogged
-          min_age_hours: parseInt(pendingProposals.cnt) > 10 ? 24 : 48, // Faster expiry when clogged
-          reason
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-      if (cleanupRes.ok) {
-        const data = await cleanupRes.json();
-        proposalCleanupCount = data.expired_count || 0;
-        console.log(`[sentinel] Scout cleanup: expired ${proposalCleanupCount} stale proposals`);
-      }
-    } catch (e) {
-      console.log(`[sentinel] Scout cleanup failed: ${e instanceof Error ? e.message : "unknown"}`);
-    }
-  }
-
-  // Scout blocked if too many pending proposals or any stale proposals exist
+  // Scout blocked if too many pending proposals — stops NEW idea generation only.
+  // NEVER auto-expire or auto-dismiss existing proposals. Carlos reviews them manually.
   const scoutBlocked = parseInt(pendingProposals.cnt) >= 5 || parseInt(staleProposals.cnt) > 0;
   const pipelineLow = parseInt(pipeline.cnt) < 3 && parseInt(pendingIdeas.cnt) === 0 && !scoutBlocked;
 
@@ -3308,7 +3272,7 @@ export async function GET(req: Request) {
     trace_id: traceId,
     dispatches: dispatches.length,
     approvals_expired: expiredApprovals.length,
-    scout_proposals_cleaned: proposalCleanupCount,
+    scout_proposals_cleaned: 0,
     stuck_cycles_cleaned: stuckCycles.length,
     deploy_drift: drift.drifted,
     broken_deploys: brokenDeploys.length,
