@@ -1,0 +1,87 @@
+name: Hive PR Webhook
+run-name: "PR Event: ${{ github.event.action }} - #${{ github.event.number }}"
+
+on:
+  pull_request:
+    types: [opened, closed, merged]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  handle-pr-event:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Handle PR merge completion
+        if: github.event.pull_request.merged == true
+        run: |
+          echo "PR #${{ github.event.number }} was merged"
+
+          # Extract task_id from PR branch name or description
+          BRANCH_NAME="${{ github.head_ref }}"
+          PR_BODY="${{ github.event.pull_request.body }}"
+
+          # Try to extract task_id from branch name (format: hive/cycle-N-task-id)
+          TASK_ID=$(echo "$BRANCH_NAME" | grep -oP 'hive/cycle-\d+-\K[a-f0-9-]+' || echo "")
+
+          # If not found in branch, try PR body
+          if [ -z "$TASK_ID" ]; then
+            TASK_ID=$(echo "$PR_BODY" | grep -oP 'Task\s+[a-f0-9-]+' | head -1 | grep -oP '[a-f0-9-]+' || echo "")
+          fi
+
+          if [ -n "$TASK_ID" ]; then
+            echo "Found task_id: $TASK_ID"
+
+            # Get OIDC token for API access
+            OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+              | jq -r '.value')
+
+            if [ -n "$OIDC_TOKEN" ] && [ "$OIDC_TOKEN" != "null" ]; then
+              # Confirm task completion
+              TASK_UPDATE=$(curl -s -X PATCH "https://hive-phi.vercel.app/api/tasks/${TASK_ID}" \
+                -H "Authorization: Bearer $OIDC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d '{"status":"done"}' 2>/dev/null || echo "{}")
+
+              UPDATE_SUCCESS=$(echo "$TASK_UPDATE" | jq -r '.id // empty')
+              if [ -n "$UPDATE_SUCCESS" ]; then
+                echo "✅ Task ${TASK_ID} completion confirmed via PR merge"
+
+                # Log the completion event
+                curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+                  -H "Authorization: Bearer $OIDC_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"company_slug\":\"${{ github.repository_owner }}/${{ github.event.repository.name }}\",\"agent\":\"github\",\"action_type\":\"task_completed\",\"status\":\"success\",\"description\":\"Task ${TASK_ID} completed via PR #${{ github.event.number }} merge\"}" || true
+              else
+                ERROR_MSG=$(echo "$TASK_UPDATE" | jq -r '.error // "unknown error"')
+                echo "❌ Failed to confirm task completion: $ERROR_MSG"
+              fi
+            else
+              echo "❌ Failed to get OIDC token for task completion"
+            fi
+          else
+            echo "⚠️ No task_id found in PR #${{ github.event.number }} - completion tracking skipped"
+          fi
+
+      - name: Log PR opened event
+        if: github.event.action == 'opened'
+        run: |
+          echo "PR #${{ github.event.number }} was opened"
+
+          # Get OIDC token for logging
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          if [ -n "$OIDC_TOKEN" ] && [ "$OIDC_TOKEN" != "null" ]; then
+            # Log PR creation event
+            curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"company_slug\":\"${{ github.repository_owner }}/${{ github.event.repository.name }}\",\"agent\":\"github\",\"action_type\":\"pr_opened\",\"status\":\"success\",\"description\":\"PR #${{ github.event.number }} opened: ${{ github.event.pull_request.title }}\"}" || true
+          fi
