@@ -56,6 +56,20 @@ export async function POST(req: Request) {
     return err("cycle_id, company_id, agent, and action_type required");
   }
 
+  // Don't log failures for 0-turn workflow dispatch errors - these are GitHub Actions YAML issues, not real agent failures
+  if (status === "failed" && error && (tokens_used === 0 || tokens_used == null)) {
+    const is0TurnError = error.includes("unknown (0 turns)") ||
+                        error.includes("exhausted after 0 turns") ||
+                        error.includes("workflow file issue") ||
+                        error.includes("syntax error") ||
+                        description?.includes("unknown (0 turns)");
+
+    if (is0TurnError) {
+      console.log(`Skipping 0-turn failure log for ${agent}:${action_type} - GitHub Actions dispatch error, not agent execution failure`);
+      return json({ ok: true, skipped: true, reason: "0-turn workflow dispatch error" });
+    }
+  }
+
   const sql = getDb();
   const [action] = await sql`
     INSERT INTO agent_actions (cycle_id, company_id, agent, action_type, description, status, input, output, error, reflection, retry_count, tokens_used, started_at, finished_at)

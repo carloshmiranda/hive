@@ -191,10 +191,27 @@ export async function GET() {
   }
 
   // High agent failure rate in last 48h
+  // Exclude 0-turn actions (GitHub Actions dispatch failures, not real agent execution failures)
   const [failStats] = await sql`
     SELECT
-      COUNT(*) FILTER (WHERE status = 'failed') as failed,
-      COUNT(*) as total
+      COUNT(*) FILTER (WHERE status = 'failed'
+        AND NOT (
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )
+      ) as failed,
+      COUNT(*) FILTER (WHERE NOT (
+        (tokens_used = 0 OR tokens_used IS NULL)
+        AND (error ILIKE '%unknown (0 turns)%'
+             OR error ILIKE '%exhausted after 0 turns%'
+             OR error ILIKE '%workflow file issue%'
+             OR error ILIKE '%syntax error%'
+             OR description ILIKE '%unknown (0 turns)%')
+      )) as total
     FROM agent_actions
     WHERE finished_at > now() - interval '48 hours'
   `;

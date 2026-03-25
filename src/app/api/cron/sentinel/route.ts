@@ -1608,10 +1608,27 @@ export async function GET(req: Request) {
     `.catch(() => []);
 
     // (C) Agent failure rate — if >50% of all agent runs are failing, Hive needs fixing
+    // Exclude 0-turn actions (GitHub Actions dispatch failures, not real agent execution failures)
     const failureRate = await sql`
       SELECT
-        COUNT(*) FILTER (WHERE status = 'failed')::float /
-        NULLIF(COUNT(*), 0)::float as rate
+        COUNT(*) FILTER (WHERE status = 'failed'
+          AND NOT (
+            (tokens_used = 0 OR tokens_used IS NULL)
+            AND (error ILIKE '%unknown (0 turns)%'
+                 OR error ILIKE '%exhausted after 0 turns%'
+                 OR error ILIKE '%workflow file issue%'
+                 OR error ILIKE '%syntax error%'
+                 OR description ILIKE '%unknown (0 turns)%')
+          )
+        )::float /
+        NULLIF(COUNT(*) FILTER (WHERE NOT (
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )), 0)::float as rate
       FROM agent_actions
       WHERE agent NOT IN ('sentinel', 'healer')
         AND finished_at > NOW() - INTERVAL '48 hours'
