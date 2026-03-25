@@ -2306,49 +2306,56 @@ export async function GET(req: Request) {
     }
   }
 
-  // Check for approved setup_action proposals that haven't been implemented
-  // These were approved in /api/evolver but only created pending_manual agent_actions
-  // Route them through hive_backlog so they get actually implemented by Engineer
-  const approvedSetupActions = await sql`
-    SELECT id, title, diagnosis, proposed_fix, severity
+  // Check for approved proposals that haven't been implemented
+  // These were approved in /api/evolver but need to be routed through hive_backlog for implementation
+  // Handles setup_action, knowledge_gap, and other implementation-requiring proposal types
+  const approvedImplementationProposals = await sql`
+    SELECT id, title, diagnosis, proposed_fix, severity, gap_type
     FROM evolver_proposals
     WHERE status = 'approved'
       AND implemented_at IS NULL
-      AND proposed_fix->>'type' = 'setup_action'
+      AND (
+        proposed_fix->>'type' = 'setup_action'
+        OR proposed_fix->>'type' = 'knowledge_gap'
+        OR (gap_type IN ('capability', 'outcome') AND signal_source = 'sentinel_self_improvement')
+      )
       AND reviewed_at > NOW() - INTERVAL '14 days'
     ORDER BY
       CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
-    LIMIT 3
+    LIMIT 5
   `;
 
-  for (const setup of approvedSetupActions) {
+  for (const proposal of approvedImplementationProposals) {
     // Check if already in backlog
     const [existing] = await sql`
       SELECT id FROM hive_backlog
-      WHERE title ILIKE ${(setup.title as string).slice(0, 50) + "%"}
+      WHERE title ILIKE ${(proposal.title as string).slice(0, 50) + "%"}
         AND status NOT IN ('done', 'rejected')
       LIMIT 1
     `.catch(() => []);
     if (existing) continue;
 
-    const priority = 'P1'; // setup_action proposals get P1 priority as they're infrastructure improvements
-    const description = `Diagnosis: ${setup.diagnosis}\n\nProposed fix: ${typeof setup.proposed_fix === 'string' ? setup.proposed_fix : JSON.stringify(setup.proposed_fix)}`;
+    const proposalType = proposal.proposed_fix?.type || proposal.gap_type;
+    // Prioritize by proposal type: setup_action and critical gaps get P1, others get P2
+    const priority = (proposalType === 'setup_action' || proposal.severity === 'critical') ? 'P1' : 'P2';
+    const category = proposalType === 'setup_action' ? 'infra' : 'improvement';
+    const description = `Diagnosis: ${proposal.diagnosis}\n\nProposed fix: ${typeof proposal.proposed_fix === 'string' ? proposal.proposed_fix : JSON.stringify(proposal.proposed_fix)}`;
 
-    // Create a backlog item for the setup action
+    // Create a backlog item for the proposal
     await sql`
       INSERT INTO hive_backlog (title, description, priority, category, status, source)
       VALUES (
-        ${(setup.title as string).slice(0, 200)},
+        ${(proposal.title as string).slice(0, 200)},
         ${description.slice(0, 2000)},
-        ${priority}, 'infra', 'ready', 'evolver_setup_action'
+        ${priority}, ${category}, 'ready', ${`evolver_${proposalType}`}
       )
     `.catch(() => {});
     await sql`
       UPDATE evolver_proposals SET implemented_at = NOW(),
         notes = COALESCE(notes, '') || ' | Routed to hive_backlog for automated implementation'
-      WHERE id = ${setup.id}
+      WHERE id = ${proposal.id}
     `;
-    dispatches.push({ type: "setup_action", target: "backlog", payload: { proposal_id: setup.id, title: setup.title, routed: "backlog" } });
+    dispatches.push({ type: proposalType, target: "backlog", payload: { proposal_id: proposal.id, title: proposal.title, routed: "backlog" } });
   }
 
   // Reminder for critical/high severity proposals pending >48h
