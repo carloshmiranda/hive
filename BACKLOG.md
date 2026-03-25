@@ -87,11 +87,20 @@ Check 44 in company-health: dispatches cycle_start for companies with no activit
 ### ✅ P1 — Detect PRs with green CI not merging (DONE — 2026-03-25)
 Check 45 in company-health: finds company repo PRs with all CI checks passing but open >2h. Dispatches CEO review to unblock them.
 
-### 🟡 P1 — Engineer polling timeout false failures
-68% of Engineer failures are 20-minute GitHub Actions polling timeouts, not actual build failures. The build may succeed on the company repo but Hive's Engineer workflow times out waiting. Options: (1) increase polling timeout, (2) webhook-based callback from company repo, (3) don't count polling timeouts as failures in success rate calculations.
+### ✅ P1 — Engineer polling timeout false failures (DONE — 2026-03-25)
+Reclassified: no polling exists. Engineer build is fire-and-forget via workflow_dispatch to company repo (30min timeout). Failures were GitHub Actions job-level timeouts, handled by company repo's own timeout-minutes.
 
-### 🟡 P1 — Groq rate limit backoff
-Concurrent Ops dispatches hit Groq 429 rate limits. Need exponential backoff + jitter in `/api/agents/dispatch` for Groq provider, or stagger Ops dispatches in Sentinel with delays between companies.
+### ✅ P1 — Groq rate limit backoff (DONE — 2026-03-25)
+Already implemented in `src/lib/llm.ts` fetchWithRetry() — exponential backoff (1s→2s→4s) + jitter for 429 errors, 4 max retries for Groq.
+
+### ✅ P1 — Sentinel infra_repair false-positive loop (DONE — 2026-03-25)
+262 repairs in 48h for all 4 companies. Root cause: Check 9c queried `neon_project_id IS NULL` without excluding Vercel-managed DBs (always NULL) and without dedup. Fix: added Vercel infra exclusion + 24h dedup.
+
+### ✅ P1 — Evolver over-triggered (DONE — 2026-03-25)
+38 gap analyses in 48h. Root cause: Sentinel dispatched evolve_trigger for `evolveDue` and `highFailureRate` with no dedup. Fixed: 24h dedup check on Evolver dispatch.
+
+### ✅ P1 — Company task completion bottleneck (DONE — 2026-03-25)
+82/102 tasks stuck in `proposed` status. CEO creates tasks via POST /api/tasks which defaulted to `proposed`. Engineer needs `approved`. Fix: CEO-sourced tasks auto-set to `approved` (already phase-gate validated).
 
 ### 🟡 P1 — Specialist prompt profiles for agent task routing
 Agents use one broad prompt for all task types, causing poor quality on specialized work (73% cascade failure rate, generic UI, no security review). Implement specialist prompt injection: task type → load focused prompt alongside the agent's base prompt.

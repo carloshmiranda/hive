@@ -115,6 +115,20 @@
 
 ---
 
+### 2026-03-25 Sentinel dispatch loops: missing dedup on recurring checks
+**What happened:** 262 infra_repair calls in 48h, 38 Evolver gap_analyses in 48h. Both were no-ops that wasted compute.
+**Root cause:** Two patterns: (1) Check 9c queried `neon_project_id IS NULL` but all Vercel-managed DBs have this as NULL — false positive for all 4 companies every Sentinel run. (2) Evolver dispatch for `evolveDue` and `highFailureRate` had no dedup guard — dispatched every hour when conditions stayed true.
+**Fix applied:** Check 9c: added `NOT EXISTS (infra WHERE service='vercel')` exclusion + 24h dedup. Evolver dispatch: added 24h dedup query on agent_actions.
+**Prevention:** Every Sentinel dispatch MUST have a dedup guard (query for recent same-type action in last N hours). When writing a query for "missing X", verify that X is actually expected to exist — don't query for standalone Neon projects when DBs are Vercel-managed.
+**Affects:** hive
+
+### 2026-03-25 CEO-sourced company tasks stuck in 'proposed' — never executed
+**What happened:** 82/102 company_tasks stuck in `proposed` status. Engineer never picked them up.
+**Root cause:** POST /api/tasks used DB default status (`proposed`). CEO already validates tasks against phase gates, but the tasks needed manual approval to move to `approved`. No approval flow existed.
+**Fix applied:** CEO-sourced tasks auto-set to `approved` in POST /api/tasks (already phase-gate validated).
+**Prevention:** When adding new status-based workflows, verify the full lifecycle: who creates → what status → who advances → who executes. Don't add statuses without a transition mechanism.
+**Affects:** both
+
 ### 2026-03-22 Boilerplate module-level SDK initialization crashes builds without env vars
 **What happened:** PoupaMais provisioning failed because `neon(process.env.DATABASE_URL!)` and `new Stripe(process.env.STRIPE_SECRET_KEY!)` were called at module scope. During `next build`, these execute even though env vars aren't set, crashing the build.
 **Root cause:** SDK clients initialized at module scope (file load time) instead of inside request handlers. Next.js evaluates all route modules during build for tree-shaking.

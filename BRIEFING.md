@@ -40,23 +40,27 @@
   - Resend domain verification (need a real domain for outreach emails)
 - **Known issues:**
   - 33+ Scout proposals pending approval (auto-expiry disabled — manual review only)
-  - All 4 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration)
+  - All 4 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration — not a bug)
   - Zero metrics across all companies — stats endpoints broken at company level
-  - Groq rate limiting (429) on concurrent Ops dispatches
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
+  - 80 existing company_tasks need bulk-approve: `UPDATE company_tasks SET status = 'approved' WHERE source = 'ceo' AND status = 'proposed'`
 - **Recently fixed:**
-  - CEO dispatch DOA fixed: prompt reduced 67% (removed CLAUDE.md read, extracted PR review to file, trigger-specific context)
-  - Engineer PR tracking in chain callback (extracts PR# from execution output)
+  - Sentinel infra_repair loop eliminated: 262 repairs/48h → 0 (Check 9c excluded Vercel-managed DBs + 24h dedup)
+  - Evolver over-triggering eliminated: 38 gap_analyses/48h → max 2 (24h dedup on dispatch)
+  - Company task bottleneck: CEO tasks auto-approved (82 stuck tasks unblocked)
+  - CEO dispatch DOA fixed: prompt reduced 67%
+  - Engineer PR tracking in chain callback
   - 3 new company-health checks: dispatch verification (43), stale safety net (44), stuck PRs (45)
   - Evolver quality gate + problem statement detection (PR #42)
-  - Backlog retry loop eliminated (max_attempts=3, problem detection, circuit breaker)
-  - 5 loop quality improvements: circuit breaker P0 bypass, auto_resolve retry cap, evolver quality gate, Check 41 PR verification, max_attempts 5→3
-  - Error extraction in all 4 agent workflows + 0-turn ghost fix (log as 'skipped')
+  - Error extraction in all 4 agent workflows + 0-turn ghost fix
   - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
+  - MCP server: added hive_sql_mutate and hive_tasks tools
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-25: Bulk backlog triage session — resolved 13 P1 items (7 already-done, 3 code fixes, 3 false alarms). Key fixes: Sentinel infra_repair loop (262/48h→0), Evolver over-trigger (38/48h→max 2), task bottleneck (82 stuck→auto-approved). Added MCP mutation tools. Groq backoff and backlog dedup verified already implemented. Engineer polling timeout reclassified (no polling exists).
 
 ### 2026-03-25 [code] CEO dispatch fix + Engineer PR tracking + 3 health checks + backlog cleanup
 - **CEO dispatch DOA fixed (P0)**: Root cause was 1576 lines of context loading burning all turns. Removed CLAUDE.md read (670 lines), extracted PR review to `prompts/ceo-review.md`, made context trigger-specific. 67% reduction for ceo_review, 43% for cycle_start.
