@@ -2567,6 +2567,51 @@ export async function GET(req: Request) {
     dispatches.push({ type: "self_improvement", target: "backlog", payload: { proposal_id: imp.id, title: imp.title, routed: "backlog" } });
   }
 
+  // Check for approved setup_action proposals that haven't been implemented
+  // These were approved in /api/evolver but only created pending_manual agent_actions
+  // Route them through hive_backlog so they get actually implemented by Engineer
+  const approvedSetupActions = await sql`
+    SELECT id, title, diagnosis, proposed_fix, severity
+    FROM evolver_proposals
+    WHERE status = 'approved'
+      AND implemented_at IS NULL
+      AND proposed_fix->>'type' = 'setup_action'
+      AND reviewed_at > NOW() - INTERVAL '14 days'
+    ORDER BY
+      CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
+    LIMIT 3
+  `;
+
+  for (const setup of approvedSetupActions) {
+    // Check if already in backlog
+    const [existing] = await sql`
+      SELECT id FROM hive_backlog
+      WHERE title ILIKE ${(setup.title as string).slice(0, 50) + "%"}
+        AND status NOT IN ('done', 'rejected')
+      LIMIT 1
+    `.catch(() => []);
+    if (existing) continue;
+
+    const priority = 'P1'; // setup_action proposals get P1 priority as they're infrastructure improvements
+    const description = `Diagnosis: ${setup.diagnosis}\n\nProposed fix: ${typeof setup.proposed_fix === 'string' ? setup.proposed_fix : JSON.stringify(setup.proposed_fix)}`;
+
+    // Create a backlog item for the setup action
+    await sql`
+      INSERT INTO hive_backlog (title, description, priority, category, status, source)
+      VALUES (
+        ${(setup.title as string).slice(0, 200)},
+        ${description.slice(0, 2000)},
+        ${priority}, 'infra', 'ready', 'evolver_setup_action'
+      )
+    `.catch(() => {});
+    await sql`
+      UPDATE evolver_proposals SET implemented_at = NOW(),
+        notes = COALESCE(notes, '') || ' | Routed to hive_backlog for automated implementation'
+      WHERE id = ${setup.id}
+    `;
+    dispatches.push({ type: "setup_action", target: "backlog", payload: { proposal_id: setup.id, title: setup.title, routed: "backlog" } });
+  }
+
   // Reminder for critical/high severity proposals pending >48h
   const urgentPending = await sql`
     SELECT id, title, severity, gap_type
