@@ -56,7 +56,57 @@ export async function POST(req: Request) {
 
   const sql = getDb();
   const body = await req.json().catch(() => ({}));
-  const { completed_id, completed_status, pr_number, branch, changed_files } = body;
+  let { completed_id, completed_status, pr_number, branch, changed_files } = body;
+
+  // Auto-extract PR tracking data if not provided and status is success
+  if (completed_id && completed_status === "success" && (!pr_number || !branch)) {
+    try {
+      const ghToken = await getSettingValue("github_token");
+      if (ghToken) {
+        // Look for recent open PRs on hive repo that might be related to this backlog item
+        const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=10", {
+          headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+          signal: AbortSignal.timeout(5000),
+        });
+
+        if (prListRes.ok) {
+          const openPRs = await prListRes.json();
+          // Find PRs created in the last hour that start with "hive/"
+          const recentPRs = openPRs.filter((pr: any) => {
+            const createdAt = new Date(pr.created_at);
+            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+            return pr.head?.ref?.startsWith("hive/") && createdAt > oneHourAgo;
+          });
+
+          // Take the most recent one as likely candidate
+          if (recentPRs.length > 0) {
+            const candidatePR = recentPRs[0];
+            pr_number = candidatePR.number;
+            branch = candidatePR.head.ref;
+
+            // Get changed files for this PR
+            try {
+              const filesRes = await fetch(`https://api.github.com/repos/carloshmiranda/hive/pulls/${pr_number}/files`, {
+                headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+                signal: AbortSignal.timeout(5000),
+              });
+              if (filesRes.ok) {
+                const files = await filesRes.json();
+                changed_files = files.map((f: any) => f.filename);
+              }
+            } catch {
+              // Non-blocking
+            }
+
+            console.log(`[backlog] Auto-extracted PR tracking: #${pr_number} on ${branch}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[backlog] Failed to auto-extract PR tracking:", e instanceof Error ? e.message : "unknown");
+      // Non-blocking, continue without PR data
+    }
+  }
 
   // Periodic cleanup of expired cooldown entries
   cleanupFailedItemsCache();
@@ -87,7 +137,7 @@ export async function POST(req: Request) {
           UPDATE agent_actions
           SET output = CASE
             WHEN output IS NULL THEN
-              ${JSON.stringify({ pr_number, branch, changed_files })}
+              ${JSON.stringify({ pr_tracking: { pr_number, branch, changed_files } })}
             ELSE
               jsonb_set(
                 COALESCE(output, '{}'),
