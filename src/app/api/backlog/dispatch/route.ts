@@ -203,7 +203,7 @@ export async function POST(req: Request) {
   `.catch(() => [{ total: 0, failed: 0 }]);
   const recentFailed = Number((recentFailureRow as Record<string, number>)?.failed || 0);
   const recentTotal = Number((recentFailureRow as Record<string, number>)?.total || 0);
-  if (recentTotal >= 3 && recentFailed / recentTotal > 0.6) {
+  if (recentTotal >= 3 && recentFailed / recentTotal > 0.6 && !forceDispatch) {
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100), window: "30m", free_workers_dispatched: freeWorkers });
   }
