@@ -88,52 +88,70 @@ export async function POST(req: Request) {
         trackFailedBacklogItem(item.id, attempt);
       }
 
-      // On max_turns failure (attempt 2+): auto-decompose instead of blind retry
+      // On max_turns failure: auto-decompose if complexity is M or L
       let decomposed = false;
-      if (isMaxTurns && attempt >= 2 && item) {
+      if (isMaxTurns && item) {
         try {
           const { generateSpec } = await import("@/lib/backlog-planner");
           let spec = item.spec;
+
+          // (1) Call the planner to get a spec if none exists
           if (!spec || !spec.approach) {
             spec = await generateSpec(
               { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
               sql
             );
           }
-          if (spec && Array.isArray(spec.approach) && spec.approach.length >= 2) {
+
+          // (2) If spec.complexity is M or L, decompose into sub-items using existing decomposition logic
+          if (spec && (spec.complexity === "M" || spec.complexity === "L") && Array.isArray(spec.approach) && spec.approach.length >= 2) {
             const steps = spec.approach as string[];
-            const subItems: { title: string; description: string }[] = [];
+            const subItems: { title: string; description: string; files: string[] }[] = [];
+
+            // Use the same decomposition logic as pre-dispatch (group steps into 1-2 step chunks)
             for (let i = 0; i < steps.length; i += 2) {
               const chunk = steps.slice(i, i + 2);
               const stepNums = chunk.map((_, j) => i + j + 1).join("-");
               subItems.push({
                 title: `${item.title} (step ${stepNums}/${steps.length})`,
                 description: `Parent: ${item.title}\n\n${chunk.join("\n")}`,
+                files: (spec.affected_files as string[] || []).slice(0, 3),
               });
             }
+
             if (subItems.length >= 2) {
+              // (4) The sub-items go to ready status and get dispatched normally
               for (const sub of subItems) {
                 await sql`
                   INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
                   VALUES (
                     ${sub.title.slice(0, 200)}, ${sub.description.slice(0, 2000)},
                     ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
-                    ${JSON.stringify({ complexity: "S", estimated_turns: 15, acceptance_criteria: ["npx next build passes"] })}
+                    ${JSON.stringify({
+                      complexity: "S",
+                      estimated_turns: 15,
+                      acceptance_criteria: ["npx next build passes"],
+                      affected_files: sub.files,
+                      approach: [sub.description.split('\n\n')[1] || sub.description],
+                      risks: []
+                    })}
                   )
                 `.catch(() => {});
               }
+
+              // (3) Mark the parent item as blocked with reason auto-decomposed-on-failure
               await sql`
                 UPDATE hive_backlog
                 SET status = 'blocked', dispatched_at = NULL,
-                    notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [auto-decomposed] Hit max_turns ${attempt}x — split into ${subItems.length} sub-tasks.`}
+                    notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [auto-decomposed-on-failure] Hit max_turns — split into ${subItems.length} sub-tasks.`}
                 WHERE id = ${completed_id}
               `.catch(() => {});
               decomposed = true;
-              console.log(`[backlog] Auto-decomposed "${item.title}" into ${subItems.length} sub-tasks after max_turns failure`);
+              console.log(`[backlog] Auto-decomposed "${item.title}" (complexity: ${spec.complexity}) into ${subItems.length} sub-tasks after max_turns failure`);
             }
           }
         } catch (e) {
-          console.warn("[backlog] Auto-decompose failed:", e instanceof Error ? e.message : "unknown");
+          console.warn("[backlog] Auto-decompose on max_turns failure failed:", e instanceof Error ? e.message : "unknown");
         }
       }
 
