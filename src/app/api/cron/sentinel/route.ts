@@ -1142,31 +1142,45 @@ export async function GET(req: Request) {
   for (const esc of recurringEscalations) {
     if (SKIP_AUTO_RESOLVE.includes(esc.gate_type as string)) continue;
 
-    // Check how many failed auto-resolve attempts have been made for this escalation in the last 48h
+    // Check ALL auto-resolve attempts (any status) in the last 48h.
+    // Previously only counted 'failed', so successes that didn't actually fix the root cause
+    // would reset the counter and trigger infinite retries (80+ actions observed).
     const [retryCount] = await sql`
       SELECT COUNT(*)::int as attempts
       FROM agent_actions
       WHERE company_id = ${esc.company_id}
         AND agent = 'sentinel'
         AND action_type = 'auto_resolve_escalation'
-        AND status = 'failed'
-        AND description ILIKE ${'%' + esc.gate_type + '%' + esc.slug + '%'}
+        AND status IN ('failed', 'success', 'skipped')
         AND started_at > NOW() - INTERVAL '48 hours'
     `;
 
-    // Cap retries at 3 attempts - stop trying and keep escalation pending for manual review
+    // Cap at 3 total attempts (including successes) — if the escalation keeps recurring
+    // after "successful" auto-resolve, the fix isn't working. Stop and wait for manual review.
     if (retryCount && retryCount.attempts >= 3) {
-      await sql`
-        INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
-        VALUES (
-          ${esc.company_id}, 'sentinel', 'auto_resolve_escalation',
-          ${`Skipped auto-resolve for ${esc.gate_type} on ${esc.slug} - max retries (3) exceeded`},
-          'skipped',
-          ${JSON.stringify({ reason: 'max_retries_exceeded', attempts: retryCount.attempts, gate_type: esc.gate_type })}::jsonb,
-          NOW(), NOW()
-        )
+      // Only log the skip once per 48h window (check if already logged)
+      const [alreadySkipped] = await sql`
+        SELECT 1 FROM agent_actions
+        WHERE company_id = ${esc.company_id}
+          AND agent = 'sentinel'
+          AND action_type = 'auto_resolve_escalation'
+          AND status = 'skipped'
+          AND started_at > NOW() - INTERVAL '48 hours'
+        LIMIT 1
       `;
-      continue; // Skip this escalation and leave it escalated for manual review
+      if (!alreadySkipped) {
+        await sql`
+          INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+          VALUES (
+            ${esc.company_id}, 'sentinel', 'auto_resolve_escalation',
+            ${`Skipped auto-resolve for ${esc.gate_type} on ${esc.slug} - max attempts (3) exceeded in 48h`},
+            'skipped',
+            ${JSON.stringify({ reason: 'max_attempts_exceeded', attempts: retryCount.attempts, gate_type: esc.gate_type })}::jsonb,
+            NOW(), NOW()
+          )
+        `;
+      }
+      continue;
     }
 
     const description = (esc.latest_description as string) || "";
@@ -1727,6 +1741,32 @@ export async function GET(req: Request) {
       // Route approved proposals through hive_backlog instead of dispatching directly.
       // This ensures they get planning phase, specs, complexity estimation, and compete on priority.
       for (const proposal of approvedImprovements) {
+        // Quality gate: reject vague proposals that would waste Engineer turns.
+        // 118/242 Engineer failures traced to vague evolver proposals crashing at 0 turns.
+        const proposalText = `${proposal.title} ${typeof proposal.proposed_fix === 'string' ? proposal.proposed_fix : JSON.stringify(proposal.proposed_fix)}`;
+        const hasSpecificFile = /\b(src\/|\.ts|\.tsx|\.yml|\.json|route\.ts|page\.tsx)\b/.test(proposalText);
+        const hasActionableVerb = /\b(add|remove|change|update|fix|replace|create|delete|move|rename|insert|wrap|extract)\b/i.test(proposalText);
+        const isLongEnough = proposalText.length >= 80;
+        if (!hasSpecificFile && !hasActionableVerb) {
+          // Too vague — reject back to evolver with feedback
+          await sql`
+            UPDATE evolver_proposals SET status = 'rejected',
+              notes = COALESCE(notes, '') || ' | Auto-rejected: proposal lacks specific file paths or actionable implementation steps. Resubmit with concrete code changes.'
+            WHERE id = ${proposal.id}
+          `.catch(() => {});
+          console.log(`[sentinel] Rejected vague evolver proposal ${proposal.id}: "${(proposal.title as string).slice(0, 60)}"`);
+          continue;
+        }
+        if (!isLongEnough && !hasSpecificFile) {
+          await sql`
+            UPDATE evolver_proposals SET status = 'rejected',
+              notes = COALESCE(notes, '') || ' | Auto-rejected: description too short and lacks file references. Need specific implementation details.'
+            WHERE id = ${proposal.id}
+          `.catch(() => {});
+          console.log(`[sentinel] Rejected short evolver proposal ${proposal.id}: "${(proposal.title as string).slice(0, 60)}"`);
+          continue;
+        }
+
         // Check if already in backlog (prevent duplicates)
         const [existing] = await sql`
           SELECT id FROM hive_backlog
@@ -1734,7 +1774,15 @@ export async function GET(req: Request) {
             AND status NOT IN ('done', 'rejected')
           LIMIT 1
         `.catch(() => []);
-        if (existing) continue;
+        if (existing) {
+          // Already in backlog — mark as implemented so it doesn't loop
+          await sql`
+            UPDATE evolver_proposals SET implemented_at = NOW(),
+              notes = COALESCE(notes, '') || ' | Already in hive_backlog, marked implemented'
+            WHERE id = ${proposal.id}
+          `.catch(() => {});
+          continue;
+        }
 
         const priority = proposal.severity === "critical" ? "P0" : proposal.severity === "high" ? "P1" : "P2";
         await sql`
@@ -2063,6 +2111,75 @@ export async function GET(req: Request) {
     }
   } catch (check40Err: any) {
     console.warn(`[sentinel] Check 40 failed: ${check40Err.message}`);
+  }
+
+  // --- Check 41: PR verification — verify pr_open items against GitHub API ---
+  // Items with pr_number should be checked: if PR is merged → mark done,
+  // if PR doesn't exist or is closed → reset to ready.
+  try {
+    const prOpenItems = await sql`
+      SELECT id, title, pr_number, pr_url
+      FROM hive_backlog
+      WHERE status = 'pr_open' AND pr_number IS NOT NULL
+      LIMIT 10
+    `;
+    const ghPAT = await getSettingValue("github_token").catch(() => null);
+    if (prOpenItems.length > 0 && ghPAT) {
+      let verified = 0, reset = 0, merged = 0;
+      for (const item of prOpenItems) {
+        try {
+          const prRes = await fetch(`https://api.github.com/repos/${REPO}/pulls/${item.pr_number}`, {
+            headers: { Authorization: `token ${ghPAT}`, Accept: "application/vnd.github.v3+json" },
+            signal: AbortSignal.timeout(5000),
+          });
+          if (!prRes.ok) {
+            // PR doesn't exist — reset to ready
+            await sql`
+              UPDATE hive_backlog
+              SET status = 'ready', dispatched_at = NULL, pr_number = NULL, pr_url = NULL,
+                  notes = COALESCE(notes, '') || ${` [check-41] PR #${item.pr_number} not found (HTTP ${prRes.status}), reset to ready.`}
+              WHERE id = ${item.id}
+            `;
+            reset++;
+            continue;
+          }
+          const pr = await prRes.json();
+          if (pr.merged) {
+            await sql`
+              UPDATE hive_backlog
+              SET status = 'done', completed_at = NOW(),
+                  notes = COALESCE(notes, '') || ${` [check-41] PR #${item.pr_number} merged, marking done.`}
+              WHERE id = ${item.id}
+            `;
+            merged++;
+          } else if (pr.state === "closed") {
+            await sql`
+              UPDATE hive_backlog
+              SET status = 'ready', dispatched_at = NULL, pr_number = NULL, pr_url = NULL,
+                  notes = COALESCE(notes, '') || ${` [check-41] PR #${item.pr_number} closed without merge, reset to ready.`}
+              WHERE id = ${item.id}
+            `;
+            reset++;
+          } else {
+            // PR is open — check CI status
+            verified++;
+          }
+        } catch {
+          // Non-blocking per item
+        }
+      }
+      if (merged > 0 || reset > 0) {
+        console.log(`[sentinel] Check 41: PR verification — ${merged} merged→done, ${reset} invalid→reset, ${verified} still open`);
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'pr_verification',
+            ${`Check 41: Verified ${prOpenItems.length} pr_open items — ${merged} merged→done, ${reset} reset, ${verified} still open`},
+            'success', NOW(), NOW())
+        `.catch(() => {});
+      }
+    }
+  } catch (check41Err: any) {
+    console.warn(`[sentinel] Check 41 failed: ${check41Err.message}`);
   }
 
   // --- Deploy drift check ---

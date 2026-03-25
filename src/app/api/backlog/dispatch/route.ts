@@ -372,10 +372,8 @@ export async function POST(req: Request) {
   `.catch(() => [{ total: 0, failed: 0 }]);
   const recentFailed = Number((recentFailureRow as Record<string, number>)?.failed || 0);
   const recentTotal = Number((recentFailureRow as Record<string, number>)?.total || 0);
-  if (recentTotal >= 3 && recentFailed / recentTotal > 0.6 && !forceDispatch) {
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
-    return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100), window: "30m", free_workers_dispatched: freeWorkers });
-  }
+  const circuitBreakerTripped = recentTotal >= 3 && recentFailed / recentTotal > 0.6 && !forceDispatch;
+  // Don't return yet — P0 items bypass circuit breaker (checked after item selection)
 
   // Check for running Hive Engineer jobs (dedup)
   const [running] = await sql`
@@ -436,16 +434,16 @@ export async function POST(req: Request) {
           AND dispatched_at > NOW() - INTERVAL '30 minutes'
         )
         AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
-             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 5)
-        AND priority = 'P0'
+             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
+        AND priority IN ('P0', 'P1')
         ORDER BY
-          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 ELSE 2 END,
           created_at ASC
         LIMIT 10
       `;
 
       // Log cascade dispatch decision for debugging
-      console.log(`[backlog] Chain dispatch: filtering to P0 only (was triggered by completion of ${completed_id})`);
+      console.log(`[backlog] Chain dispatch: filtering to P0+P1 (triggered by completion of ${completed_id})`);
     } else {
       backlogItems = await sql`
         SELECT * FROM hive_backlog
@@ -459,7 +457,7 @@ export async function POST(req: Request) {
           AND dispatched_at > NOW() - INTERVAL '30 minutes'
         )
         AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
-             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 5)
+             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
         ORDER BY
           CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
           created_at ASC
@@ -471,11 +469,11 @@ export async function POST(req: Request) {
     backlogItems = [];
   }
 
-  // Auto-block items with 5+ failed attempts at query time (defense-in-depth).
-  // The callback handler (line ~82) also blocks after 5 attempts, but if the
-  // chain callback never fires (e.g., dispatch lost), items stay in 'ready'
-  // and keep getting dispatched. This catches that case.
-  const MAX_ATTEMPTS = 5;
+  // Auto-block items with 3+ failed attempts at query time (defense-in-depth).
+  // The callback handler also blocks after 3 attempts, but if the chain callback
+  // never fires (e.g., dispatch lost), items stay in 'ready' and keep getting
+  // dispatched. This catches that case.
+  const MAX_ATTEMPTS = 3;
   for (const item of backlogItems) {
     const attemptCount = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
     if (attemptCount >= MAX_ATTEMPTS && item.status !== "blocked") {
@@ -648,6 +646,12 @@ export async function POST(req: Request) {
 
   if (!topItem) {
     return json({ dispatched: false, reason: "no_scorable_items" });
+  }
+
+  // Circuit breaker: block non-P0 items when failure rate is high
+  if (circuitBreakerTripped && topItem.priority !== "P0") {
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100), window: "30m", p0_bypass: false, free_workers_dispatched: freeWorkers });
   }
 
   // Dispatch via GitHub Actions
