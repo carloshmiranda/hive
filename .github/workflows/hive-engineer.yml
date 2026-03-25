@@ -56,25 +56,22 @@ jobs:
           EVENT="${{ github.event_name }}"
           if [ "$EVENT" = "repository_dispatch" ]; then
             ACTION="${{ github.event.action }}"
-            # Use heredoc to avoid single-quote / special char breakage in JSON payloads
-            read -r -d '' PAYLOAD <<'PAYLOAD_EOF' || true
-          ${{ toJson(github.event.client_payload) }}
-PAYLOAD_EOF
             set_output "trigger" "${ACTION}"
-            set_output "payload" "${PAYLOAD}"
+            set_output "payload" "${DISPATCH_PAYLOAD}"
           else
             set_output "trigger" "manual"
             set_output "payload" "{\"task\":\"${{ github.event.inputs.task }}\",\"company\":\"${{ github.event.inputs.company }}\"}"
           fi
+        env:
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
 
       - name: Resolve company repo
         id: resolve
+        env:
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           npm install --no-save postgres 2>/dev/null
-          COMPANY=$(cat <<'CPEOF' | jq -r '.company // ""' 2>/dev/null || echo ""
-          ${{ toJson(github.event.client_payload) }}
-CPEOF
-          )
+          COMPANY=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company // ""' 2>/dev/null || echo "")
           if [ -z "$COMPANY" ]; then
             COMPANY="${{ github.event.inputs.company }}"
           fi

@@ -75,6 +75,8 @@ jobs:
 
       - name: Build Scout context
         id: context
+        env:
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           EVENT="${{ github.event_name }}"
 
@@ -87,10 +89,7 @@ jobs:
 
           if [ "$EVENT" = "repository_dispatch" ]; then
             ACTION="${{ github.event.action }}"
-            # Use heredoc to avoid single-quote / special char breakage in JSON payloads
-            read -r -d '' PAYLOAD <<'PAYLOAD_EOF' || true
-${{ toJson(github.event.client_payload) }}
-PAYLOAD_EOF
+            PAYLOAD="${DISPATCH_PAYLOAD}"
             set_output "trigger" "${ACTION}"
             set_output "payload" "${PAYLOAD}"
           else
@@ -211,6 +210,7 @@ PAYLOAD_EOF
           GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
           CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
           HIVE_URL: https://hive-phi.vercel.app
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           set +e  # Prevent grep/jq exit codes from crashing the step
           RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
@@ -230,18 +230,12 @@ PAYLOAD_EOF
           # Extract company from agent output (handles JSON in code blocks, prose, or raw)
           COMPANY=$(echo "$RESULT" | grep -oP '"company"\s*:\s*"\K[^"]+' | head -1 || echo "")
           if [ -z "$COMPANY" ]; then
-            COMPANY=$(cat <<'JQEOF' | jq -r '.company // ""' 2>/dev/null || echo ""
-${{ toJson(github.event.client_payload) }}
-JQEOF
-            )
+            COMPANY=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company // ""' 2>/dev/null || echo "")
           fi
           # Also extract company_id
           COMPANY_ID=$(echo "$RESULT" | grep -oP '"company_id"\s*:\s*"\K[^"]+' | head -1 || echo "")
           if [ -z "$COMPANY_ID" ]; then
-            COMPANY_ID=$(cat <<'JQEOF' | jq -r '.company_id // ""' 2>/dev/null || echo ""
-${{ toJson(github.event.client_payload) }}
-JQEOF
-            )
+            COMPANY_ID=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company_id // ""' 2>/dev/null || echo "")
           fi
           echo "Company: $COMPANY | Company ID: $COMPANY_ID"
 
