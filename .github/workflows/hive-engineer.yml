@@ -891,13 +891,48 @@ jobs:
             fi
           fi
 
+          # Extract PR info from agent output for backlog tracking
+          PR_NUMBER=""
+          PR_BRANCH=""
+          PR_FILES=""
+          if [ "$STATUS" = "success" ]; then
+            EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+            if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+              EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+            fi
+            if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
+              # Extract PR number from agent's output (looks for gh pr create output or JSON)
+              RESULT_TEXT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[]? | select(.type == "text") | .text] | join("\n")' "$EXEC_FILE" 2>/dev/null || echo "")
+              PR_NUMBER=$(echo "$RESULT_TEXT" | grep -oP '(?:PR |pull/|pr_number.*?)\K\d+' | head -1 || echo "")
+              if [ -z "$PR_NUMBER" ]; then
+                # Try from tool results (gh pr create returns URL)
+                PR_NUMBER=$(jq -r '[.[] | select(.type == "tool_result")] | .[-1].content // "" | tostring' "$EXEC_FILE" 2>/dev/null | grep -oP 'pull/\K\d+' | head -1 || echo "")
+              fi
+              PR_BRANCH=$(echo "$RESULT_TEXT" | grep -oP '"branch"\s*:\s*"\K[^"]+' | head -1 || echo "")
+              echo "  Extracted PR info: number=$PR_NUMBER branch=$PR_BRANCH"
+            fi
+          fi
+
           if [ -n "$BACKLOG_ID" ] || [ "$(echo "${PAYLOAD_JSON}" | jq -r '.chain_next // false')" = "true" ]; then
+            # Build callback payload with PR tracking data
+            CALLBACK_PAYLOAD="{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\""
+            if [ -n "$ERROR_TYPE" ]; then
+              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"error\":\"${ERROR_TYPE}: ${ERROR_DETAIL:0:200}\""
+            fi
+            if [ -n "$PR_NUMBER" ]; then
+              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"pr_number\":\"${PR_NUMBER}\""
+            fi
+            if [ -n "$PR_BRANCH" ]; then
+              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"branch\":\"${PR_BRANCH}\""
+            fi
+            CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD}}"
+
             # First try to chain to next backlog item
-            echo "Chaining: marking $BACKLOG_ID as $STATUS, dispatching next..."
+            echo "Chaining: marking $BACKLOG_ID as $STATUS (PR #${PR_NUMBER:-none}), dispatching next..."
             BACKLOG_RESULT=$(curl -s -X POST "$HIVE_URL/api/backlog/dispatch" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\",\"error\":\"${ERROR_TYPE}: ${ERROR_DETAIL:0:200}\"}" || echo "{}")
+              -d "$CALLBACK_PAYLOAD" || echo "{}")
             echo "  Backlog result: $BACKLOG_RESULT"
 
             # If no backlog items left, chain to next company cycle
