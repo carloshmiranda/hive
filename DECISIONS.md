@@ -378,3 +378,14 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 - Email notifications: already have digest, but not real-time and no interactive buttons
 - Dashboard-only: works but requires actively checking, no push notifications
 **Consequences:** Carlos gets real-time visibility into all Hive operations. Approvals can be handled from phone in seconds. PRs can be merged without opening GitHub. Trade-off: Telegram dependency — if Telegram API is down, notifications silently fail (fire-and-forget design). Setup requires manual bot creation via @BotFather.
+
+### ADR-027: Cost-only PR escalation model
+**Date:** 2026-03-25
+**Status:** accepted
+**Context:** PR risk scoring had a dead zone at score 4-6 (`manual_review`) with no handler — PRs sat in limbo forever. Carlos's principle: "Carlos should only be involved in decisions that might impact our operational cost."
+**Decision:** Remove `manual_review` decision entirely. All PRs auto-merge if CI passes and no safety gates fail. Only cost-impacting changes escalate to Carlos: new paid service dependencies, GitHub Actions workflow additions (burns private minutes), model routing upgrades to more expensive LLMs, Vercel Pro plan triggers, schema changes with data loss risk. Safety gates (secrets in diff, destructive SQL without rollback, merge conflicts, CI failures, huge diffs) still block merge.
+**Alternatives considered:**
+- Time-based cooldown (score 4→1h, 5→2h, 6→4h delay before merge): adds complexity, doesn't solve the real problem (cost visibility)
+- AI reviewer agent (LLM reviews medium-risk PRs): burns tokens for quality checks that CI already covers
+- Dashboard review queue: still requires Carlos to actively check — defeats autonomy goal
+**Consequences:** Fully autonomous PR merging for quality-risk changes. Carlos only sees PRs with cost implications. Risk: a high-score PR that introduces bugs will auto-merge — but CI is the safety net, and Healer can self-fix post-merge. Trade-off is intentional: autonomy > perfectionism.

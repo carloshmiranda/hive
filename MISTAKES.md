@@ -437,3 +437,24 @@
 **Root cause:** Schema was updated in schema.sql but the constraint wasn't applied to the live DB. The `metadata` and `metric` references were written assuming a different schema shape. No error boundary meant the 500 was silent — Vercel logs showed only the Neon SDK deprecation warning, not the actual error.
 **Fix applied:** Fixed all 3 queries, added try/catch error boundary that returns the actual error message and stack trace, updated live DB constraint.
 **Prevention:** (1) Always add error boundaries to cron handlers — silent 500s are undebuggable. (2) After writing SQL queries, verify column names against `information_schema.columns`. (3) When adding new enum values to schema.sql, also run the ALTER on the live DB or add a migration step.
+
+### 2026-03-25 Schema-map drift breaks all PR CI
+**What happened:** All open PRs (10+) failed CI because `scripts/lint-sql.ts` uses `src/lib/schema-map.ts` as a static copy of DB schema constraints. When agents added new values (agent names, gate types, columns), the map wasn't updated → every PR failed the SQL lint check.
+**Root cause:** `schema-map.ts` is manually maintained — no sync mechanism with `schema.sql`. Agent-generated code adds new enum values to schema.sql but never touches schema-map.ts.
+**Fix applied:** Updated schema-map.ts with 5 agent names (`auto_merge`, `dispatch`, `webhook`, `system`, `admin`), 1 gate type (`pr_review`), 3 columns (`market`, `content_language`, `decided_at`), 1 status (`completed`). Also fixed schema.sql CHECK constraints to match.
+**Prevention:** Added P1 backlog item for auto-sync between schema.sql and schema-map.ts. Until implemented: any schema.sql change must also update schema-map.ts.
+**Affects:** hive
+
+### 2026-03-25 Engineer callback missing error type breaks auto-decompose
+**What happened:** Auto-decompose logic (split failing L/M tasks into S sub-tasks on `error_max_turns`) was wired in `/api/backlog/dispatch` but never triggered. The error type field in the callback was always empty.
+**Root cause:** `hive-engineer.yml` chain dispatch step sent `{"completed_id": "...", "completed_status": "..."}` without an `error` field. The dispatch handler checked `body.error` but it was always undefined.
+**Fix applied:** Engineer workflow now extracts `subtype` from claude execution output JSON and passes it as `error` in the callback payload.
+**Prevention:** When adding callback-driven features, always verify the entire chain from producer to consumer — check that all fields are actually populated.
+**Affects:** hive
+
+### 2026-03-25 PR manual_review dead zone — PRs stuck forever
+**What happened:** PRs with risk score 4-6 got `manual_review` decision but no code handled them — they sat open indefinitely.
+**Root cause:** The decision logic had three tiers (auto_merge ≤3, manual_review 4-6, escalate 7+) but only auto_merge and escalate had handlers.
+**Fix applied:** Replaced with cost-only escalation model (ADR-027). All PRs auto-merge if CI passes. Only cost-impacting changes escalate.
+**Prevention:** Never add a decision branch without implementing its handler. Dead code paths in event-driven systems are silent failures.
+**Affects:** hive

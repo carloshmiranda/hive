@@ -61,6 +61,15 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+### 2026-03-25 [code] Cost-only escalation model + cascade self-healing fixes
+Session focused on making the cascade loop truly autonomous:
+- **Schema-map drift fixed**: `schema-map.ts` was missing 5 agent names, 1 gate type, 3 columns, 1 status — caused ALL PR CI to fail. Updated both `schema-map.ts` and `schema.sql` CHECK constraints.
+- **PR auto-merge unblocked**: Moved PR merge logic to run on every callback (not just success). 8 PRs merged, down from 10+ open to 2.
+- **Auto-decompose wired**: Engineer workflow now passes `error_type` (e.g. `error_max_turns`) in callback payload. Next max_turns failure on attempt 2+ triggers task decomposition.
+- **Cost-only escalation model (ADR-027)**: Replaced dead `manual_review` zone (score 4-6) with autonomous merging. PRs auto-merge if CI passes regardless of risk score. Only cost-impacting changes (new paid deps, workflow minute burns, model routing upgrades, Vercel Pro triggers) escalate to Carlos. Safety gates (secrets, destructive SQL) still block.
+- **Telegram webhook fix**: `notes` → `decision_note` column name corrected.
+- **10 self-healing backlog items added**: Schema auto-sync, PR health check, observability, callback audit, cascade health metric.
+
 ### 2026-03-25 [code] Cascade unblock + strategic intelligence + agent specialization
 Major session focused on unblocking cascade and adding strategic depth:
 - **Cascade unblocked**: Went from stalled (48 ready, 0 dispatched, broken workflows) to actively chaining (6 items in 30 min, 3 PRs, chain dispatch working).
