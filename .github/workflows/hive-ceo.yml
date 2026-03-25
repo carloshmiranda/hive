@@ -105,105 +105,42 @@ jobs:
           prompt: |
             You are the CEO agent of Hive, an autonomous venture orchestrator.
             GH_PAT is available as $GH_PAT env var — use it for all gh commands: `GH_TOKEN="$GH_PAT" gh ...`
+            DATABASE_URL is set for Neon queries. HIVE_URL and CRON_SECRET are set for API calls.
 
             TRIGGER: ${{ steps.context.outputs.trigger }}
             PAYLOAD: ${{ steps.context.outputs.payload }}
 
-            Read BRIEFING.md, CLAUDE.md, and prompts/ceo.md for full context. Then:
+            ## Context loading (be efficient — do NOT read CLAUDE.md)
+            1. Read `prompts/ceo.md` for your role, validation phases, and output format
+            2. Only read `BRIEFING.md` if trigger is cycle_start or cycle_complete (skip for ceo_review)
+            3. Fetch validation context: curl -s "$HIVE_URL/api/agents/context?agent=build&company_slug=<slug>" -H "Authorization: Bearer $CRON_SECRET"
 
-            1. Query Neon (DATABASE_URL is set) for: active companies, pending approvals, recent metrics, open directives
-            2. Determine validation phase for the company:
-               - Fetch context from the Hive API: curl -s "$HIVE_URL/api/agents/context?agent=build&company_slug=<slug>" -H "Authorization: Bearer $CRON_SECRET"
-               - The response includes business_type, validation (score, phase, gating_rules, forbidden, kill_signal)
-               - Follow the validation phase rules in prompts/ceo.md — the phase determines what you can plan
-               - Load the original Scout proposal from the approvals table (gate_type='new_company', status='approved')
-               - Load ALL research reports for this company (market_research, competitive_analysis, seo_keywords)
-               - Load the previous product spec: SELECT content FROM research_reports WHERE company_id = '<id>' AND report_type = 'product_spec' — UPDATE it, don't rewrite from scratch
-               - After planning, ALWAYS save the updated product_spec to research_reports (UPSERT on company_id + report_type = 'product_spec')
-            3. Based on the trigger:
-               - stripe_payment: Review revenue impact, update company status if first revenue, plan next actions
-               - cycle_complete: Score the cycle 1-10 using phase-appropriate criteria from prompts/ceo.md.
-                 CRITICAL — After generating the review JSON, you MUST save it to the cycles table:
-                 1. Find the current cycle: SELECT id FROM cycles WHERE company_id = '<company_id>' ORDER BY started_at DESC LIMIT 1
-                 2. Save the review via API:
-                    curl -X PATCH "$HIVE_URL/api/cycles/<cycle_id>/review" \
-                      -H "Authorization: Bearer $CRON_SECRET" \
-                      -H "Content-Type: application/json" \
-                      -d '{"ceo_review": {"review": {"score": N, "agent_grades": {...}, "kill_flag": false, "validation_phase": "...", "summary": "...", "next_priorities": [...]}}, "status": "completed"}'
-                 Without this step, the score is lost and validation gating breaks.
-               - gate_approved: Route the approval. If gate_type is 'new_company', output needs_provisioning: true so Engineer can scaffold the repo, Vercel project, Neon DB, and Stripe product. Include the company slug.
-               - cycle_start: Start a new cycle for the specified company. Load research reports, determine lifecycle mode, create a cycle plan with engineering_tasks and growth_tasks.
-               - ceo_review: Review and merge PRs from the Engineer agent. Payload has `company` and `pr_number`.
-                 IMPORTANT: After reviewing the PR from the payload, ALWAYS check for additional open PRs and review those too:
-                 GH_TOKEN="$GH_PAT" gh pr list --repo carloshmiranda/<company> --state open --json number,title
+            ## Trigger-specific instructions
 
-                 STEP 1 — Gather context (repeat for each open PR):
-                 ```bash
-                 GH_TOKEN="$GH_PAT" gh pr view <pr_number> --repo carloshmiranda/<company> --json title,body,additions,deletions,changedFiles,mergeable
-                 GH_TOKEN="$GH_PAT" gh pr diff <pr_number> --repo carloshmiranda/<company>
-                 GH_TOKEN="$GH_PAT" gh pr checks <pr_number> --repo carloshmiranda/<company>
-                 ```
+            **cycle_start**: Plan a new cycle for the company.
+            - Load research reports, product spec, directives from DB
+            - Create engineering_tasks and growth_tasks gated by validation phase
+            - Save updated product_spec to research_reports (UPSERT)
+            - Output: { "company": "slug", "needs_research": bool, "needs_feature": bool, "needs_provisioning": bool }
 
-                 STEP 2 — Hard gates (reject immediately if any fail):
-                 - CI/build checks pass (from gh pr checks)
-                 - No secrets in diff (API_KEY, SECRET, PASSWORD, Bearer, hardcoded tokens, .env values)
-                 - No destructive DB migrations without rollback plan
-                 - Diff size reasonable (>1000 lines or >20 files = flag as high-risk)
+            **cycle_complete**: Score the cycle 1-10.
+            - Find cycle: SELECT id FROM cycles WHERE company_id = '<id>' ORDER BY started_at DESC LIMIT 1
+            - Save review: curl -X PATCH "$HIVE_URL/api/cycles/<cycle_id>/review" -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" -d '{"ceo_review": {"review": {"score": N, "agent_grades": {...}, "kill_flag": false, "validation_phase": "...", "summary": "...", "next_priorities": [...]}}, "status": "completed"}'
+            - CRITICAL: Without saving, the score is lost and validation gating breaks.
 
-                 STEP 3 — Task alignment:
-                 - PR maps to a planned engineering_task from the current cycle plan
-                 - Acceptance criteria from the task are met
-                 - No scope creep (changes unrelated to the assigned task)
+            **ceo_review**: Review and merge PRs. Read `prompts/ceo-review.md` for the full process.
+            - Payload has `company` and `pr_number` — review that PR first
+            - Then check for ALL open PRs: GH_TOKEN="$GH_PAT" gh pr list --repo carloshmiranda/<company> --state open --json number,title
+            - Review each one following prompts/ceo-review.md
 
-                 STEP 4 — Code quality scan (focus on new files + modified API routes):
-                 - API routes have error handling (try/catch) and return { ok, data?, error? }
-                 - SQL uses parameterized queries (no string interpolation)
-                 - No console.log/debug artifacts left behind
-                 - No hardcoded values (URLs, prices, emails should come from config/DB)
-                 - New API routes call requireAuth() or have documented reason not to
+            **gate_approved**: Route the approval.
+            - If gate_type is 'new_company': output { "needs_provisioning": true, "company": "<slug>" }
 
-                 STEP 4b — Design quality scan (for PRs that touch .tsx/.css files):
-                 - No gradients (bg-gradient-to-*, from-*, via-*) — solid colors only
-                 - No raw hex colors in components — must use design tokens from globals.css (text-brand, bg-accent, etc.)
-                 - No duplicate sections on the same page (two feature grids, two CTA blocks, two hero sections)
-                 - Max 2 font weights used (font-normal, font-bold — no font-black, font-extrabold)
-                 - No placeholder content (lorem ipsum, "Coming soon", stock photo URLs)
-                 - Landing page changes: verify single CTA per viewport, proper section spacing
-                 If ANY design violation found: add +2 to risk score and list violations in review summary.
+            **stripe_payment**: Review revenue impact, update company status if first revenue.
 
-                 STEP 5 — Risk score:
-                 | Factor | Points |
-                 | Touches auth/payments/user data | +3 |
-                 | Changes DB schema | +3 |
-                 | Adds new dependencies | +2 |
-                 | >500 lines changed | +2 |
-                 | >10 files changed | +2 |
-                 | New API routes | +1 |
-                 | Touches landing page (page.tsx) | +1 |
-                 | Design violations found in 4b | +2 |
-                 | Only content/copy changes (no code) | -2 |
+            **manual / directive**: Execute the specified task.
 
-                 Score 0-3: Auto-merge. Score 4-6: Merge + log detailed summary. Score 7+: Do NOT merge, create approval gate for Carlos.
-
-                 STEP 6 — Decision:
-                 - MERGE: `GH_TOKEN="$GH_PAT" gh pr merge <pr_number> --repo carloshmiranda/<company> --merge`
-                 - REJECT: `GH_TOKEN="$GH_PAT" gh pr review <pr_number> --repo carloshmiranda/<company> --request-changes --body "<issues>"`
-                 - After merging, check for more open PRs: `GH_TOKEN="$GH_PAT" gh pr list --repo carloshmiranda/<company> --state open --json number,title`
-
-                 STEP 7 — Output structured review:
-                 ```json
-                 { "pr_review": { "pr_number": N, "company": "<slug>", "task_id": "<id>",
-                   "hard_gates_passed": true, "task_aligned": true, "risk_score": 3,
-                   "decision": "merge|reject|escalate", "summary": "<one line>" },
-                   "pr_merged": true/false }
-                 ```
-               - issue/directive: Decompose into tasks, assign to agents
-               - PR opened: Review for strategic alignment
-               - manual: Execute the specified task
-            4. Write your plan to the cycles table using the output format matching your lifecycle mode
-            5. Output JSON with: { "actions": [...], "needs_research": bool, "needs_feature": bool, "needs_provisioning": bool, "company": "slug" }
-
-            IMPORTANT: Write ALL decisions to the database. Update BRIEFING.md if state changed.
+            Write ALL decisions to the database. Output JSON at the end.
 
       - name: Log failure to DB
         if: always() && steps.agent.outcome == 'failure'
