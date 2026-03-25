@@ -59,12 +59,14 @@ CREATE TABLE agent_actions (
   company_id    TEXT REFERENCES companies(id),
   agent         TEXT NOT NULL CHECK (agent IN (
                   'ceo', 'scout', 'engineer', 'ops', 'growth', 'outreach', 'evolver',
-                  'healer', 'orchestrator', 'sentinel'
+                  'healer', 'orchestrator', 'sentinel', 'auto_merge', 'dispatch',
+                  'webhook', 'system', 'admin'
                 )),
   action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
   description   TEXT,
   status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
-                  'pending', 'running', 'success', 'failed', 'skipped', 'escalated', 'pending_manual'
+                  'pending', 'running', 'success', 'failed', 'skipped', 'escalated',
+                  'pending_manual', 'completed'
                 )),
   input         JSONB,           -- what was fed to the agent
   output        JSONB,           -- what it produced
@@ -91,7 +93,8 @@ CREATE TABLE approvals (
                   'vercel_pro_upgrade',  -- company needs Vercel Pro (has revenue)
                   'social_account',      -- Growth wants a social media account created
                   'first_revenue',       -- first paying customer detected
-                  'capability_migration' -- boilerplate capability migration proposal
+                  'capability_migration', -- boilerplate capability migration proposal
+                  'pr_review'            -- PR needs manual review (risk score 4-6)
                 )),
   title         TEXT NOT NULL,
   description   TEXT NOT NULL,
@@ -325,6 +328,7 @@ CREATE TABLE IF NOT EXISTS evolver_proposals (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   reviewed_at     TIMESTAMPTZ,
   implemented_at  TIMESTAMPTZ,
+  decided_at      TIMESTAMPTZ,
   notes           TEXT
 );
 
@@ -402,6 +406,7 @@ CREATE TABLE hive_backlog (
   status        TEXT NOT NULL DEFAULT 'ready' CHECK (status IN (
                   'ready',         -- available for dispatch
                   'approved',      -- Carlos approved (for P2/P3 needing gate)
+                  'planning',      -- spec generation in progress
                   'dispatched',    -- sent to Engineer
                   'in_progress',   -- Engineer is working on it
                   'pr_open',       -- PR created, awaiting merge
@@ -413,6 +418,7 @@ CREATE TABLE hive_backlog (
   dispatch_id   TEXT,              -- agent_action id when dispatched
   pr_number     INTEGER,           -- PR created for risky changes
   pr_url        TEXT,
+  spec          JSONB,             -- planning phase output (acceptance criteria, affected files, approach)
   notes         TEXT,              -- resolution notes, blockers, etc.
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   dispatched_at TIMESTAMPTZ,

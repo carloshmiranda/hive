@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-25 toJson in GitHub Actions breaks on single quotes in payload content
+**What happened:** All workflow runs silently failed after Engineer created tasks with descriptions containing single quotes (e.g., `"No 'unknown (0 turns)' failures"`). The entire cascade stalled — 48 items ready, 0 dispatched.
+**Root cause:** Workflow YAML used `PAYLOAD='${{ toJson(github.event.client_payload) }}'` — the single-quoted wrapper. When the JSON payload contained literal single quotes, bash saw `PAYLOAD='{"desc": "No '` then `unknown (0 turns)` as an unquoted command → syntax error. First fix attempt used heredocs (`<<'EOF'`) but the EOF marker at column 0 broke GitHub Actions' YAML literal block parser, causing ALL runs to fail with "workflow file issue."
+**Fix applied:** Replaced all inline `${{ toJson() }}` in bash with step-level `env:` variables: `env: DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}` then `echo "${DISPATCH_PAYLOAD}"` in bash. Applied to hive-engineer.yml (6 patterns), hive-ceo.yml (4), hive-scout.yml (3), hive-healer.yml (1).
+**Prevention:** NEVER use `'${{ toJson(...) }}'` in bash blocks. Always pass structured data through `env:` vars with `${{ toJson() }}` — GitHub evaluates the expression at YAML level (safe), and bash receives it as a normal env var (no quoting issues). Add to workflow YAML rules in CLAUDE.md.
+**Affects:** hive
+
+### 2026-03-25 Healer wastes max_turns on settings/config issues
+**What happened:** Healer was dispatched for "Neon API key not configured" (systemic, 4 companies). Spent all 35 turns trying to fix it in code, but the issue is a missing setting in /settings — requires manual action, not code changes.
+**Root cause:** Healer has no classification step to distinguish "code bug" from "missing configuration." It treats all errors as fixable by code changes.
+**Fix applied:** None yet. Added to known issues.
+**Prevention:** Healer should classify errors before attempting fixes: (1) config/settings errors → create a todo/approval for Carlos, don't attempt code fix. (2) infra errors (missing DB, Vercel down) → route to repair-infra. (3) code errors → attempt fix. Classification can use keyword matching: "not configured", "API key", "setting" → config class.
+**Affects:** hive
+
 ### 2026-03-24 Cascade marks backlog items "done" before PR merge — false completion notifications
 **What happened:** Carlos received Telegram notifications that 15+ backlog items were "completed" but none of the code was on main. 7 PRs sat open, unmerged. The cascade kept dispatching new items while claiming previous ones were done.
 **Root cause:** `backlog/dispatch/route.ts` marked items `status = 'done'` when Engineer reported `completed_status = "success"`. But "success" means "PR created", not "code merged." There was no lifecycle step between PR creation and merge.

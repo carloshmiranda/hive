@@ -56,19 +56,22 @@ jobs:
           EVENT="${{ github.event_name }}"
           if [ "$EVENT" = "repository_dispatch" ]; then
             ACTION="${{ github.event.action }}"
-            PAYLOAD='${{ toJson(github.event.client_payload) }}'
             set_output "trigger" "${ACTION}"
-            set_output "payload" "${PAYLOAD}"
+            set_output "payload" "${DISPATCH_PAYLOAD}"
           else
             set_output "trigger" "manual"
             set_output "payload" "{\"task\":\"${{ github.event.inputs.task }}\",\"company\":\"${{ github.event.inputs.company }}\"}"
           fi
+        env:
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
 
       - name: Resolve company repo
         id: resolve
+        env:
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           npm install --no-save postgres 2>/dev/null
-          COMPANY=$(echo '${{ toJson(github.event.client_payload) }}' | jq -r '.company // ""' 2>/dev/null || echo "")
+          COMPANY=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company // ""' 2>/dev/null || echo "")
           if [ -z "$COMPANY" ]; then
             COMPANY="${{ github.event.inputs.company }}"
           fi
@@ -792,7 +795,14 @@ jobs:
 
             1. Read CLAUDE.md, BRIEFING.md, MISTAKES.md for context
             2. Parse the task description from PAYLOAD to understand what to build
-            3. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
+            3. **Check PAYLOAD for a `spec` field.** If present, this is a pre-analyzed implementation plan:
+               - `spec.acceptance_criteria`: What "done" looks like — verify ALL criteria before committing
+               - `spec.affected_files`: Read THESE files first (pre-identified as relevant). Do NOT spend turns exploring the codebase.
+               - `spec.approach`: Follow these steps in order. They were designed for this codebase.
+               - `spec.risks`: Be aware of these — test accordingly
+               - `spec.complexity` and `spec.estimated_turns`: Budget your turns. S=quick, M=moderate, L=large.
+               If the spec exists, go straight to implementation. Do NOT explore or re-plan.
+            4. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
                `git checkout -b <branch>`
             4. Implement the change
             5. Run `npx next build` — fix any errors until it passes
@@ -823,12 +833,14 @@ jobs:
 
       - name: Notify via Telegram
         if: always()
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
           OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
           STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
-          TASK=$(echo '${{ needs.context.outputs.payload }}' | jq -r '.task // "Hive-internal work"' 2>/dev/null || echo "Hive-internal work")
+          TASK=$(echo "${PAYLOAD_JSON}" | jq -r '.task // "Hive-internal work"' 2>/dev/null || echo "Hive-internal work")
           curl -s -X POST "https://hive-phi.vercel.app/api/notify" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
@@ -836,16 +848,18 @@ jobs:
 
       - name: Chain dispatch next work item
         if: always()
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
           OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
-          BACKLOG_ID=$(echo '${{ needs.context.outputs.payload }}' | jq -r '.backlog_id // empty' 2>/dev/null || echo "")
+          BACKLOG_ID=$(echo "${PAYLOAD_JSON}" | jq -r '.backlog_id // empty' 2>/dev/null || echo "")
           STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
           HIVE_URL="https://hive-phi.vercel.app"
-          COMPANY=$(echo '${{ needs.context.outputs.payload }}' | jq -r '.company // empty' 2>/dev/null || echo "")
+          COMPANY=$(echo "${PAYLOAD_JSON}" | jq -r '.company // empty' 2>/dev/null || echo "")
 
-          if [ -n "$BACKLOG_ID" ] || [ "$(echo '${{ needs.context.outputs.payload }}' | jq -r '.chain_next // false')" = "true" ]; then
+          if [ -n "$BACKLOG_ID" ] || [ "$(echo "${PAYLOAD_JSON}" | jq -r '.chain_next // false')" = "true" ]; then
             # First try to chain to next backlog item
             echo "Chaining: marking $BACKLOG_ID as $STATUS, dispatching next..."
             BACKLOG_RESULT=$(curl -s -X POST "$HIVE_URL/api/backlog/dispatch" \
@@ -868,6 +882,8 @@ jobs:
 
       - name: Log failure to Hive API
         if: always() && steps.agent.outcome == 'failure'
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
           OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
@@ -882,7 +898,7 @@ jobs:
           ERROR_MSG=$(jq -r '[.[] | select(.type == "result" or .type == "error")] | last | .error // .result // "unknown"' "$EXEC_FILE" 2>/dev/null | head -c 500 || echo "unknown")
           SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
           TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
-          TASK=$(echo '${{ needs.context.outputs.payload }}' | jq -r '.task // "Hive-internal work"' 2>/dev/null | head -c 100 || echo "unknown")
+          TASK=$(echo "${PAYLOAD_JSON}" | jq -r '.task // "Hive-internal work"' 2>/dev/null | head -c 100 || echo "unknown")
 
           # Escape for JSON
           ERROR_ESCAPED=$(echo "$ERROR_MSG" | jq -Rs '.' | sed 's/^"//;s/"$//')

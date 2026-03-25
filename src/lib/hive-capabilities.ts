@@ -419,7 +419,28 @@ export function findCapabilityForProblem(
  */
 export function getCapabilitySummary(): string {
   const lines: string[] = [
-    "HIVE CAPABILITIES (endpoints you can call):",
+    "HIVE AUTONOMOUS CAPABILITIES vs HUMAN APPROVAL GATES:",
+    "",
+    "🤖 AUTONOMOUS SERVICES (execute directly, no approval needed):",
+    "  - Google Search Console (GSC): sitemap submission, search performance tracking",
+    "  - GitHub: repo creation, code pushes, branch management, webhook processing",
+    "  - Vercel: project creation/deletion, deployments, analytics, env vars",
+    "  - Neon: database creation/deletion, schema setup, connection management",
+    "  - Stripe: product/price creation, payment processing, customer management",
+    "  - Resend: email sending (digest, outreach, transactional), domain verification",
+    "  - Internal APIs: all /api/agents/* endpoints, metrics collection, health checks",
+    "",
+    "🔒 HUMAN APPROVAL GATES (require Carlos approval via approvals table):",
+    "  1. new_company: Creating a new venture (only after Scout research)",
+    "  2. growth_strategy: Marketing campaigns or significant spend proposals",
+    "  3. spend_approval: Any expense > €20 (ads, tools, services)",
+    "  4. kill_company: Shutting down a company",
+    "",
+    "⚠️  CRITICAL RULE: NEVER flag autonomous services as \"needs manual work\".",
+    "    If GSC, GitHub, Vercel, Neon, Stripe, or Resend actions fail, use the",
+    "    corresponding API endpoints below to fix them programmatically.",
+    "",
+    "🔧 AVAILABLE API ENDPOINTS:",
     "",
   ];
 

@@ -80,6 +80,11 @@ export const AGENT_ROUTING: Record<string, { primary: string; model: string; fal
     model: "mistralai/mistral-small-3.1-24b-instruct:free", // 24B fast for health checks
     fallback: ["groq", "gemini", "claude"],
   },
+  planner: {
+    primary: "openrouter",
+    model: "qwen/qwen3-coder:free",  // Best free coding model for codebase analysis
+    fallback: ["gemini", "groq"],     // No Claude fallback — specs are not worth burning quota
+  },
 };
 
 // Retry wrapper with exponential backoff for rate limiting
