@@ -1,126 +1,251 @@
-# Hive
+# 🚀 Hive: Autonomous Venture Orchestrator
 
-Autonomous venture orchestrator. Generates business ideas, spins up companies, runs them with AI agents, kills failures.
+Build and run multiple digital companies with AI agents. Hive generates business ideas, creates complete web applications, grows them autonomously, and kills the failures. It's like having a tireless business partner that works 24/7.
 
-**Carlos approves 4 gates.** New company, growth strategy, spend > €20, kill company. Everything else is autonomous.
+**🎯 You only approve 4 decisions:** New company, growth strategy, spend >€20, company shutdown. Everything else happens autonomously.
 
-## Architecture
+## ✨ What Hive Does
 
-<p align="center">
-  <img src="./docs/architecture.svg" alt="Hive Architecture" width="100%"/>
-</p>
+- **🔍 Discovers opportunities** - Scouts markets, analyzes trends, finds profitable niches
+- **🏗️ Builds complete apps** - Scaffolds Next.js sites, sets up payments, deploys to production
+- **📈 Grows autonomously** - Creates SEO content, manages social media, runs outreach campaigns
+- **💰 Tracks performance** - Monitors metrics, revenue, user engagement across all companies
+- **🧠 Learns and adapts** - Improves from successes and failures across the portfolio
+- **⚡ Operates 24/7** - No downtime, works while you sleep, Mac not required
 
-### How it works
+## 🎥 How It Works
 
-Hive runs 7 AI agents across two tiers. Brain agents (CEO, Scout, Engineer, Evolver) run on GitHub Actions using Claude Code with a Max 5x OAuth token. Worker agents (Ops, Growth, Outreach) run on Vercel serverless using Gemini and Groq free APIs.
+**Phase 1: Idea Generation**
+- Scout agent researches markets via web search
+- CEO evaluates ideas for automation potential and market size
+- You approve which companies to build
 
-There are no scheduled crons. Agents are triggered by three mechanisms:
+**Phase 2: Company Creation**
+- Engineer provisions GitHub repo, Vercel hosting, Neon database, Stripe payments
+- Boilerplate Next.js app deployed with authentication and checkout flow
+- Company enters autonomous build cycles
 
-- **Events** — Stripe payment arrives, a deploy completes, you create a GitHub issue or approve a PR. These fire directly through GitHub's native event system or via `repository_dispatch` from Vercel webhooks.
-- **Chains** — When one agent finishes, it dispatches the next. Scout delivers research → Growth creates content. CEO flags a problem → Scout investigates. Ops finds an error → Engineer fixes it.
-- **Data conditions** — A lightweight sentinel queries Neon every 4 hours and dispatches agents whose work conditions are met (pipeline low, content stale, leads rotting). Most runs dispatch nothing. It catches gaps when chains break.
+**Phase 3: Autonomous Growth**
+- Growth agent creates blog content, SEO pages, social media posts
+- Outreach agent finds prospects and sends personalized cold emails
+- Ops agent monitors performance and fixes issues
+- CEO reviews progress and adjusts strategy
 
-### Agents
+**Phase 4: Portfolio Management**
+- Daily digest emails with portfolio performance
+- Kill switch for underperforming companies
+- Cross-company learning improves future ventures
 
-| Agent | What it does | Triggered by |
-|---|---|---|
-| **CEO** | Plans cycles, reviews scores, portfolio analysis, kill recommendations | Payments, cycle completions, gates, PR reviews |
-| **Scout** | Finds new business ideas, market/SEO/competitive research | Pipeline low, CEO requests, company killed |
-| **Engineer** | Implements features, scaffolds companies, opens and merges PRs | GitHub issues (feature/bug), CEO, Ops escalation |
-| **Ops** | Health checks, metrics, error detection + fixing | Deploys, agent failures, sentinel |
-| **Growth** | Creates blog posts, SEO content, social posts | Scout research delivered, sentinel (stale content) |
-| **Outreach** | Finds prospects, drafts cold emails, plans follow-ups | Scout leads delivered, sentinel (stale leads) |
-| **Evolver** | Analyses agent performance, proposes prompt improvements | Cycle count threshold, failure rate threshold |
+## 🤖 The AI Team
 
-### Stack
+| Agent | Role | Capabilities |
+|-------|------|-------------|
+| **🎯 CEO** | Strategic planning | Plans build cycles, reviews performance, portfolio analysis |
+| **🔍 Scout** | Market research | Finds opportunities, analyzes competitors, discovers SEO keywords |
+| **⚙️ Engineer** | Technical execution | Builds features, fixes bugs, scaffolds new companies |
+| **📈 Growth** | Content & SEO | Creates blog posts, landing pages, social media content |
+| **📧 Outreach** | Business development | Finds leads, writes cold emails, manages follow-ups |
+| **🛡️ Ops** | Monitoring & health | Tracks metrics, detects issues, ensures uptime |
+| **🔬 Evolver** | Continuous improvement | Analyzes performance, optimizes AI prompts |
 
-| Layer | Service | Plan |
-|---|---|---|
-| Intelligence | Claude Max 5x via `claude setup-token` OAuth | $100/mo |
-| Compute (brain) | GitHub Actions, ubuntu runners | Free (private, ~46% of 2,000 min limit) |
-| Compute (workers) | Vercel serverless (Gemini Flash-Lite, Groq Llama 70B) | Free (Hobby) |
-| Database | Neon serverless Postgres | Free |
-| Dashboard | Next.js on Vercel | Free (Hobby) |
+## 🏗️ Architecture
 
-**Total cost: $100/mo.** Mac not required — close the lid, Hive keeps running.
+Hive runs 7 AI agents across a hybrid cloud architecture optimized for cost and performance:
 
-### Interacting with Hive
+**🧠 Brain Tier (GitHub Actions + Claude)**
+- Strategic agents (CEO, Scout, Engineer, Evolver) use Claude Opus/Sonnet
+- Run on GitHub Actions with 1-year OAuth token from Claude Max 5x
+- Handle planning, analysis, code generation, and decision-making
 
-All interaction happens through GitHub:
+**⚡ Worker Tier (Vercel Serverless + Free APIs)**
+- Operational agents (Growth, Outreach, Ops) use Gemini Flash and Groq
+- Run on Vercel serverless functions for speed and scalability
+- Handle content creation, outreach, and monitoring
 
-- **Create an issue** with label `directive` → CEO decomposes into tasks
-- **Create an issue** with label `feature` → Engineer implements it
-- **Create an issue** with label `research` → Scout investigates
-- **Approve a PR** → Engineer merges and deploys
-- **Comment mentioning an agent** → That agent responds in the thread
-- **Approve a gate** in the dashboard → Dependent agent proceeds
+**🔄 Event-Driven Execution**
+No scheduled crons - agents work on-demand via three triggers:
 
-### Key decisions
+- **Events** — Payments, deploys, GitHub issues trigger instant responses
+- **Chains** — Agents dispatch each other: Scout → Growth → CEO Review
+- **Conditions** — Sentinel checks every 4h for work that needs doing
 
-See [DECISIONS.md](./DECISIONS.md) for the full Architecture Decision Record log. Key ones:
-
-- **ADR-009**: Multi-provider model routing (Claude for brain, Gemini/Groq for workers)
-- **ADR-010**: Multi-repo with shared intelligence layer
-- **ADR-011**: Event-driven execution on GitHub Actions with Max 5x OAuth
-- **ADR-012**: Agent consolidation from 10 to 7
-
-## Setup
-
-### Prerequisites
-
-- Claude Max 5x subscription
-- GitHub account (private repo, event-driven model stays within 2,000 min/mo free tier)
-- Vercel Hobby account
-- Neon free-tier database
-
-### Quick start
-
-```bash
-# 1. Generate a 1-year OAuth token from your Max 5x subscription
-claude setup-token
-# Copy the sk-ant-oat01-... token
-
-# 2. Add secrets to GitHub repo → Settings → Secrets → Actions
-#    CLAUDE_CODE_OAUTH_TOKEN = (token from step 1)
-#    DATABASE_URL = (Neon connection string)
-#    CRON_SECRET = (random 32-char hex: openssl rand -hex 32)
-#    GITHUB_PAT = (fine-grained token with contents:write)
-
-# 3. Deploy to Vercel
-vercel deploy --prod
-
-# 4. Run migration
-psql $DATABASE_URL < migrations/003_agent_consolidation.sql
-
-# 5. Test — trigger CEO agent manually
-# Go to GitHub → Actions → "Hive CEO" → Run workflow
+```
+┌─────────────┐    ┌──────────────┐    ┌─────────────────┐
+│   Events    │    │    Chains    │    │   Conditions    │
+│ (payments,  │───▶│ Scout → CEO  │───▶│ Sentinel (4h)   │
+│  deploys)   │    │ CEO → Growth │    │ (health checks) │
+└─────────────┘    └──────────────┘    └─────────────────┘
+                           │                     │
+                           ▼                     ▼
+                  ┌─────────────────────────────────────┐
+                  │        AI Agent Execution           │
+                  │  (GitHub Actions + Vercel)          │
+                  └─────────────────────────────────────┘
 ```
 
-## Project structure
+## 💰 Cost Structure
+
+| Service | Tier | Monthly Cost | Usage |
+|---------|------|--------------|-------|
+| **Claude Max 5x** | Premium | $100 | Brain agents (CEO, Scout, Engineer, Evolver) |
+| **GitHub Actions** | Free (private) | $0 | 2,000 min/mo for brain agents |
+| **GitHub Actions** | Free (public) | $0 | Unlimited for company repos |
+| **Vercel** | Hobby | $0 | Worker agents + company hosting |
+| **Neon Database** | Free | $0 | 0.5 GB, 10 projects |
+| **Gemini API** | Free | $0 | 250 req/day for Growth/Outreach |
+| **Groq API** | Free | $0 | 6,000 req/day for Ops monitoring |
+| **Resend Email** | Free | $0 | 100 emails/day |
+
+**🎯 Total: $100/month** - same as a Claude subscription you might already have!
+
+### 📊 What You Get
+
+- **Unlimited digital companies** (subject to free tier limits)
+- **24/7 autonomous operation** (no Mac required)
+- **Full source code** and operational visibility
+- **Cross-company learning** system
+- **Built-in metrics** and performance tracking
+- **Email digest** with daily portfolio updates
+
+## 🚀 Key Features
+
+### 🎯 Autonomous Company Creation
+- Generates 3 business ideas with market research
+- Creates GitHub repos with full Next.js applications
+- Sets up Stripe payments, authentication, and databases
+- Deploys to production on Vercel automatically
+
+### 📈 Intelligent Growth Engine
+- Writes SEO-optimized blog content
+- Creates social media posts and campaigns
+- Builds email marketing sequences
+- Manages cold outreach with personalization
+
+### 🛡️ Built-in Monitoring & Healing
+- Tracks website performance and uptime
+- Monitors revenue, user growth, and engagement
+- Auto-fixes common deployment issues
+- Escalates complex problems for human review
+
+### 🧠 Cross-Company Learning
+- Successful strategies automatically propagate to other companies
+- Failed approaches are documented and avoided
+- Playbook grows smarter with each venture
+- Knowledge compounds across the portfolio
+
+### 📊 Portfolio Management Dashboard
+- Real-time view of all companies and metrics
+- Approval gates for major decisions
+- Task tracking and agent activity logs
+- Daily email digest with key insights
+
+## 🎮 How to Interact
+
+**Dashboard** (Web UI)
+- View portfolio performance and metrics
+- Approve/reject company proposals
+- Review agent activity and logs
+- Issue directives via command bar
+
+**GitHub Issues** (Programmatic)
+- `directive` label → CEO breaks down into tasks
+- `feature` label → Engineer implements immediately
+- `research` label → Scout investigates market
+- Mention @agent → Direct agent communication
+
+**Email** (Notifications)
+- Daily portfolio digest at 8am UTC
+- Approval notifications for gates
+- Error alerts and escalations
+
+## 🛠️ Quick Setup
+
+**Prerequisites:** Claude Max 5x subscription, GitHub account, Vercel account
+
+```bash
+# 1. Fork this repo and clone it
+git clone https://github.com/yourusername/hive.git
+
+# 2. Generate Claude OAuth token
+claude setup-token
+
+# 3. Set up GitHub Actions secrets
+# (DATABASE_URL, CLAUDE_CODE_OAUTH_TOKEN, GH_PAT, CRON_SECRET)
+
+# 4. Deploy to Vercel
+vercel deploy --prod
+
+# 5. Run database migration
+psql $DATABASE_URL < schema.sql
+```
+
+**📖 [Complete Setup Guide →](./SETUP.md)**
+
+The setup guide includes:
+- Step-by-step instructions for each service
+- API key configuration for free tiers
+- Email domain setup for outreach
+- Troubleshooting common issues
+
+## 📁 Project Structure
 
 ```
 hive/
-├── .github/workflows/     # Agent workflow files (event triggers + chains)
-│   ├── hive-ceo.yml
-│   ├── hive-scout.yml
-│   ├── hive-engineer.yml
-│   ├── hive-evolver.yml
-│   ├── hive-workers.yml   # Worker agent dispatch (curl → Vercel)
-│   └── hive-sentinel.yml  # Data condition checker
-├── src/app/
-│   ├── api/agents/        # Worker dispatch endpoint + company list
-│   ├── api/webhooks/      # Stripe → repository_dispatch
-│   ├── dashboard/         # Approval gates, company views, agent activity
-│   └── ...
-├── migrations/            # Neon schema migrations
-├── docs/
-│   └── architecture.svg   # Architecture diagram
-├── DECISIONS.md           # Architecture Decision Records
-├── BRIEFING.md            # Context for brain agents
-├── MEMORY.md              # Cross-company learnings
-└── MISTAKES.md            # Production incident log
+├── 🤖 .github/workflows/    # AI agent definitions
+│   ├── hive-ceo.yml        # Strategic planning & portfolio management
+│   ├── hive-scout.yml      # Market research & idea generation
+│   ├── hive-engineer.yml   # Code implementation & deployments
+│   └── hive-sentinel.yml   # Health monitoring (every 4h)
+├── 🎯 src/app/
+│   ├── api/agents/         # Worker agent dispatch & OIDC auth
+│   ├── api/webhooks/       # Stripe/GitHub event handlers
+│   ├── page.tsx           # Portfolio dashboard
+│   └── settings/          # API key management
+├── 📚 Documentation
+│   ├── SETUP.md           # Detailed setup instructions
+│   ├── ARCHITECTURE.md    # System design & data flow
+│   ├── DECISIONS.md       # Architectural decision records
+│   └── BRIEFING.md        # Current operational state
+├── 🏗️ templates/          # Company boilerplate
+└── 🗃️ schema.sql          # Database structure (17 tables)
 ```
 
-## License
+## 📚 Documentation
 
-Private. All rights reserved.
+- **[SETUP.md](./SETUP.md)** - Complete setup guide with troubleshooting
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Deep dive into system design
+- **[BRIEFING.md](./BRIEFING.md)** - Current state and recent changes
+- **[DECISIONS.md](./DECISIONS.md)** - Why things are built this way
+- **[MISTAKES.md](./MISTAKES.md)** - Production learnings and fixes
+
+## 🌟 Example Companies
+
+Hive can build various types of digital businesses:
+
+**SaaS Applications**
+- Productivity tools, calculators, form builders
+- Authentication, payments, and user dashboards
+- Feature development cycles with user feedback
+
+**Content Businesses**
+- SEO-optimized blogs with automated posting
+- Newsletter platforms with subscriber management
+- Affiliate marketing sites with conversion tracking
+
+**Service Marketplaces**
+- Directory sites with search and filters
+- Lead generation with contact forms
+- Social proof with testimonials and reviews
+
+## 🤝 Contributing
+
+This is an open-source project! Contributions welcome:
+
+1. **Fork and experiment** - try building your own venture portfolio
+2. **Share learnings** - document what works in your market/niche
+3. **Improve agents** - better prompts, new capabilities, bug fixes
+4. **Add integrations** - new LLM providers, marketing tools, analytics
+
+## 📄 License
+
+MIT License - feel free to fork, modify, and create your own AI venture empire!
