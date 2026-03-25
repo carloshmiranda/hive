@@ -233,7 +233,9 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
   }
 
-  // Fetch ready backlog items (exclude manually-blocked items and recently-failed items)
+  // Fetch ready backlog items
+  // Cooldown: items with recent attempt failures wait 30min before retry.
+  // Uses dispatched_at (reset on failure) as proxy for "last attempt time".
   const backlogItems = await sql`
     SELECT * FROM hive_backlog
     WHERE (
@@ -242,7 +244,7 @@ export async function POST(req: Request) {
     )
     AND NOT (
       notes ILIKE '%[attempt %]%'
-      AND created_at > NOW() - INTERVAL '30 minutes'
+      AND dispatched_at > NOW() - INTERVAL '30 minutes'
     )
     ORDER BY
       CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
@@ -440,6 +442,69 @@ export async function POST(req: Request) {
     } catch (e) {
       console.warn(`[backlog] Planning phase error:`, e instanceof Error ? e.message : "unknown");
       // Non-blocking — dispatch proceeds without spec
+    }
+  }
+
+  // Auto-decompose L (large) complexity tasks into sub-items
+  // Instead of dispatching a 30+ turn task that will exhaust max_turns,
+  // split it into S/M steps and dispatch the first one.
+  if (spec && spec.complexity === "L" && Array.isArray(spec.approach) && spec.approach.length >= 3) {
+    // Create sub-items from the approach steps
+    const steps = spec.approach as string[];
+    const subItems: { title: string; description: string; files: string[] }[] = [];
+
+    // Group steps into 1-2 step chunks (each becomes an S/M task)
+    for (let i = 0; i < steps.length; i += 2) {
+      const chunk = steps.slice(i, i + 2);
+      const stepNums = chunk.map((_, j) => i + j + 1).join("-");
+      subItems.push({
+        title: `${topItem.title} (step ${stepNums}/${steps.length})`,
+        description: chunk.join("\n"),
+        files: (spec.affected_files as string[] || []).slice(0, 3), // Limit file scope per sub-item
+      });
+    }
+
+    if (subItems.length >= 2) {
+      // Insert sub-items into backlog (all but the first — first will be dispatched now)
+      for (let i = 1; i < subItems.length; i++) {
+        await sql`
+          INSERT INTO hive_backlog (title, description, priority, category, status, spec)
+          VALUES (
+            ${subItems[i].title.slice(0, 200)},
+            ${`Parent: ${topItem.title}\n\n${subItems[i].description}`.slice(0, 2000)},
+            ${topItem.priority},
+            ${topItem.category},
+            'ready',
+            ${JSON.stringify({
+              acceptance_criteria: ["npx next build passes"],
+              affected_files: subItems[i].files,
+              approach: [subItems[i].description],
+              risks: [],
+              complexity: "S",
+              estimated_turns: 15,
+            })}
+          )
+        `.catch(() => {});
+      }
+
+      // Rewrite the spec for the first chunk only (S complexity)
+      spec = {
+        ...spec,
+        approach: [subItems[0].description],
+        complexity: "S",
+        estimated_turns: 15,
+        affected_files: (spec.affected_files as string[] || []).slice(0, 3),
+      };
+
+      // Update the parent item's spec to reflect the decomposition
+      await sql`
+        UPDATE hive_backlog
+        SET spec = ${JSON.stringify(spec)},
+            notes = COALESCE(notes, '') || ${` [auto-decomposed] Split into ${subItems.length} sub-tasks.`}
+        WHERE id = ${topItem.id}
+      `.catch(() => {});
+
+      console.log(`[backlog] Auto-decomposed L task "${topItem.title}" into ${subItems.length} sub-tasks`);
     }
   }
 

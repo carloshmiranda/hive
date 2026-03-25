@@ -175,7 +175,7 @@ Skip Claude entirely for tasks that don't need reasoning: fix lint errors, add m
 ### ⚪ P3 — Knowledge graph with PageRank for context injection
 Replace flat playbook queries with a knowledge graph where entries link to companies, agents, domains, and outcomes. PageRank determines which knowledge gets injected into agent context (most connected = most valuable). Currently playbook injection is a simple confidence threshold query. Inspired by Ruflo's intelligence loop where SessionStart builds a knowledge graph with PageRank-ranked context injection.
 
-### ⚪ P3 — Cross-session pattern learning (ReasoningBank)
+### 🟡 P1 — Cross-session pattern learning (ReasoningBank)
 Cache reasoning patterns so agents don't re-derive the same logic across cycles. If CEO solved "how to evaluate a Portuguese SaaS" in cycle 5, the reasoning should be retrievable in cycle 15 without burning turns. Hive's playbook captures outcomes but not reasoning chains. Inspired by Ruflo's ReasoningBank that stores and retrieves reasoning patterns with similarity matching.
 
 ### ⚪ P3 — Plugin/extension system for agent capabilities
@@ -214,22 +214,22 @@ Engineer writes code and creates PR — CEO reviews after. If the code has issue
 ### 🟢 P2 — Self-improvement rollback safety net
 Hive self-improvement (Sentinel Check 37) pushes to main or creates PRs. But no rollback if a self-improvement breaks something. Fix: (1) Before self-improvement commit, tag the current state (`git tag pre-improvement-{timestamp}`). (2) After deploy, monitor error rate for 30 minutes via Sentinel. (3) If error rate spikes >2x baseline, auto-revert to the tag and notify Carlos. Implementation: add pre/post steps to the self-improvement dispatch in `hive-engineer.yml`. Post-deploy monitoring via a delayed Sentinel check (new check 38: "self-improvement health"). Vercel instant rollback API for fast revert. Inspired by Ruflo's auto-updates with rollback.
 
-### 🟢 P2 — Ephemeral context cache (Vercel KV or Neon unlogged)
+### 🟡 P1 — Ephemeral context cache (Vercel KV or Neon unlogged)
 Every agent dispatch runs 10+ DB queries for context (company data, playbook, research, tasks, metrics). Same company dispatched twice in one cycle = identical queries repeated. Fix: cache context API responses with 10-min TTL. Implementation: use Vercel KV (free tier: 30K req/day) or Neon unlogged table. Cache key = `company_id:agent_type:cycle_id`. Context API checks cache first, falls back to full DB queries on miss. Invalidate on writes (new tasks, playbook updates, metric changes). Expected hit rate: ~80% within a cycle (CEO, Engineer, Growth all query same company). Inspired by Ruflo's LRU collective memory cache (95% hit rate).
 
-### 🟢 P2 — Agent-scoped playbook context injection
+### 🟡 P1 — Agent-scoped playbook context injection
 All agents receive the same playbook entries regardless of role. Engineer gets marketing learnings, Growth gets database tips — noise that wastes context tokens. Fix: tag playbook entries with relevant agent roles, filter by agent when injecting context. Implementation: add `relevant_agents text[]` column to playbook table (default all agents). Context API filters `WHERE relevant_agents @> ARRAY[agent_type]`. Existing entries auto-tagged based on `domain` field (e.g., domain='seo' → `['growth','engineer']`, domain='testing' → `['engineer']`). Inspired by Ruflo's AgentMemoryScope with per-agent isolation + cross-agent transfer.
 
 ### 🟢 P2 — Vector semantic search for playbook (pgvector + Gemini embeddings)
 Playbook lookups use SQL ILIKE (exact keyword match). "Pricing page optimization" won't match "conversion rate on checkout" even though they're related. Fix: enable Neon's `pgvector` extension + use Gemini's free embedding API (`text-embedding-004`, 1500 RPD free tier) to generate embeddings for playbook entries. Semantic similarity search via cosine distance. Implementation: (1) `CREATE EXTENSION vector`, add `embedding vector(768)` column to playbook table. (2) `src/lib/embeddings.ts` — `generateEmbedding(text)` calls Gemini embedding API, caches results. (3) On playbook insert/update, generate and store embedding. (4) Context API queries `ORDER BY embedding <=> $query_embedding LIMIT 5` instead of ILIKE. (5) Fallback to trigram (`pg_trgm`) if embedding API is down. Cost: $0 (Gemini free tier). Neon free tier supports pgvector. Inspired by Ruflo's HNSW vector memory + RuVector PostgreSQL.
 
-### 🟢 P2 — Dynamic prompt composition from learned outcomes
+### 🟡 P1 — Dynamic prompt composition from learned outcomes
 Specialist profiles (P1) are static prompt files. Next step: dynamically compose prompts based on what worked. Track which prompt sections correlate with successful outcomes (cycle score 8+, task completed, no errors). Over time, weight prompt sections by effectiveness — amplify what works, fade what doesn't. Implementation: (1) Tag each specialist prompt with numbered sections. (2) After task completion, log which specialist + sections were active. (3) Correlate sections with success/failure in `agent_actions`. (4) `src/lib/prompt-composer.ts` — `composePrompt(agent, taskType)` assembles prompt from highest-performing sections. (5) Evolver reviews composition data weekly, proposes section rewrites for low-performing segments. Hive's equivalent of LoRA/fine-tuning — lightweight adaptation without model access. Inspired by Ruflo's MicroLoRA adaptation principle applied to prompt engineering.
 
-### 🟢 P2 — Context payload deduplication and compression
+### 🟡 P1 — Context payload deduplication and compression
 Agent dispatches include repeated context (same company data, same playbook entries across CEO → Engineer → Growth in one cycle). Each repetition wastes tokens. Fix: (1) Hash context payloads, cache in Neon with 10-min TTL. If same company context requested within TTL, return cached version. (2) Deduplicate playbook entries that appear in multiple agent contexts within same cycle. (3) Compress research report summaries further — extract only sections relevant to current task type (SEO research for Growth, competitive analysis for CEO). Implementation: context API checks `context_cache` table before running 10+ queries. Cache key = `company_id + agent_type + cycle_id`. Saves DB load + reduces context size ~20%. Inspired by Ruflo's token optimizer cache (95% hit rate) and Int8 quantization principle (compress without losing signal).
 
-### 🟢 P2 — Reasoning cache for high-scoring CEO plans
+### 🟡 P1 — Reasoning cache for high-scoring CEO plans
 CEO re-derives the same planning logic every cycle. When CEO produces a plan that scores 8+, store the plan structure (task decomposition, acceptance criteria, specialist assignments) in a `reasoning_cache` table keyed by task pattern. Next time a similar task appears, inject the cached plan as a starting point. Reduces CEO turns and improves plan quality consistency. Implementation: after cycle review, if score ≥ 8, extract plan JSON from cycle data → store with task type + company type as lookup key. Context API matches incoming task against cache using trigram similarity. Inspired by Ruflo's ReasoningBank (upgrades existing P3 item to P2 with concrete implementation).
 
 ### 🟢 P2 — Mid-execution checkpoint for long agent runs

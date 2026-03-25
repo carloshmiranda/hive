@@ -39,7 +39,7 @@
 - **Blocked on:**
   - Resend domain verification (need a real domain for outreach emails)
 - **Known issues:**
-  - 15 Scout proposals pending approval (auto-expiry planned but accumulating faster)
+  - 15 Scout proposals pending approval (auto-expiry disabled — manual review only)
   - All 3 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration)
   - CEO reviews not being recorded — most cycles complete without CEO scores
   - Engineer 68% failure rate is polling timeouts (20min), not real failures
@@ -63,6 +63,18 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+### 2026-03-25 [code] Autonomy unblock + planning phase + LLM optimization
+Major session focused on making Hive self-evolving:
+- **Scout auto-cleanup reverted**: 14 dismissed proposals restored. Auto-expiry disabled — Carlos reviews manually. Sentinel still blocks NEW idea generation at >=5 pending.
+- **Auto-merge fix**: GitHub webhook PR handler now reads `github_token` from settings DB (was only checking env vars). Risk scoring: 0-3 auto-merge, 4-6 queued, 7+ escalated.
+- **Planning phase implemented (P0)**: New `src/lib/backlog-planner.ts` generates specs via OpenRouter Qwen Coder (free) before Engineer dispatch. Spec includes acceptance_criteria, affected_files, approach, risks, complexity, estimated_turns. Engineer workflow updated to follow specs directly. Schema updated with `planning` status + `spec JSONB` column.
+- **Circuit breaker bypass**: P0 items and `force=true` skip the 60-min cooldown. Prevents critical items from being blocked by prior failures.
+- **MANUAL_KEYWORDS narrowed**: Regex was blocking automatable items matching "manual" in technical contexts.
+- **Unified LLM layer**: `src/lib/llm.ts` with provider routing (OpenRouter primary for all workers), automatic failover, rate limit retry with exponential backoff.
+- **Loop quality fixes**: 5 P1 items for task decomposition, duplicate retry prevention, PR tracking, circuit breaker bypass, observability.
+- **Ruflo items promoted**: 13 items from BACKLOG.md promoted to hive_backlog DB. 6 caching/optimization items bumped P2/P3 → P1 (ephemeral cache, dedup, reasoning cache, agent-scoped playbook, dynamic prompts, ReasoningBank).
+- **Flolio contamination**: P1 item added to investigate Portuguese content bleed into global-market company.
 
 ### 2026-03-24 [code] Enhanced Scout proposal cleanup system
 **P1 backlog task completed:** Scout proposals were accumulating (15 pending) while existing companies couldn't execute properly. Enhanced auto-cleanup system with more aggressive thresholds: triggers at >3 pending proposals (was >5), faster expiry when severely clogged (24h vs 48h when >10 proposals), and keeps fewer proposals (2 vs 3 when clogged). Added dashboard cleanup UI when >5 proposals: "Cleanup" button for gradual cleanup and "Reset All" for nuclear option. Sentinel now prioritizes company execution over accumulating Scout ideas.
