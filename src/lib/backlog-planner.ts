@@ -103,6 +103,125 @@ function findRelevantFiles(
 }
 
 /**
+ * Analyze if a backlog item description is a problem statement vs. implementable task
+ * Problem statements need decomposition before they can be dispatched
+ */
+export function isProblemStatement(title: string, description: string): boolean {
+  const text = `${title} ${description}`.toLowerCase();
+
+  // Problem statement indicators
+  const problemIndicators = [
+    // Vague action words without specifics
+    /\b(improve|enhance|optimize|make better|fix issues|address)\b(?!\s+(function|file|component|class|method|route|api|endpoint|table|query))/,
+
+    // High-level goals without implementation details
+    /\b(should be|need to|we should|it would be good|consider|explore|investigate)\b/,
+
+    // Reporting/analysis rather than implementation tasks
+    /\b(analyze|research|figure out|understand why|look into|check)\b/,
+
+    // Vague references without specificity
+    /\b(better|more|less|faster|cleaner|easier|simpler)\b(?!\s+(by|via|through|using))/,
+
+    // Generic problem descriptions
+    /\b(problems?|issues?|bugs?|errors?)\s+with\b(?!\s+(function|file|component|class|method|route|api|endpoint|table|query))/,
+
+    // Feature requests without implementation details
+    /\b(add support for|implement|create)\b(?!\s+(function|file|component|class|method|route|api|endpoint|table|query))/
+  ];
+
+  // Actionable task indicators (if present, likely NOT a problem statement)
+  const actionableIndicators = [
+    // Specific file/code references
+    /\b(src\/|\.ts|\.tsx|\.js|\.sql|package\.json|schema\.sql)\b/,
+
+    // Specific technical terms
+    /\b(function|method|class|component|route|api|endpoint|table|query|column|interface|type)\s+\w+/,
+
+    // Concrete actions
+    /\b(update|modify|change|replace|add|remove|delete)\s+(the\s+)?(\w+\s+)?(function|method|class|component|route|api|endpoint|table|query|file)\b/,
+
+    // Step-by-step instructions
+    /step \d+:|^\d+\.|first|then|next|finally/,
+
+    // Specific implementation details
+    /\b(in|to|from)\s+(src\/|\w+\.ts|\w+\.tsx|\w+\.js|\w+\.sql)/
+  ];
+
+  // Check for problem indicators
+  const hasProblemIndicators = problemIndicators.some(pattern => pattern.test(text));
+
+  // Check for actionable indicators
+  const hasActionableIndicators = actionableIndicators.some(pattern => pattern.test(text));
+
+  // Additional heuristics for problem statements
+  const isVague = (
+    // Very short descriptions (likely too high-level)
+    description.trim().length < 100 ||
+
+    // Lacks specific technical details
+    !/\b(src\/|function|method|class|component|route|api|file|table)\b/.test(text) ||
+
+    // Contains question words without answers
+    /\b(what|why|how|where|when|which)\b/.test(text) && !/\b(update|change|add|remove|fix)\b/.test(text)
+  );
+
+  // Decision logic:
+  // - If has actionable indicators and no problem indicators -> not a problem statement
+  // - If has problem indicators or is vague and lacks actionable details -> problem statement
+  return (hasProblemIndicators || isVague) && !hasActionableIndicators;
+}
+
+/**
+ * Flag backlog items that are problem statements as needing decomposition
+ * This prevents them from being dispatched until broken down into actionable tasks
+ */
+export async function flagProblemStatementsAsNeedingDecomposition(
+  sql?: any
+): Promise<{ flagged: number; items: Array<{ id: string; title: string }> }> {
+  if (!sql) {
+    return { flagged: 0, items: [] };
+  }
+
+  try {
+    // Find items in ready/approved status that might be problem statements
+    const candidateItems = await sql`
+      SELECT id, title, description, status, notes
+      FROM hive_backlog
+      WHERE status IN ('ready', 'approved')
+      AND NOT (notes ILIKE '%needs_decomposition%')
+      ORDER BY created_at ASC
+      LIMIT 50
+    `.catch(() => []);
+
+    const flaggedItems: Array<{ id: string; title: string }> = [];
+
+    for (const item of candidateItems) {
+      if (isProblemStatement(item.title || '', item.description || '')) {
+        // Flag as needs decomposition
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'blocked',
+              notes = COALESCE(notes, '') || ' [needs_decomposition] Auto-flagged as problem statement — needs breakdown into actionable tasks.'
+          WHERE id = ${item.id}
+        `.catch(() => {});
+
+        flaggedItems.push({ id: item.id, title: item.title });
+      }
+    }
+
+    if (flaggedItems.length > 0) {
+      console.log(`[backlog-planner] Flagged ${flaggedItems.length} problem statements as needing decomposition`);
+    }
+
+    return { flagged: flaggedItems.length, items: flaggedItems };
+  } catch (error) {
+    console.warn('flagProblemStatementsAsNeedingDecomposition failed:', error instanceof Error ? error.message : 'unknown');
+    return { flagged: 0, items: [] };
+  }
+}
+
+/**
  * Filter backlog items to exclude those in cooldown period
  * Also performs cleanup of expired cooldown entries
  */

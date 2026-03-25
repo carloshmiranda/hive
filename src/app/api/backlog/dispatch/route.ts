@@ -3,7 +3,7 @@ import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
-import { filterBacklogItemsByCooldown, checkBacklogCircuitBreaker } from "@/lib/backlog-planner";
+import { filterBacklogItemsByCooldown, checkBacklogCircuitBreaker, flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -416,6 +416,19 @@ export async function POST(req: Request) {
   `.catch(() => []);
   if (recentDispatch) {
     return json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
+  }
+
+  // Flag problem statements as needing decomposition before dispatch
+  // This prevents vague/high-level descriptions from being dispatched repeatedly
+  try {
+    const flagResult = await flagProblemStatementsAsNeedingDecomposition(sql);
+    if (flagResult.flagged > 0) {
+      console.log(`[backlog] Flagged ${flagResult.flagged} problem statements:`,
+                  flagResult.items.map(i => i.title).join(', '));
+    }
+  } catch (e) {
+    console.warn('[backlog] Problem statement detection failed:', e instanceof Error ? e.message : 'unknown');
+    // Non-blocking, continue with dispatch
   }
 
   // Fetch ready backlog items
