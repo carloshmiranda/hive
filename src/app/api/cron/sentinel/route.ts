@@ -2182,6 +2182,70 @@ export async function GET(req: Request) {
     console.warn(`[sentinel] Check 41 failed: ${check41Err.message}`);
   }
 
+  // --- Check 42: Mark evolver proposals as implemented when backlog items complete ---
+  try {
+    // Find completed backlog items that originated from evolver proposals but haven't marked the proposal as implemented
+    const completedEvolverBacklog = await sql`
+      SELECT
+        hb.id as backlog_id,
+        hb.title,
+        hb.source,
+        hb.completed_at,
+        hb.status,
+        CAST(REGEXP_REPLACE(hb.description, '.*evolver proposal ([0-9a-f-]+).*', '\\1', 'i') AS UUID) as evolver_proposal_id
+      FROM hive_backlog hb
+      WHERE hb.status = 'done'
+        AND hb.source LIKE '%evolver%'
+        AND hb.description ~ 'evolver proposal [0-9a-f-]+'
+        AND hb.completed_at > NOW() - INTERVAL '7 days'
+        AND EXISTS (
+          SELECT 1 FROM evolver_proposals ep
+          WHERE ep.id = CAST(REGEXP_REPLACE(hb.description, '.*evolver proposal ([0-9a-f-]+).*', '\\1', 'i') AS UUID)
+            AND ep.status = 'approved'
+            AND ep.implemented_at IS NULL
+        )
+      ORDER BY hb.completed_at DESC
+      LIMIT 10
+    `;
+
+    let markedCount = 0;
+    for (const item of completedEvolverBacklog) {
+      try {
+        // Mark the original evolver proposal as implemented
+        await sql`
+          UPDATE evolver_proposals
+          SET implemented_at = NOW(),
+              status = 'implemented',
+              notes = COALESCE(notes, '') || ${` | [Step 5] Backlog item #${item.backlog_id} completed at ${item.completed_at}`}
+          WHERE id = ${item.evolver_proposal_id}
+            AND status = 'approved'
+            AND implemented_at IS NULL
+        `;
+
+        markedCount++;
+        console.log(`[sentinel] Check 42: Marked evolver proposal ${item.evolver_proposal_id} as implemented (backlog item: "${item.title?.slice(0, 60)}")`);
+      } catch (proposalUpdateErr: any) {
+        console.warn(`[sentinel] Check 42: Failed to mark evolver proposal ${item.evolver_proposal_id} as implemented: ${proposalUpdateErr.message}`);
+      }
+    }
+
+    if (markedCount > 0) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES (
+          'sentinel',
+          'evolver_proposal_completion',
+          ${`Check 42: Marked ${markedCount} approved evolver proposals as implemented after backlog completion`},
+          'success',
+          NOW(),
+          NOW()
+        )
+      `.catch(() => {});
+    }
+  } catch (check42Err: any) {
+    console.warn(`[sentinel] Check 42 failed: ${check42Err.message}`);
+  }
+
   // --- Deploy drift check ---
   const drift = await checkDeployDrift(vercelToken, ghPat);
   if (drift.drifted) {
