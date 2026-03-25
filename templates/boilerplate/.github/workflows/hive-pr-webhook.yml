@@ -56,7 +56,7 @@ jobs:
                 curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
                   -H "Authorization: Bearer $OIDC_TOKEN" \
                   -H "Content-Type: application/json" \
-                  -d "{\"company_slug\":\"${{ github.repository_owner }}/${{ github.event.repository.name }}\",\"agent\":\"github\",\"action_type\":\"task_completed\",\"status\":\"success\",\"description\":\"Task ${TASK_ID} completed via PR #${{ github.event.number }} merge\"}" || true
+                  -d "{\"company_slug\":\"${{ github.event.repository.name }}\",\"agent\":\"github\",\"action_type\":\"task_completed\",\"status\":\"success\",\"description\":\"Task ${TASK_ID} completed via PR #${{ github.event.number }} merge\"}" || true
               else
                 ERROR_MSG=$(echo "$TASK_UPDATE" | jq -r '.error // "unknown error"')
                 echo "❌ Failed to confirm task completion: $ERROR_MSG"
@@ -83,5 +83,5 @@ jobs:
             curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"company_slug\":\"${{ github.repository_owner }}/${{ github.event.repository.name }}\",\"agent\":\"github\",\"action_type\":\"pr_opened\",\"status\":\"success\",\"description\":\"PR #${{ github.event.number }} opened: ${{ github.event.pull_request.title }}\"}" || true
+              -d "{\"company_slug\":\"${{ github.event.repository.name }}\",\"agent\":\"github\",\"action_type\":\"pr_opened\",\"status\":\"success\",\"description\":\"PR #${{ github.event.number }} opened: ${{ github.event.pull_request.title }}\"}" || true
           fi

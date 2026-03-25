@@ -109,37 +109,61 @@ jobs:
       - name: Mark tasks as in progress
         id: mark_progress
         run: |
-          # Extract task IDs from payload and mark them as in_progress
+          # Extract task IDs from payload, CEO plan, and engineering tasks context
           PAYLOAD='${{ github.event.inputs.payload }}'
+          PRODUCT_CTX='${{ steps.context.outputs.product_ctx }}'
           echo "Payload: $PAYLOAD"
 
-          # Try to extract task_id from payload or task field
-          TASK_ID=$(echo "$PAYLOAD" | jq -r '.task_id // .id // empty' 2>/dev/null)
-          if [ -z "$TASK_ID" ]; then
-            # Try alternative parsing for different payload formats
-            TASK_ID=$(echo "$PAYLOAD" | grep -oP '"(?:task_)?id":\s*"?\K[a-f0-9-]+' | head -1 || echo "")
+          # Try multiple sources for task_id
+          TASK_ID=""
+
+          # 1. Try to extract task_id from payload first
+          if [ -n "$PAYLOAD" ] && [ "$PAYLOAD" != "{}" ]; then
+            TASK_ID=$(echo "$PAYLOAD" | jq -r '.task_id // .id // empty' 2>/dev/null)
+            if [ -z "$TASK_ID" ]; then
+              # Try alternative parsing for different payload formats
+              TASK_ID=$(echo "$PAYLOAD" | grep -oP '"(?:task_)?id":\s*"?\K[a-f0-9-]+' | head -1 || echo "")
+            fi
+          fi
+
+          # 2. If not found in payload, try CEO plan from product context
+          if [ -z "$TASK_ID" ] && [ -n "$PRODUCT_CTX" ]; then
+            TASK_ID=$(echo "$PRODUCT_CTX" | jq -r '.cycle.ceo_plan.engineering_tasks[0].id // empty' 2>/dev/null)
+          fi
+
+          # 3. If still not found, try engineering_tasks array from context
+          if [ -z "$TASK_ID" ] && [ -n "$PRODUCT_CTX" ]; then
+            TASK_ID=$(echo "$PRODUCT_CTX" | jq -r '.engineering_tasks[0].id // empty' 2>/dev/null)
           fi
 
           if [ -n "$TASK_ID" ]; then
+            echo "Found task_id: $TASK_ID"
+
             OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
               | jq -r '.value')
 
-            TASK_UPDATE=$(curl -s -X PATCH "https://hive-phi.vercel.app/api/tasks/${TASK_ID}" \
-              -H "Authorization: Bearer $OIDC_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{"status":"in_progress"}' 2>/dev/null || echo "{}")
+            if [ -n "$OIDC_TOKEN" ] && [ "$OIDC_TOKEN" != "null" ]; then
+              TASK_UPDATE=$(curl -s -X PATCH "https://hive-phi.vercel.app/api/tasks/${TASK_ID}" \
+                -H "Authorization: Bearer $OIDC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d '{"status":"in_progress"}' 2>/dev/null || echo "{}")
 
-            UPDATE_SUCCESS=$(echo "$TASK_UPDATE" | jq -r '.id // empty')
-            if [ -n "$UPDATE_SUCCESS" ]; then
-              echo "Task ${TASK_ID} marked as in_progress"
-              echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+              UPDATE_SUCCESS=$(echo "$TASK_UPDATE" | jq -r '.id // empty')
+              if [ -n "$UPDATE_SUCCESS" ]; then
+                echo "✅ Task ${TASK_ID} marked as in_progress"
+                echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+              else
+                ERROR_MSG=$(echo "$TASK_UPDATE" | jq -r '.error // "unknown error"')
+                echo "❌ WARNING: Failed to mark task ${TASK_ID} as in_progress: $ERROR_MSG"
+                echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT  # Still set the ID for later use
+              fi
             else
-              echo "WARNING: Failed to mark task ${TASK_ID} as in_progress: $(echo "$TASK_UPDATE" | jq -r '.error // "unknown"')"
-              echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT  # Still set the ID for later use
+              echo "❌ WARNING: Failed to get OIDC token for task status update"
+              echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
             fi
           else
-            echo "No task_id found in payload - proceeding without task tracking"
+            echo "⚠️ No task_id found in payload, CEO plan, or engineering tasks - proceeding without task tracking"
           fi
 
       - name: Run build agent
@@ -264,7 +288,8 @@ jobs:
             4. Read `ceo_plan.engineering_tasks`. ALSO check `engineering_tasks` from PRODUCT CONTEXT — these are from the company_tasks backlog.
                If ceo_plan has no engineering_tasks, use the backlog tasks instead. Pick the FIRST uncompleted task.
                IMPORTANT: Implement ONE task per run. You have limited turns.
-            4b. If the task has an `id` from company_tasks, note it for tracking.
+            4b. The task_id is automatically extracted from CEO plan or engineering tasks context and used for status tracking.
+                This closes the task tracking loop so CEO knows what was built and won't re-plan completed tasks.
             5. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
                - Check competitive_analysis for what competitors do (match or beat them)
                - Check the pricing model to build the right tier-gating structure
@@ -345,6 +370,8 @@ jobs:
 
           # Mark task as done if PR was opened and we have a task_id
           if [ "$PR_OPENED" = "true" ] && [ -n "$TASK_ID" ]; then
+            echo "Marking task ${TASK_ID} as done (PR #${PR_NUM} opened)"
+
             OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
               | jq -r '.value')
@@ -358,18 +385,35 @@ jobs:
               UPDATE_SUCCESS=$(echo "$TASK_UPDATE" | jq -r '.id // empty')
               if [ -n "$UPDATE_SUCCESS" ]; then
                 echo "✅ Task ${TASK_ID} marked as done (PR #${PR_NUM} opened)"
+                echo "✅ CEO will no longer re-plan this task as it's marked completed"
               else
                 ERROR_MSG=$(echo "$TASK_UPDATE" | jq -r '.error // "unknown error"')
-                echo "❌ WARNING: Failed to update task ${TASK_ID} status: $ERROR_MSG"
+                echo "❌ WARNING: Failed to update task ${TASK_ID} status to done: $ERROR_MSG"
                 echo "Full response: $TASK_UPDATE"
+
+                # Fallback: try to mark with a different cycle_id to ensure it's tracked
+                TASK_UPDATE_FALLBACK=$(curl -s -X PATCH "https://hive-phi.vercel.app/api/tasks/${TASK_ID}" \
+                  -H "Authorization: Bearer $OIDC_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"status\":\"done\",\"cycle_id\":\"${{ github.event.inputs.cycle_id }}\"}" 2>/dev/null || echo "{}")
+
+                FALLBACK_SUCCESS=$(echo "$TASK_UPDATE_FALLBACK" | jq -r '.id // empty')
+                if [ -n "$FALLBACK_SUCCESS" ]; then
+                  echo "✅ Task ${TASK_ID} marked as done via fallback method"
+                else
+                  echo "❌ Fallback also failed: $(echo "$TASK_UPDATE_FALLBACK" | jq -r '.error // "unknown error"')"
+                fi
               fi
             else
               echo "❌ WARNING: Failed to get OIDC token for task status update"
             fi
           elif [ "$PR_OPENED" = "true" ]; then
             echo "⚠️ PR opened but no task_id found - task tracking skipped"
+            echo "⚠️ CEO may re-plan similar tasks since this work isn't tracked"
           elif [ -n "$TASK_ID" ]; then
             echo "⚠️ Task ${TASK_ID} found but no PR opened - leaving in in_progress state"
+          else
+            echo "⚠️ No task tracking - neither PR opened nor task_id available"
           fi
 
           # Only run anti-drift validation and dispatch CEO if PR was opened
