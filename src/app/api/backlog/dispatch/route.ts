@@ -66,13 +66,47 @@ export async function POST(req: Request) {
     if (completed_status === "success") {
       // Engineer "success" means PR created, NOT code merged.
       // Move to 'pr_open' so it stays visible until PR is merged.
-      // Sentinel or a webhook will mark 'done' after merge.
       await sql`
         UPDATE hive_backlog
         SET status = 'pr_open', dispatched_at = NOW(),
             notes = COALESCE(notes, '') || ' PR created via chain dispatch — awaiting merge.'
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch(() => {});
+
+      // Event-driven PR review: review and auto-merge all open hive/ PRs immediately
+      // instead of waiting for Sentinel's 4h cron (Check 38).
+      try {
+        const ghToken = await getSettingValue("github_token");
+        if (ghToken) {
+          const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
+          const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
+            headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+          });
+          if (prListRes.ok) {
+            const openPRs = await prListRes.json();
+            const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
+            for (const pr of hivePRs) {
+              try {
+                const analysis = await analyzePR("carloshmiranda", "hive", pr.number, ghToken);
+                if (analysis.decision === "auto_merge") {
+                  const result = await autoMergePR("carloshmiranda", "hive", pr.number, ghToken, "squash");
+                  if (result.success) {
+                    await sql`
+                      UPDATE hive_backlog SET status = 'done',
+                        notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged on success callback.`}
+                      WHERE status = 'pr_open'
+                        AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
+                    `.catch(() => {});
+                    console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
+                  }
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch (prErr) {
+        console.warn("[backlog] Event-driven PR review failed:", prErr instanceof Error ? prErr.message : "unknown");
+      }
     } else {
       // Failed: learn from it. Track attempts, decompose if too big.
       const [item] = await sql`
