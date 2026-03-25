@@ -1625,6 +1625,7 @@ export async function GET(req: Request) {
   // Rationale: if Hive itself is broken (systemic errors, broken pipelines),
   // running company cycles wastes budget on work that will fail anyway.
   let hiveFixesDispatched = 0;
+  let proposalsImplemented = 0;
   try {
     // (A0) Auto-approve critical proposals pending >24h — these are blocking the system
     await sql`
@@ -1707,7 +1708,17 @@ export async function GET(req: Request) {
             AND status NOT IN ('done', 'rejected')
           LIMIT 1
         `.catch(() => []);
-        if (existing) continue;
+        if (existing) {
+          // Already in backlog, just mark as implemented
+          console.log(`[sentinel] Approved proposal ${proposal.id} already in backlog, marking implemented`);
+          await sql`
+            UPDATE evolver_proposals SET implemented_at = NOW(),
+              notes = COALESCE(notes, '') || ' | Found in hive_backlog, marked implemented'
+            WHERE id = ${proposal.id}
+          `.catch(() => {});
+          proposalsImplemented++;
+          continue;
+        }
 
         const priority = proposal.severity === "critical" ? "P0" : proposal.severity === "high" ? "P1" : "P2";
         await sql`
@@ -1718,11 +1729,13 @@ export async function GET(req: Request) {
             ${priority}, 'infra', 'ready'
           )
         `.catch(() => {});
+        console.log(`[sentinel] Approved proposal ${proposal.id} routed to backlog and marked implemented`);
         await sql`
           UPDATE evolver_proposals SET implemented_at = NOW(),
             notes = COALESCE(notes, '') || ' | Routed to hive_backlog for planning + dispatch'
           WHERE id = ${proposal.id}
         `.catch(() => {});
+        proposalsImplemented++;
         dispatches.push({
           type: "brain",
           target: "hive_self_fix",
@@ -2547,7 +2560,17 @@ export async function GET(req: Request) {
         AND status NOT IN ('done', 'rejected')
       LIMIT 1
     `.catch(() => []);
-    if (existing) continue;
+    if (existing) {
+      // Already in backlog, just mark as implemented
+      console.log(`[sentinel] Evolver proposal ${imp.id} already in backlog, marking implemented`);
+      await sql`
+        UPDATE evolver_proposals SET implemented_at = NOW(),
+          notes = COALESCE(notes, '') || ' | Already in hive_backlog, marked implemented'
+        WHERE id = ${imp.id}
+      `.catch(() => {});
+      proposalsImplemented++;
+      continue;
+    }
 
     const priority = imp.severity === "critical" ? "P0" : imp.severity === "high" ? "P1" : "P2";
     const description = `Diagnosis: ${imp.diagnosis}\n\nProposed fix: ${typeof imp.proposed_fix === 'string' ? imp.proposed_fix : JSON.stringify(imp.proposed_fix)}`;
@@ -2559,12 +2582,85 @@ export async function GET(req: Request) {
         ${priority}, 'infra', 'ready'
       )
     `.catch(() => {});
+    console.log(`[sentinel] Evolver proposal ${imp.id} routed to backlog and marked implemented`);
     await sql`
       UPDATE evolver_proposals SET implemented_at = NOW(),
         notes = COALESCE(notes, '') || ' | Routed to hive_backlog for planning + dispatch'
       WHERE id = ${imp.id}
     `;
+    proposalsImplemented++;
     dispatches.push({ type: "self_improvement", target: "backlog", payload: { proposal_id: imp.id, title: imp.title, routed: "backlog" } });
+  }
+
+  // CRITICAL FIX: Handle ALL other approved proposals that weren't covered by the above filters
+  // This ensures no approved proposal gets stuck indefinitely without being marked as implemented
+  const orphanedApprovedProposals = await sql`
+    SELECT id, title, proposed_fix, gap_type, severity, signal_source
+    FROM evolver_proposals
+    WHERE status = 'approved'
+      AND implemented_at IS NULL
+      AND created_at > NOW() - INTERVAL '30 days'
+      AND NOT (
+        gap_type IN ('capability', 'outcome') AND signal_source = 'sentinel_self_improvement'
+      )
+    ORDER BY
+      CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+      created_at ASC
+    LIMIT 5
+  `;
+
+  for (const orphan of orphanedApprovedProposals) {
+    // Check if already in backlog
+    const [existing] = await sql`
+      SELECT id FROM hive_backlog
+      WHERE title ILIKE ${(orphan.title as string).slice(0, 50) + "%"}
+        AND status NOT IN ('done', 'rejected')
+      LIMIT 1
+    `.catch(() => []);
+
+    if (existing) {
+      // Already in backlog, just mark as implemented
+      console.log(`[sentinel] Orphaned proposal ${orphan.id} already in backlog, marking implemented`);
+      await sql`
+        UPDATE evolver_proposals SET implemented_at = NOW(),
+          notes = COALESCE(notes, '') || ' | Found in hive_backlog, marked implemented'
+        WHERE id = ${orphan.id}
+      `.catch(() => {});
+      proposalsImplemented++;
+    } else {
+      // Route to backlog
+      const priority = orphan.severity === "critical" ? "P0" : orphan.severity === "high" ? "P1" : "P2";
+      const description = `Source: evolver proposal ${orphan.id} (${orphan.gap_type})\n${typeof orphan.proposed_fix === 'string' ? orphan.proposed_fix : JSON.stringify(orphan.proposed_fix)}`;
+
+      await sql`
+        INSERT INTO hive_backlog (title, description, priority, category, status)
+        VALUES (
+          ${(orphan.title as string).slice(0, 200)},
+          ${description.slice(0, 2000)},
+          ${priority}, 'infra', 'ready'
+        )
+      `.catch(() => {});
+
+      console.log(`[sentinel] Orphaned proposal ${orphan.id} (${orphan.gap_type}/${orphan.signal_source}) routed to backlog and marked implemented`);
+      await sql`
+        UPDATE evolver_proposals SET implemented_at = NOW(),
+          notes = COALESCE(notes, '') || ' | Routed to hive_backlog via orphan cleanup'
+        WHERE id = ${orphan.id}
+      `.catch(() => {});
+      proposalsImplemented++;
+
+      dispatches.push({
+        type: "orphan_proposal",
+        target: "backlog",
+        payload: {
+          proposal_id: orphan.id,
+          title: orphan.title,
+          gap_type: orphan.gap_type,
+          signal_source: orphan.signal_source,
+          routed: "backlog"
+        }
+      });
+    }
   }
 
   // Reminder for critical/high severity proposals pending >48h
@@ -3386,11 +3482,12 @@ export async function GET(req: Request) {
     const { notifyHive } = await import("@/lib/telegram");
     const interesting = dispatches.length > 0 || staleRecordsFixed > 0 ||
       selfImprovementProposals > 0 || agentRegressions > 0 || statsEndpointsBroken > 0 ||
-      languageMismatches > 0 || hiveFixesDispatched > 0 || backlogDispatched > 0;
+      languageMismatches > 0 || hiveFixesDispatched > 0 || backlogDispatched > 0 || proposalsImplemented > 0;
     if (interesting) {
       const parts: string[] = [];
       if (hiveFixesDispatched > 0) parts.push(`🔧 ${hiveFixesDispatched} Hive fixes (priority)`);
       if (backlogDispatched > 0) parts.push(`📋 ${backlogDispatched} backlog item dispatched`);
+      if (proposalsImplemented > 0) parts.push(`✅ ${proposalsImplemented} proposals implemented`);
       if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
       if (staleRecordsFixed > 0) parts.push(`${staleRecordsFixed} stale records fixed`);
       if (selfImprovementProposals > 0) parts.push(`${selfImprovementProposals} improvement proposals`);
