@@ -401,10 +401,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
       dispatched_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
       completed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
+      theme: { type: "TEXT", nullable: true, hasDefault: false },
     },
     checks: [
       { column: "priority", allowedValues: ["P0", "P1", "P2", "P3"] },
-      { column: "category", allowedValues: ["bugfix", "feature", "refactor", "infra", "quality", "research"] },
+      { column: "category", allowedValues: ["bugfix", "feature", "refactor", "infra", "quality", "research", "docs"] },
       { column: "status", allowedValues: ["ready", "approved", "planning", "dispatched", "in_progress", "pr_open", "done", "blocked", "rejected"] },
     ],
   },

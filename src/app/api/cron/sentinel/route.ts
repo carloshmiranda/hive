@@ -545,7 +545,8 @@ export async function GET(req: Request) {
   // Use the cleanup endpoint for each stuck cycle to avoid interfering with CEO reviews
   for (const cycle of stuckCycles) {
     try {
-      const response = await fetch(`${process.env.VERCEL_URL || 'https://hive-phi.vercel.app'}/api/cycles/${cycle.id}/cleanup`, {
+      const cleanupUrl = process.env.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app';
+      const response = await fetch(`${cleanupUrl}/api/cycles/${cycle.id}/cleanup`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${process.env.CRON_SECRET}`,
@@ -1991,6 +1992,30 @@ export async function GET(req: Request) {
   }
 
   // Checks 38, 30 moved to /api/cron/company-health (fired above)
+
+  // --- Check 40: Phantom pr_open cleanup ---
+  // Backlog items marked pr_open but with no pr_number are phantom completions.
+  // Engineer marked them done but never created an actual PR. Reset to ready.
+  try {
+    const phantomPrItems = await sql`
+      UPDATE hive_backlog
+      SET status = 'ready', dispatched_at = NULL,
+          notes = COALESCE(notes, '') || ' [orphan-reset] No pr_number — phantom pr_open, reset to ready.'
+      WHERE status = 'pr_open' AND pr_number IS NULL
+      RETURNING id, title
+    `;
+    if (phantomPrItems.length > 0) {
+      console.log(`[sentinel] Check 40: Reset ${phantomPrItems.length} phantom pr_open items: ${phantomPrItems.map((i: any) => i.title.slice(0, 50)).join(", ")}`);
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'phantom_pr_cleanup',
+          ${`Check 40: Reset ${phantomPrItems.length} phantom pr_open items (no pr_number)`},
+          'success', NOW(), NOW())
+      `.catch(() => {});
+    }
+  } catch (check40Err: any) {
+    console.warn(`[sentinel] Check 40 failed: ${check40Err.message}`);
+  }
 
   // --- Deploy drift check ---
   const drift = await checkDeployDrift(vercelToken, ghPat);

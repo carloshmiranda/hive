@@ -237,12 +237,13 @@ export async function POST(req: Request) {
       }
 
       if (!decomposed) {
-        // Auto-block after 5 failed attempts — prevents infinite retry loops
-        if (attempt >= 5) {
+        // Auto-block: 2 attempts for max_turns (task is too big), 5 for other errors
+        const blockThreshold = isMaxTurns ? 2 : 5;
+        if (attempt >= blockThreshold) {
           await sql`
             UPDATE hive_backlog
             SET status = 'blocked', dispatched_at = NULL,
-                notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Auto-blocked after ${attempt} failures — needs decomposition or manual review.`}
+                notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Auto-blocked after ${attempt} ${isMaxTurns ? 'max_turns' : ''} failures — needs decomposition or manual review.`}
             WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
           `.catch(() => {});
         } else {
