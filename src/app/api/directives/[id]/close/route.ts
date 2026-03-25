@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { getSettingValue } from "@/lib/settings";
+import { dispatchEvent } from "@/lib/dispatch";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -39,6 +40,37 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         console.error("Failed to close GitHub issue:", e);
       }
     }
+  }
+
+  // Check for approved knowledge_gap type proposals that need CEO attention
+  try {
+    const knowledgeGapProposals = await sql`
+      SELECT id, title, diagnosis, proposed_fix, affected_companies
+      FROM evolver_proposals
+      WHERE status = 'approved'
+        AND implemented_at IS NULL
+        AND proposed_fix->>'type' = 'knowledge_gap'
+        AND reviewed_at > NOW() - INTERVAL '14 days'
+      LIMIT 5
+    `;
+
+    if (knowledgeGapProposals.length > 0) {
+      // Dispatch CEO review for knowledge gap proposals
+      await dispatchEvent("ceo_review", {
+        source: "directive_close",
+        trigger: "knowledge_gap_proposals",
+        directive_id: directive.id,
+        knowledge_gap_proposals: knowledgeGapProposals.map((p: any) => ({
+          id: p.id,
+          title: p.title,
+          diagnosis: p.diagnosis,
+          proposed_fix: p.proposed_fix,
+          affected_companies: p.affected_companies
+        }))
+      });
+    }
+  } catch (e) {
+    console.error("Failed to check knowledge gap proposals:", e);
   }
 
   return json(directive);
