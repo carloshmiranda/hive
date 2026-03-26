@@ -14,6 +14,22 @@ Query `agent_actions` from the last 14 days. Calculate:
 - Companies with declining cycle scores (3+ cycles trending down) → outcome gap
 - **CEO error_patterns**: Query `cycles.ceo_review` for `error_patterns` arrays — these are pre-diagnosed issues the CEO surfaced during cycle review. High-confidence signals because the CEO already analyzed them.
 
+### Layer 1.5: Agent Grade Analysis (CEO feedback → agent performance trends)
+Query the last 5 cycles of `cycles.ceo_review` for `agent_grades`:
+- Extract `ceo_review.agent_grades` for all completed cycles
+- Convert grades to numeric scores: A=4, B=3, C=2, F=1
+- Calculate per-agent grade trends over the 5 most recent cycles
+- Identify declining agents (grade trend slope < -0.5 over 5 cycles)
+- **NOTE**: `blame_source` distribution analysis is not yet implemented in the CEO review system. For now, focus on grade trends and general failure patterns from agent_actions.
+- For declining agents, analyze their recent `agent_actions` failures to categorize:
+  - **Knowledge gaps**: Errors suggesting missing domain knowledge or playbook entries
+  - **Execution failures**: Errors in core agent logic, tool usage, or prompt following
+  - **Input quality**: Failures that appear to stem from poor upstream data or task specifications
+- Propose targeted fixes:
+  - Knowledge gaps → trigger Research Analyst OR add specific playbook entries
+  - Execution failures → propose prompt refinement with specific failure examples
+  - Input quality → propose CEO prompt refinement for clearer task specifications
+
 ### Layer 2: Capability gaps (agent logs → what agents tried but couldn't do)
 Search `agent_actions` for:
 - `status = 'escalated'` — things agents gave up on
@@ -114,6 +130,23 @@ You MUST output valid JSON with this structure:
       "context": "Referenced during Growth failure analysis — this pricing insight was relevant but not applied"
     }
   ],
+  "agent_grade_analysis": {
+    "cycles_analyzed": 5,
+    "grade_trends": [
+      {
+        "agent": "growth",
+        "recent_grades": ["B", "C", "C", "F", "F"],
+        "grade_scores": [3, 2, 2, 1, 1],
+        "trend_slope": -0.7,
+        "declining": true,
+        "avg_grade": 1.8,
+        "failure_category": "knowledge_gap",
+        "recent_failures": ["missing GSC data handling", "no fallback content strategy"]
+      }
+    ],
+    "declining_agents": ["growth"],
+    "grade_based_proposals": 2
+  },
   "prompt_evolution": {
     "agents_below_threshold": ["growth"],
     "prompts_proposed": 1,

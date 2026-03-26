@@ -554,9 +554,10 @@ async function evolverContext(sql: any) {
       FROM agent_actions WHERE started_at > NOW() - INTERVAL '14 days'
       GROUP BY agent
     `.catch(() => []),
-    // Cycle scores (30 days)
+    // Cycle scores and agent grades (30 days)
     sql`
-      SELECT co.slug, c.cycle_number, c.ceo_review->>'score' as score
+      SELECT co.slug, c.cycle_number, c.ceo_review->>'score' as score,
+             c.ceo_review->'agent_grades' as agent_grades, c.started_at
       FROM cycles c JOIN companies co ON co.id = c.company_id
       WHERE c.started_at > NOW() - INTERVAL '30 days' AND c.ceo_review IS NOT NULL
       ORDER BY co.slug, c.cycle_number DESC
@@ -592,7 +593,13 @@ async function evolverContext(sql: any) {
 
   return {
     agent_performance: agentStats,
-    cycle_scores: cycleScores,
+    cycle_scores: cycleScores.map((c: { slug: string; cycle_number: number; score: string; agent_grades: object; started_at: string }) => ({
+      company_slug: c.slug,
+      cycle_number: c.cycle_number,
+      score: c.score,
+      agent_grades: c.agent_grades,
+      started_at: c.started_at,
+    })),
     stalled_companies: stalled,
     repeated_errors: repeatedErrors.map((e: { agent: string; error: string; occurrences: number }) => ({
       agent: e.agent,
