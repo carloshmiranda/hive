@@ -389,7 +389,7 @@ async function fixContext(sql: any, company: any) {
 // ─── CEO context (per-company, strategic planning + review) ───
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function ceoContext(sql: any, company: any) {
-  const [cycle, reports, allPlaybookEntries, engTasks, growthTasks, metrics, directives, recentCycles] = await Promise.all([
+  const [cycle, reports, allPlaybookEntries, engTasks, growthTasks, metrics, directives, recentCycles, portfolioData] = await Promise.all([
     sql`
       SELECT id, cycle_number, ceo_plan, ceo_review FROM cycles
       WHERE company_id = ${company.id}
@@ -439,6 +439,8 @@ async function ceoContext(sql: any, company: any) {
         AND ceo_review IS NOT NULL
       ORDER BY started_at DESC LIMIT 3
     `.catch(() => []),
+    // Portfolio summary data
+    getPortfolioSummary(sql),
   ]);
 
   const research: Record<string, string> = {};
@@ -455,6 +457,9 @@ async function ceoContext(sql: any, company: any) {
   // Calculate WoW growth rates
   const growthRates = calculateWoWGrowthRates(metrics);
   const growthSummary = generateGrowthSummary(growthRates);
+
+  // Add portfolio context with current company highlighted
+  const portfolioContext = await enrichPortfolioWithContext(sql, portfolioData, company.id);
 
   return {
     company: {
@@ -484,6 +489,7 @@ async function ceoContext(sql: any, company: any) {
     metrics: metrics.slice(0, 7),
     growth_rates: growthRates,
     growth_summary: growthSummary,
+    portfolio_summary: portfolioContext,
     hive_capabilities: getCapabilitySummary(),
   };
 }
@@ -609,4 +615,206 @@ async function evolverContext(sql: any) {
     playbook_coverage: playbookCoverage,
     pending_proposals: pendingProposals,
   };
+}
+
+// ─── Portfolio Summary Helper Functions ───
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getPortfolioSummary(sql: any) {
+  const [companies, allMetrics, cycleActivity] = await Promise.all([
+    // Get all active companies
+    sql`
+      SELECT id, name, slug, description, company_type, market, created_at
+      FROM companies
+      WHERE status IN ('mvp', 'active')
+      ORDER BY created_at ASC
+    `.catch(() => []),
+    // Get latest metrics for all active companies
+    sql`
+      SELECT DISTINCT ON (company_id)
+        company_id, date, page_views, waitlist_total, mrr, customers,
+        revenue, signups, waitlist_signups
+      FROM metrics m
+      WHERE company_id IN (
+        SELECT id FROM companies WHERE status IN ('mvp', 'active')
+      )
+      ORDER BY company_id, date DESC
+    `.catch(() => []),
+    // Get cycle activity in last 7 days
+    sql`
+      SELECT company_id, COUNT(*)::int as cycle_count
+      FROM cycles
+      WHERE started_at >= CURRENT_DATE - INTERVAL '7 days'
+      GROUP BY company_id
+    `.catch(() => []),
+  ]);
+
+  return { companies, allMetrics, cycleActivity };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function enrichPortfolioWithContext(sql: any, portfolioData: any, currentCompanyId: string) {
+  const { companies, allMetrics, cycleActivity } = portfolioData;
+
+  // Create a map for quick metric lookup
+  const metricsMap = new Map();
+  for (const metric of allMetrics) {
+    metricsMap.set(metric.company_id, metric);
+  }
+
+  // Create cycle activity map
+  const cycleMap = new Map();
+  for (const cycle of cycleActivity) {
+    cycleMap.set(cycle.company_id, cycle.cycle_count);
+  }
+
+  // Enrich companies with metrics and validation scores
+  const enrichedCompanies = [];
+  for (const company of companies) {
+    const metric = metricsMap.get(company.id) || {};
+    const businessType = normalizeBusinessType(company.company_type);
+
+    // Get recent metrics for validation score calculation
+    const companyMetrics = await sql`
+      SELECT date, page_views, signups, waitlist_signups, waitlist_total,
+        revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
+        affiliate_clicks, affiliate_revenue
+      FROM metrics WHERE company_id = ${company.id}
+      ORDER BY date DESC LIMIT 14
+    `.catch(() => []);
+
+    const validation = computeValidationScore(businessType, companyMetrics, company.created_at);
+
+    enrichedCompanies.push({
+      id: company.id,
+      name: company.name,
+      slug: company.slug,
+      market: company.market || 'global',
+      page_views: metric.page_views || 0,
+      waitlist: metric.waitlist_total || 0,
+      mrr: metric.mrr || 0,
+      validation_score: validation.score,
+      validation_phase: validation.phase,
+      cycles_last_7d: cycleMap.get(company.id) || 0,
+      last_metric_date: metric.date || null,
+      is_current: company.id === currentCompanyId,
+    });
+  }
+
+  // Calculate percentile rankings
+  const metrics = ['page_views', 'waitlist', 'mrr', 'validation_score'];
+  const rankings = calculatePercentileRankings(enrichedCompanies, metrics);
+
+  // Detect shared patterns - look for companies with significant metric changes
+  const patterns = await detectSharedPatterns(sql, enrichedCompanies);
+
+  // Resource allocation summary
+  const totalCycles = enrichedCompanies.reduce((sum, c) => sum + c.cycles_last_7d, 0);
+  const resourceAllocation = enrichedCompanies.map(c => ({
+    company: c.name,
+    cycles: c.cycles_last_7d,
+    percentage: totalCycles > 0 ? Math.round((c.cycles_last_7d / totalCycles) * 100) : 0,
+  }));
+
+  return {
+    companies: enrichedCompanies,
+    rankings,
+    patterns,
+    resource_allocation: {
+      total_cycles_7d: totalCycles,
+      allocation: resourceAllocation,
+    },
+  };
+}
+
+// Calculate percentile rankings for each metric
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function calculatePercentileRankings(companies: any[], metrics: string[]) {
+  const rankings: Record<string, Record<string, number>> = {};
+
+  for (const metric of metrics) {
+    const values = companies.map(c => c[metric]).filter(v => v != null);
+    values.sort((a, b) => a - b);
+
+    for (const company of companies) {
+      if (!rankings[company.id]) rankings[company.id] = {};
+
+      const value = company[metric];
+      if (value == null) {
+        rankings[company.id][metric] = 0;
+      } else {
+        const rank = values.filter(v => v < value).length;
+        rankings[company.id][metric] = Math.round((rank / Math.max(values.length - 1, 1)) * 100);
+      }
+    }
+  }
+
+  return rankings;
+}
+
+// Detect shared patterns across companies
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function detectSharedPatterns(sql: any, companies: any[]) {
+  const patterns: string[] = [];
+
+  if (companies.length < 2) return patterns;
+
+  // Get week-over-week changes for all companies
+  const companyIds = companies.map(c => c.id);
+  const wowChanges = await sql`
+    SELECT
+      company_id,
+      COALESCE(LAG(page_views) OVER (PARTITION BY company_id ORDER BY date), 0) as prev_views,
+      page_views as current_views,
+      date
+    FROM metrics
+    WHERE company_id = ANY(${companyIds})
+      AND date >= CURRENT_DATE - INTERVAL '14 days'
+    ORDER BY company_id, date DESC
+  `.catch(() => []);
+
+  // Group by company for analysis
+  const changesByCompany = new Map();
+  for (const change of wowChanges) {
+    if (!changesByCompany.has(change.company_id)) {
+      changesByCompany.set(change.company_id, []);
+    }
+    changesByCompany.get(change.company_id).push(change);
+  }
+
+  // Look for shared traffic drops (>20% decrease)
+  let companiesWithDrop = 0;
+  for (const [, changes] of changesByCompany) {
+    const latestChange = changes[0];
+    if (latestChange && latestChange.prev_views > 0) {
+      const percentChange = ((latestChange.current_views - latestChange.prev_views) / latestChange.prev_views) * 100;
+      if (percentChange < -20) {
+        companiesWithDrop++;
+      }
+    }
+  }
+
+  if (companiesWithDrop >= Math.ceil(companies.length * 0.5)) {
+    patterns.push(`${companiesWithDrop}/${companies.length} companies show traffic drops >20% - likely external factor`);
+  }
+
+  // Check for companies with no recent activity
+  const staleCompanies = companies.filter(c => !c.last_metric_date ||
+    new Date(c.last_metric_date) < new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+
+  if (staleCompanies.length > 0) {
+    patterns.push(`${staleCompanies.length} companies have stale metrics (>7 days old)`);
+  }
+
+  // Check for resource imbalance
+  const totalCycles = companies.reduce((sum, c) => sum + c.cycles_last_7d, 0);
+  if (totalCycles > 0) {
+    const topCompany = companies.reduce((max, c) => c.cycles_last_7d > max.cycles_last_7d ? c : max);
+    const percentage = (topCompany.cycles_last_7d / totalCycles) * 100;
+    if (percentage > 60) {
+      patterns.push(`${topCompany.name} consuming ${Math.round(percentage)}% of cycles - potential resource imbalance`);
+    }
+  }
+
+  return patterns;
 }
