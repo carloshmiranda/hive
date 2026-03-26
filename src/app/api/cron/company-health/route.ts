@@ -748,7 +748,7 @@ export async function GET(req: Request) {
               INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
               VALUES ('sentinel', 'pr_analysis_error',
                 ${`PR analysis error: ${pc.github_repo}#${pr.number} "${pr.title}" — ${prErr.message}, escalated for manual review`},
-                'error', ${pc.id}, NOW(), NOW())
+                'failed', ${pc.id}, NOW(), NOW())
             `.catch((e: any) => { console.warn(`[company-health] log PR analysis error for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
 
             await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {

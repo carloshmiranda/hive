@@ -1795,7 +1795,7 @@ export async function GET(request: Request) {
       }
       if (parentsClosed > 0) {
         await sql`
-          INSERT INTO agent_actions (agent, company_id, action_type, description, status, output, started_at, completed_at)
+          INSERT INTO agent_actions (agent, company_id, action_type, description, status, output, started_at, finished_at)
           VALUES ('sentinel', NULL, 'janitor_check',
             ${`Check 46: Closed ${parentsClosed} decomposed parents (all sub-tasks done)`},
             'success', NULL, now(), now())
