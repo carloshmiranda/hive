@@ -216,3 +216,25 @@ export async function PATCH(req: Request) {
   console.error(`[backlog] Manual dispatch failed: ${res.status} for item "${targetItem.title}"`);
   return err(`GitHub dispatch failed: ${res.status}`, res.status);
 }
+
+// PUT /api/backlog — regenerate BACKLOG.md from database
+export async function PUT(req: Request) {
+  const session = await requireAuth();
+  if (!session) return err("Unauthorized", 401);
+
+  const sql = getDb();
+
+  try {
+    const { regenerateBacklogMd } = await import("@/lib/backlog-planner");
+    await regenerateBacklogMd(sql);
+
+    return json({
+      success: true,
+      message: "BACKLOG.md regenerated from database",
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("[backlog] Failed to regenerate BACKLOG.md:", error);
+    return err(`Failed to regenerate BACKLOG.md: ${error instanceof Error ? error.message : "unknown error"}`, 500);
+  }
+}

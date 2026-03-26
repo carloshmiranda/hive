@@ -3280,6 +3280,17 @@ export async function GET(req: Request) {
     }
   } catch { /* Telegram not configured — silently skip */ }
 
+  // Regenerate BACKLOG.md from database after all sentinel checks
+  let backlogRegenerated = false;
+  try {
+    const { regenerateBacklogMd } = await import("@/lib/backlog-planner");
+    await regenerateBacklogMd(sql);
+    backlogRegenerated = true;
+    console.log("[sentinel] BACKLOG.md regenerated from database");
+  } catch (error) {
+    console.warn("[sentinel] Failed to regenerate BACKLOG.md:", error instanceof Error ? error.message : "unknown");
+  }
+
   return Response.json({
     ok: true,
     trace_id: traceId,
@@ -3309,6 +3320,7 @@ export async function GET(req: Request) {
     self_improvement_proposals: selfImprovementProposals,
     hive_fixes_dispatched: hiveFixesDispatched,
     backlog_dispatched: backlogDispatched,
+    backlog_regenerated: backlogRegenerated,
     error_patterns_learned: errorPatternsLearned,
     details: dispatches,
   });
