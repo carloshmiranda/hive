@@ -22,8 +22,7 @@ const LABELS: Record<string, { label: string; placeholder: string; help: string 
   google_search_console_key: { label: "Google Search Console", placeholder: "service account JSON key", help: "For SEO tracking. Growth agent reads impressions/clicks per company property." },
   digest_email: { label: "Digest Email", placeholder: "you@example.com", help: "Where Hive sends your daily morning digest" },
   notification_email: { label: "Notification Email", placeholder: "you@example.com", help: "For urgent escalations (can be same as digest)" },
-  gemini_api_key: { label: "Gemini API Key", placeholder: "AIza...", help: "aistudio.google.com/apikey — free tier: Growth, Outreach agents" },
-  groq_api_key: { label: "Groq API Key", placeholder: "gsk_...", help: "console.groq.com/keys — free tier: Ops agent" },
+  openrouter_api_key: { label: "OpenRouter API Key", placeholder: "sk-or-v1-...", help: "openrouter.ai/keys — sole LLM provider for all worker agents (free models)" },
   bing_webmaster_key: { label: "Bing Webmaster Key", placeholder: "bing_...", help: "bing.com/webmasters — for Bing search data (future)" },
   indexnow_key: { label: "IndexNow Key", placeholder: "hexstring...", help: "Random hex key for instant re-indexing via IndexNow protocol" },
 };
@@ -32,7 +31,7 @@ const GROUPS = [
   { title: "Infrastructure", keys: ["vercel_token", "vercel_team_id", "neon_api_key", "github_token", "github_owner"] },
   { title: "Revenue & Analytics", keys: ["stripe_secret_key", "google_search_console_key", "bing_webmaster_key", "indexnow_key"] },
   { title: "Communications", keys: ["resend_api_key", "sending_domain", "digest_email", "notification_email"] },
-  { title: "AI Providers", keys: ["gemini_api_key", "groq_api_key"] },
+  { title: "AI Providers", keys: ["openrouter_api_key"] },
 ];
 
 export default function SettingsPage() {

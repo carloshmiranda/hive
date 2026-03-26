@@ -331,7 +331,7 @@ export const HIVE_CAPABILITIES: HiveCapability[] = [
       "Exchange OIDC token for service tokens (GitHub PAT, Vercel token) at runtime",
     triggers: [],
     params: {
-      service: "github | vercel | neon | stripe | resend | gemini | groq",
+      service: "github | vercel | neon | stripe | resend | openrouter",
       scope: "Optional: repo slug for scoped tokens",
     },
   },

@@ -5,9 +5,7 @@ import { requireAuth } from "@/lib/auth";
 const COST_PER_TURN: Record<string, number> = {
   opus: 0.15,
   sonnet: 0.03,
-  "gemini-flash": 0,
-  "gemini-flash-lite": 0,
-  groq: 0,
+  openrouter: 0,   // All OpenRouter free models
 };
 
 // Default model per agent (from CLAUDE.md model routing table)
@@ -16,19 +14,19 @@ const DEFAULT_MODEL: Record<string, string> = {
   scout: "opus",
   engineer: "sonnet",
   evolver: "opus",
-  growth: "gemini-flash",
-  outreach: "gemini-flash",
-  ops: "groq",
+  growth: "openrouter",
+  outreach: "openrouter",
+  ops: "openrouter",
 };
 
 function costPerTurn(model: string | null | undefined, agent: string): number {
   if (model) {
     const m = model.toLowerCase();
-    // Match known model names loosely
     if (m.includes("opus")) return COST_PER_TURN.opus;
     if (m.includes("sonnet")) return COST_PER_TURN.sonnet;
-    if (m.includes("gemini") || m.includes("flash")) return COST_PER_TURN["gemini-flash"];
-    if (m.includes("groq") || m.includes("llama")) return COST_PER_TURN.groq;
+    // All OpenRouter free models cost $0
+    if (m.includes("openrouter") || m.includes("hermes") || m.includes("llama") ||
+        m.includes("mistral") || m.includes("qwen") || m.includes(":free")) return 0;
   }
   // Fall back to default model for agent
   const defaultModel = DEFAULT_MODEL[agent] || "sonnet";

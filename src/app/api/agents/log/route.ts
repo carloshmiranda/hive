@@ -88,9 +88,9 @@ function getDefaultModel(agent: string): string {
     'scout': 'claude-opus',
     'engineer': 'claude-sonnet',
     'evolver': 'claude-opus',
-    'growth': 'gemini-flash',
-    'outreach': 'gemini-flash',
-    'ops': 'groq-llama',
+    'growth': 'openrouter',
+    'outreach': 'openrouter',
+    'ops': 'openrouter',
     'healer': 'claude-sonnet',
     'orchestrator': 'none', // orchestrator doesn't use LLMs
     'sentinel': 'none'      // sentinel doesn't use LLMs

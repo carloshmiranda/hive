@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
   // Token type → settings key mapping
   const tokenMap: Record<string, string> = {
     claude: "claude_code_oauth_token",
-    gemini: "gemini_api_key",
+    openrouter: "openrouter_api_key",
     github_pat: "github_token",
     vercel_token: "vercel_token",
     neon_api_key: "neon_api_key",

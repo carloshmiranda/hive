@@ -102,9 +102,9 @@ const COMPLEXITY_PATTERNS = {
 
 // Model recommendations based on complexity
 const MODEL_RECOMMENDATIONS = {
-  mechanical: "groq", // Fast, cheap for simple operations
-  standard: "gemini", // Good balance for regular dev work
-  complex: "claude"   // High reasoning for complex tasks
+  mechanical: "openrouter", // Fast free models for simple operations
+  standard: "openrouter",  // Free models for regular dev work
+  complex: "claude"        // Claude Max (GitHub Actions) for complex tasks
 } as const;
 
 /**
@@ -330,10 +330,10 @@ export function getModelRecommendation(
   if (!recommendation && fallbackToDefault) {
     // These come from the existing AGENT_ROUTING in llm.ts
     const agentDefaults: Record<string, string> = {
-      growth: "gemini",
-      outreach: "gemini",
-      ops: "groq",
-      engineer: "claude" // Current default for engineer
+      growth: "openrouter",
+      outreach: "openrouter",
+      ops: "openrouter",
+      engineer: "claude" // Claude Max via GitHub Actions
     };
 
     return agentDefaults[agent.toLowerCase()] || "claude";

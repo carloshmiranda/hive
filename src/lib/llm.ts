@@ -1,10 +1,11 @@
 import { getSettingValue } from "./settings";
 
 // Unified LLM calling interface for worker agents
-// Handles provider selection, automatic failover, rate limiting, and response normalization
+// All calls route through OpenRouter with per-model fallback chains.
+// Claude Max (GitHub Actions CLI) is NOT in this chain — it's not API-based.
 
 // ---------------------------------------------------------------------------
-// Circuit Breaker — per-provider health tracking with EMA error rate
+// Circuit Breaker — per-model health tracking with EMA error rate
 // ---------------------------------------------------------------------------
 
 export interface ProviderHealth {
@@ -23,8 +24,8 @@ const MIN_REQUESTS = 3;             // need at least 3 data points before trippi
 
 const healthMap = new Map<string, ProviderHealth>();
 
-function getOrCreateHealth(provider: string): ProviderHealth {
-  let h = healthMap.get(provider);
+function getOrCreateHealth(key: string): ProviderHealth {
+  let h = healthMap.get(key);
   if (!h) {
     h = {
       errorRate: 0,
@@ -34,49 +35,48 @@ function getOrCreateHealth(provider: string): ProviderHealth {
       openedAt: 0,
       requestCount: 0,
     };
-    healthMap.set(provider, h);
+    healthMap.set(key, h);
   }
   return h;
 }
 
 /** Update EMA after a successful call. May transition half_open → closed. */
-export function recordProviderSuccess(provider: string): void {
-  const h = getOrCreateHealth(provider);
+export function recordProviderSuccess(key: string): void {
+  const h = getOrCreateHealth(key);
   h.requestCount++;
   h.lastSuccess = Date.now();
   h.errorRate = h.errorRate * (1 - EMA_ALPHA); // EMA towards 0
 
   if (h.state === "half_open") {
     h.state = "closed";
-    console.warn(`[circuit-breaker] ${provider}: HALF_OPEN → CLOSED (test request succeeded)`);
+    console.warn(`[circuit-breaker] ${key}: HALF_OPEN → CLOSED (test request succeeded)`);
   }
 }
 
 /** Update EMA after a failed call. May transition closed → open or half_open → open. */
-export function recordProviderFailure(provider: string): void {
-  const h = getOrCreateHealth(provider);
+export function recordProviderFailure(key: string): void {
+  const h = getOrCreateHealth(key);
   h.requestCount++;
   h.lastError = Date.now();
   h.errorRate = h.errorRate * (1 - EMA_ALPHA) + EMA_ALPHA; // EMA towards 1
 
   if (h.state === "half_open") {
-    // Test request failed — reopen circuit, reset cooldown
     h.state = "open";
     h.openedAt = Date.now();
-    console.warn(`[circuit-breaker] ${provider}: HALF_OPEN → OPEN (test request failed, cooldown reset)`);
+    console.warn(`[circuit-breaker] ${key}: HALF_OPEN → OPEN (test request failed, cooldown reset)`);
     return;
   }
 
   if (h.state === "closed" && h.requestCount >= MIN_REQUESTS && h.errorRate > ERROR_RATE_THRESHOLD) {
     h.state = "open";
     h.openedAt = Date.now();
-    console.warn(`[circuit-breaker] ${provider}: CLOSED → OPEN (error rate ${(h.errorRate * 100).toFixed(1)}% > ${ERROR_RATE_THRESHOLD * 100}%)`);
+    console.warn(`[circuit-breaker] ${key}: CLOSED → OPEN (error rate ${(h.errorRate * 100).toFixed(1)}% > ${ERROR_RATE_THRESHOLD * 100}%)`);
   }
 }
 
-/** Check whether a provider should receive traffic. Handles open → half_open transition. */
-export function isProviderAvailable(provider: string): boolean {
-  const h = healthMap.get(provider);
+/** Check whether a model should receive traffic. Handles open → half_open transition. */
+export function isProviderAvailable(key: string): boolean {
+  const h = healthMap.get(key);
   if (!h) return true; // no data = healthy
 
   if (h.state === "closed") return true;
@@ -85,7 +85,7 @@ export function isProviderAvailable(provider: string): boolean {
     const elapsed = Date.now() - h.openedAt;
     if (elapsed >= COOLDOWN_MS) {
       h.state = "half_open";
-      console.warn(`[circuit-breaker] ${provider}: OPEN → HALF_OPEN (cooldown elapsed, allowing test request)`);
+      console.warn(`[circuit-breaker] ${key}: OPEN → HALF_OPEN (cooldown elapsed, allowing test request)`);
       return true;
     }
     return false;
@@ -95,7 +95,7 @@ export function isProviderAvailable(provider: string): boolean {
   return true;
 }
 
-/** Return a snapshot of all tracked provider health (for monitoring / API exposure). */
+/** Return a snapshot of all tracked model health (for monitoring / API exposure). */
 export function getProviderHealth(): Record<string, ProviderHealth> {
   const out: Record<string, ProviderHealth> = {};
   healthMap.forEach((v, k) => {
@@ -123,73 +123,37 @@ export interface LLMResponse {
   routing_reason: string;
 }
 
-export interface LLMProvider {
-  name: string;
-  models: string[];
-  cost_per_call: number;
-  free_tier: boolean;
-}
+// Available OpenRouter free models (ordered by capability)
+export const OPENROUTER_MODELS = {
+  hermes_405b: "nousresearch/hermes-3-llama-3.1-405b:free",   // 405B — strongest free reasoning
+  llama_70b: "meta-llama/llama-3.3-70b-instruct:free",         // 70B — solid general purpose
+  mistral_24b: "mistralai/mistral-small-3.1-24b-instruct:free", // 24B — fast, good for simple tasks
+  qwen_coder: "qwen/qwen3-coder:free",                         // Best free coding model
+  claude_sonnet: "anthropic/claude-sonnet-4:free",              // Claude Sonnet 4 free — best reasoning
+} as const;
 
-// Provider definitions with fallback priority
-export const PROVIDERS: Record<string, LLMProvider> = {
-  openrouter: {
-    name: "openrouter",
-    models: [
-      "nousresearch/hermes-3-llama-3.1-405b:free",   // 405B — strongest free reasoning
-      "meta-llama/llama-3.3-70b-instruct:free",       // 70B — solid general purpose
-      "mistralai/mistral-small-3.1-24b-instruct:free", // 24B — fast, good for simple tasks
-      "qwen/qwen3-coder:free",                         // 480B — best free coding model
-    ],
-    cost_per_call: 0,
-    free_tier: true,
-  },
-  groq: {
-    name: "groq",
-    models: ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile"],
-    cost_per_call: 0,
-    free_tier: true,
-  },
-  gemini: {
-    name: "gemini",
-    models: ["gemini-2.5-flash", "gemini-2.5-flash-lite"],
-    cost_per_call: 0,
-    free_tier: true,
-  },
-  claude: {
-    name: "claude",
-    models: ["claude-3-sonnet-20240229"],
-    cost_per_call: 0.03,
-    free_tier: false,
-  },
-};
-
-// Agent-specific provider routing table
-// OpenRouter is primary for all workers — single API key, best free models
-export const AGENT_ROUTING: Record<string, { primary: string; model: string; fallback: string[] }> = {
+// Agent-specific model routing — all through OpenRouter
+// Primary model + fallback models (tried in order if primary fails)
+export const AGENT_ROUTING: Record<string, { primary: string; fallbacks: string[] }> = {
   growth: {
-    primary: "openrouter",
-    model: "nousresearch/hermes-3-llama-3.1-405b:free",  // 405B for content quality
-    fallback: ["gemini", "groq", "claude"],
+    primary: OPENROUTER_MODELS.hermes_405b,       // 405B for content quality
+    fallbacks: [OPENROUTER_MODELS.llama_70b, OPENROUTER_MODELS.mistral_24b],
   },
   outreach: {
-    primary: "openrouter",
-    model: "meta-llama/llama-3.3-70b-instruct:free",     // 70B sufficient for emails
-    fallback: ["gemini", "groq", "claude"],
+    primary: OPENROUTER_MODELS.llama_70b,          // 70B sufficient for emails
+    fallbacks: [OPENROUTER_MODELS.hermes_405b, OPENROUTER_MODELS.mistral_24b],
   },
   ops: {
-    primary: "openrouter",
-    model: "mistralai/mistral-small-3.1-24b-instruct:free", // 24B fast for health checks
-    fallback: ["groq", "gemini", "claude"],
+    primary: OPENROUTER_MODELS.mistral_24b,        // 24B fast for health checks
+    fallbacks: [OPENROUTER_MODELS.llama_70b, OPENROUTER_MODELS.hermes_405b],
   },
   planner: {
-    primary: "openrouter",
-    model: "qwen/qwen3-coder:free",  // Best free coding model for codebase analysis
-    fallback: ["gemini", "groq"],     // No Claude fallback — specs are not worth burning quota
+    primary: OPENROUTER_MODELS.qwen_coder,         // Best free coding model
+    fallbacks: [OPENROUTER_MODELS.claude_sonnet, OPENROUTER_MODELS.hermes_405b],
   },
   decomposer: {
-    primary: "openrouter",
-    model: "anthropic/claude-sonnet-4:free",  // Claude Sonnet 4 free via OpenRouter — best reasoning for task decomposition
-    fallback: ["claude", "gemini", "groq"],   // Claude API fallback for when OpenRouter quota exhausted
+    primary: OPENROUTER_MODELS.claude_sonnet,       // Best reasoning for task decomposition
+    fallbacks: [OPENROUTER_MODELS.hermes_405b, OPENROUTER_MODELS.qwen_coder],
   },
 };
 
@@ -210,9 +174,9 @@ async function fetchWithRetry(
 
       // Rate limiting - exponential backoff with jitter
       if (res.status === 429 && attempt < maxRetries) {
-        const baseDelay = 1000; // 1 second base
+        const baseDelay = 1000;
         const exponentialDelay = baseDelay * Math.pow(2, attempt);
-        const jitter = Math.random() * 1000; // 0-1 second jitter
+        const jitter = Math.random() * 1000;
         const delay = exponentialDelay + jitter;
 
         console.log(`Rate limit hit (429), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
@@ -238,64 +202,7 @@ async function fetchWithRetry(
   throw new Error("fetchWithRetry: unreachable");
 }
 
-// Provider-specific API calls
-async function callGemini(prompt: string, model: string, options: LLMOptions = {}): Promise<string> {
-  const apiKey = await getSettingValue("gemini_api_key");
-  if (!apiKey) throw new Error("gemini_api_key not configured in settings");
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetchWithRetry(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        maxOutputTokens: options.maxTokens || 8192,
-        temperature: options.temperature || 0.7,
-      },
-    }),
-  }, options.maxRetries);
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Gemini ${model} HTTP ${res.status}: ${body.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned empty response");
-  return text.trim();
-}
-
-async function callGroq(prompt: string, model: string, options: LLMOptions = {}): Promise<string> {
-  const apiKey = await getSettingValue("groq_api_key");
-  if (!apiKey) throw new Error("groq_api_key not configured in settings");
-
-  const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: options.maxTokens || 8192,
-      temperature: options.temperature || 0.7,
-    }),
-  }, options.maxRetries || 4); // Higher retries for Groq due to rate limiting
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Groq ${model} HTTP ${res.status}: ${body.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error("Groq returned empty response");
-  return text.trim();
-}
-
+// Single provider: OpenRouter
 async function callOpenRouter(prompt: string, model: string, options: LLMOptions = {}): Promise<string> {
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
@@ -323,43 +230,8 @@ async function callOpenRouter(prompt: string, model: string, options: LLMOptions
 
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error("OpenRouter returned empty response");
+  if (!text) throw new Error(`OpenRouter ${model} returned empty response`);
   return text.trim();
-}
-
-async function callClaude(prompt: string, model: string, options: LLMOptions = {}): Promise<string> {
-  // Fallback to Claude should only happen in extreme cases
-  // For now, return a placeholder that logs the fallback
-  console.warn(`Falling back to Claude for ${model} - this burns premium quota`);
-  throw new Error("Claude fallback not implemented - contact admin to add API key");
-}
-
-// Get historical success rates to determine optimal provider
-async function getProviderSuccessRate(
-  provider: string,
-  agent: string,
-  sql?: any
-): Promise<number> {
-  if (!sql) return 0.8; // Default success rate if no DB access
-
-  try {
-    const [stats] = await sql`
-      SELECT
-        COUNT(*) FILTER (WHERE status = 'success') as successes,
-        COUNT(*) as total
-      FROM agent_actions
-      WHERE agent = ${agent}
-        AND action_type = 'execute_task'
-        AND started_at > NOW() - INTERVAL '48 hours'
-        AND output IS NOT NULL
-        AND output->>'provider' = ${provider}
-    `;
-
-    if (!stats || stats.total === 0) return 0.8; // Default if no data
-    return Number(stats.successes) / Number(stats.total);
-  } catch {
-    return 0.8; // Default on error
-  }
 }
 
 // Main unified LLM calling interface
@@ -374,103 +246,47 @@ export async function callLLM(
   }
 
   const { sql, ...llmOptions } = options;
-  const providers = [routing.primary, ...routing.fallback];
+  const models = [routing.primary, ...routing.fallbacks];
   let lastError: Error | null = null;
 
-  // Try each provider in order until one succeeds
-  for (const providerName of providers) {
-    const provider = PROVIDERS[providerName];
-    if (!provider) continue;
+  // Try each model in order until one succeeds
+  for (const model of models) {
+    const circuitKey = `openrouter:${model}`;
 
-    // Circuit breaker: skip providers with open circuits
-    if (!isProviderAvailable(providerName)) {
-      console.warn(`[circuit-breaker] Skipping ${providerName} (circuit open)`);
+    // Circuit breaker: skip models with open circuits
+    if (!isProviderAvailable(circuitKey)) {
+      console.warn(`[circuit-breaker] Skipping ${model} (circuit open)`);
       continue;
     }
 
+    const isPrimary = model === routing.primary;
+    const routingReason = isPrimary ? `primary:${model}` : `fallback:${model}`;
+
     try {
-      // Check historical success rate for adaptive routing
-      const successRate = await getProviderSuccessRate(providerName, agent, sql);
-      const isProviderDegraded = successRate < 0.7;
-
-      let routingReason = `primary_${providerName}`;
-      if (isProviderDegraded && providerName === routing.primary) {
-        routingReason = `degraded_${providerName} (${Math.round(successRate * 100)}% success)`;
-      } else if (providerName !== routing.primary) {
-        routingReason = `fallback_${providerName}`;
-      }
-
-      // Select model - use primary model for primary provider, first available for fallbacks
-      const model = providerName === routing.primary
-        ? routing.model
-        : provider.models[0];
-
-      let content: string;
-
-      // Call provider-specific function
-      switch (providerName) {
-        case "openrouter":
-          content = await callOpenRouter(prompt, model, llmOptions);
-          break;
-        case "gemini":
-          content = await callGemini(prompt, model, llmOptions);
-          break;
-        case "groq":
-          content = await callGroq(prompt, model, llmOptions);
-          break;
-        case "claude":
-          content = await callClaude(prompt, model, llmOptions);
-          break;
-        default:
-          throw new Error(`Unknown provider: ${providerName}`);
-      }
+      const content = await callOpenRouter(prompt, model, llmOptions);
 
       // Record success for circuit breaker
-      recordProviderSuccess(providerName);
+      recordProviderSuccess(circuitKey);
 
       return {
         content,
-        provider: providerName,
+        provider: "openrouter",
         model,
-        usage: {
-          cost_usd: provider.cost_per_call,
-        },
+        usage: { cost_usd: 0 },
         routing_reason: routingReason,
       };
-
     } catch (error: any) {
-      console.warn(`Provider ${providerName} failed:`, error.message);
+      console.warn(`[llm] Model ${model} failed for ${agent}: ${error.message}`);
       lastError = error;
 
       // Record failure for circuit breaker
-      recordProviderFailure(providerName);
-
-      // If this is Gemini Flash, try Flash-Lite before moving to next provider
-      if (providerName === "gemini" && routing.model === "gemini-2.5-flash") {
-        try {
-          const content = await callGemini(prompt, "gemini-2.5-flash-lite", llmOptions);
-          // Flash-Lite success still counts as gemini success
-          recordProviderSuccess(providerName);
-          return {
-            content,
-            provider: "gemini",
-            model: "gemini-2.5-flash-lite",
-            usage: { cost_usd: 0 },
-            routing_reason: "gemini_flash_lite_fallback",
-          };
-        } catch {
-          // Flash-Lite also failed — failure already recorded above
-          // Continue to next provider
-        }
-      }
-
-      // Continue to next provider in fallback chain
+      recordProviderFailure(circuitKey);
       continue;
     }
   }
 
-  // All providers failed
-  throw new Error(`All LLM providers failed for agent ${agent}. Last error: ${lastError?.message}`);
+  // All models failed
+  throw new Error(`All OpenRouter models failed for agent ${agent}. Models tried: ${models.join(", ")}. Last error: ${lastError?.message}`);
 }
 
 // Convenience wrapper for simple text generation
@@ -509,9 +325,9 @@ export async function callLLMWithLogging(
     const duration = Math.round((Date.now() - startTime) / 1000);
 
     const logData = {
-      provider: "unknown",
+      provider: "openrouter",
       model: "unknown",
-      routing_reason: "error",
+      routing_reason: "all_models_failed",
       cost_usd: 0,
       duration_s: duration,
       status: "failed",
