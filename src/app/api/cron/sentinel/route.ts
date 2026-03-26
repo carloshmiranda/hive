@@ -1479,9 +1479,17 @@ export async function GET(req: Request) {
       SELECT MAX(started_at) as last_run FROM agent_actions
       WHERE agent = 'healer' AND started_at > NOW() - INTERVAL '6 hours'
     `;
-    if (!lastHealerRun?.last_run) {
+    // Circuit breaker: skip if 3+ healer failures in 48h
+    const [healerFailures7] = await sql`
+      SELECT COUNT(*)::int as cnt FROM agent_actions
+      WHERE agent = 'healer' AND status = 'failed'
+      AND finished_at > NOW() - INTERVAL '48 hours'
+    `.catch(() => [{ cnt: 0 }]);
+    if (!lastHealerRun?.last_run && (healerFailures7?.cnt ?? 0) < 3) {
       await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate", trace_id: traceId }, ghPat);
       dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "high_failure_rate" } });
+    } else if ((healerFailures7?.cnt ?? 0) >= 3) {
+      console.warn(`[sentinel] Healer circuit breaker (check 7): ${healerFailures7.cnt} failures in 48h — skipping`);
     }
   }
 
@@ -1492,9 +1500,17 @@ export async function GET(req: Request) {
       SELECT MAX(finished_at) as last_run FROM agent_actions
       WHERE agent = 'healer' AND finished_at > NOW() - INTERVAL '24 hours'
     `;
-    if (!lastHeal?.last_run) {
+    // Circuit breaker: skip if 3+ healer failures in 48h
+    const [healerFailures7b] = await sql`
+      SELECT COUNT(*)::int as cnt FROM agent_actions
+      WHERE agent = 'healer' AND status = 'failed'
+      AND finished_at > NOW() - INTERVAL '48 hours'
+    `.catch(() => [{ cnt: 0 }]);
+    if (!lastHeal?.last_run && (healerFailures7b?.cnt ?? 0) < 3) {
       await dispatchToActions("healer_trigger", { source: "sentinel", scope: "systemic", reason: "errors_detected", trace_id: traceId }, ghPat);
       dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "errors_detected" } });
+    } else if ((healerFailures7b?.cnt ?? 0) >= 3) {
+      console.warn(`[sentinel] Healer circuit breaker (check 7b): ${healerFailures7b.cnt} failures in 48h — skipping`);
     }
   }
 
@@ -1827,7 +1843,15 @@ export async function GET(req: Request) {
       }
 
       // If high systemic failure rate and still have budget, dispatch healer
-      if (systemicErrors.length > 0 && overallFailureRate > 0.4 && remainingSlots > 0) {
+      // Circuit breaker: skip if healer has failed 3+ times in last 48h (prevents re-dispatch loops)
+      const healerRecentFailures = await sql`
+        SELECT COUNT(*)::int as cnt FROM agent_actions
+        WHERE agent = 'healer' AND status = 'failed'
+        AND finished_at > NOW() - INTERVAL '48 hours'
+      `.catch(() => [{ cnt: 0 }]);
+      const healerFailCount = healerRecentFailures[0]?.cnt ?? 0;
+
+      if (systemicErrors.length > 0 && overallFailureRate > 0.4 && remainingSlots > 0 && healerFailCount < 3) {
         const errorSummary = systemicErrors
           .map((e) => `${e.agent}: "${(e.error as string).slice(0, 80)}" (${e.affected_companies} companies, ${e.occurrences}x)`)
           .join("; ");
@@ -1844,6 +1868,12 @@ export async function GET(req: Request) {
         });
         hiveFixesDispatched++;
         remainingSlots--;
+      } else if (healerFailCount >= 3) {
+        console.warn(`[sentinel] Healer circuit breaker (systemic): ${healerFailCount} healer failures in 48h — skipping dispatch`);
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'healer_circuit_breaker', ${`Systemic healer skipped: ${healerFailCount} failures in 48h (failure rate: ${Math.round(overallFailureRate * 100)}%)`}, 'success', NOW(), NOW())
+        `.catch(() => {});
       }
 
       if (hiveFixesDispatched > 0) {
@@ -1966,6 +1996,23 @@ export async function GET(req: Request) {
           signal: AbortSignal.timeout(10000),
         });
         if (res.status >= 400) {
+          // Circuit breaker: skip healer dispatch if 3+ failures for this company in 48h
+          const healerFailures = await sql`
+            SELECT COUNT(*)::int as cnt FROM agent_actions
+            WHERE agent = 'healer' AND status = 'failed'
+            AND company_id = ${r.company_id}
+            AND finished_at > NOW() - INTERVAL '48 hours'
+          `.catch(() => [{ cnt: 0 }]);
+          if ((healerFailures[0]?.cnt ?? 0) >= 3) {
+            console.warn(`[sentinel] Healer circuit breaker: ${r.slug} has ${healerFailures[0].cnt} healer failures in 48h — skipping dispatch`);
+            await sql`
+              INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
+              VALUES ('sentinel', 'healer_circuit_breaker', ${`Healer skipped for ${r.slug}: ${healerFailures[0].cnt} failures in 48h`}, 'success', ${r.company_id}, NOW(), NOW())
+            `.catch(() => {});
+            dispatches.push({ type: "skipped", target: "healer_circuit_breaker", payload: { company: r.slug, failures: healerFailures[0].cnt } });
+            continue;
+          }
+
           // Dispatch fix directly to company repo if available
           const [co] = await sql`SELECT github_repo FROM companies WHERE slug = ${r.slug} LIMIT 1`;
           if (co?.github_repo) {

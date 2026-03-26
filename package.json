@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "db:push": "psql $DATABASE_URL -f schema.sql"
+    "db:push": "psql $DATABASE_URL -f schema.sql",
+    "schema-map:generate": "npx tsx scripts/generate-schema-map.ts",
+    "schema-map:check": "npx tsx scripts/generate-schema-map.ts && git diff --exit-code src/lib/schema-map.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.0",

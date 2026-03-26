@@ -173,6 +173,41 @@ jobs:
             - Always run `npx next build` before committing.
             - Push after committing: `git push origin main`
 
+      - name: Log healer success
+        if: always() && steps.agent.outcome == 'success'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          HIVE_URL: ${{ secrets.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app' }}
+        run: |
+          EXECUTION_FILE="${{ steps.agent.outputs.execution_file }}"
+          TURNS=0
+          if [ -f "$EXECUTION_FILE" ]; then
+            TURNS=$(jq -r '.num_turns // 0' "$EXECUTION_FILE" 2>/dev/null || echo "0")
+          fi
+
+          # Log success to agent_actions via API
+          curl -s -X POST "${HIVE_URL}/api/actions" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"agent\":\"healer\",\"action_type\":\"error_fix\",\"status\":\"success\",\"description\":\"Healer completed successfully (${TURNS} turns)\",\"tokens_used\":${TURNS}}"
+
+          # Also log via direct DB as fallback
+          npm install --no-save postgres 2>/dev/null
+          node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          async function log() {
+            await sql\`
+              INSERT INTO agent_actions (agent, action_type, status, description, tokens_used, started_at, finished_at)
+              VALUES ('healer', 'error_fix', 'success', 'Healer completed successfully (${TURNS} turns)', ${TURNS}, NOW() - INTERVAL '20 minutes', NOW())
+            \`;
+            await sql.end();
+          }
+          log().catch(e => console.error('DB log failed:', e.message));
+          "
+          echo "Logged Healer success (${TURNS} turns)"
+
       - name: Log failure to DB
         if: always() && steps.agent.outcome == 'failure'
         run: |

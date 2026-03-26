@@ -440,6 +440,122 @@ export async function regenerateBacklogMd(sql: any): Promise<void> {
   }
 }
 
+export interface DecomposedSubTask {
+  title: string;
+  description: string;
+  acceptance_criteria: string[];
+  affected_files: string[];
+  complexity: "S" | "M";
+  estimated_turns: number;
+}
+
+/**
+ * LLM-assisted task decomposition — breaks a large/failed task into
+ * independently deliverable sub-tasks, each with its own spec.
+ * Unlike dumb chunking, this produces sub-tasks that are single-responsibility,
+ * testable, and ordered by dependency.
+ */
+export async function decomposeTask(
+  item: BacklogItem,
+  spec: BacklogSpec | null,
+  reason: string,
+  sql?: any
+): Promise<DecomposedSubTask[]> {
+  const files = await getFileTree();
+  const relevantFiles = findRelevantFiles(files, item.title, item.description);
+
+  const topLevel = files
+    .filter((f: string) => f.split("/").length <= 3 && f.startsWith("src/app/api/"))
+    .slice(0, 30);
+  const fileContext = [...new Set([...relevantFiles, ...topLevel])].sort().join("\n");
+
+  const specContext = spec
+    ? `\nEXISTING SPEC (failed to complete in one shot):\n- Approach: ${spec.approach.join("; ")}\n- Affected files: ${spec.affected_files.join(", ")}\n- Complexity: ${spec.complexity}\n- Risks: ${spec.risks.join("; ") || "none"}`
+    : "";
+
+  const prompt = `You are a senior engineer decomposing a task that is too large for a single agent session (max 35 turns).
+
+TASK: ${item.title}
+DESCRIPTION:
+${item.description}
+${specContext}
+
+DECOMPOSITION REASON: ${reason}
+
+RELEVANT FILES IN CODEBASE:
+${fileContext}
+
+Break this into 2-4 INDEPENDENT sub-tasks. Each sub-task must be completable in a single session (10-20 turns).
+
+Rules for sub-tasks:
+1. SINGLE RESPONSIBILITY — each sub-task does ONE thing (one feature, one file group, one concern)
+2. INDEPENDENTLY TESTABLE — each sub-task can be verified on its own ("npx next build passes" + specific check)
+3. ORDERED BY DEPENDENCY — if sub-task B depends on A, list A first
+4. SPECIFIC FILES — list exact files each sub-task modifies (from the file list above)
+5. CONCRETE ACCEPTANCE CRITERIA — not "implement X" but "function Y in file Z returns correct results for input W"
+6. NO BUNDLING — if you write "implement X, Y, and Z", that's 3 sub-tasks, not 1
+
+Respond with ONLY valid JSON array (no markdown, no explanation):
+[
+  {
+    "title": "Short imperative title (max 80 chars)",
+    "description": "What to do, which files to modify, and how. 2-4 sentences max.",
+    "acceptance_criteria": ["criterion 1", "criterion 2", "npx next build passes"],
+    "affected_files": ["src/exact/path.ts"],
+    "complexity": "S",
+    "estimated_turns": 15
+  }
+]
+
+Complexity: S = 1-3 files, simple logic (10-15 turns). M = 3-5 files, moderate logic (20-25 turns).
+Never output complexity "L" — if a sub-task would be L, break it further.`;
+
+  try {
+    const response = await callLLM("decomposer", prompt, {
+      maxTokens: 3000,
+      temperature: 0.3,
+      timeout: 30000,
+    });
+
+    let jsonStr = response.content.trim();
+    const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) jsonStr = codeBlockMatch[1].trim();
+
+    const subTasks = JSON.parse(jsonStr) as DecomposedSubTask[];
+
+    // Validate
+    if (!Array.isArray(subTasks) || subTasks.length < 2 || subTasks.length > 6) {
+      console.warn(`[decompose] Invalid sub-task count: ${subTasks?.length}`);
+      return [];
+    }
+
+    // Validate and sanitize each sub-task
+    const valid: DecomposedSubTask[] = [];
+    for (const st of subTasks) {
+      if (!st.title || !st.description || !Array.isArray(st.acceptance_criteria)) continue;
+      // Ensure build check
+      if (!st.acceptance_criteria.some(c => c.toLowerCase().includes("build"))) {
+        st.acceptance_criteria.push("npx next build passes");
+      }
+      // Clamp
+      st.complexity = st.complexity === "M" ? "M" : "S";
+      st.estimated_turns = Math.max(10, Math.min(25, st.estimated_turns || 15));
+      valid.push(st);
+    }
+
+    if (valid.length < 2) {
+      console.warn(`[decompose] Only ${valid.length} valid sub-tasks after validation`);
+      return [];
+    }
+
+    console.log(`[decompose] "${item.title}" → ${valid.length} sub-tasks: ${valid.map(s => s.title).join(", ")}`);
+    return valid;
+  } catch (error) {
+    console.warn("Task decomposition failed:", error instanceof Error ? error.message : "unknown");
+    return [];
+  }
+}
+
 // Generate a spec for a backlog item using a cheap LLM call
 export async function generateSpec(
   item: BacklogItem,

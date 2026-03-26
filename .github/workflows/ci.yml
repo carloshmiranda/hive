@@ -16,6 +16,8 @@ jobs:
       - run: npm ci
       - name: Lint SQL queries
         run: npx tsx scripts/lint-sql.ts
+      - name: Check schema-map is up to date
+        run: npm run schema-map:check
       - name: Build
         run: npx next build
         env:

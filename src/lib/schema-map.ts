@@ -10,7 +10,7 @@
  */
 
 export interface ColumnDef {
-  type: string;      // pg type: TEXT, INTEGER, NUMERIC(12,2), TIMESTAMPTZ, etc.
+  type: string;
   nullable: boolean;
   hasDefault: boolean;
 }
@@ -26,404 +26,1624 @@ export interface TableDef {
 }
 
 export const SCHEMA_MAP: Record<string, TableDef> = {
-  companies: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      name: { type: "TEXT", nullable: false, hasDefault: false },
-      slug: { type: "TEXT", nullable: false, hasDefault: false },
-      description: { type: "TEXT", nullable: true, hasDefault: false },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      vercel_project_id: { type: "TEXT", nullable: true, hasDefault: false },
-      vercel_url: { type: "TEXT", nullable: true, hasDefault: false },
-      github_repo: { type: "TEXT", nullable: true, hasDefault: false },
-      neon_project_id: { type: "TEXT", nullable: true, hasDefault: false },
-      stripe_account_id: { type: "TEXT", nullable: true, hasDefault: false },
-      domain: { type: "TEXT", nullable: true, hasDefault: false },
-      capabilities: { type: "JSONB", nullable: true, hasDefault: true },
-      company_type: { type: "TEXT", nullable: true, hasDefault: true },
-      imported: { type: "BOOLEAN", nullable: true, hasDefault: true },
-      last_assessed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      updated_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      killed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      kill_reason: { type: "TEXT", nullable: true, hasDefault: false },
-      market: { type: "TEXT", nullable: true, hasDefault: true },
-      content_language: { type: "TEXT", nullable: true, hasDefault: false },
+  "companies": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "name": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "slug": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "description": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "vercel_project_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "vercel_url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "github_repo": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "neon_project_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "stripe_account_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "domain": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "capabilities": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "company_type": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "market": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "content_language": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "imported": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "last_assessed_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "updated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "killed_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "kill_reason": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "status", allowedValues: ["idea", "approved", "provisioning", "mvp", "active", "paused", "killed"] },
-    ],
+    "checks": [
+      {
+        "column": "status",
+        "allowedValues": [
+          "idea",
+          "approved",
+          "provisioning",
+          "mvp",
+          "active",
+          "paused",
+          "killed"
+        ]
+      }
+    ]
   },
-
-  cycles: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: false, hasDefault: false },
-      cycle_number: { type: "INTEGER", nullable: false, hasDefault: false },
-      started_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      finished_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      ceo_plan: { type: "JSONB", nullable: true, hasDefault: false },
-      ceo_review: { type: "JSONB", nullable: true, hasDefault: false },
+  "cycles": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "cycle_number": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "started_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "finished_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "ceo_plan": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "ceo_review": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "status", allowedValues: ["running", "completed", "failed", "partial"] },
-    ],
+    "checks": [
+      {
+        "column": "status",
+        "allowedValues": [
+          "running",
+          "completed",
+          "failed",
+          "partial"
+        ]
+      }
+    ]
   },
-
-  agent_actions: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      cycle_id: { type: "TEXT", nullable: true, hasDefault: false },
-      company_id: { type: "TEXT", nullable: true, hasDefault: false },
-      agent: { type: "TEXT", nullable: false, hasDefault: false },
-      action_type: { type: "TEXT", nullable: false, hasDefault: false },
-      description: { type: "TEXT", nullable: true, hasDefault: false },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      input: { type: "JSONB", nullable: true, hasDefault: false },
-      output: { type: "JSONB", nullable: true, hasDefault: false },
-      error: { type: "TEXT", nullable: true, hasDefault: false },
-      retry_count: { type: "INTEGER", nullable: true, hasDefault: true },
-      reflection: { type: "TEXT", nullable: true, hasDefault: false },
-      started_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      finished_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      tokens_used: { type: "INTEGER", nullable: true, hasDefault: false },
+  "agent_actions": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "cycle_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "agent": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "action_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "description": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "input": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "output": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "error": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "retry_count": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "reflection": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "started_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "finished_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "tokens_used": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "agent", allowedValues: ["ceo", "scout", "engineer", "ops", "growth", "outreach", "evolver", "healer", "orchestrator", "sentinel", "auto_merge", "dispatch", "webhook", "system", "admin"] },
-      { column: "status", allowedValues: ["pending", "running", "success", "failed", "skipped", "escalated", "pending_manual", "completed"] },
-    ],
+    "checks": [
+      {
+        "column": "agent",
+        "allowedValues": [
+          "ceo",
+          "scout",
+          "engineer",
+          "ops",
+          "growth",
+          "outreach",
+          "evolver",
+          "healer",
+          "orchestrator",
+          "sentinel",
+          "auto_merge",
+          "dispatch",
+          "webhook",
+          "system",
+          "admin"
+        ]
+      },
+      {
+        "column": "status",
+        "allowedValues": [
+          "pending",
+          "running",
+          "success",
+          "failed",
+          "skipped",
+          "escalated",
+          "pending_manual",
+          "completed"
+        ]
+      }
+    ]
   },
-
-  approvals: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: true, hasDefault: false },
-      gate_type: { type: "TEXT", nullable: false, hasDefault: false },
-      title: { type: "TEXT", nullable: false, hasDefault: false },
-      description: { type: "TEXT", nullable: false, hasDefault: false },
-      context: { type: "JSONB", nullable: true, hasDefault: false },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      decided_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      decision_note: { type: "TEXT", nullable: true, hasDefault: false },
+  "approvals": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "gate_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "title": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "description": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "context": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "decided_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "decision_note": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "gate_type", allowedValues: ["new_company", "growth_strategy", "spend_approval", "kill_company", "prompt_upgrade", "escalation", "outreach_batch", "vercel_pro_upgrade", "social_account", "first_revenue", "capability_migration", "pr_review"] },
-      { column: "status", allowedValues: ["pending", "approved", "rejected", "expired"] },
-    ],
+    "checks": [
+      {
+        "column": "gate_type",
+        "allowedValues": [
+          "new_company",
+          "growth_strategy",
+          "spend_approval",
+          "kill_company",
+          "prompt_upgrade",
+          "escalation",
+          "outreach_batch",
+          "vercel_pro_upgrade",
+          "social_account",
+          "first_revenue",
+          "capability_migration",
+          "pr_review"
+        ]
+      },
+      {
+        "column": "status",
+        "allowedValues": [
+          "pending",
+          "approved",
+          "rejected",
+          "expired"
+        ]
+      }
+    ]
   },
-
-  metrics: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: false, hasDefault: false },
-      date: { type: "DATE", nullable: false, hasDefault: false },
-      revenue: { type: "NUMERIC(12,2)", nullable: true, hasDefault: true },
-      mrr: { type: "NUMERIC(12,2)", nullable: true, hasDefault: true },
-      customers: { type: "INTEGER", nullable: true, hasDefault: true },
-      page_views: { type: "INTEGER", nullable: true, hasDefault: true },
-      signups: { type: "INTEGER", nullable: true, hasDefault: true },
-      churn_rate: { type: "NUMERIC(5,4)", nullable: true, hasDefault: true },
-      cac: { type: "NUMERIC(10,2)", nullable: true, hasDefault: true },
-      ad_spend: { type: "NUMERIC(10,2)", nullable: true, hasDefault: true },
-      emails_sent: { type: "INTEGER", nullable: true, hasDefault: true },
-      social_posts: { type: "INTEGER", nullable: true, hasDefault: true },
-      social_engagement: { type: "INTEGER", nullable: true, hasDefault: true },
-      waitlist_signups: { type: "INTEGER", nullable: true, hasDefault: true },
-      waitlist_total: { type: "INTEGER", nullable: true, hasDefault: true },
-      email_opens: { type: "INTEGER", nullable: true, hasDefault: true },
-      email_clicks: { type: "INTEGER", nullable: true, hasDefault: true },
-      email_bounces: { type: "INTEGER", nullable: true, hasDefault: true },
-      pricing_page_views: { type: "INTEGER", nullable: true, hasDefault: true },
-      pricing_cta_clicks: { type: "INTEGER", nullable: true, hasDefault: true },
-      affiliate_clicks: { type: "INTEGER", nullable: true, hasDefault: true },
-      affiliate_revenue: { type: "NUMERIC(10,2)", nullable: true, hasDefault: true },
+  "metrics": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "date": {
+        "type": "DATE",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "revenue": {
+        "type": "NUMERIC(12,2)",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "mrr": {
+        "type": "NUMERIC(12,2)",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "customers": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "page_views": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "signups": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "churn_rate": {
+        "type": "NUMERIC(5,4)",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "cac": {
+        "type": "NUMERIC(10,2)",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "ad_spend": {
+        "type": "NUMERIC(10,2)",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "emails_sent": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "social_posts": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "social_engagement": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "waitlist_signups": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "waitlist_total": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "email_opens": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "email_clicks": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "email_bounces": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "pricing_page_views": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "pricing_cta_clicks": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "affiliate_clicks": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "affiliate_revenue": {
+        "type": "NUMERIC(10,2)",
+        "nullable": true,
+        "hasDefault": true
+      }
     },
-    checks: [],
+    "checks": []
   },
-
-  playbook: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      source_company_id: { type: "TEXT", nullable: true, hasDefault: false },
-      domain: { type: "TEXT", nullable: false, hasDefault: false },
-      insight: { type: "TEXT", nullable: false, hasDefault: false },
-      evidence: { type: "JSONB", nullable: true, hasDefault: false },
-      confidence: { type: "NUMERIC(3,2)", nullable: true, hasDefault: true },
-      applied_count: { type: "INTEGER", nullable: true, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      superseded_by: { type: "TEXT", nullable: true, hasDefault: false },
-      last_referenced_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      reference_count: { type: "INTEGER", nullable: true, hasDefault: true },
+  "playbook": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "source_company_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "domain": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "insight": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "evidence": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "confidence": {
+        "type": "NUMERIC(3,2)",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "applied_count": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "superseded_by": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "content_language": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "last_referenced_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "reference_count": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      }
     },
-    checks: [],
+    "checks": []
   },
-
-  agent_prompts: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      agent: { type: "TEXT", nullable: false, hasDefault: false },
-      version: { type: "INTEGER", nullable: false, hasDefault: false },
-      prompt_text: { type: "TEXT", nullable: false, hasDefault: false },
-      is_active: { type: "BOOLEAN", nullable: true, hasDefault: true },
-      performance_score: { type: "NUMERIC(5,4)", nullable: true, hasDefault: false },
-      sample_size: { type: "INTEGER", nullable: true, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      promoted_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
+  "agent_prompts": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "agent": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "version": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "prompt_text": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "is_active": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "performance_score": {
+        "type": "NUMERIC(5,4)",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "sample_size": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "promoted_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [],
+    "checks": []
   },
-
-  infra: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: false, hasDefault: false },
-      service: { type: "TEXT", nullable: false, hasDefault: false },
-      resource_id: { type: "TEXT", nullable: true, hasDefault: false },
-      config: { type: "JSONB", nullable: true, hasDefault: false },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      torn_down_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
+  "infra": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "service": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "resource_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "config": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "torn_down_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "status", allowedValues: ["provisioning", "active", "failed", "torn_down"] },
-    ],
+    "checks": [
+      {
+        "column": "status",
+        "allowedValues": [
+          "provisioning",
+          "active",
+          "failed",
+          "torn_down"
+        ]
+      }
+    ]
   },
-
-  social_accounts: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: false, hasDefault: false },
-      platform: { type: "TEXT", nullable: false, hasDefault: false },
-      account_handle: { type: "TEXT", nullable: true, hasDefault: false },
-      auth_token: { type: "TEXT", nullable: true, hasDefault: false },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "social_accounts": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "platform": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "account_handle": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "auth_token": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [
-      { column: "platform", allowedValues: ["x", "linkedin", "instagram", "tiktok", "youtube"] },
-      { column: "status", allowedValues: ["pending", "active", "expired", "disabled"] },
-    ],
+    "checks": [
+      {
+        "column": "platform",
+        "allowedValues": [
+          "x",
+          "linkedin",
+          "instagram",
+          "tiktok",
+          "youtube"
+        ]
+      },
+      {
+        "column": "status",
+        "allowedValues": [
+          "pending",
+          "active",
+          "expired",
+          "disabled"
+        ]
+      }
+    ]
   },
-
-  directives: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: true, hasDefault: false },
-      agent: { type: "TEXT", nullable: true, hasDefault: false },
-      text: { type: "TEXT", nullable: false, hasDefault: false },
-      github_issue_number: { type: "INTEGER", nullable: true, hasDefault: false },
-      github_issue_url: { type: "TEXT", nullable: true, hasDefault: false },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      resolution: { type: "TEXT", nullable: true, hasDefault: false },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      resolved_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
+  "directives": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "agent": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "text": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "github_issue_number": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "github_issue_url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "resolution": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "resolved_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "status", allowedValues: ["open", "in_progress", "done", "rejected"] },
-    ],
+    "checks": [
+      {
+        "column": "status",
+        "allowedValues": [
+          "open",
+          "in_progress",
+          "done",
+          "rejected"
+        ]
+      }
+    ]
   },
-
-  imports: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: true, hasDefault: false },
-      source_type: { type: "TEXT", nullable: false, hasDefault: false },
-      source_url: { type: "TEXT", nullable: true, hasDefault: false },
-      scan_status: { type: "TEXT", nullable: false, hasDefault: true },
-      scan_report: { type: "JSONB", nullable: true, hasDefault: false },
-      onboard_status: { type: "TEXT", nullable: false, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "imports": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "source_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "source_url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "scan_status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "scan_report": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "onboard_status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [
-      { column: "source_type", allowedValues: ["github_repo", "external_repo", "vercel_project", "manual"] },
-      { column: "scan_status", allowedValues: ["pending", "scanning", "scanned", "failed"] },
-      { column: "onboard_status", allowedValues: ["pending", "in_progress", "complete", "failed"] },
-    ],
+    "checks": [
+      {
+        "column": "source_type",
+        "allowedValues": [
+          "github_repo",
+          "external_repo",
+          "vercel_project",
+          "manual"
+        ]
+      },
+      {
+        "column": "scan_status",
+        "allowedValues": [
+          "pending",
+          "scanning",
+          "scanned",
+          "failed"
+        ]
+      },
+      {
+        "column": "onboard_status",
+        "allowedValues": [
+          "pending",
+          "in_progress",
+          "complete",
+          "failed"
+        ]
+      }
+    ]
   },
-
-  settings: {
-    columns: {
-      key: { type: "TEXT", nullable: false, hasDefault: false },
-      value: { type: "TEXT", nullable: false, hasDefault: false },
-      is_secret: { type: "BOOLEAN", nullable: true, hasDefault: true },
-      updated_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: true },
+  "settings": {
+    "columns": {
+      "key": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "value": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "is_secret": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "updated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": true
+      }
     },
-    checks: [],
+    "checks": []
   },
-
-  research_reports: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: false, hasDefault: false },
-      report_type: { type: "TEXT", nullable: false, hasDefault: false },
-      content: { type: "JSONB", nullable: false, hasDefault: false },
-      summary: { type: "TEXT", nullable: true, hasDefault: false },
-      sources: { type: "JSONB", nullable: true, hasDefault: false },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      updated_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "research_reports": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "report_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "content": {
+        "type": "JSONB",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "summary": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "sources": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "updated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [
-      { column: "report_type", allowedValues: ["market_research", "competitive_analysis", "lead_list", "seo_keywords", "outreach_log", "visibility_snapshot", "llm_visibility", "content_performance", "content_gaps", "product_spec"] },
-    ],
+    "checks": [
+      {
+        "column": "report_type",
+        "allowedValues": [
+          "market_research",
+          "competitive_analysis",
+          "lead_list",
+          "seo_keywords",
+          "outreach_log",
+          "visibility_snapshot",
+          "llm_visibility",
+          "content_performance",
+          "content_gaps",
+          "product_spec"
+        ]
+      }
+    ]
   },
-
-  visibility_metrics: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: false, hasDefault: false },
-      date: { type: "DATE", nullable: false, hasDefault: false },
-      source: { type: "TEXT", nullable: false, hasDefault: false },
-      keyword: { type: "TEXT", nullable: true, hasDefault: false },
-      url: { type: "TEXT", nullable: true, hasDefault: false },
-      impressions: { type: "INTEGER", nullable: true, hasDefault: true },
-      clicks: { type: "INTEGER", nullable: true, hasDefault: true },
-      position: { type: "NUMERIC(6,2)", nullable: true, hasDefault: false },
-      ctr: { type: "NUMERIC(5,4)", nullable: true, hasDefault: false },
-      cited: { type: "BOOLEAN", nullable: true, hasDefault: false },
-      mentioned: { type: "BOOLEAN", nullable: true, hasDefault: false },
-      competitors: { type: "JSONB", nullable: true, hasDefault: false },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "visibility_metrics": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "date": {
+        "type": "DATE",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "source": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "keyword": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "impressions": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "clicks": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "position": {
+        "type": "NUMERIC(6,2)",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "ctr": {
+        "type": "NUMERIC(5,4)",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "cited": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "mentioned": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "competitors": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [
-      { column: "source", allowedValues: ["gsc", "bwt", "llm_gemini", "vercel"] },
-    ],
+    "checks": [
+      {
+        "column": "source",
+        "allowedValues": [
+          "gsc",
+          "bwt",
+          "llm_gemini",
+          "vercel"
+        ]
+      }
+    ]
   },
-
-  dismissed_todos: {
-    columns: {
-      todo_id: { type: "TEXT", nullable: false, hasDefault: false },
-      dismissed_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "dismissed_todos": {
+    "columns": {
+      "todo_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "dismissed_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [],
+    "checks": []
   },
-
-  evolver_proposals: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      gap_type: { type: "TEXT", nullable: false, hasDefault: false },
-      severity: { type: "TEXT", nullable: false, hasDefault: true },
-      title: { type: "TEXT", nullable: false, hasDefault: false },
-      diagnosis: { type: "TEXT", nullable: false, hasDefault: false },
-      signal_source: { type: "TEXT", nullable: false, hasDefault: false },
-      signal_data: { type: "JSONB", nullable: true, hasDefault: true },
-      proposed_fix: { type: "JSONB", nullable: false, hasDefault: false },
-      affected_companies: { type: "TEXT[]", nullable: true, hasDefault: true },
-      cross_company: { type: "BOOLEAN", nullable: true, hasDefault: true },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      playbook_entry_id: { type: "TEXT", nullable: true, hasDefault: false },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      reviewed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      implemented_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      decided_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      notes: { type: "TEXT", nullable: true, hasDefault: false },
+  "evolver_proposals": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "gap_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "severity": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "title": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "diagnosis": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "signal_source": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "signal_data": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "proposed_fix": {
+        "type": "JSONB",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "affected_companies": {
+        "type": "TEXT[]",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "cross_company": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "playbook_entry_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "reviewed_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "implemented_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "decided_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "notes": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "gap_type", allowedValues: ["outcome", "capability", "knowledge", "process"] },
-      { column: "severity", allowedValues: ["critical", "high", "medium", "low"] },
-      { column: "status", allowedValues: ["pending", "approved", "rejected", "implemented", "deferred"] },
-    ],
+    "checks": [
+      {
+        "column": "gap_type",
+        "allowedValues": [
+          "outcome",
+          "capability",
+          "knowledge",
+          "process"
+        ]
+      },
+      {
+        "column": "severity",
+        "allowedValues": [
+          "critical",
+          "high",
+          "medium",
+          "low"
+        ]
+      },
+      {
+        "column": "status",
+        "allowedValues": [
+          "pending",
+          "approved",
+          "rejected",
+          "implemented",
+          "deferred"
+        ]
+      }
+    ]
   },
-
-  context_log: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      source: { type: "TEXT", nullable: false, hasDefault: false },
-      category: { type: "TEXT", nullable: false, hasDefault: false },
-      summary: { type: "TEXT", nullable: false, hasDefault: false },
-      detail: { type: "TEXT", nullable: true, hasDefault: false },
-      related_adr: { type: "TEXT", nullable: true, hasDefault: false },
-      related_file: { type: "TEXT", nullable: true, hasDefault: false },
-      tags: { type: "TEXT[]", nullable: true, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "context_log": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "source": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "category": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "summary": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "detail": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "related_adr": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "related_file": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "tags": {
+        "type": "TEXT[]",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [
-      { column: "source", allowedValues: ["chat", "code", "orch", "carlos"] },
-      { column: "category", allowedValues: ["decision", "learning", "brainstorm", "blocker", "milestone", "question"] },
-    ],
+    "checks": [
+      {
+        "column": "source",
+        "allowedValues": [
+          "chat",
+          "code",
+          "orch",
+          "carlos"
+        ]
+      },
+      {
+        "column": "category",
+        "allowedValues": [
+          "decision",
+          "learning",
+          "brainstorm",
+          "blocker",
+          "milestone",
+          "question"
+        ]
+      }
+    ]
   },
-
-  error_patterns: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      pattern: { type: "TEXT", nullable: false, hasDefault: false },
-      agent: { type: "TEXT", nullable: false, hasDefault: false },
-      fix_summary: { type: "TEXT", nullable: false, hasDefault: false },
-      fix_detail: { type: "TEXT", nullable: true, hasDefault: false },
-      source_action_id: { type: "TEXT", nullable: true, hasDefault: false },
-      occurrences: { type: "INTEGER", nullable: true, hasDefault: true },
-      last_seen_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: true },
-      resolved: { type: "BOOLEAN", nullable: true, hasDefault: true },
-      auto_fixable: { type: "BOOLEAN", nullable: true, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: true },
+  "company_tasks": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "category": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "title": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "description": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "priority": {
+        "type": "INT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "source": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "prerequisites": {
+        "type": "TEXT[]",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "acceptance": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "cycle_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "updated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [],
+    "checks": [
+      {
+        "column": "category",
+        "allowedValues": [
+          "engineering",
+          "growth",
+          "research",
+          "qa",
+          "ops",
+          "strategy"
+        ]
+      },
+      {
+        "column": "status",
+        "allowedValues": [
+          "proposed",
+          "approved",
+          "in_progress",
+          "done",
+          "dismissed"
+        ]
+      },
+      {
+        "column": "source",
+        "allowedValues": [
+          "ceo",
+          "sentinel",
+          "evolver",
+          "carlos"
+        ]
+      }
+    ]
   },
-
-  company_tasks: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      company_id: { type: "TEXT", nullable: false, hasDefault: false },
-      category: { type: "TEXT", nullable: false, hasDefault: false },
-      title: { type: "TEXT", nullable: false, hasDefault: false },
-      description: { type: "TEXT", nullable: false, hasDefault: false },
-      priority: { type: "INTEGER", nullable: false, hasDefault: true },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      source: { type: "TEXT", nullable: false, hasDefault: true },
-      prerequisites: { type: "TEXT[]", nullable: true, hasDefault: true },
-      acceptance: { type: "TEXT", nullable: true, hasDefault: false },
-      cycle_id: { type: "TEXT", nullable: true, hasDefault: false },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      updated_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "error_patterns": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "pattern": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "agent": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "fix_summary": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "fix_detail": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "source_action_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "occurrences": {
+        "type": "INT",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "last_seen_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "resolved": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "auto_fixable": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": true
+      }
     },
-    checks: [
-      { column: "category", allowedValues: ["engineering", "growth", "research", "qa", "ops", "strategy"] },
-      { column: "status", allowedValues: ["proposed", "approved", "in_progress", "done", "dismissed"] },
-      { column: "source", allowedValues: ["ceo", "sentinel", "evolver", "carlos"] },
-    ],
+    "checks": []
   },
-
-  hive_backlog: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      priority: { type: "TEXT", nullable: false, hasDefault: true },
-      title: { type: "TEXT", nullable: false, hasDefault: false },
-      description: { type: "TEXT", nullable: false, hasDefault: false },
-      category: { type: "TEXT", nullable: false, hasDefault: true },
-      status: { type: "TEXT", nullable: false, hasDefault: true },
-      source: { type: "TEXT", nullable: true, hasDefault: true },
-      dispatch_id: { type: "TEXT", nullable: true, hasDefault: false },
-      pr_number: { type: "INTEGER", nullable: true, hasDefault: false },
-      pr_url: { type: "TEXT", nullable: true, hasDefault: false },
-      spec: { type: "JSONB", nullable: true, hasDefault: false },
-      notes: { type: "TEXT", nullable: true, hasDefault: false },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      dispatched_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      completed_at: { type: "TIMESTAMPTZ", nullable: true, hasDefault: false },
-      theme: { type: "TEXT", nullable: true, hasDefault: false },
+  "hive_backlog": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "priority": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "title": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "description": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "category": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "source": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "dispatch_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "pr_number": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "pr_url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "theme": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "spec": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "notes": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "dispatched_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "completed_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      }
     },
-    checks: [
-      { column: "priority", allowedValues: ["P0", "P1", "P2", "P3"] },
-      { column: "category", allowedValues: ["bugfix", "feature", "refactor", "infra", "quality", "research", "docs"] },
-      { column: "status", allowedValues: ["ready", "approved", "planning", "dispatched", "in_progress", "pr_open", "done", "blocked", "rejected"] },
-    ],
+    "checks": [
+      {
+        "column": "priority",
+        "allowedValues": [
+          "P0",
+          "P1",
+          "P2",
+          "P3"
+        ]
+      },
+      {
+        "column": "category",
+        "allowedValues": [
+          "bugfix",
+          "feature",
+          "refactor",
+          "infra",
+          "quality",
+          "research"
+        ]
+      },
+      {
+        "column": "status",
+        "allowedValues": [
+          "ready",
+          "approved",
+          "planning",
+          "dispatched",
+          "in_progress",
+          "pr_open",
+          "done",
+          "blocked",
+          "rejected"
+        ]
+      }
+    ]
   },
-
-  routing_weights: {
-    columns: {
-      id: { type: "TEXT", nullable: false, hasDefault: true },
-      task_type: { type: "TEXT", nullable: false, hasDefault: false },
-      model: { type: "TEXT", nullable: false, hasDefault: false },
-      agent: { type: "TEXT", nullable: false, hasDefault: false },
-      successes: { type: "INTEGER", nullable: true, hasDefault: true },
-      failures: { type: "INTEGER", nullable: true, hasDefault: true },
-      success_rate: { type: "NUMERIC(5,4)", nullable: true, hasDefault: false },
-      last_updated: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
-      created_at: { type: "TIMESTAMPTZ", nullable: false, hasDefault: true },
+  "routing_weights": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "task_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "model": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "agent": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "successes": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "failures": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "success_rate": {
+        "type": "NUMERIC(5,4)",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "last_updated": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    checks: [],
+    "checks": []
   },
+  "context_cache": {
+    "columns": {
+      "cache_key": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "agent_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "cycle_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "context_data": {
+        "type": "JSONB",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "expires_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
+    },
+    "checks": [
+      {
+        "column": "agent_type",
+        "allowedValues": [
+          "build",
+          "growth",
+          "fix"
+        ]
+      }
+    ]
+  }
 };
 
 /**
@@ -443,9 +1663,9 @@ export function validateColumn(table: string, column: string): string | null {
  */
 export function validateCheckValue(table: string, column: string, value: string): string | null {
   const tableDef = SCHEMA_MAP[table];
-  if (!tableDef) return null; // can't validate unknown tables
+  if (!tableDef) return null;
   const check = tableDef.checks.find(c => c.column === column);
-  if (!check) return null; // no CHECK constraint on this column
+  if (!check) return null;
   if (!check.allowedValues.includes(value)) {
     return `Value '${value}' not allowed for ${table}.${column}. Allowed: ${check.allowedValues.join(", ")}`;
   }

@@ -179,11 +179,11 @@ export async function POST(req: Request) {
         trackFailedBacklogItem(item.id, attempt);
       }
 
-      // On max_turns failure: auto-decompose if complexity is M or L
+      // On max_turns failure: LLM-assisted decompose if complexity is M or L
       let decomposed = false;
       if (isMaxTurns && item) {
         try {
-          const { generateSpec } = await import("@/lib/backlog-planner");
+          const { generateSpec, decomposeTask } = await import("@/lib/backlog-planner");
           let spec = item.spec;
 
           // (1) Call the planner to get a spec if none exists
@@ -194,51 +194,43 @@ export async function POST(req: Request) {
             );
           }
 
-          // (2) If spec.complexity is M or L, decompose into sub-items using existing decomposition logic
+          // (2) LLM-assisted decomposition — produces independent, testable sub-tasks
           if (spec && (spec.complexity === "M" || spec.complexity === "L") && Array.isArray(spec.approach) && spec.approach.length >= 2) {
-            const steps = spec.approach as string[];
-            const subItems: { title: string; description: string; files: string[] }[] = [];
+            const subTasks = await decomposeTask(
+              { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
+              spec,
+              `max_turns failure after ${attempt} attempt(s) — task too large for single session`,
+              sql
+            );
 
-            // Use the same decomposition logic as pre-dispatch (group steps into 1-2 step chunks)
-            for (let i = 0; i < steps.length; i += 2) {
-              const chunk = steps.slice(i, i + 2);
-              const stepNums = chunk.map((_, j) => i + j + 1).join("-");
-              subItems.push({
-                title: `${item.title} (step ${stepNums}/${steps.length})`,
-                description: `Parent: ${item.title}\n\n${chunk.join("\n")}`,
-                files: (spec.affected_files as string[] || []).slice(0, 3),
-              });
-            }
-
-            if (subItems.length >= 2) {
-              // (4) The sub-items go to ready status and get dispatched normally
-              for (const sub of subItems) {
+            if (subTasks.length >= 2) {
+              for (const sub of subTasks) {
                 await sql`
                   INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
                   VALUES (
                     ${sub.title.slice(0, 200)}, ${sub.description.slice(0, 2000)},
                     ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
                     ${JSON.stringify({
-                      complexity: "S",
-                      estimated_turns: 15,
-                      acceptance_criteria: ["npx next build passes"],
-                      affected_files: sub.files,
-                      approach: [sub.description.split('\n\n')[1] || sub.description],
+                      complexity: sub.complexity,
+                      estimated_turns: sub.estimated_turns,
+                      acceptance_criteria: sub.acceptance_criteria,
+                      affected_files: sub.affected_files,
+                      approach: [sub.description],
                       risks: []
                     })}
                   )
                 `.catch((e: any) => { console.warn(`[backlog] insert decomposed sub-item failed: ${e?.message || e}`); });
               }
 
-              // (3) Mark the parent item as blocked with reason auto-decomposed-on-failure
+              // Mark the parent as blocked
               await sql`
                 UPDATE hive_backlog
                 SET status = 'blocked', dispatched_at = NULL,
-                    notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [auto-decomposed-on-failure] Hit max_turns — split into ${subItems.length} sub-tasks.`}
+                    notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [auto-decomposed] LLM split into ${subTasks.length} independent sub-tasks.`}
                 WHERE id = ${completed_id}
               `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as auto-decomposed failed: ${e?.message || e}`); });
               decomposed = true;
-              console.log(`[backlog] Auto-decomposed "${item.title}" (complexity: ${spec.complexity}) into ${subItems.length} sub-tasks after max_turns failure`);
+              console.log(`[backlog] LLM-decomposed "${item.title}" → ${subTasks.length} sub-tasks: ${subTasks.map(s => s.title).join(", ")}`);
             }
           }
         } catch (e) {
@@ -821,64 +813,72 @@ export async function POST(req: Request) {
 
   // Auto-decompose L (large) complexity tasks into sub-items
   // Instead of dispatching a 30+ turn task that will exhaust max_turns,
-  // split it into S/M steps and dispatch the first one.
+  // use LLM-assisted decomposition to create independent, testable sub-tasks.
   if (spec && spec.complexity === "L" && Array.isArray(spec.approach) && spec.approach.length >= 3) {
-    // Create sub-items from the approach steps
-    const steps = spec.approach as string[];
-    const subItems: { title: string; description: string; files: string[] }[] = [];
+    try {
+      const { decomposeTask } = await import("@/lib/backlog-planner");
+      const subTasks = await decomposeTask(
+        {
+          id: topItem.id,
+          title: topItem.title,
+          description: topItem.description,
+          priority: topItem.priority,
+          category: topItem.category,
+          notes: topItem.notes,
+        },
+        spec as any,
+        `pre-dispatch decomposition — L complexity with ${spec.approach.length} approach steps`,
+        sql
+      );
 
-    // Group steps into 1-2 step chunks (each becomes an S/M task)
-    for (let i = 0; i < steps.length; i += 2) {
-      const chunk = steps.slice(i, i + 2);
-      const stepNums = chunk.map((_, j) => i + j + 1).join("-");
-      subItems.push({
-        title: `${topItem.title} (step ${stepNums}/${steps.length})`,
-        description: chunk.join("\n"),
-        files: (spec.affected_files as string[] || []).slice(0, 3), // Limit file scope per sub-item
-      });
-    }
+      if (subTasks.length >= 2) {
+        // Insert sub-tasks into backlog (all but the first — first will be dispatched now)
+        for (let i = 1; i < subTasks.length; i++) {
+          const sub = subTasks[i];
+          await sql`
+            INSERT INTO hive_backlog (title, description, priority, category, status, spec)
+            VALUES (
+              ${sub.title.slice(0, 200)},
+              ${`Parent: ${topItem.title}\n\n${sub.description}`.slice(0, 2000)},
+              ${topItem.priority},
+              ${topItem.category},
+              'ready',
+              ${JSON.stringify({
+                acceptance_criteria: sub.acceptance_criteria,
+                affected_files: sub.affected_files,
+                approach: [sub.description],
+                risks: [],
+                complexity: sub.complexity,
+                estimated_turns: sub.estimated_turns,
+              })}
+            )
+          `.catch(() => {});
+        }
 
-    if (subItems.length >= 2) {
-      // Insert sub-items into backlog (all but the first — first will be dispatched now)
-      for (let i = 1; i < subItems.length; i++) {
+        // Rewrite the spec for the first sub-task only
+        const first = subTasks[0];
+        spec = {
+          ...spec,
+          approach: [first.description],
+          complexity: first.complexity,
+          estimated_turns: first.estimated_turns,
+          affected_files: first.affected_files,
+          acceptance_criteria: first.acceptance_criteria,
+        };
+
+        // Update the parent item's spec to reflect the decomposition
         await sql`
-          INSERT INTO hive_backlog (title, description, priority, category, status, spec)
-          VALUES (
-            ${subItems[i].title.slice(0, 200)},
-            ${`Parent: ${topItem.title}\n\n${subItems[i].description}`.slice(0, 2000)},
-            ${topItem.priority},
-            ${topItem.category},
-            'ready',
-            ${JSON.stringify({
-              acceptance_criteria: ["npx next build passes"],
-              affected_files: subItems[i].files,
-              approach: [subItems[i].description],
-              risks: [],
-              complexity: "S",
-              estimated_turns: 15,
-            })}
-          )
+          UPDATE hive_backlog
+          SET spec = ${JSON.stringify(spec)},
+              notes = COALESCE(notes, '') || ${` [auto-decomposed] LLM split into ${subTasks.length} sub-tasks.`}
+          WHERE id = ${topItem.id}
         `.catch(() => {});
+
+        console.log(`[backlog] LLM-decomposed L task "${topItem.title}" into ${subTasks.length} sub-tasks`);
       }
-
-      // Rewrite the spec for the first chunk only (S complexity)
-      spec = {
-        ...spec,
-        approach: [subItems[0].description],
-        complexity: "S",
-        estimated_turns: 15,
-        affected_files: (spec.affected_files as string[] || []).slice(0, 3),
-      };
-
-      // Update the parent item's spec to reflect the decomposition
-      await sql`
-        UPDATE hive_backlog
-        SET spec = ${JSON.stringify(spec)},
-            notes = COALESCE(notes, '') || ${` [auto-decomposed] Split into ${subItems.length} sub-tasks.`}
-        WHERE id = ${topItem.id}
-      `.catch(() => {});
-
-      console.log(`[backlog] Auto-decomposed L task "${topItem.title}" into ${subItems.length} sub-tasks`);
+    } catch (decomposeErr) {
+      console.warn(`[backlog] LLM decomposition failed for "${topItem.title}", dispatching as-is:`, decomposeErr instanceof Error ? decomposeErr.message : "unknown");
+      // Non-blocking — dispatch proceeds with the original L-complexity spec
     }
   }
 

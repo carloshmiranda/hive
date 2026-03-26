@@ -34,13 +34,15 @@ interface TableDef {
 function parseSchema(sql: string): Record<string, TableDef> {
   const tables: Record<string, TableDef> = {};
 
-  // Match CREATE TABLE blocks
-  const tableRegex = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\(([\s\S]*?)\);/g;
+  // Match CREATE TABLE blocks (including UNLOGGED tables)
+  const tableRegex = /CREATE\s+(?:UNLOGGED\s+)?TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\(([\s\S]*?)\);/g;
   let match;
 
   while ((match = tableRegex.exec(sql)) !== null) {
     const tableName = match[1];
-    const body = match[2];
+    // Strip SQL line comments before splitting — inline comments contain commas
+    // that confuse the top-level comma splitter
+    const body = match[2].replace(/--[^\n]*/g, "");
     const columns: Record<string, ColumnDef> = {};
     const checks: CheckConstraint[] = [];
 
@@ -200,8 +202,6 @@ for (const [name, def] of Object.entries(tables)) {
   console.log(`  ${name}: ${Object.keys(def.columns).length} columns, ${def.checks.length} checks`);
 }
 
-// For now, just verify parsing — actual file generation would overwrite the hand-written version
-// Uncomment the next line to auto-generate:
-// writeFileSync(OUTPUT_PATH, generateOutput(tables));
-console.log(`\nSchema map is at: src/lib/schema-map.ts`);
-console.log(`To regenerate, uncomment writeFileSync in this script.`);
+const output = generateOutput(tables);
+writeFileSync(OUTPUT_PATH, output);
+console.log(`\nSchema map written to: src/lib/schema-map.ts`);

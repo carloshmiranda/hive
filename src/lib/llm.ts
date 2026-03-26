@@ -186,6 +186,11 @@ export const AGENT_ROUTING: Record<string, { primary: string; model: string; fal
     model: "qwen/qwen3-coder:free",  // Best free coding model for codebase analysis
     fallback: ["gemini", "groq"],     // No Claude fallback — specs are not worth burning quota
   },
+  decomposer: {
+    primary: "openrouter",
+    model: "anthropic/claude-sonnet-4:free",  // Claude Sonnet 4 free via OpenRouter — best reasoning for task decomposition
+    fallback: ["claude", "gemini", "groq"],   // Claude API fallback for when OpenRouter quota exhausted
+  },
 };
 
 // Retry wrapper with exponential backoff for rate limiting
