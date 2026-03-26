@@ -55,6 +55,14 @@ ALL user-facing content MUST be in **{{CONTENT_LANGUAGE_NAME}}**. This includes:
 - Color contrast: minimum 4.5:1 for all text
 - Every page: unique `<title>`, meta description, OG tags, proper heading hierarchy
 - JSON-LD structured data on layout (Organization + WebSite) and FAQ sections
+- No backdrop-blur, glass effects, or frosted backgrounds
+- Max 2 shadow depths: shadow-sm for cards, shadow-md for modals only. No shadow-lg/xl
+- Max 2 background colors per page: bg-white and bg-subtle (gray-50). No rainbow section backgrounds
+- No statistics, counters, or testimonials without real data sources
+- Hero must include one domain-specific visual element, not a generic dashboard mockup
+- Micro-copy (button labels, empty states, error messages) must use domain vocabulary
+- No Inter or Roboto as display font
+- Every section must look connected to adjacent sections (consistent vertical rhythm, shared color vocabulary)
 
 ## Constraints
 - Landing page MUST include visual product previews (CSS/SVG mockups in browser frames). Never ship a landing page with text-only feature descriptions. Customize the generic dashboard mockup to match the product domain.

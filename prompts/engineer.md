@@ -107,6 +107,14 @@ Read `globals.css` before writing ANY UI code. It contains design tokens and rul
 8. **Content width constraints.** Max container: `max-w-5xl` (1120px). Hero text: `max-w-3xl` (768px). Never full-width text.
 9. **Consistent spacing.** Section padding: `py-20`. Card padding: `p-6`. Use the spacing scale from globals.css.
 10. **No placeholder content.** Never ship lorem ipsum, "Coming soon", stock photos, or placeholder text. If content isn't ready, skip the section entirely.
+11. **No backdrop-blur, glass effects, or frosted backgrounds.**
+12. **Max 2 shadow depths: shadow-sm for cards, shadow-md for modals only. No shadow-lg/xl.**
+13. **Max 2 background colors per page: bg-white and bg-subtle (gray-50). No rainbow section backgrounds.**
+14. **No statistics, counters, or testimonials without real data sources.**
+15. **Hero must include one domain-specific visual element, not a generic dashboard mockup.**
+16. **Micro-copy (button labels, empty states, error messages) must use domain vocabulary.**
+17. **No Inter or Roboto as display font.**
+18. **Every section must look connected to adjacent sections (consistent vertical rhythm, shared color vocabulary).**
 
 ### When things break
 - If the build fails, read the error carefully and fix it. Don't retry the same code.
