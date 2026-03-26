@@ -1,0 +1,101 @@
+name: Hive Decompose
+run-name: "Decompose: ${{ github.event.client_payload.title || github.event.inputs.title || 'unknown' }}"
+
+on:
+  repository_dispatch:
+    types:
+      - decompose_task
+
+  workflow_dispatch:
+    inputs:
+      backlog_id:
+        description: 'Backlog item ID to decompose'
+        required: true
+      title:
+        description: 'Task title (for display)'
+        required: false
+        default: 'manual'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  decompose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Hive
+        uses: actions/checkout@v4
+
+      - name: Extract payload
+        id: payload
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "backlog_id=${{ github.event.client_payload.backlog_id }}" >> "$GITHUB_OUTPUT"
+            echo "title=${{ github.event.client_payload.title }}" >> "$GITHUB_OUTPUT"
+            echo "priority=${{ github.event.client_payload.priority }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "backlog_id=${{ github.event.inputs.backlog_id }}" >> "$GITHUB_OUTPUT"
+            echo "title=${{ github.event.inputs.title }}" >> "$GITHUB_OUTPUT"
+            echo "priority=P1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decompose with Claude
+        id: decompose
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          max_turns: 8
+          timeout_minutes: 5
+          prompt: |
+            You are decomposing a Hive backlog task that is too large for a single Engineer session (max 35 turns).
+
+            Read the backlog item from the database, then break it into 2-4 independent sub-tasks.
+
+            BACKLOG ITEM ID: ${{ steps.payload.outputs.backlog_id }}
+
+            Steps:
+            1. Query the database for the full item: SELECT * FROM hive_backlog WHERE id = ${{ steps.payload.outputs.backlog_id }}
+            2. Read the spec (JSON) to understand approach, affected_files, complexity
+            3. For each affected file mentioned, read it to understand the actual codebase context
+            4. Decompose into 2-4 sub-tasks following these rules:
+               - SINGLE RESPONSIBILITY: each sub-task does ONE thing
+               - INDEPENDENTLY TESTABLE: each can be verified alone (build passes + specific check)
+               - ORDERED BY DEPENDENCY: if B depends on A, list A first
+               - SPECIFIC FILES: list exact files each sub-task modifies
+               - CONCRETE ACCEPTANCE CRITERIA: not "implement X" but "function Y returns correct results"
+               - NO BUNDLING: "implement X, Y, and Z" is 3 sub-tasks, not 1
+            5. Insert each sub-task into hive_backlog via SQL:
+               INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+               VALUES ('title', 'Parent: original_title\n\ndescription', priority, category, 'ready', 'decomposed',
+                 '{"acceptance_criteria": [...], "affected_files": [...], "approach": [...], "complexity": "S or M", "estimated_turns": 15}'::jsonb)
+            6. Update the parent item:
+               UPDATE hive_backlog SET status = 'done', notes = COALESCE(notes,'') || ' [decomposed] Split into N sub-tasks by Claude on Actions.'
+               WHERE id = ${{ steps.payload.outputs.backlog_id }}
+            7. Print a summary of what you created
+
+            Complexity guide: S = 1-3 files, 10-15 turns. M = 3-5 files, 20-25 turns. Never create L sub-tasks.
+
+      - name: Dispatch first sub-task
+        if: success()
+        run: |
+          # Trigger backlog dispatch to pick up the newly created sub-tasks
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app' }}/api/backlog/dispatch" \
+            -d '{"trigger": "decompose_complete"}' || true
+
+      - name: Log failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app' }}/api/actions" \
+            -d "{\"agent\": \"decomposer\", \"action_type\": \"decompose_task\", \"status\": \"failed\", \"description\": \"Decompose failed for backlog item ${{ steps.payload.outputs.backlog_id }}: ${{ steps.payload.outputs.title }}\"}" || true

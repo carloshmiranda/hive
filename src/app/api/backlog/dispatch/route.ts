@@ -811,73 +811,81 @@ export async function POST(req: Request) {
     }
   }
 
-  // Auto-decompose L (large) complexity tasks into sub-items
-  // Instead of dispatching a 30+ turn task that will exhaust max_turns,
-  // use LLM-assisted decomposition to create independent, testable sub-tasks.
+  // Auto-decompose L (large) complexity tasks — dispatch to GitHub Actions
+  // Claude CLI on Actions has Max subscription access for quality decomposition.
+  // Instead of burning 30+ turns on a task that will exhaust max_turns, decompose first.
   if (spec && spec.complexity === "L" && Array.isArray(spec.approach) && spec.approach.length >= 3) {
     try {
+      const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
+      const decomposeRes = await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+        method: "POST",
+        headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+        body: JSON.stringify({
+          event_type: "decompose_task",
+          client_payload: {
+            backlog_id: topItem.id,
+            title: topItem.title,
+            priority: topItem.priority,
+          },
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (decomposeRes.ok || decomposeRes.status === 204) {
+        // Mark as planning — decompose workflow will create sub-tasks and re-trigger dispatch
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'planning',
+              notes = COALESCE(notes, '') || ${` [decompose] Dispatched to GitHub Actions for Claude-assisted decomposition.`}
+          WHERE id = ${topItem.id}
+        `.catch(() => {});
+
+        console.log(`[backlog] L-complexity task "${topItem.title}" dispatched to hive-decompose.yml for Claude decomposition`);
+        return json({
+          ok: true,
+          dispatched: true,
+          target: "decompose",
+          backlog_id: topItem.id,
+          reason: "L-complexity task routed to GitHub Actions for Claude-assisted decomposition",
+        });
+      }
+
+      // If Actions dispatch failed, fall back to serverless LLM decomposition
+      console.warn(`[backlog] Actions decompose dispatch failed (${decomposeRes.status}), falling back to serverless`);
       const { decomposeTask } = await import("@/lib/backlog-planner");
       const subTasks = await decomposeTask(
-        {
-          id: topItem.id,
-          title: topItem.title,
-          description: topItem.description,
-          priority: topItem.priority,
-          category: topItem.category,
-          notes: topItem.notes,
-        },
+        { id: topItem.id, title: topItem.title, description: topItem.description, priority: topItem.priority, category: topItem.category, notes: topItem.notes },
         spec as any,
-        `pre-dispatch decomposition — L complexity with ${spec.approach.length} approach steps`,
+        `pre-dispatch decomposition fallback — Actions dispatch failed`,
         sql
       );
 
       if (subTasks.length >= 2) {
-        // Insert sub-tasks into backlog (all but the first — first will be dispatched now)
         for (let i = 1; i < subTasks.length; i++) {
           const sub = subTasks[i];
           await sql`
-            INSERT INTO hive_backlog (title, description, priority, category, status, spec)
+            INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
             VALUES (
               ${sub.title.slice(0, 200)},
               ${`Parent: ${topItem.title}\n\n${sub.description}`.slice(0, 2000)},
-              ${topItem.priority},
-              ${topItem.category},
-              'ready',
-              ${JSON.stringify({
-                acceptance_criteria: sub.acceptance_criteria,
-                affected_files: sub.affected_files,
-                approach: [sub.description],
-                risks: [],
-                complexity: sub.complexity,
-                estimated_turns: sub.estimated_turns,
-              })}
+              ${topItem.priority}, ${topItem.category}, 'ready', 'decomposed',
+              ${JSON.stringify({ acceptance_criteria: sub.acceptance_criteria, affected_files: sub.affected_files, approach: [sub.description], risks: [], complexity: sub.complexity, estimated_turns: sub.estimated_turns })}
             )
           `.catch(() => {});
         }
 
-        // Rewrite the spec for the first sub-task only
         const first = subTasks[0];
-        spec = {
-          ...spec,
-          approach: [first.description],
-          complexity: first.complexity,
-          estimated_turns: first.estimated_turns,
-          affected_files: first.affected_files,
-          acceptance_criteria: first.acceptance_criteria,
-        };
+        spec = { ...spec, approach: [first.description], complexity: first.complexity, estimated_turns: first.estimated_turns, affected_files: first.affected_files, acceptance_criteria: first.acceptance_criteria };
 
-        // Update the parent item's spec to reflect the decomposition
         await sql`
-          UPDATE hive_backlog
-          SET spec = ${JSON.stringify(spec)},
-              notes = COALESCE(notes, '') || ${` [auto-decomposed] LLM split into ${subTasks.length} sub-tasks.`}
+          UPDATE hive_backlog SET spec = ${JSON.stringify(spec)}, notes = COALESCE(notes, '') || ${` [auto-decomposed] Serverless fallback split into ${subTasks.length} sub-tasks.`}
           WHERE id = ${topItem.id}
         `.catch(() => {});
 
-        console.log(`[backlog] LLM-decomposed L task "${topItem.title}" into ${subTasks.length} sub-tasks`);
+        console.log(`[backlog] Serverless fallback decomposed "${topItem.title}" into ${subTasks.length} sub-tasks`);
       }
     } catch (decomposeErr) {
-      console.warn(`[backlog] LLM decomposition failed for "${topItem.title}", dispatching as-is:`, decomposeErr instanceof Error ? decomposeErr.message : "unknown");
+      console.warn(`[backlog] Decomposition failed for "${topItem.title}", dispatching as-is:`, decomposeErr instanceof Error ? decomposeErr.message : "unknown");
       // Non-blocking — dispatch proceeds with the original L-complexity spec
     }
   }
