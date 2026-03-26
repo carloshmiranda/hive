@@ -204,6 +204,21 @@ This is your richest signal source. Visit actual communities where people expres
 - web_fetch: https://www.reddit.com/r/literaciafinanceira/top/?t=month
 
 ### Phase 3: Competition deep-dive (3-5 competitors per niche)
+
+**MANDATORY NOVELTY CHECK:** Before analyzing individual competitors, you MUST run novelty screening searches for each potential idea:
+- web_search: "[core concept] tool" (e.g., "budget tracker tool", "password manager tool", "invoice generator tool")
+- web_search: "[core concept] app" (e.g., "habit tracker app", "meal planner app", "time tracking app")
+- Count the NUMBER of direct competitors on page 1 of results (exclude generic tools like Excel/Google Sheets)
+- Record the exact count as `existing_competitors_count`
+
+**NOVELTY SCORING RULES:**
+- 0-2 competitors: novelty_score = 1.0 (high novelty)
+- 3-5 competitors: novelty_score = 0.8 (good novelty)
+- 6-9 competitors: novelty_score = 0.6 (moderate novelty)
+- 10+ competitors: novelty_score = 0.3 (low novelty - heavily saturated)
+
+**SATURATION PENALTY:** If existing_competitors_count >= 10, you MUST require a much stronger differentiation story or apply a 20% penalty to the final weighted_total score. Flag these proposals with "high_saturation": true.
+
 For each competitor, gather ALL of the following:
 - web_search: "[niche] software/tool/site"
 - web_search: "[niche] alternative" or "[competitor] alternative"
@@ -253,10 +268,14 @@ For each finalist, fill the **weighted scoring rubric** (0-10 per criterion):
 | Market size | 20% | TAM with numbers and source. No adjectives — if you can't find a number, score 0. |
 | Demand signal | 25% | Existing paying customers = 8-10. Waitlists/search volume = 5-7. Forum complaints only = 2-4. Nothing concrete = 0-1. |
 | AI automation fit | 20% | Can Hive build AND run this 100% autonomously? Daily ops, content, support, fulfilment. |
-| Competitive moat | 15% | Why won't incumbents or copycats kill this in 6 months? Distribution advantage, data network effect, niche too small for big players. |
+| Competitive moat | 15% | Why won't incumbents or copycats kill this in 6 months? Distribution advantage, data network effect, niche too small for big players. Factor in novelty_score: 10+ competitors = max 5/10, novel ideas get higher scores. |
 | Revenue speed | 20% | First revenue in weeks = 8-10. Months = 4-6. Unclear path = 0-3. |
 
-**Weighted total** = (market_size * 0.20) + (demand_signal * 0.25) + (automation_fit * 0.20) + (competitive_moat * 0.15) + (revenue_speed * 0.20). This is the proposal score (0-10). Include the filled rubric in the JSON output.
+**Weighted total** = (market_size * 0.20) + (demand_signal * 0.25) + (automation_fit * 0.20) + (competitive_moat * 0.15) + (revenue_speed * 0.20).
+
+**SATURATION PENALTY:** If existing_competitors_count >= 10, apply a 20% penalty: weighted_total = weighted_total * 0.8. This reflects the difficulty of standing out in oversaturated markets.
+
+This is the proposal score (0-10). Include the filled rubric in the JSON output.
 
 **Demand signal scoring guide:**
 - **PROVEN DEMAND (8-10):** People are already paying a competitor for this exact thing. You found pricing pages, customer counts, or revenue data. MUST have 3+ independent platform sources.
@@ -377,6 +396,9 @@ Pick the top 3 respecting the mandatory mix above.
         "expansion_pros": ["pro1", "pro2"],
         "expansion_cons": ["con1"]
       },
+      "novelty_score": 0.0-1.0,
+      "existing_competitors_count": 0,
+      "high_saturation": false,
       "confidence": 0.0-1.0
     }
   ]
@@ -396,4 +418,7 @@ IMPORTANT:
 - `demand_status` is REQUIRED — must be "PROVEN_DEMAND" or "UNPROVEN_DEMAND" based on whether people are already paying.
 - `signal_sources` is REQUIRED — minimum 3 sources from different platforms. Include specific URLs and evidence.
 - `weak_signal` is REQUIRED — set to true if fewer than 3 independent platform sources found. Weak signal proposals have lower priority.
+- `novelty_score` is REQUIRED — calculated based on competitor count using the novelty scoring rules above.
+- `existing_competitors_count` is REQUIRED — exact number of direct competitors found on page 1 of "[idea] tool" and "[idea] app" searches.
+- `high_saturation` is REQUIRED — set to true if existing_competitors_count >= 10. These proposals need exceptional differentiation.
 - Order by `scoring_rubric.weighted_total`, highest first.
