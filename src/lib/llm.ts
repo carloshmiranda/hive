@@ -3,6 +3,10 @@ import { getSettingValue } from "./settings";
 // Unified LLM calling interface for worker agents
 // All calls route through OpenRouter with per-model fallback chains.
 // Claude Max (GitHub Actions CLI) is NOT in this chain — it's not API-based.
+//
+// Dynamic model discovery: fetches OpenRouter's free model catalog and pads
+// agent chains with all available free models. Curated primaries go first
+// (quality), dynamic pool fills the rest (resilience during outages).
 
 // ---------------------------------------------------------------------------
 // Circuit Breaker — per-model health tracking with EMA error rate
@@ -123,71 +127,164 @@ export interface LLMResponse {
   routing_reason: string;
 }
 
-// Available OpenRouter free models (ordered by capability tier)
-// Verified models only — non-existent models waste rate limit budget
+// Curated primary models — quality picks that go first in the chain.
+// Dynamic discovery pads the rest with all available free models.
 export const OPENROUTER_MODELS = {
   // Tier 1: Large models (best quality)
-  hermes_405b: "nousresearch/hermes-3-llama-3.1-405b:free",        // 405B — strongest free reasoning
-  llama_70b: "meta-llama/llama-3.3-70b-instruct:free",              // 70B — solid general purpose
-  qwen_coder: "qwen/qwen3-coder:free",                              // Best free coding model
+  hermes_405b: "nousresearch/hermes-3-llama-3.1-405b:free",
+  llama_70b: "meta-llama/llama-3.3-70b-instruct:free",
+  qwen_coder: "qwen/qwen3-coder:free",
 
   // Tier 2: Medium models (good balance)
-  gemma_27b: "google/gemma-3-27b-it:free",                          // 27B — Google, strong instruction following
-  mistral_24b: "mistralai/mistral-small-3.1-24b-instruct:free",     // 24B — fast, good for simple tasks
-  phi4: "microsoft/phi-4:free",                                      // 14B — surprisingly capable for size
+  gemma_27b: "google/gemma-3-27b-it:free",
+  mistral_24b: "mistralai/mistral-small-3.1-24b-instruct:free",
+  phi4: "microsoft/phi-4:free",
 
-  // Tier 3: Meta-routers (ultimate fallbacks)
-  auto_free: "openrouter/auto",                                      // OpenRouter picks best available free model
+  // Meta-routers (ultimate fallbacks — always appended last)
+  auto: "openrouter/auto",
+  free: "openrouter/free",
 } as const;
 
-// Agent-specific model routing — all through OpenRouter
-// Uses native `models` array: OpenRouter tries each server-side in ONE request.
-// This saves rate limit budget (1 request vs N) and is faster (no round-trips).
-export const AGENT_ROUTING: Record<string, { models: string[] }> = {
+// Agent-specific curated primaries — quality picks go first.
+// Dynamic free models are appended after these (see buildModelChain).
+export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: number }> = {
   growth: {
     models: [
-      OPENROUTER_MODELS.hermes_405b,       // 405B for content quality
+      OPENROUTER_MODELS.hermes_405b,
       OPENROUTER_MODELS.llama_70b,
       OPENROUTER_MODELS.gemma_27b,
-      OPENROUTER_MODELS.qwen_coder,        // Fallback: good instruction following
-      OPENROUTER_MODELS.mistral_24b,
     ],
+    minContext: 8192,  // Content generation needs decent context
   },
   outreach: {
     models: [
-      OPENROUTER_MODELS.llama_70b,          // 70B sufficient for emails
+      OPENROUTER_MODELS.llama_70b,
       OPENROUTER_MODELS.hermes_405b,
       OPENROUTER_MODELS.gemma_27b,
-      OPENROUTER_MODELS.qwen_coder,         // Fallback: broader model diversity
-      OPENROUTER_MODELS.mistral_24b,
     ],
+    minContext: 4096,  // Email drafting is short-context
   },
   ops: {
     models: [
-      OPENROUTER_MODELS.mistral_24b,        // 24B fast for health checks
+      OPENROUTER_MODELS.mistral_24b,
       OPENROUTER_MODELS.phi4,
       OPENROUTER_MODELS.gemma_27b,
-      OPENROUTER_MODELS.qwen_coder,         // Fallback: strong coding model
-      OPENROUTER_MODELS.llama_70b,
     ],
+    minContext: 4096,  // Health checks are simple
   },
   planner: {
     models: [
-      OPENROUTER_MODELS.qwen_coder,         // Best free coding model
+      OPENROUTER_MODELS.qwen_coder,
       OPENROUTER_MODELS.hermes_405b,
       OPENROUTER_MODELS.llama_70b,
-      OPENROUTER_MODELS.gemma_27b,
     ],
+    minContext: 16384, // Spec generation needs long context
   },
   decomposer: {
     models: [
-      OPENROUTER_MODELS.hermes_405b,        // 405B for complex decomposition
+      OPENROUTER_MODELS.hermes_405b,
       OPENROUTER_MODELS.llama_70b,
       OPENROUTER_MODELS.qwen_coder,
-      OPENROUTER_MODELS.gemma_27b,
     ],
+    minContext: 16384, // Task decomposition needs full context
   },
 };
+
+// ---------------------------------------------------------------------------
+// Dynamic Free Model Discovery
+// Fetches OpenRouter's catalog, filters free text models, caches 1h.
+// ---------------------------------------------------------------------------
+
+interface OpenRouterModel {
+  id: string;
+  context_length: number;
+  architecture: { modality: string };
+  pricing: { prompt: string; completion: string };
+}
+
+interface FreeModelEntry {
+  id: string;
+  contextLength: number;
+}
+
+let freeModelCache: { models: FreeModelEntry[]; fetchedAt: number } | null = null;
+const FREE_MODEL_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+/** Fetch all free text-to-text models from OpenRouter, sorted by context_length desc. */
+async function fetchFreeModels(): Promise<FreeModelEntry[]> {
+  // Return cache if fresh
+  if (freeModelCache && Date.now() - freeModelCache.fetchedAt < FREE_MODEL_CACHE_TTL) {
+    return freeModelCache.models;
+  }
+
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/models", {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.warn(`[llm] Failed to fetch OpenRouter models: HTTP ${res.status}`);
+      return freeModelCache?.models ?? [];
+    }
+
+    const { data } = await res.json() as { data: OpenRouterModel[] };
+
+    const freeModels = data
+      .filter((m) =>
+        m.pricing.prompt === "0" &&
+        m.pricing.completion === "0" &&
+        m.architecture.modality.startsWith("text") &&
+        !m.id.startsWith("openrouter/")  // exclude meta-routers
+      )
+      .sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0))
+      .map((m) => ({ id: m.id, contextLength: m.context_length ?? 0 }));
+
+    freeModelCache = { models: freeModels, fetchedAt: Date.now() };
+    console.log(`[llm] Discovered ${freeModels.length} free models on OpenRouter`);
+    return freeModels;
+  } catch (err: any) {
+    console.warn(`[llm] OpenRouter model discovery failed: ${err.message}`);
+    return freeModelCache?.models ?? [];
+  }
+}
+
+/**
+ * Build the full model chain for an agent:
+ * 1. Curated primaries (quality — agent-specific ordering)
+ * 2. Dynamic free models (resilience — everything else, sorted by context_length)
+ * 3. Meta-routers (ultimate fallback — openrouter/auto, openrouter/free)
+ *
+ * Deduplicates so curated models aren't listed twice.
+ * Filters dynamic pool by agent's minContext requirement.
+ */
+async function buildModelChain(agent: string): Promise<string[]> {
+  const config = AGENT_PRIMARIES[agent];
+  if (!config) throw new Error(`No routing configuration for agent: ${agent}`);
+
+  const primaries = [...config.models];
+  const dynamicPool = await fetchFreeModels();
+
+  // Filter dynamic pool: meets min context, not already in primaries
+  const primarySet = new Set(primaries);
+  const extras = dynamicPool
+    .filter((m) => !primarySet.has(m.id) && m.contextLength >= config.minContext)
+    .map((m) => m.id);
+
+  // Combine: primaries first, then dynamic pool, then meta-routers
+  return [
+    ...primaries,
+    ...extras,
+    OPENROUTER_MODELS.auto,
+    OPENROUTER_MODELS.free,
+  ];
+}
+
+// Keep backward-compatible export for any code referencing AGENT_ROUTING
+export const AGENT_ROUTING: Record<string, { models: string[] }> = Object.fromEntries(
+  Object.entries(AGENT_PRIMARIES).map(([agent, config]) => [
+    agent,
+    { models: config.models },
+  ])
+);
 
 // Retry wrapper with exponential backoff for rate limiting
 async function fetchWithRetry(
@@ -288,15 +385,14 @@ export async function callLLM(
   prompt: string,
   options: LLMOptions & { sql?: any } = {}
 ): Promise<LLMResponse> {
-  const routing = AGENT_ROUTING[agent];
-  if (!routing) {
-    throw new Error(`No routing configuration for agent: ${agent}`);
-  }
+  // Build full model chain: curated primaries + dynamic free models + meta-routers
+  const fullChain = await buildModelChain(agent);
+  const primaryModel = AGENT_PRIMARIES[agent]?.models[0] ?? fullChain[0];
 
   const { sql, ...llmOptions } = options;
 
   // Filter out models with open circuit breakers
-  const availableModels = routing.models.filter(model => {
+  const availableModels = fullChain.filter(model => {
     const circuitKey = `openrouter:${model}`;
     if (!isProviderAvailable(circuitKey)) {
       console.warn(`[circuit-breaker] Skipping ${model} (circuit open)`);
@@ -304,11 +400,6 @@ export async function callLLM(
     }
     return true;
   });
-
-  // Always append openrouter/auto as ultimate fallback
-  if (!availableModels.includes(OPENROUTER_MODELS.auto_free)) {
-    availableModels.push(OPENROUTER_MODELS.auto_free);
-  }
 
   if (availableModels.length === 0) {
     throw new Error(`All models circuit-broken for agent ${agent}`);
@@ -326,17 +417,18 @@ export async function callLLM(
       provider: "openrouter",
       model: result.model,
       usage: { cost_usd: 0 },
-      routing_reason: result.model === routing.models[0]
+      routing_reason: result.model === primaryModel
         ? `primary:${result.model}`
-        : `fallback:${result.model}`,
+        : `fallback:${result.model} (${availableModels.length} models in chain)`,
     };
   } catch (error: any) {
-    // Record failure for all attempted models (we don't know which failed server-side)
-    for (const model of availableModels) {
+    // Record failure for primary models only (don't penalize entire dynamic pool)
+    const primaries = AGENT_PRIMARIES[agent]?.models ?? [];
+    for (const model of primaries) {
       recordProviderFailure(`openrouter:${model}`);
     }
 
-    throw new Error(`All OpenRouter models failed for agent ${agent}. Models sent: ${availableModels.slice(0, 3).join(", ")}... Last error: ${error.message}`);
+    throw new Error(`All OpenRouter models failed for agent ${agent}. Chain: ${availableModels.length} models (primaries: ${primaries.slice(0, 3).join(", ")}). Last error: ${error.message}`);
   }
 }
 
