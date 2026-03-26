@@ -361,8 +361,9 @@ Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude
 | Engineer (build) | Claude (GitHub Actions) | Sonnet | 35 | Code execution, speed > reasoning |
 | Evolver | Claude (GitHub Actions) | Opus | 25 | Meta-cognitive prompt improvement |
 | Growth | Company repo Actions (Gemini CLI) | 2.5 Flash | 25 | Can write files directly to company repo (blog posts, SEO pages). 1K RPD free tier. Fallback: Gemini API on Vercel |
-| Healer (systemic) | Hive repo Actions (Claude Sonnet) | Sonnet | 20 | Fixes shared bugs in Hive code (hive-healer.yml on Hive repo) |
+| Healer (systemic) | Hive repo Actions (Claude Sonnet) | Sonnet | 20 | Fixes shared bugs in Hive code (hive-healer.yml on Hive repo). Circuit breaker: 3 failures/48h → skip dispatch |
 | Healer (company) | Company repo Actions (Claude Sonnet) | Sonnet | 20 | Fixes bugs in company code (hive-fix.yml dispatched to company repo). Free on public repos. Fallback: Hive Engineer |
+| Decomposer | Hive repo Actions (Claude Max) | Claude | 8 | Decomposes L-complexity backlog tasks into 2-4 independent sub-tasks. hive-decompose.yml. Serverless fallback: OpenRouter Claude Sonnet 4 free |
 | Outreach | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Email personalization quality — doesn't need repo access |
 | Ops | Groq API (Vercel serverless) | Llama 3.3 70B | N/A | Fast inference for health checks |
 | Sentinel | Vercel cron (Node.js) | None | N/A | Pure DB queries + HTTP checks, no LLM |

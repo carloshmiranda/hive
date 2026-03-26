@@ -44,6 +44,11 @@
   - Zero metrics across all companies — stats endpoints broken at company level
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
 - **Recently fixed:**
+  - Schema-map drift: auto-sync from schema.sql (22 tables), CI check prevents drift, generator fixed for UNLOGGED tables
+  - Healer Flolio loop: success logging step in workflow + per-company circuit breaker (3 failures/48h → skip)
+  - Auto-decompose quality: LLM-assisted decomposition replaces dumb step-chunking (Claude Sonnet 4 via OpenRouter)
+  - L-complexity tasks: dispatched to dedicated hive-decompose.yml on GitHub Actions (Claude Max) with serverless fallback
+  - Backlog triage: 63 junk auto-decomposed sub-tasks rejected, 32 items unblocked to ready
   - Metrics pipeline: skips DB writes on fetch failure (no more zero pollution)
   - Cross-company playbook bleed: `content_language` column + filters on all read/write paths
   - CEO error_patterns: consolidate extracts patterns → error-patterns API + healer dispatch
@@ -60,6 +65,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-26: Loop error triage — 4 fixes: (A) schema-map auto-sync from schema.sql + CI check, (B) healer circuit breakers + success logging, (C) LLM-assisted task decomposition replacing dumb chunking (Claude Sonnet 4 via OpenRouter, fallback chain), (D) backlog triage: 63 junk sub-tasks rejected, 32 items unblocked. New: hive-decompose.yml workflow — L-complexity tasks dispatch to GitHub Actions for Claude Max decomposition instead of serverless. Decomposer routing: OpenRouter (primary) → Claude API → Gemini → Groq.
 
 - `[code]` 2026-03-26: 8-task batch — 5 bug fixes + 3 features. Metrics zeros, playbook language bleed, CEO error feedback loop, silent catch blocks, max_turns detection. Scout scoring rubric, per-provider circuit breaker, MCP server overhaul. DB migration: `content_language` column on playbook table. Backlog: 88 done, 118 ready, 35 blocked (241 total).
 

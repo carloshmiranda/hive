@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-26 Dumb auto-decompose produced 63 junk sub-tasks that blocked their parents
+**What happened:** Auto-decompose chunked approach steps into 1-2 step groups with hardcoded `complexity: "S"` and generic acceptance criteria. 63 useless sub-tasks were created. Parents were marked as decomposed and stopped being dispatched. The backlog filled with narrative fragments that no Engineer could execute.
+**Root cause:** Step-based chunking has no understanding of code, dependencies, or testability. Grouping "step 1-2" and "step 3-4" produces coupled fragments, not independent tasks. Acceptance criteria like `"Implements: Add error handling to..."` tell the Engineer nothing concrete.
+**Fix applied:** (1) Replaced dumb chunking with LLM-assisted `decomposeTask()` that reads the codebase and produces single-responsibility sub-tasks with concrete acceptance criteria. (2) L-complexity tasks dispatch to `hive-decompose.yml` on GitHub Actions for Claude Max quality. (3) Rejected all 63 junk sub-tasks, unblocked 32 parent items.
+**Prevention:** Never decompose tasks with heuristics alone. Task decomposition requires codebase understanding — always use LLM for this. Validate sub-task quality: each must have specific files, testable criteria, and be independently completable.
+**Affects:** hive
+
+### 2026-03-26 Schema-map drift caused 98% failure rate inflation
+**What happened:** Sentinel check 7 flagged schema-map mismatch every hour, creating error actions that inflated the failure rate metric. `content_language` column was added to playbook table but schema-map.ts wasn't regenerated.
+**Root cause:** `scripts/generate-schema-map.ts` had its `writeFileSync` call commented out (line 205). The regex didn't match `CREATE UNLOGGED TABLE`. SQL comments in column definitions broke column parsing.
+**Fix applied:** Fixed generator (uncommented write, regex for UNLOGGED, comment stripping). Added `schema-map:check` CI step that fails if schema-map.ts is out of date.
+**Prevention:** CI enforcement is the only reliable way to prevent drift. Generator scripts must be tested after schema changes. Never comment out the write step "temporarily."
+**Affects:** hive
+
 ### 2026-03-25 toJson in GitHub Actions breaks on single quotes in payload content
 **What happened:** All workflow runs silently failed after Engineer created tasks with descriptions containing single quotes (e.g., `"No 'unknown (0 turns)' failures"`). The entire cascade stalled — 48 items ready, 0 dispatched.
 **Root cause:** Workflow YAML used `PAYLOAD='${{ toJson(github.event.client_payload) }}'` — the single-quoted wrapper. When the JSON payload contained literal single quotes, bash saw `PAYLOAD='{"desc": "No '` then `unknown (0 turns)` as an unquoted command → syntax error. First fix attempt used heredocs (`<<'EOF'`) but the EOF marker at column 0 broke GitHub Actions' YAML literal block parser, causing ALL runs to fail with "workflow file issue."

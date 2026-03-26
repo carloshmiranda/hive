@@ -435,3 +435,20 @@ Move ~12 checks to event-driven (no cron):
 - Keep GitHub Actions cron: Works but wastes private repo minutes on a curl proxy. Vercel Crons are strictly better.
 
 **Consequences:** Phase 1 eliminates ~24 GitHub Actions runs/day. Phase 2 reduces total cron invocations from 24/day to ~10/day and moves half of Sentinel's checks to event-driven. Phase 3 makes chain dispatch durable (currently fire-and-forget HTTP). The system becomes progressively more event-driven without big-bang rewrites.
+
+### ADR-032: LLM-assisted task decomposition with Actions-first routing
+**Date:** 2026-03-26
+**Status:** accepted
+**Context:** Auto-decompose was producing junk sub-tasks — dumb step-chunking that grouped approach steps into 1-2 step chunks with hardcoded `complexity: "S"`, generic acceptance criteria, and narrative descriptions. 63 sub-tasks were created that were useless. Meanwhile, L-complexity tasks exhausted max_turns (30+) when dispatched as-is.
+**Decision:** Two-tier decomposition: (1) L-complexity tasks dispatch to `hive-decompose.yml` on GitHub Actions where Claude CLI (Max subscription) reads the codebase and produces 2-4 independent, testable sub-tasks. (2) Serverless fallback via `decomposeTask()` in backlog-planner.ts uses OpenRouter (Claude Sonnet 4 free tier) for when Actions dispatch fails or for failure-triggered decomposition. Both produce structured sub-tasks with single-responsibility, concrete acceptance criteria, specific affected files, and S/M complexity.
+**Key design choices:**
+- Actions-first: Claude Max gives better reasoning than free-tier models for task breakdown
+- Serverless fallback: ensures decomposition always works, even if Actions is unavailable
+- Parent marked `planning` during Actions decomposition (not blocked or dispatched)
+- Decompose workflow triggers backlog/dispatch on completion to pick up new sub-tasks
+- Decomposer routing: OpenRouter `anthropic/claude-sonnet-4:free` → Claude API → Gemini → Groq
+**Alternatives considered:**
+- Only serverless decomposition: free-tier models produce lower quality breakdowns
+- Only Actions decomposition: adds latency and burns Actions minutes for every L task
+- Keep dumb chunking with better heuristics: fundamental limit — heuristics can't understand codebase context
+**Consequences:** Task decomposition quality matches what a senior engineer would produce. L-complexity tasks no longer exhaust max_turns. Actions minutes used only for genuinely complex decomposition (~5min per task, max 8 turns). Serverless path handles simpler cases at zero cost.
