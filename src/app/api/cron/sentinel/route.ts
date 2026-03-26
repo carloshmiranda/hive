@@ -4,7 +4,7 @@ import { getBoilerplateGaps } from "@/lib/capabilities";
 import { SCHEMA_MAP, getExpectedTables } from "@/lib/schema-map";
 import { findCapabilityForProblem } from "@/lib/hive-capabilities";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
-import { verifyCronAuth } from "@/lib/qstash";
+import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
 import boilerplateManifest from "../../../../../templates/boilerplate-manifest.json";
 
 export const dynamic = "force-dynamic";
@@ -129,16 +129,14 @@ async function dispatchToWorker(agent: string, companySlug: string, trigger: str
   if (isDuplicate(`worker_${agent}`, companySlug)) return;
   markDispatched(`worker_${agent}`, companySlug);
 
-  const cronSecret = process.env.CRON_SECRET;
-  const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
-  await fetch(`${baseUrl}/api/agents/dispatch`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${cronSecret}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ company_slug: companySlug, agent, trigger }),
-  });
+  // QStash publish: guaranteed delivery with retries (falls back to direct fetch)
+  await qstashPublish("/api/agents/dispatch", {
+    company_slug: companySlug,
+    agent,
+    trigger,
+  }, {
+    deduplicationId: `sentinel-worker-${agent}-${companySlug}-${new Date().toISOString().slice(0, 13)}`,
+  }).catch((e: any) => { console.warn(`[sentinel] qstash dispatch worker ${agent}/${companySlug} failed: ${e?.message || e}`); });
 
   // Non-blocking Telegram notification
   import("@/lib/telegram").then(({ notifyHive }) =>

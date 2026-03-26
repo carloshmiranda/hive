@@ -404,7 +404,7 @@ Migration 003 renames all existing records in agent_actions and agent_prompts.
 
 ### ADR-031: Sentinel scheduling strategy — Vercel Crons + lazy checks
 **Date:** 2026-03-25
-**Status:** accepted (phases 1-2), proposed (phases 3-4)
+**Status:** accepted (phases 1+3 implemented, phase 2 pending), proposed (phase 4)
 **Context:** Sentinel runs hourly via a GitHub Actions cron that curls Vercel endpoints — an unnecessary middleman. ADR-029 introduced continuous event-driven dispatch (chain callbacks), making Sentinel's dispatch role redundant for the happy path. But Sentinel still runs 33 DB-only checks, many of which don't need hourly polling: approval expiry checks time windows of 2-14 days, stale content uses 7-day windows, research staleness is 14 days. Meanwhile, some checks (stuck cycles, stale running actions) DO need frequent attention.
 
 **Decision:** Four-phase migration from cron-heavy to event-driven:
@@ -425,7 +425,7 @@ Move ~12 checks to event-driven (no cron):
 - Recurring escalation detection → trigger on escalation creation
 - Auto-dismiss escalations → check-on-read when list loaded
 
-**Phase 3 — Upstash QStash for guaranteed delivery (if chain dispatch proves unreliable):** Replace chain dispatch `fetch()` calls with QStash publish for retry guarantees. Use delayed messages for "check back later" patterns (e.g., verify provision after 2h) instead of polling. Free tier: 500-1,000 msgs/day — sufficient for Hive's volume.
+**Phase 3 — Upstash QStash for guaranteed delivery (DONE 2026-03-26):** Implemented in two sub-phases: (A) QStash schedules replacing Vercel crons for sentinel/metrics/digest — dual-mode auth via `verifyCronAuth()` accepts both QStash signatures and CRON_SECRET. (B) `qstashPublish()` helper replacing fire-and-forget fetch calls in cycle-complete, sentinel, and backlog/dispatch — 3 retries, hourly deduplication IDs, graceful fallback to direct fetch when QSTASH_TOKEN not set. Only fire-and-forget calls replaced; synchronous calls (health-gate, backlog response) kept as direct fetch. Free tier: 1,000 msgs/day, 10 schedules.
 
 **Phase 4 — Vercel Queues (when GA):** Evaluate native Vercel Queues to replace QStash and chain dispatch HTTP calls with managed, durable event streaming.
 

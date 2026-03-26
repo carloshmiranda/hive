@@ -30,6 +30,48 @@ function getReceiver(): Receiver | null {
  * During migration both work. After removing Vercel crons, QStash is primary
  * and CRON_SECRET remains for internal server-to-server calls (e.g. sentinel → company-health).
  */
+/**
+ * Publish a message to an internal Hive endpoint via QStash for guaranteed delivery.
+ * Falls back to direct fetch if QSTASH_TOKEN is not configured.
+ * Use for fire-and-forget dispatches where retry + delivery guarantee matters.
+ */
+export async function qstashPublish(
+  path: string,
+  body: Record<string, unknown>,
+  options?: { retries?: number; deduplicationId?: string }
+): Promise<{ messageId: string } | null> {
+  const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+  const cronSecret = process.env.CRON_SECRET;
+
+  // If QStash not configured, fall back to direct fetch (fire-and-forget)
+  const token = process.env.QSTASH_TOKEN;
+  if (!token) {
+    await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        ...(cronSecret && { Authorization: `Bearer ${cronSecret}` }),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    }).catch(() => null);
+    return null;
+  }
+
+  const client = getQStashClient();
+  const result = await client.publishJSON({
+    url: `${baseUrl}${path}`,
+    body,
+    retries: options?.retries ?? 3,
+    headers: {
+      ...(cronSecret && { Authorization: `Bearer ${cronSecret}` }),
+    },
+    ...(options?.deduplicationId && { deduplicationId: options.deduplicationId }),
+  });
+
+  return { messageId: result.messageId };
+}
+
 export async function verifyCronAuth(
   req: Request
 ): Promise<{ authorized: true; source: string } | { authorized: false; error: string }> {

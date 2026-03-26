@@ -29,8 +29,8 @@ Added `crons` array to `vercel.json` (sentinel hourly, metrics 2x/day, digest da
 ### 🟡 P1 — Phase 2: Split Sentinel into urgent/dispatch/janitor + lazy checks (ADR-031)
 Split the 2933-line Sentinel monolith into 3 focused endpoints by urgency: `sentinel-urgent` (every 2h: stuck cycles/actions, provisions), `sentinel-dispatch` (every 4h: company cycles safety net, budget check), `sentinel-janitor` (daily: stale content/leads/research, evolve, healer, assess). Move ~12 checks to event-driven: approval expiry → check-on-read, schema drift → post-deploy hook, anomaly detection → metrics cron, agent regression → digest, dispatch loop detection → inline in dispatchToActions(). Reduces cron invocations from 24/day to ~10/day.
 
-### ⚪ P3 — Phase 3: Upstash QStash for guaranteed chain dispatch delivery (ADR-031)
-Chain dispatch uses fire-and-forget HTTP calls — if the target is down or slow, the message is lost and Sentinel must catch it on next run. Replace with Upstash QStash for retry guarantees and delayed delivery. Use delayed messages for "check back later" patterns (verify provision after 2h, verify deploy after 30min) instead of frequent polling. Free tier: 500-1,000 msgs/day. Only implement if chain dispatch proves unreliable.
+### ✅ P3 — Phase 3: Upstash QStash for guaranteed chain dispatch delivery (DONE — 2026-03-26)
+Replaced fire-and-forget HTTP dispatch calls with `qstashPublish()` in cycle-complete, sentinel, and backlog/dispatch. Guaranteed delivery with 3 retries + hourly deduplication. Synchronous calls (health-gate, backlog response) kept as direct fetch. Phase 1 (QStash schedules) also deployed. ADR-031 Phases 1+3 complete. Remaining: Phase 2 (Sentinel split), Phase 4 (delayed verification patterns).
 
 ---
 

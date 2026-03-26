@@ -4,6 +4,7 @@ import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
 import { filterBacklogItemsByCooldown, checkBacklogCircuitBreaker, flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
+import { qstashPublish } from "@/lib/qstash";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -29,12 +30,14 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
 
   const dispatched: string[] = [];
   for (const w of workers) {
-    await fetch(`${HIVE_URL}/api/agents/dispatch`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ company_slug: w.company, agent: w.agent, trigger: "cascade_free_worker" }),
-      signal: AbortSignal.timeout(30000),
-    }).then(r => { if (r.ok) dispatched.push(`${w.agent}:${w.company}`); }).catch((e: any) => { console.warn(`[backlog] free worker dispatch ${w.agent}:${w.company} failed: ${e?.message || e}`); });
+    await qstashPublish("/api/agents/dispatch", {
+      company_slug: w.company,
+      agent: w.agent,
+      trigger: "cascade_free_worker",
+    }, {
+      deduplicationId: `backlog-worker-${w.agent}-${w.company}-${new Date().toISOString().slice(0, 13)}`,
+    }).catch((e: any) => { console.warn(`[backlog] qstash free worker dispatch ${w.agent}:${w.company} failed: ${e?.message || e}`); });
+    dispatched.push(`${w.agent}:${w.company}`);
   }
   return dispatched;
 }
@@ -259,26 +262,17 @@ export async function POST(req: Request) {
         }
       }
 
-      // After 3 failures, notify Carlos
+      // After 3 failures, notify Carlos (QStash guarantees delivery)
       if (attempt >= 3) {
-        const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
-        await fetch(`${baseUrl}/api/notify`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.CRON_SECRET}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            agent: "backlog",
-            action: decomposed ? "auto_decomposed" : "repeated_failure",
-            company: "hive",
-            status: decomposed ? "decomposed" : "failed",
-            summary: decomposed
-              ? `"${item?.title || completed_id}" hit max_turns ${attempt}x — auto-decomposed into smaller tasks.`
-              : `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
-          }),
-          signal: AbortSignal.timeout(5000),
-        }).catch(() => {});
+        await qstashPublish("/api/notify", {
+          agent: "backlog",
+          action: decomposed ? "auto_decomposed" : "repeated_failure",
+          company: "hive",
+          status: decomposed ? "decomposed" : "failed",
+          summary: decomposed
+            ? `"${item?.title || completed_id}" hit max_turns ${attempt}x — auto-decomposed into smaller tasks.`
+            : `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
+        }, { retries: 2 }).catch(() => {});
       }
     }
   }
@@ -532,23 +526,14 @@ export async function POST(req: Request) {
 
   // Notify about manual items that were blocked
   if (manualItems.length > 0) {
-    const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
     const titles = manualItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
-    await fetch(`${baseUrl}/api/notify`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.CRON_SECRET}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        agent: "backlog",
-        action: "manual_blocked",
-        company: "hive",
-        status: "needs_carlos",
-        summary: `${manualItems.length} backlog item(s) need manual action:\n${titles}`,
-      }),
-      signal: AbortSignal.timeout(5000),
-    }).catch(() => {});
+    await qstashPublish("/api/notify", {
+      agent: "backlog",
+      action: "manual_blocked",
+      company: "hive",
+      status: "needs_carlos",
+      summary: `${manualItems.length} backlog item(s) need manual action:\n${titles}`,
+    }, { retries: 2 }).catch(() => {});
   }
 
   // Detect items that need decomposition (problem statements vs actionable tasks)
@@ -607,23 +592,14 @@ export async function POST(req: Request) {
 
   // Notify about items that need decomposition
   if (decompositionItems.length > 0) {
-    const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
     const titles = decompositionItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
-    await fetch(`${baseUrl}/api/notify`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.CRON_SECRET}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        agent: "backlog",
-        action: "decomposition_needed",
-        company: "hive",
-        status: "needs_breakdown",
-        summary: `${decompositionItems.length} backlog item(s) need decomposition (problem statements):\n${titles}`,
-      }),
-      signal: AbortSignal.timeout(5000),
-    }).catch(() => {});
+    await qstashPublish("/api/notify", {
+      agent: "backlog",
+      action: "decomposition_needed",
+      company: "hive",
+      status: "needs_breakdown",
+      summary: `${decompositionItems.length} backlog item(s) need decomposition (problem statements):\n${titles}`,
+    }, { retries: 2 }).catch(() => {});
   }
 
   // Apply cooldown filter to remove recently failed items from actionable items
@@ -937,23 +913,14 @@ export async function POST(req: Request) {
     const dispatchType = isChainDispatch ? "chain" : "manual";
     console.log(`[backlog] ${dispatchType} dispatch: "${topItem.title}" (${topItem.priority}, score: ${topItem.priority_score})${attemptCount > 0 ? ` attempt ${attemptCount + 1}` : ""}`);
 
-    // Notify via Telegram
-    const baseUrlNotify = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
-    await fetch(`${baseUrlNotify}/api/notify`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cronSecret}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        agent: "backlog",
-        action: "dispatch",
-        company: "_hive",
-        status: "started",
-        summary: `[${topItem.priority}] "${topItem.title}" dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
-      }),
-      signal: AbortSignal.timeout(5000),
-    }).catch(() => {});
+    // Notify via Telegram (QStash guarantees delivery)
+    await qstashPublish("/api/notify", {
+      agent: "backlog",
+      action: "dispatch",
+      company: "_hive",
+      status: "started",
+      summary: `[${topItem.priority}] "${topItem.title}" dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
+    }, { retries: 2 }).catch(() => {});
 
     return json({
       dispatched: true,

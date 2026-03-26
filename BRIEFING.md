@@ -7,7 +7,7 @@
 ## Current State
 
 - **Phase:** Two companies actively iterating. System operational.
-- **Architecture:** 7 agents, event-driven, 3 scheduled crons + 1 delegated (metrics 2x/day, sentinel hourly, digest daily 8am; company-health fired by sentinel). Mac not required.
+- **Architecture:** 7 agents, event-driven, QStash schedules (sentinel hourly, metrics 2x/day, digest daily) + chain dispatch via QStash guaranteed delivery + 1 delegated (company-health fired by sentinel). Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 26 cycles, last CEO score 2/10, waitlist + IRS guide (April 1 deadline)
@@ -61,10 +61,14 @@
   - Evolver over-triggering eliminated: 38 gap_analyses/48h → max 2
   - CEO dispatch DOA fixed: prompt reduced 67%
   - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
+  - QStash Phase 1: schedules replacing Vercel crons (sentinel hourly, metrics 2x/day, digest daily)
+  - QStash Phase 2: guaranteed delivery for chain dispatch (free workers, notifications) via `qstashPublish()`
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-26: QStash Phase 2 — replaced all fire-and-forget chain dispatch HTTP calls with `qstashPublish()` for guaranteed delivery + automatic retries. Files: cycle-complete (free worker dispatch + notify), sentinel (worker dispatch), backlog/dispatch (free worker dispatch + 4 notify calls). Synchronous calls (health-gate, backlog response) intentionally kept as direct fetch. Deduplication via hourly-bucket IDs. Graceful fallback to direct fetch when QSTASH_TOKEN not configured. Phase 1 (QStash schedules for sentinel/metrics/digest) deployed in prior session — Vercel crons in vercel.json still running in parallel for verification.
 
 - `[code]` 2026-03-26: Loop error triage — 4 fixes: (A) schema-map auto-sync from schema.sql + CI check, (B) healer circuit breakers + success logging, (C) LLM-assisted task decomposition replacing dumb chunking (Claude Sonnet 4 via OpenRouter, fallback chain), (D) backlog triage: 63 junk sub-tasks rejected, 32 items unblocked. New: hive-decompose.yml workflow — L-complexity tasks dispatch to GitHub Actions for Claude Max decomposition instead of serverless. Decomposer routing: OpenRouter (primary) → Claude API → Gemini → Groq.
 

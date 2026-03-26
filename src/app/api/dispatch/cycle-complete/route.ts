@@ -1,6 +1,7 @@
 import { getDb, json } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { invalidateCompanyCache } from "@/lib/cache";
+import { qstashPublish } from "@/lib/qstash";
 
 const REPO = "carloshmiranda/hive";
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -38,20 +39,14 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
 
   const results: string[] = [];
   for (const w of workers) {
-    const res = await fetch(`${HIVE_URL}/api/agents/dispatch`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cronSecret}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        company_slug: w.company,
-        agent: w.agent,
-        trigger: "cascade_free_worker",
-      }),
-      signal: AbortSignal.timeout(30000),
-    }).catch((e: any) => { console.warn(`[cycle-complete] dispatch free worker ${w.agent}:${w.company} failed: ${e?.message || e}`); return null; });
-    if (res?.ok) results.push(`${w.agent}:${w.company}`);
+    await qstashPublish("/api/agents/dispatch", {
+      company_slug: w.company,
+      agent: w.agent,
+      trigger: "cascade_free_worker",
+    }, {
+      deduplicationId: `free-worker-${w.agent}-${w.company}-${new Date().toISOString().slice(0, 13)}`,
+    }).catch((e: any) => { console.warn(`[cycle-complete] qstash dispatch free worker ${w.agent}:${w.company} failed: ${e?.message || e}`); });
+    results.push(`${w.agent}:${w.company}`);
   }
   return results;
 }
@@ -292,22 +287,14 @@ export async function POST(req: Request) {
         ${next.id}, NOW(), NOW())
     `.catch((e: any) => { console.warn(`[cycle-complete] log chain dispatch ${company} -> ${next.slug} failed: ${e?.message || e}`); });
 
-    // Notify via Telegram
-    await fetch(`${HIVE_URL}/api/notify`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cronSecret}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        agent: "dispatch",
-        action: "chain_cycle",
-        company: next.slug,
-        status: "dispatched",
-        summary: `Chained: ${company} done → dispatching ${next.slug} (score: ${next.priority_score})`,
-      }),
-      signal: AbortSignal.timeout(5000),
-    }).catch((e: any) => { console.warn(`[cycle-complete] notify chain dispatch ${next.slug} failed: ${e?.message || e}`); });
+    // Notify via Telegram (QStash guarantees delivery)
+    await qstashPublish("/api/notify", {
+      agent: "dispatch",
+      action: "chain_cycle",
+      company: next.slug,
+      status: "dispatched",
+      summary: `Chained: ${company} done → dispatching ${next.slug} (score: ${next.priority_score})`,
+    }, { retries: 2 }).catch((e: any) => { console.warn(`[cycle-complete] notify chain dispatch ${next.slug} failed: ${e?.message || e}`); });
 
     return json({
       chained: true,
