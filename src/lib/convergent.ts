@@ -249,32 +249,49 @@ export interface PlaybookEntry {
   content_language?: string | null; // NULL = universal, 'en'/'pt' for language-specific
 }
 
+export interface PlaybookOutcome {
+  success: boolean;
+  timestamp: string;
+  context?: Record<string, any>;
+}
+
+export interface PlaybookEntryFull extends PlaybookEntry {
+  id?: string;
+  success_rate?: number | null;
+  usage_count?: number;
+  outcome_history?: PlaybookOutcome[];
+  last_outcome_at?: string | null;
+  split_from?: string | null;
+  variance_score?: number | null;
+}
+
 /**
- * Convergent playbook update using highest-confidence-wins.
- * If an entry with the same domain + insight exists, keeps the one with higher confidence.
- *
- * Similarity matching: Two entries are considered the same if:
- * - Same domain AND
- * - Insight text similarity > 0.8 (using simple word overlap)
+ * Convergent playbook update with smart management features:
+ * - Entries with >0.9 similarity: merge using weighted averages
+ * - Entries with 0.8-0.9 similarity: highest-confidence-wins (legacy behavior)
+ * - No similarity: create new entry
  */
 export async function upsertPlaybookEntry(entry: PlaybookEntry): Promise<string> {
   const sql = getDb();
 
   // First, find existing entries with same domain
   const existingEntries = await sql`
-    SELECT id, insight, confidence, superseded_by
+    SELECT id, insight, confidence, superseded_by, success_rate, usage_count,
+           outcome_history, applied_count, evidence
     FROM playbook
     WHERE domain = ${entry.domain}
     AND superseded_by IS NULL
   `;
 
-  // Check for similar insights (simple word-based similarity)
+  // Check for similar insights and determine best match
   let conflictingEntry = null;
+  let maxSimilarity = 0;
+
   for (const existing of existingEntries) {
     const similarity = calculateTextSimilarity(entry.insight, existing.insight);
-    if (similarity > 0.8) {
+    if (similarity > maxSimilarity && similarity > 0.8) {
+      maxSimilarity = similarity;
       conflictingEntry = existing;
-      break;
     }
   }
 
@@ -290,7 +307,12 @@ export async function upsertPlaybookEntry(entry: PlaybookEntry): Promise<string>
     return newEntry.id;
   }
 
-  // Found conflicting entry - apply highest-confidence-wins
+  // High similarity (>0.9) - merge using weighted averages
+  if (maxSimilarity > 0.9) {
+    return await mergePlaybookEntries(conflictingEntry, entry);
+  }
+
+  // Medium similarity (0.8-0.9) - apply highest-confidence-wins
   if (entry.confidence > conflictingEntry.confidence) {
     // New entry has higher confidence - supersede the old one
     const [newEntry] = await sql`
@@ -341,6 +363,226 @@ function calculateTextSimilarity(text1: string, text2: string): number {
   return intersection.size / union.size;
 }
 
+/**
+ * Merge two highly similar playbook entries using weighted averages.
+ * The entry with higher usage gets more weight in the merge.
+ */
+async function mergePlaybookEntries(existing: any, newEntry: PlaybookEntry): Promise<string> {
+  const sql = getDb();
+
+  const existingWeight = Math.max(existing.usage_count || 1, 1);
+  const newWeight = 1; // New entries start with weight 1
+  const totalWeight = existingWeight + newWeight;
+
+  // Weighted average confidence
+  const mergedConfidence = (existing.confidence * existingWeight + newEntry.confidence * newWeight) / totalWeight;
+
+  // Merge evidence
+  const existingEvidence = existing.evidence || {};
+  const newEvidence = newEntry.evidence || {};
+  const mergedEvidence = { ...existingEvidence, ...newEvidence };
+
+  // Take the longer/more detailed insight
+  const mergedInsight = newEntry.insight.length > existing.insight.length ? newEntry.insight : existing.insight;
+
+  // Update existing entry with merged data
+  await sql`
+    UPDATE playbook
+    SET confidence = ${mergedConfidence},
+        insight = ${mergedInsight},
+        evidence = ${JSON.stringify(mergedEvidence)},
+        applied_count = applied_count + 1
+    WHERE id = ${existing.id}
+  `;
+
+  return existing.id;
+}
+
+/**
+ * Record an outcome for a playbook entry and update success rate using exponential moving average.
+ * Learning rate = 0.1 as specified in the requirements.
+ */
+export async function recordPlaybookOutcome(entryId: string, success: boolean, context?: Record<string, any>): Promise<void> {
+  const sql = getDb();
+
+  // Get current entry data
+  const [entry] = await sql`
+    SELECT success_rate, outcome_history, usage_count
+    FROM playbook
+    WHERE id = ${entryId}
+  `;
+
+  if (!entry) return;
+
+  const learningRate = 0.1;
+  const currentSuccessRate = entry.success_rate ?? 0.5; // Start with neutral 0.5 if no data
+
+  // Update success rate using exponential moving average
+  const newSuccessRate = currentSuccessRate * (1 - learningRate) + (success ? 1 : 0) * learningRate;
+
+  // Update outcome history (keep last 20 outcomes for variance calculation)
+  const outcomeHistory: PlaybookOutcome[] = entry.outcome_history || [];
+  const newOutcome: PlaybookOutcome = {
+    success,
+    timestamp: new Date().toISOString(),
+    context
+  };
+
+  outcomeHistory.push(newOutcome);
+  if (outcomeHistory.length > 20) {
+    outcomeHistory.shift(); // Remove oldest
+  }
+
+  // Calculate variance score
+  const varianceScore = calculateVarianceScore(outcomeHistory);
+
+  // Update the entry
+  await sql`
+    UPDATE playbook
+    SET success_rate = ${newSuccessRate},
+        usage_count = usage_count + 1,
+        outcome_history = ${JSON.stringify(outcomeHistory)},
+        last_outcome_at = NOW(),
+        variance_score = ${varianceScore}
+    WHERE id = ${entryId}
+  `;
+
+  // Check if entry should be split due to high variance
+  if (varianceScore > 0.7 && outcomeHistory.length >= 10) {
+    await considerSplittingEntry(entryId, outcomeHistory);
+  }
+}
+
+/**
+ * Calculate variance score from outcome history.
+ * Returns 0 for consistent outcomes, 1 for highly variable outcomes.
+ */
+function calculateVarianceScore(outcomes: PlaybookOutcome[]): number {
+  if (outcomes.length < 2) return 0;
+
+  const successValues = outcomes.map(o => o.success ? 1 : 0);
+  const mean = successValues.reduce((a: number, b: number) => a + b, 0) / successValues.length;
+  const variance = successValues.reduce((sum: number, val: number) => sum + Math.pow(val - mean, 2), 0) / successValues.length;
+
+  // Normalize variance to 0-1 scale (max variance for binary outcomes is 0.25)
+  return Math.min(variance * 4, 1);
+}
+
+/**
+ * Consider splitting an entry with high variance into domain-specific variants.
+ * Analyzes context patterns to create specialized versions.
+ */
+async function considerSplittingEntry(entryId: string, outcomes: PlaybookOutcome[]): Promise<void> {
+  const sql = getDb();
+
+  // Get the original entry
+  const [entry] = await sql`
+    SELECT * FROM playbook WHERE id = ${entryId}
+  `;
+
+  if (!entry) return;
+
+  // Analyze context patterns to identify split criteria
+  const contextPatterns = analyzeContextPatterns(outcomes);
+
+  if (contextPatterns.length >= 2) {
+    // Create specialized variants for different contexts
+    for (const pattern of contextPatterns) {
+      if (pattern.count >= 3) { // Need at least 3 examples to create a variant
+        const variantInsight = `${entry.insight} (${pattern.description})`;
+
+        await sql`
+          INSERT INTO playbook (
+            source_company_id, domain, insight, evidence, confidence,
+            content_language, success_rate, usage_count, split_from
+          )
+          VALUES (
+            ${entry.source_company_id}, ${entry.domain}, ${variantInsight},
+            ${entry.evidence}, ${pattern.successRate}, ${entry.content_language},
+            ${pattern.successRate}, ${pattern.count}, ${entryId}
+          )
+        `;
+      }
+    }
+
+    // Mark original entry as having been split
+    await sql`
+      UPDATE playbook
+      SET superseded_by = 'split'
+      WHERE id = ${entryId}
+    `;
+  }
+}
+
+/**
+ * Analyze outcome context patterns to identify split criteria.
+ */
+function analyzeContextPatterns(outcomes: PlaybookOutcome[]): Array<{
+  description: string;
+  successRate: number;
+  count: number;
+}> {
+  const patterns: Map<string, { successes: number; total: number }> = new Map();
+
+  for (const outcome of outcomes) {
+    if (outcome.context) {
+      // Simple pattern detection - could be enhanced with ML
+      const contextKey = Object.keys(outcome.context).sort().join(',');
+      if (!patterns.has(contextKey)) {
+        patterns.set(contextKey, { successes: 0, total: 0 });
+      }
+
+      const pattern = patterns.get(contextKey)!;
+      pattern.total++;
+      if (outcome.success) pattern.successes++;
+    }
+  }
+
+  return Array.from(patterns.entries()).map(([key, data]) => ({
+    description: key.replace(',', ' + '),
+    successRate: data.successes / data.total,
+    count: data.total
+  }));
+}
+
+/**
+ * Prune playbook entries when capacity is exceeded.
+ * Uses scoring formula: successRate * log(usageCount + 1)
+ */
+export async function prunePlaybookEntries(maxEntries: number = 1000): Promise<number> {
+  const sql = getDb();
+
+  // Count current active entries
+  const [{ count }] = await sql`
+    SELECT COUNT(*) as count FROM playbook WHERE superseded_by IS NULL
+  `;
+
+  if (count <= maxEntries) return 0; // No pruning needed
+
+  const entriesToRemove = count - maxEntries;
+
+  // Find entries with lowest scores
+  const lowScoreEntries = await sql`
+    SELECT id, COALESCE(success_rate, 0.5) * ln(GREATEST(usage_count + 1, 1)) as score
+    FROM playbook
+    WHERE superseded_by IS NULL
+    ORDER BY score ASC
+    LIMIT ${entriesToRemove}
+  `;
+
+  // Mark entries as superseded (soft delete)
+  const entryIds = lowScoreEntries.map(e => e.id);
+  if (entryIds.length > 0) {
+    await sql`
+      UPDATE playbook
+      SET superseded_by = 'pruned'
+      WHERE id = ANY(${entryIds})
+    `;
+  }
+
+  return entryIds.length;
+}
+
 // ============================================================================
 // CONVENIENCE FUNCTIONS
 // ============================================================================
@@ -385,4 +627,92 @@ export async function addPlaybookLearning(
     confidence,
     content_language: content_language || null,
   });
+}
+
+/**
+ * Mark playbook entry as used and optionally record outcome
+ */
+export async function markPlaybookEntryUsed(
+  entryId: string,
+  success?: boolean,
+  context?: Record<string, any>
+): Promise<void> {
+  const sql = getDb();
+
+  if (success !== undefined) {
+    // Record outcome and update success rate
+    await recordPlaybookOutcome(entryId, success, context);
+  } else {
+    // Just increment usage count and reference tracking
+    await sql`
+      UPDATE playbook
+      SET usage_count = usage_count + 1,
+          reference_count = reference_count + 1,
+          last_referenced_at = NOW()
+      WHERE id = ${entryId}
+    `;
+  }
+}
+
+/**
+ * Get playbook entries ranked by effectiveness score
+ */
+export async function getEffectivePlaybookEntries(
+  domain?: string,
+  limit: number = 10
+): Promise<any[]> {
+  const sql = getDb();
+
+  const entries = domain
+    ? await sql`
+        SELECT p.*, c.name as source_company,
+               COALESCE(p.success_rate, 0.5) * ln(GREATEST(p.usage_count + 1, 1)) as effectiveness_score
+        FROM playbook p
+        LEFT JOIN companies c ON c.id = p.source_company_id
+        WHERE p.domain = ${domain} AND p.superseded_by IS NULL
+        ORDER BY effectiveness_score DESC
+        LIMIT ${limit}
+      `
+    : await sql`
+        SELECT p.*, c.name as source_company,
+               COALESCE(p.success_rate, 0.5) * ln(GREATEST(p.usage_count + 1, 1)) as effectiveness_score
+        FROM playbook p
+        LEFT JOIN companies c ON c.id = p.source_company_id
+        WHERE p.superseded_by IS NULL
+        ORDER BY effectiveness_score DESC
+        LIMIT ${limit}
+      `;
+
+  return entries;
+}
+
+/**
+ * Get playbook statistics for monitoring
+ */
+export async function getPlaybookStats(): Promise<{
+  total: number;
+  avgSuccessRate: number;
+  highVarianceEntries: number;
+  splitEntries: number;
+  prunedEntries: number;
+}> {
+  const sql = getDb();
+
+  const [stats] = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE superseded_by IS NULL) as total,
+      AVG(success_rate) FILTER (WHERE superseded_by IS NULL AND success_rate IS NOT NULL) as avg_success_rate,
+      COUNT(*) FILTER (WHERE superseded_by IS NULL AND variance_score > 0.7) as high_variance_entries,
+      COUNT(*) FILTER (WHERE split_from IS NOT NULL) as split_entries,
+      COUNT(*) FILTER (WHERE superseded_by = 'pruned') as pruned_entries
+    FROM playbook
+  `;
+
+  return {
+    total: parseInt(stats.total) || 0,
+    avgSuccessRate: parseFloat(stats.avg_success_rate) || 0,
+    highVarianceEntries: parseInt(stats.high_variance_entries) || 0,
+    splitEntries: parseInt(stats.split_entries) || 0,
+    prunedEntries: parseInt(stats.pruned_entries) || 0,
+  };
 }

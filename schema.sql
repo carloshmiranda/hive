@@ -148,7 +148,13 @@ CREATE TABLE playbook (
   superseded_by TEXT REFERENCES playbook(id), -- if a newer insight replaces this
   content_language TEXT DEFAULT NULL, -- NULL = universal/language-agnostic, 'en'/'pt' for language-specific
   last_referenced_at TIMESTAMPTZ,
-  reference_count INTEGER DEFAULT 0
+  reference_count INTEGER DEFAULT 0,
+  success_rate NUMERIC(4,3) DEFAULT NULL CHECK (success_rate BETWEEN 0 AND 1), -- exponential moving average success rate
+  usage_count INTEGER DEFAULT 0, -- number of times this entry has been used
+  outcome_history JSONB DEFAULT '[]'::jsonb, -- recent outcomes for variance calculation
+  last_outcome_at TIMESTAMPTZ, -- timestamp of last outcome
+  split_from TEXT REFERENCES playbook(id), -- parent entry if split due to variance
+  variance_score NUMERIC(4,3) DEFAULT NULL CHECK (variance_score BETWEEN 0 AND 1) -- variance of outcomes
 );
 
 -- Backfill: UPDATE playbook p SET content_language = c.content_language FROM companies c WHERE p.source_company_id = c.id AND p.source_company_id IS NOT NULL AND c.content_language IS NOT NULL;
@@ -249,6 +255,9 @@ CREATE INDEX idx_actions_company ON agent_actions(company_id, started_at DESC);
 CREATE INDEX idx_approvals_pending ON approvals(status) WHERE status = 'pending';
 CREATE INDEX idx_metrics_company_date ON metrics(company_id, date DESC);
 CREATE INDEX idx_playbook_domain ON playbook(domain);
+CREATE INDEX idx_playbook_similarity ON playbook(domain, confidence DESC) WHERE superseded_by IS NULL;
+CREATE INDEX idx_playbook_pruning_score ON playbook((COALESCE(success_rate, 0.5) * ln(GREATEST(usage_count + 1, 1)))) WHERE superseded_by IS NULL;
+CREATE INDEX idx_playbook_variance ON playbook(variance_score DESC) WHERE superseded_by IS NULL AND variance_score IS NOT NULL;
 CREATE INDEX idx_infra_company ON infra(company_id);
 CREATE INDEX idx_directives_open ON directives(status) WHERE status = 'open';
 CREATE INDEX idx_imports_company ON imports(company_id);
