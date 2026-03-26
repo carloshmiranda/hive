@@ -406,7 +406,7 @@ async function ceoContext(sql: any, company: any) {
       ORDER BY date DESC LIMIT 14
     `.catch(() => []),
     sql`
-      SELECT id, instruction FROM directives
+      SELECT id, text FROM directives
       WHERE company_id = ${company.id} AND status = 'open'
       ORDER BY created_at DESC LIMIT 5
     `.catch(() => []),
