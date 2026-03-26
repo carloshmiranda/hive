@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { encrypt, decrypt } from "@/lib/crypto";
+import { invalidateSetting } from "@/lib/redis-cache";
 
 // Settings are stored in a simple key-value pattern in Neon.
 // We create the table on first access if it doesn't exist.
@@ -93,6 +94,9 @@ export async function POST(req: Request) {
       is_secret = EXCLUDED.is_secret,
       updated_at = now()
   `;
+
+  // Invalidate Redis cache for this setting
+  await invalidateSetting(key);
 
   return json({ key, saved: true });
 }

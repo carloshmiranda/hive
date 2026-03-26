@@ -1,14 +1,14 @@
 name: "Crons: Manual Trigger (legacy fallback)"
 
-# Vercel native crons are the primary trigger (vercel.json).
+# QStash is the primary scheduler (ADR-031 Phase 3).
 # This workflow is kept for manual fallback only.
 on:
   workflow_dispatch:
     inputs:
       endpoint:
-        description: "Which cron to trigger (sentinel, metrics, digest, all)"
+        description: "Which cron to trigger (sentinel-urgent, sentinel-dispatch, sentinel-janitor, metrics, digest, all)"
         required: false
-        default: "sentinel"
+        default: "sentinel-urgent"
 
 jobs:
   trigger:
@@ -20,23 +20,47 @@ jobs:
         run: |
           MANUAL="${{ github.event.inputs.endpoint }}"
           if [ "$MANUAL" = "all" ]; then
-            echo "run_sentinel=true" >> $GITHUB_OUTPUT
+            echo "run_sentinel_urgent=true" >> $GITHUB_OUTPUT
+            echo "run_sentinel_dispatch=true" >> $GITHUB_OUTPUT
+            echo "run_sentinel_janitor=true" >> $GITHUB_OUTPUT
             echo "run_metrics=true" >> $GITHUB_OUTPUT
             echo "run_digest=true" >> $GITHUB_OUTPUT
           else
-            echo "run_sentinel=$( [ '$MANUAL' = 'sentinel' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_sentinel_urgent=$( [ '$MANUAL' = 'sentinel-urgent' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_sentinel_dispatch=$( [ '$MANUAL' = 'sentinel-dispatch' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_sentinel_janitor=$( [ '$MANUAL' = 'sentinel-janitor' ] && echo true || echo false )" >> $GITHUB_OUTPUT
             echo "run_metrics=$( [ '$MANUAL' = 'metrics' ] && echo true || echo false )" >> $GITHUB_OUTPUT
             echo "run_digest=$( [ '$MANUAL' = 'digest' ] && echo true || echo false )" >> $GITHUB_OUTPUT
           fi
 
-      - name: Trigger Sentinel
-        if: steps.crons.outputs.run_sentinel == 'true'
+      - name: Trigger Sentinel Urgent
+        if: steps.crons.outputs.run_sentinel_urgent == 'true'
         run: |
-          STATUS=$(curl -s -o /tmp/sentinel.json -w "%{http_code}" \
+          STATUS=$(curl -s -o /tmp/sentinel-urgent.json -w "%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://hive-phi.vercel.app/api/cron/sentinel")
-          echo "Sentinel HTTP $STATUS"
-          cat /tmp/sentinel.json | head -c 2000
+            "https://hive-phi.vercel.app/api/cron/sentinel-urgent")
+          echo "Sentinel Urgent HTTP $STATUS"
+          cat /tmp/sentinel-urgent.json | head -c 2000
+          [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]
+
+      - name: Trigger Sentinel Dispatch
+        if: steps.crons.outputs.run_sentinel_dispatch == 'true'
+        run: |
+          STATUS=$(curl -s -o /tmp/sentinel-dispatch.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://hive-phi.vercel.app/api/cron/sentinel-dispatch")
+          echo "Sentinel Dispatch HTTP $STATUS"
+          cat /tmp/sentinel-dispatch.json | head -c 2000
+          [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]
+
+      - name: Trigger Sentinel Janitor
+        if: steps.crons.outputs.run_sentinel_janitor == 'true'
+        run: |
+          STATUS=$(curl -s -o /tmp/sentinel-janitor.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://hive-phi.vercel.app/api/cron/sentinel-janitor")
+          echo "Sentinel Janitor HTTP $STATUS"
+          cat /tmp/sentinel-janitor.json | head -c 2000
           [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]
 
       - name: Trigger Metrics

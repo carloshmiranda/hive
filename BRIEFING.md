@@ -7,7 +7,7 @@
 ## Current State
 
 - **Phase:** Two companies actively iterating. System operational.
-- **Architecture:** 7 agents, event-driven, QStash schedules (sentinel hourly, metrics 2x/day, digest daily) + chain dispatch via QStash guaranteed delivery + 1 delegated (company-health fired by sentinel). Mac not required.
+- **Architecture:** 7 agents, event-driven, QStash as sole scheduler (5 schedules: sentinel-urgent 2h, sentinel-dispatch 4h, sentinel-janitor daily, metrics 2x/day, digest daily) + chain dispatch via QStash guaranteed delivery + 1 delegated (company-health fired by sentinel). Vercel crons removed. Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 26 cycles, last CEO score 2/10, waitlist + IRS guide (April 1 deadline)
@@ -33,7 +33,7 @@
 
 - **Events**: Stripe payments, deploys, GitHub issues/PRs → trigger agents directly
 - **Chains**: Agent A finishes → dispatches Agent B (brain agents via `repository_dispatch`, worker agents directly to Vercel `/api/agents/dispatch`)
-- **Data conditions**: Sentinel runs as Vercel cron hourly → dispatches agents whose work conditions are met
+- **Data conditions**: 3 Sentinel tiers run via QStash schedules (urgent 2h, dispatch 4h, janitor daily) → dispatch agents whose work conditions are met
 - **Worker dispatch**: Growth/Outreach/Ops called directly from chain dispatch steps (no GitHub Actions proxy)
 
 - **Blocked on:**
@@ -57,16 +57,25 @@
   - Scout prompt: weighted scoring rubric + mandatory disconfirming evidence + demand proof
   - Per-provider circuit breaker: EMA error rate tracking in llm.ts (CLOSED/HALF_OPEN/OPEN)
   - MCP server: fixed broken hive_companies/hive_cycles tools, parameterized queries, new tools (playbook, error_patterns, directives, routing_weights)
+  - ADR-031 Phase 2: Sentinel monolith split into 3 urgency-tier endpoints (urgent/dispatch/janitor) + shared helpers
   - Sentinel infra_repair loop eliminated: 262 repairs/48h → 0
   - Evolver over-triggering eliminated: 38 gap_analyses/48h → max 2
   - CEO dispatch DOA fixed: prompt reduced 67%
   - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
-  - QStash Phase 1: schedules replacing Vercel crons (sentinel hourly, metrics 2x/day, digest daily)
+  - QStash full consolidation (ADR-031 Phase 3): sole scheduler, Vercel crons removed, sentinel monolith deleted, 5 QStash schedules
   - QStash Phase 2: guaranteed delivery for chain dispatch (free workers, notifications) via `qstashPublish()`
+  - Sentry error tracking: @sentry/nextjs integrated (server + edge + client), captures errors + 10% trace sampling, NEXT_NOT_FOUND filtered
+  - Redis caching layer: @upstash/redis for settings (10-min TTL), playbook (1-hour TTL), company list (5-min TTL). Graceful no-op without env vars.
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-26: Sentry + Redis caching — Added @sentry/nextjs (server/edge/client instrumentation, global-error.tsx boundary, 10% trace sampling). Added @upstash/redis caching layer (redis-cache.ts): settings cache (10-min TTL, 118 call sites benefit), playbook cache (1h), company list cache (5m), health check endpoint. Both gracefully no-op without env vars. Needs Vercel Marketplace install for SENTRY_DSN + UPSTASH_REDIS_REST_URL/TOKEN.
+
+- `[code]` 2026-03-26: QStash full consolidation (ADR-031 Phase 3) — Vercel crons removed entirely, QStash is sole scheduler. Deleted original sentinel monolith (3391 lines). Updated qstash-schedules setup from 3→5 schedules (sentinel-urgent/dispatch/janitor + metrics + digest) with stale cleanup. Fixed sentinel-dispatch missing POST export (blocker for QStash). Updated hive-capabilities.ts (1→3 sentinel entries), hive-crons.yml (legacy fallback now targets 3 split endpoints). Build clean, zero references to old monolith.
+
+- `[code]` 2026-03-26: ADR-031 Phase 2 — split Sentinel monolith (3391 lines) into 3 urgency-tier endpoints: `sentinel-urgent` (every 2h, 619 lines: stuck cycles, orphaned companies, deploy drift, phantom PRs), `sentinel-dispatch` (every 4h, 935 lines: agent scheduling, company cycle dispatch, chain gaps, budget checks), `sentinel-janitor` (daily 2am, 1836 lines: maintenance, intelligence, playbook consolidation, auto-decompose, BACKLOG.md regen). Original sentinel kept as fallback during transition. Shared helpers extracted to `sentinel-helpers.ts` (SentinelContext pattern, dispatch dedup, circuit breaker). Cost analysis: Claude Max 5x ($100/mo) is 10-25x cheaper than API equivalent (~$2,479/mo operational-only).
 
 - `[code]` 2026-03-26: QStash Phase 2 — replaced all fire-and-forget chain dispatch HTTP calls with `qstashPublish()` for guaranteed delivery + automatic retries. Files: cycle-complete (free worker dispatch + notify), sentinel (worker dispatch), backlog/dispatch (free worker dispatch + 4 notify calls). Synchronous calls (health-gate, backlog response) intentionally kept as direct fetch. Deduplication via hourly-bucket IDs. Graceful fallback to direct fetch when QSTASH_TOKEN not configured. Phase 1 (QStash schedules for sentinel/metrics/digest) deployed in prior session — Vercel crons in vercel.json still running in parallel for verification.
 
@@ -422,13 +431,11 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Observe error extraction quality** — monitor next few cycles to confirm errors are captured properly and auto-decompose fires
-2. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-3. **Metrics pipeline zeros (P0)** — stats endpoints broken at company level, Hive cascade will attempt
-4. **CEO cycle-complete chain dispatch (P0)** — cycles don't chain to next company, Hive cascade will attempt
-5. **Chain dispatch DOA (P0)** — CEO repository_dispatch 12/12 failed, needs prompt size reduction
-6. **Dashboard redesign (P1)** — Carlos directive: real-time visualization, backlog pipeline view, compact alerts, richer activity
-7. **Telegram enrichment + naming clarity (P1)** — Carlos directive: human-readable notifications, rename legacy agent/task terminology
+1. **Install Sentry + Upstash Redis via Vercel Marketplace** — code is deployed, needs 1-click integration install to set env vars (SENTRY_DSN, UPSTASH_REDIS_REST_URL/TOKEN). Then redeploy.
+2. **Create QStash schedules** — run `POST /api/setup/qstash-schedules` with CRON_SECRET to register 5 QStash schedules
+3. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
+4. **Triage 15 idea-status companies** — Scout proposals accumulating, pending manual review
+5. **Dashboard redesign (P1)** — Carlos directive: real-time visualization, backlog pipeline view, compact alerts, richer activity
 
 ## Open Questions
 

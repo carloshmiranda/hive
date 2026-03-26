@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { upsertPlaybookEntry } from "@/lib/convergent";
+import { invalidatePlaybook } from "@/lib/redis-cache";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
@@ -47,5 +48,8 @@ export async function POST(req: Request) {
   const [entry] = await sql`
     SELECT * FROM playbook WHERE id = ${entryId}
   `;
+
+  await invalidatePlaybook();
+
   return json(entry, 201);
 }

@@ -156,14 +156,34 @@ export const HIVE_CAPABILITIES: HiveCapability[] = [
     },
   },
 
-  // --- Cron / health ---
+  // --- Cron / health (3 urgency-tier sentinel endpoints, ADR-031) ---
   {
-    id: "sentinel",
-    endpoint: "/api/cron/sentinel",
+    id: "sentinel_urgent",
+    endpoint: "/api/cron/sentinel-urgent",
     method: "GET",
     auth: "cron_secret",
     description:
-      "Run all 24 health checks, dispatch agents, expire stale approvals, detect anomalies",
+      "Every 2h: stuck cycles, orphaned companies, deploy drift, approval expiry",
+    triggers: [],
+    params: {},
+  },
+  {
+    id: "sentinel_dispatch",
+    endpoint: "/api/cron/sentinel-dispatch",
+    method: "GET",
+    auth: "cron_secret",
+    description:
+      "Every 4h: agent scheduling, company cycle dispatch, backlog dispatch",
+    triggers: [],
+    params: {},
+  },
+  {
+    id: "sentinel_janitor",
+    endpoint: "/api/cron/sentinel-janitor",
+    method: "GET",
+    auth: "cron_secret",
+    description:
+      "Daily 2am: maintenance, intelligence extraction, playbook updates, data hygiene",
     triggers: [],
     params: {},
   },
@@ -462,7 +482,7 @@ export function getCapabilitySummary(): string {
       groups["Agent Dispatch"].push(cap);
     } else if (["research_type", "visibility_check", "extract_patterns"].includes(cap.id)) {
       groups["Intelligence"].push(cap);
-    } else if (["sentinel", "metrics_cron", "agent_performance", "agent_costs"].includes(cap.id)) {
+    } else if (["sentinel_urgent", "sentinel_dispatch", "sentinel_janitor", "metrics_cron", "agent_performance", "agent_costs"].includes(cap.id)) {
       groups["Health & Metrics"].push(cap);
     } else if (["assess_company", "company_tasks", "update_task", "decide_approval"].includes(cap.id)) {
       groups["Company Management"].push(cap);

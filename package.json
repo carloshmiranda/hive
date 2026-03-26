@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.0",
+    "@sentry/nextjs": "^10.46.0",
     "@upstash/qstash": "^2.10.1",
+    "@upstash/redis": "^1.37.0",
     "jose": "^6.2.2",
     "next": "^15.0.0",
     "next-auth": "5.0.0-beta.30",

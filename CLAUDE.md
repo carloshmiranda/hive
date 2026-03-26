@@ -98,13 +98,16 @@ Hive improves itself, not just sub-companies. The same patterns apply:
 
 All orchestration runs in the cloud via GitHub Actions + Vercel serverless. No Mac dependency.
 
-### Tier 1: Vercel webhooks + crons (real-time, deterministic, no AI, $0)
+### Tier 1: Vercel webhooks + QStash schedules (real-time, deterministic, no AI, $0)
 - **Stripe webhook** (`/api/webhooks/stripe`): Logs payments, updates MRR, counts customers, detects first revenue → dispatches CEO via `repository_dispatch`
 - **GitHub webhook** (`/api/webhooks/github`): Logs deploys, detects failures → escalates after 3 failures in 24h, captures GitHub Issues with `hive-directive` label as directives
-- **Metrics cron** (`/api/cron/metrics`): Runs at 8am + 6pm, scrapes Vercel Analytics for page views
-- **Sentinel cron** (`/api/cron/sentinel`): Runs hourly, 33 checks (DB-only), dispatches brain agents via GitHub API and workers directly to `/api/agents/dispatch`. Fires company-health as non-blocking delegate.
+- **Metrics** (`/api/cron/metrics`): QStash schedule 8am + 6pm, scrapes Vercel Analytics for page views
+- **Sentinel** — 3 urgency-tier endpoints scheduled via QStash (ADR-031):
+  - **Sentinel-urgent** (`/api/cron/sentinel-urgent`): Every 2h. Stuck cycles, orphaned companies, deploy drift, phantom PRs, unverified provisions.
+  - **Sentinel-dispatch** (`/api/cron/sentinel-dispatch`): Every 4h. Agent scheduling, company cycle dispatch safety net, chain gaps, budget checks, failed task re-dispatch.
+  - **Sentinel-janitor** (`/api/cron/sentinel-janitor`): Daily 2am. Maintenance, intelligence, playbook consolidation, auto-decompose, BACKLOG.md regeneration.
 - **Company-health** (`/api/cron/company-health`): Fired by Sentinel (not scheduled independently). 6 HTTP-heavy checks: stats endpoints, language consistency, stale record reconciliation, test coverage, PR auto-merge, broken deploy repair. Gets its own 60s execution window.
-- **Digest cron** (`/api/cron/digest`): Runs daily at 8am UTC, sends portfolio summary email via Resend
+- **Digest** (`/api/cron/digest`): QStash schedule daily 8am UTC, sends portfolio summary email via Resend
 
 ### Tier 2: GitHub Actions brain agents (event-driven, Claude Code)
 Brain agents (CEO, Scout, Evolver) run on Hive's private repo via `anthropics/claude-code-action`. Engineer provision runs on Hive; Engineer build dispatches to company repos (public, unlimited minutes) via `workflow_dispatch`. Chain dispatch calls worker agents directly on Vercel (no GitHub Actions proxy).
@@ -113,10 +116,10 @@ Brain agents (CEO, Scout, Evolver) run on Hive's private repo via `anthropics/cl
 Company repos are PUBLIC — GitHub gives unlimited Actions minutes. Each company repo has `hive-build.yml` which accepts `workflow_dispatch` with task payload. Engineer on Hive dispatches build tasks here instead of running them on Hive's private quota.
 
 ### Tier 3: Vercel serverless worker agents
-Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Called directly from brain agent chain dispatch steps or from Sentinel cron.
+Worker agents (Growth, Outreach, Ops) run on Vercel serverless via `/api/agents/dispatch`. Called directly from brain agent chain dispatch steps or from Sentinel schedules.
 
 ### Continuous dispatch (chain callbacks)
-Work chains automatically without waiting for Sentinel's hourly poll:
+Work chains automatically without waiting for Sentinel's scheduled checks:
 - **CEO cycle_complete** → calls `/api/dispatch/cycle-complete` → health gate → score companies → dispatch next cycle
 - **Engineer backlog done** → calls `/api/backlog/dispatch` → if empty, falls through to `/api/dispatch/cycle-complete`
 - **Health gate** (`/api/dispatch/health-gate`): checks Claude budget, concurrent agents, failure rate, Hive backlog priority. Returns dispatch/wait/stop.
@@ -366,8 +369,8 @@ Hive routes agent tasks to the cheapest capable provider. Brain tasks get Claude
 | Decomposer | Hive repo Actions (Claude Max) | Claude | 8 | Decomposes L-complexity backlog tasks into 2-4 independent sub-tasks. hive-decompose.yml. Serverless fallback: OpenRouter Claude Sonnet 4 free |
 | Outreach | Gemini API (Vercel serverless) | 2.5 Flash | N/A | Email personalization quality — doesn't need repo access |
 | Ops | Groq API (Vercel serverless) | Llama 3.3 70B | N/A | Fast inference for health checks |
-| Sentinel | Vercel cron (Node.js) | None | N/A | Pure DB queries + HTTP checks, no LLM |
-| Digest | Vercel cron (Node.js) | None | N/A | Email assembly, no LLM |
+| Sentinel | QStash → Vercel serverless (Node.js) | None | N/A | Pure DB queries + HTTP checks, no LLM |
+| Digest | QStash → Vercel serverless (Node.js) | None | N/A | Email assembly, no LLM |
 
 ### Fallback chain
 Gemini Flash fails → try Flash-Lite → try Groq → fall back to Claude (logs warning about quota burn)
@@ -651,7 +654,8 @@ hive/
 │   │   ├── github.ts       ← GitHub API (repos, push files, archive)
 │   │   ├── neon-api.ts     ← Neon API (create/delete DB projects)
 │   │   ├── resend.ts       ← Resend helpers (TBD)
-│   │   └── validation.ts   ← Validation score engine (per-business-type phases, gating, kill signals)
+│   │   ├── validation.ts   ← Validation score engine (per-business-type phases, gating, kill signals)
+│   │   └── sentinel-helpers.ts ← Shared Sentinel utilities (SentinelContext, dispatch dedup, circuit breaker)
 │   └── components/         ← extracted components (TBD)
 ├── templates/
 │   ├── company-claude.md   ← CLAUDE.md template for new companies

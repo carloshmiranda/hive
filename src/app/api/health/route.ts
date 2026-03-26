@@ -1,5 +1,6 @@
 import { getDb, json } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { cacheHealthCheck } from "@/lib/redis-cache";
 
 export async function GET() {
   const session = await requireAuth();
@@ -57,7 +58,14 @@ export async function GET() {
     checks.schema = { status: "error", detail: e.message };
   }
 
-  // 4. Prompt files
+  // 4. Redis cache
+  const cacheStatus = await cacheHealthCheck();
+  checks.redis_cache = {
+    status: cacheStatus.ok ? "ok" : "unavailable",
+    detail: cacheStatus.ok ? `${cacheStatus.latencyMs}ms latency` : "Not configured (KV_REST_API_URL/TOKEN missing)",
+  };
+
+  // 5. Prompt files
   checks.prompts = { status: "info", detail: "Check /prompts/ directory on the server" };
 
   // Overall status

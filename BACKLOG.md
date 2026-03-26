@@ -26,8 +26,8 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 ### ✅ P1 — Phase 1: Replace GitHub Actions cron proxy with Vercel native crons (DONE — 2026-03-25)
 Added `crons` array to `vercel.json` (sentinel hourly, metrics 2x/day, digest daily 8am). Removed schedule triggers from `hive-crons.yml`, kept as manual-only fallback. Vercel sends `Authorization: Bearer CRON_SECRET` natively — no code changes needed. Saves ~24 GitHub Actions runs/day on private repo quota. ADR-031 Phase 1.
 
-### 🟡 P1 — Phase 2: Split Sentinel into urgent/dispatch/janitor + lazy checks (ADR-031)
-Split the 2933-line Sentinel monolith into 3 focused endpoints by urgency: `sentinel-urgent` (every 2h: stuck cycles/actions, provisions), `sentinel-dispatch` (every 4h: company cycles safety net, budget check), `sentinel-janitor` (daily: stale content/leads/research, evolve, healer, assess). Move ~12 checks to event-driven: approval expiry → check-on-read, schema drift → post-deploy hook, anomaly detection → metrics cron, agent regression → digest, dispatch loop detection → inline in dispatchToActions(). Reduces cron invocations from 24/day to ~10/day.
+### ✅ P1 — Phase 2: Split Sentinel into urgent/dispatch/janitor + lazy checks (DONE — 2026-03-26)
+Split the 3391-line Sentinel monolith into 3 focused endpoints by urgency tier: `sentinel-urgent` (every 2h, 619 lines: stuck cycles, orphaned companies, deploy drift, phantom PRs), `sentinel-dispatch` (every 4h, 935 lines: agent scheduling, company cycle dispatch, chain gaps, budget checks), `sentinel-janitor` (daily 2am, 1836 lines: maintenance, intelligence, playbook consolidation, auto-decompose). Shared helpers extracted to `sentinel-helpers.ts` (SentinelContext pattern, dispatch dedup, circuit breaker). Original sentinel kept as fallback during transition period. ADR-031 Phase 2.
 
 ### ✅ P3 — Phase 3: Upstash QStash for guaranteed chain dispatch delivery (DONE — 2026-03-26)
 Replaced fire-and-forget HTTP dispatch calls with `qstashPublish()` in cycle-complete, sentinel, and backlog/dispatch. Guaranteed delivery with 3 retries + hourly deduplication. Synchronous calls (health-gate, backlog response) kept as direct fetch. Phase 1 (QStash schedules) also deployed. ADR-031 Phases 1+3 complete. Remaining: Phase 2 (Sentinel split), Phase 4 (delayed verification patterns).
@@ -372,6 +372,21 @@ Companies should handle support autonomously: FAQ bot from product spec, email a
 
 ### ⚪ P3 — LTV/CAC tracking per company
 Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition starts). Unit economics dashboard. Kill decisions based on LTV/CAC ratio.
+
+### ✅ P2 — Add Upstash Redis caching layer (DONE — 2026-03-26)
+Installed @upstash/redis. Created `redis-cache.ts` with cache-aside pattern: settings (10-min TTL, `s:` prefix — 118 call sites benefit), playbook (1h TTL, `pb:` prefix), company list (5m TTL). Pattern invalidation via SCAN. Graceful no-op without env vars. Health check in `/api/health`. Needs Vercel Marketplace install to activate.
+
+### ✅ P2 — Add Sentry error tracking via Vercel Marketplace (DONE — 2026-03-26)
+Installed @sentry/nextjs v10.46. Server + edge + client instrumentation via `instrumentation.ts` pattern (Next.js 15 App Router). Global error boundary (`global-error.tsx`). 10% trace sampling, NEXT_NOT_FOUND filtered. Needs Vercel Marketplace install to activate.
+
+### ⚪ P3 — Use Vercel Edge Config for feature flags and dispatch config
+Store feature flags (enable/disable agents, maintenance mode), health gate parameters, dispatch status in Edge Config (free: 100K reads, 100 writes/mo). Sub-millisecond reads at edge vs ~50ms Neon. Constraint: only 100 writes/month — for config that changes infrequently.
+
+### ⚪ P3 — Migrate LLM calls to Vercel AI SDK unified interface
+Replace separate HTTP implementations for Gemini/Groq/Claude in llm.ts with Vercel AI SDK (`ai` package, free/open-source). Provides `generateText()`/`generateObject()` with provider plugins, automatic retries, streaming, structured output via Zod. Simplifies fallback chain. Also evaluate AI Gateway ($5/mo free credits).
+
+### ⚪ P3 — Use Vercel Blob for report storage and Neon archival
+Offload large content from Neon to Vercel Blob (free on Pro, S3-backed, 99.999999999% durability). Store research reports, generated blog posts, agent action log archives. Reduces Neon storage pressure (0.5GB free per project).
 
 ---
 
