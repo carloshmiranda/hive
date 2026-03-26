@@ -3,7 +3,7 @@ import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch";
-import { flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
+import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -687,6 +687,38 @@ export async function POST(req: Request) {
 
   if (!topItem) {
     return json({ dispatched: false, reason: "no_scorable_items" });
+  }
+
+  // Check if item is company-specific and should be blocked
+  const companySlug = await isCompanySpecific(topItem.title, topItem.description, sql);
+  if (companySlug) {
+    // Update the item status to 'blocked' with clear note
+    await sql`
+      UPDATE hive_backlog
+      SET status = 'blocked',
+          notes = COALESCE(notes, '') || ${` [scope] Company-specific task for ${companySlug} — should be a company task, not hive_backlog`}
+      WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
+    `.catch(() => {});
+
+    console.warn(`[backlog] Blocked company-specific item: "${topItem.title}" (company: ${companySlug})`);
+
+    // Skip to next item by recursively calling dispatch (but limit to prevent infinite loop)
+    const recursionDepth = (body.recursion_depth || 0) + 1;
+    if (recursionDepth < 5) {
+      // Call self with recursion tracking to find next valid item
+      return POST(new Request(req.url, {
+        method: 'POST',
+        headers: req.headers,
+        body: JSON.stringify({ ...body, recursion_depth: recursionDepth })
+      }));
+    } else {
+      return json({
+        dispatched: false,
+        reason: "too_many_company_specific_items",
+        blocked_company_item: topItem.title,
+        company_slug: companySlug
+      });
+    }
   }
 
   // Dispatch via GitHub Actions
