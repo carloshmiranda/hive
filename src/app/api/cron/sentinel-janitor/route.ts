@@ -1806,13 +1806,132 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Backlog Health Check: Handle duplicates and stale items
+    // -----------------------------------------------------------------------
+    let duplicatesRejected = 0;
+    let staleItemsDeprioritized = 0;
+
+    try {
+      // Query ready items for duplicate detection and staleness check
+      const readyItems = await sql`
+        SELECT
+          id,
+          title,
+          description,
+          priority,
+          notes,
+          created_at,
+          COALESCE(ARRAY_LENGTH(STRING_TO_ARRAY(notes, '[janitor]'), 1) - 1, 0) as attempt_count,
+          LENGTH(COALESCE(notes, '')) as notes_length
+        FROM hive_backlog
+        WHERE status = 'ready'
+        ORDER BY created_at ASC
+      `;
+
+      // Handle duplicates (similarity > 0.8)
+      const processedItems = new Set<string>();
+
+      for (let i = 0; i < readyItems.length; i++) {
+        for (let j = i + 1; j < readyItems.length; j++) {
+          const item1 = readyItems[i];
+          const item2 = readyItems[j];
+
+          // Skip if either item is already processed
+          if (processedItems.has(item1.id) || processedItems.has(item2.id)) continue;
+
+          const titleSimilarity = jaccardSimilarity(item1.title, item2.title);
+          const descSimilarity = jaccardSimilarity(
+            item1.description || "",
+            item2.description || ""
+          );
+          const avgSimilarity = (titleSimilarity + descSimilarity) / 2;
+
+          if (avgSimilarity > 0.8) {
+            // Determine which to keep based on notes/attempts (more context)
+            const item1Context = (item1.attempt_count || 0) + (item1.notes_length || 0);
+            const item2Context = (item2.attempt_count || 0) + (item2.notes_length || 0);
+
+            const keepItem = item1Context >= item2Context ? item1 : item2;
+            const rejectItem = item1Context >= item2Context ? item2 : item1;
+
+            await sql`
+              UPDATE hive_backlog
+              SET
+                status = 'rejected',
+                notes = COALESCE(notes, '') || ${` [janitor] Duplicate of ${keepItem.id} — ${keepItem.title.slice(0, 50)} (similarity: ${avgSimilarity.toFixed(2)})`}
+              WHERE id = ${rejectItem.id}
+            `;
+
+            duplicatesRejected++;
+            console.log(`[sentinel-janitor] Backlog Health: Rejected duplicate item "${rejectItem.title}" (similarity: ${avgSimilarity.toFixed(2)} with "${keepItem.title}")`);
+
+            // Mark rejected item as processed to avoid double-processing
+            processedItems.add(rejectItem.id);
+          }
+        }
+      }
+
+      // Handle stale items (ready for 14+ days, never dispatched)
+      const fourteenDaysAgo = new Date();
+      fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+
+      for (const item of readyItems) {
+        if (processedItems.has(item.id) || new Date(item.created_at) > fourteenDaysAgo) continue;
+
+        // Check if item was ever dispatched by looking for agent_actions
+        const [dispatchCheck] = await sql`
+          SELECT 1 FROM agent_actions
+          WHERE description ILIKE ${'%' + item.id + '%'}
+          OR description ILIKE ${'%' + item.title.slice(0, 30) + '%'}
+          LIMIT 1
+        `;
+
+        if (!dispatchCheck) {
+          const daysStale = Math.floor((Date.now() - new Date(item.created_at).getTime()) / (1000 * 60 * 60 * 24));
+
+          // Downgrade priority by one level (P1→P2, P2→P3). Don't downgrade P0.
+          let newPriority = item.priority;
+          if (item.priority === 'P1') newPriority = 'P2';
+          else if (item.priority === 'P2') newPriority = 'P3';
+          // P0 and P3 stay the same (P0 doesn't downgrade, P3 is already lowest)
+
+          if (newPriority !== item.priority) {
+            await sql`
+              UPDATE hive_backlog
+              SET
+                priority = ${newPriority},
+                notes = COALESCE(notes, '') || ${` [janitor] Stale for ${daysStale} days — deprioritizing`}
+              WHERE id = ${item.id}
+            `;
+
+            staleItemsDeprioritized++;
+            console.log(`[sentinel-janitor] Backlog Health: Deprioritized stale item "${item.title}" (${daysStale} days, ${item.priority}→${newPriority})`);
+          }
+        }
+      }
+
+      if (duplicatesRejected > 0 || staleItemsDeprioritized > 0) {
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'backlog_health',
+            ${`Backlog Health: Rejected ${duplicatesRejected} duplicates, deprioritized ${staleItemsDeprioritized} stale items`},
+            'success', NOW(), NOW())
+        `;
+      }
+
+    } catch (backlogHealthErr: any) {
+      console.warn(`[sentinel-janitor] Backlog Health check failed: ${backlogHealthErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Telegram notification
     // -----------------------------------------------------------------------
     try {
       const { notifyHive } = await import("@/lib/telegram");
       const interesting = dispatches.length > 0 ||
         selfImprovementProposals > 0 || agentRegressions > 0 ||
-        proposalsAutoApproved > 0 || ventureBrainDirectives > 0;
+        proposalsAutoApproved > 0 || ventureBrainDirectives > 0 ||
+        duplicatesRejected > 0 || staleItemsDeprioritized > 0;
       if (interesting) {
         const parts: string[] = [];
         if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
@@ -1822,6 +1941,8 @@ export async function GET(request: Request) {
         if (ventureBrainDirectives > 0) parts.push(`${ventureBrainDirectives} venture brain directives`);
         if (playbookMerged > 0) parts.push(`${playbookMerged} playbook merges`);
         if (errorPatternsLearned > 0) parts.push(`${errorPatternsLearned} error patterns learned`);
+        if (duplicatesRejected > 0) parts.push(`${duplicatesRejected} duplicates rejected`);
+        if (staleItemsDeprioritized > 0) parts.push(`${staleItemsDeprioritized} stale items deprioritized`);
 
         await notifyHive({
           agent: "sentinel-janitor",
@@ -1872,6 +1993,8 @@ export async function GET(request: Request) {
       self_improvement_proposals: selfImprovementProposals,
       error_patterns_learned: errorPatternsLearned,
       backlog_regenerated: backlogRegenerated,
+      backlog_duplicates_rejected: duplicatesRejected,
+      backlog_stale_deprioritized: staleItemsDeprioritized,
     });
 
   } catch (error: unknown) {
