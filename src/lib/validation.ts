@@ -34,6 +34,8 @@ export interface ValidationResult {
   forbidden: string[];
   kill_signal: boolean;
   kill_reason: string | null;
+  revenue_readiness_score: number;
+  revenue_readiness_message: string | null;
 }
 
 // ─── Phase-specific rules ───
@@ -205,6 +207,42 @@ function computeWoWGrowth(metrics: MetricsRow[]): number {
   return (thisWeek - lastWeek) / lastWeek;
 }
 
+// Revenue Readiness Score (0-100) - signals when to add payment flows
+function computeRevenueReadinessScore(metrics: MetricsRow[]): { score: number; message: string | null } {
+  const latest = metrics[0] || {} as MetricsRow;
+
+  // Pricing page visits (weight 30, >50 visits = full score)
+  const totalPricingViews = metrics.reduce((s, m) => s + (m.pricing_page_views || 0), 0);
+  const pricingScore = Math.min(30, (totalPricingViews / 50) * 30);
+
+  // Return visitor rate (weight 25, >30% = full) - placeholder (data not available)
+  // TODO: Add return_visitor_rate to metrics schema
+  const returnVisitorScore = 0;
+
+  // Waitlist size (weight 20, >100 = full)
+  const waitlistSize = latest.waitlist_total || 0;
+  const waitlistScore = Math.min(20, (waitlistSize / 100) * 20);
+
+  // Time on site average (weight 15, >2min = full) - placeholder (data not available)
+  // TODO: Add time_on_site_avg to metrics schema
+  const timeOnSiteScore = 0;
+
+  // Organic traffic growth (weight 10, >5% WoW = full)
+  const wowGrowth = computeWoWGrowth(metrics);
+  const organicGrowthScore = Math.min(10, Math.max(0, (wowGrowth / 0.05) * 10));
+
+  const score = Math.round(pricingScore + returnVisitorScore + waitlistScore + timeOnSiteScore + organicGrowthScore);
+
+  let message: string | null = null;
+  if (score >= 60) {
+    message = "Revenue ready — prioritize Stripe integration and pricing optimization.";
+  } else if (score < 30) {
+    message = "Too early for monetization — focus on traffic and validation.";
+  }
+
+  return { score, message };
+}
+
 function scoreSaas(metrics: MetricsRow[]): Record<string, number> {
   const latest = metrics[0] || {} as MetricsRow;
   const totalViews = metrics.reduce((s, m) => s + m.page_views, 0);
@@ -363,6 +401,9 @@ export function computeValidationScore(
   // Kill signals
   const kill = checkKillSignals(type, metrics, companyCreatedAt);
 
+  // Revenue readiness score
+  const revenueReadiness = computeRevenueReadinessScore(metrics);
+
   return {
     score,
     phase,
@@ -374,5 +415,7 @@ export function computeValidationScore(
     forbidden: rules.forbidden,
     kill_signal: kill.signal,
     kill_reason: kill.reason,
+    revenue_readiness_score: revenueReadiness.score,
+    revenue_readiness_message: revenueReadiness.message,
   };
 }
