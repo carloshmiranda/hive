@@ -1,5 +1,6 @@
 import { getDb, json } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { decrypt } from "@/lib/crypto";
 import { cacheHealthCheck } from "@/lib/redis-cache";
 
 export async function GET() {
@@ -65,7 +66,28 @@ export async function GET() {
     detail: cacheStatus.ok ? `${cacheStatus.latencyMs}ms latency` : "Not configured (KV_REST_API_URL/TOKEN missing)",
   };
 
-  // 5. Prompt files
+  // 5. Secrets decryption — verify all encrypted settings are readable
+  try {
+    const secrets = await sql`SELECT key, value FROM settings WHERE is_secret = true AND value IS NOT NULL`;
+    const broken: string[] = [];
+    for (const s of secrets) {
+      try {
+        decrypt(s.value);
+      } catch {
+        broken.push(s.key);
+      }
+    }
+    checks.secrets_decryption = {
+      status: broken.length === 0 ? "ok" : "error",
+      detail: broken.length === 0
+        ? `${secrets.length} secrets decryptable`
+        : `Cannot decrypt: ${broken.join(", ")}. Check ENCRYPTION_KEY / ENCRYPTION_KEY_OLD.`,
+    };
+  } catch (e: any) {
+    checks.secrets_decryption = { status: "error", detail: e.message };
+  }
+
+  // 6. Prompt files
   checks.prompts = { status: "info", detail: "Check /prompts/ directory on the server" };
 
   // Overall status

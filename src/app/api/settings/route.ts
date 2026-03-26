@@ -1,6 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
-import { encrypt, decrypt } from "@/lib/crypto";
+import { encrypt, decryptAndMigrate, DecryptionError } from "@/lib/crypto";
 import { invalidateSetting } from "@/lib/redis-cache";
 
 // Settings are stored in a simple key-value pattern in Neon.
@@ -48,16 +48,29 @@ export async function GET() {
   const sql = getDb();
   const rows = await sql`SELECT key, value, is_secret, updated_at FROM settings ORDER BY key`;
 
-  // Mask secrets — show only last 4 chars
-  const settings = rows.map(row => ({
-    key: row.key,
-    value: row.is_secret
-      ? (row.value ? "••••" + decrypt(row.value).slice(-4) : "")
-      : row.value,
-    is_set: !!row.value,
-    is_secret: row.is_secret,
-    updated_at: row.updated_at,
-  }));
+  // Mask secrets — show only last 4 chars.
+  // Uses decryptAndMigrate: if an old ENCRYPTION_KEY decrypts, auto-re-encrypt with current key.
+  const settings = rows.map(row => {
+    if (!row.is_secret || !row.value) {
+      return { key: row.key, value: row.value, is_set: !!row.value, is_secret: row.is_secret, updated_at: row.updated_at };
+    }
+
+    try {
+      const { plaintext, migrated } = decryptAndMigrate(row.value);
+      if (migrated) {
+        // Re-encrypt with current key (fire-and-forget)
+        sql`UPDATE settings SET value = ${migrated}, updated_at = now() WHERE key = ${row.key}`
+          .catch((e: any) => console.error(`[settings] key migration write failed for ${row.key}:`, e?.message || e));
+        invalidateSetting(row.key).catch(() => {});
+        console.log(`[settings] Auto-migrated "${row.key}" to current ENCRYPTION_KEY`);
+      }
+      return { key: row.key, value: "••••" + plaintext.slice(-4), is_set: true, is_secret: true, updated_at: row.updated_at };
+    } catch (e) {
+      const msg = e instanceof DecryptionError ? "DECRYPT FAILED — re-enter value or set ENCRYPTION_KEY_OLD" : "read error";
+      console.error(`[settings] ${msg} for "${row.key}"`);
+      return { key: row.key, value: `⚠️ ${msg}`, is_set: false, is_secret: true, updated_at: row.updated_at };
+    }
+  });
 
   // Include unset keys so the UI shows empty fields
   const setKeys = new Set(settings.map(s => s.key));
