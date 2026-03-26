@@ -4,6 +4,7 @@ import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
 import { filterBacklogItemsByCooldown, checkBacklogCircuitBreaker, flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
+import { performBacklogHealthCheck } from "@/lib/backlog-health";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -416,6 +417,22 @@ export async function POST(req: Request) {
   `.catch(() => []);
   if (recentDispatch) {
     return json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
+  }
+
+  // Backlog health check: prevent poisoning via volume, circularity, and staleness
+  // Runs cleanup actions and reports violations
+  let healthCheckResult;
+  try {
+    healthCheckResult = await performBacklogHealthCheck();
+    if (healthCheckResult.actions_taken.length > 0) {
+      console.log(`[backlog-health] Actions taken: ${healthCheckResult.actions_taken.join(', ')}`);
+    }
+    if (!healthCheckResult.healthy && healthCheckResult.violations.length > 0) {
+      console.warn(`[backlog-health] Violations detected: ${healthCheckResult.violations.join(', ')}`);
+    }
+  } catch (e) {
+    console.warn('[backlog-health] Health check failed:', e instanceof Error ? e.message : 'unknown');
+    // Non-blocking, continue with dispatch
   }
 
   // Flag problem statements as needing decomposition before dispatch

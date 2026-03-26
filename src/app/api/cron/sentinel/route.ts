@@ -1860,6 +1860,7 @@ export async function GET(req: Request) {
   // 13b. Backlog dispatch — delegate to /api/backlog/dispatch (single source of truth)
   // This endpoint handles scoring, planning phase (spec generation), complexity estimation,
   // circuit breaker, dedup, and feasibility checks. Sentinel just triggers it.
+  // The health check runs inside /api/backlog/dispatch and performs cleanup actions.
   let backlogDispatched = 0;
   try {
     if (remainingSlots > 0) {
@@ -1871,7 +1872,7 @@ export async function GET(req: Request) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ source: "sentinel" }),
-        signal: AbortSignal.timeout(60000), // 60s — includes planning phase (spec generation)
+        signal: AbortSignal.timeout(60000), // 60s — includes planning phase (spec generation) + health check
       }).catch(() => null);
 
       if (backlogRes?.ok) {
