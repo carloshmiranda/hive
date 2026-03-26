@@ -43,6 +43,15 @@
   - All 4 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration — not a bug)
   - Zero metrics across all companies — stats endpoints broken at company level
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
+  - MCP `hive_sql_mutate` tool cannot update `approvals` table (returns 0 affected rows) — root cause unknown, possibly RLS or trigger
+  - 20+ pending approvals need triage (duplicate new_company proposals, resolved escalations, capability_migration dupes)
+  - OpenRouter free models intermittently down — mitigated by dynamic model discovery (20-30+ models per agent chain) but still affects workers when ALL free models are down simultaneously
+- **Recently resolved (2026-03-26):**
+  - Sentry activated via Vercel Marketplace — SENTRY_DSN now live in production, error tracking active
+  - Backlog dispatch chain running — kickstarted with `chain_next: true` flag, self-sustaining chain observed
+  - ENCRYPTION_KEY set in Vercel env vars — worker agents (Growth/Outreach/Ops) can now decrypt settings
+  - Flolio Attack Challenge Mode disabled — was blocking all requests with 429 for 8+ cycles
+  - GH_PAT `workflow` scope added — Engineer can now dispatch builds to company repos
 - **Recently fixed:**
   - Schema-map drift: auto-sync from schema.sql (22 tables), CI check prevents drift, generator fixed for UNLOGGED tables
   - Healer Flolio loop: success logging step in workflow + per-company circuit breaker (3 failures/48h → skip)
@@ -64,12 +73,23 @@
   - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
   - QStash full consolidation (ADR-031 Phase 3): sole scheduler, Vercel crons removed, sentinel monolith deleted, 5 QStash schedules
   - QStash Phase 2: guaranteed delivery for chain dispatch (free workers, notifications) via `qstashPublish()`
-  - Sentry error tracking: @sentry/nextjs integrated (server + edge + client), captures errors + 10% trace sampling, NEXT_NOT_FOUND filtered
+  - Sentry error tracking: @sentry/nextjs integrated (server + edge + client), captures errors + 10% trace sampling, NEXT_NOT_FOUND filtered. **Activated via Vercel Marketplace** (SENTRY_DSN live in production as of 2026-03-26).
   - Redis caching layer: @upstash/redis for settings (10-min TTL), playbook (1-hour TTL), company list (5-min TTL). Graceful no-op without env vars.
+  - Backlog dispatch chain: `chain_next: true` flag required for chain continuation — discovered missing in manual kickstart payloads.
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-26: Engineer pipeline fixes + P1 decomposition — (1) Pipeline fixes: realistic turn estimates (S:15-20, M:25-35, L:35-50 vs old S:10-15, M:20-25, L:30-35), spec-driven max_turns sent on every dispatch (not just 3rd+ attempt), exponential backoff cooldown (2h/6h/24h based on attempt count vs flat 2h), dynamic isMaxTurns detection (80% of spec turns vs hardcoded 30). Commit 440ff05. (2) Decomposed 9 P1 parent items into 14 atomic sub-tasks with precise file paths, code snippets, and acceptance criteria — specialist prompts, input sanitizer, self-review checklist, backlog scope check, health endpoint, janitor dedup, YAML validation, agent display names. (3) Sentry webhook endpoint marked done (commit 7aa9472). (4) 20 items previously deferred to blocked status.
+
+- `[code]` 2026-03-26: Backlog audit + dynamic model discovery + context-snapshot upgrade — (1) Dynamic free model discovery: `fetchFreeModels()` in llm.ts fetches OpenRouter catalog hourly, pads agent chains with ALL available free text models (20-30+ per agent). `minContext` filtering preserves quality. (2) Backlog DB audit: cross-referenced 100+ ready items against 7 days of commits. Synced 13 stale items to done (PR auto-merge suite, recurring escalation automation, capability assessment fix, Sentinel checks already implemented). Rejected 1 duplicate. (3) Context-snapshot skill updated with mandatory Step 2: DB sync before file updates, prevents dispatch loop from re-dispatching completed work. (4) Data-driven dispatch plan created: replace global circuit breaker with item-level skip logic, remove P0/P1 cascade filter, decompose on 1st max_turns failure.
+
+- `[code]` 2026-03-26: Data-driven dispatch unclog + Sentry plan approved — (1) Loop quality audit: 25/25 actions failed (20 Ops = OpenRouter outage, 5 Engineer = max_turns on L-complexity items). (2) Added qwen_coder to growth/outreach/ops model chains for broader outage resilience. (3) Post-decompose immediate dispatch: sub-tasks now dispatch right after decomposition instead of waiting for Sentinel. (4) Analyzed data-driven dispatch plan — 5 of 6 changes already implemented, only post-decompose was missing. (5) Sentry event-driven self-healing plan approved: 4 backlog items created (webhook endpoint P1, internal integration P1, Healer dispatch P2, resolution feedback P2) under zero_intervention theme.
+
+- `[code]` 2026-03-26: Sentry activated + backlog chain running — (1) Sentry DSN was never configured despite full @sentry/nextjs integration in codebase. Installed via Vercel Marketplace (one-click, auto-provisions SENTRY_DSN + SENTRY_AUTH_TOKEN). Redeployed to activate. (2) Backlog dispatch chain restarted with `chain_next: true` flag — previous manual kickstart lacked the flag so chain never continued. Chain is now self-sustaining: 4 consecutive runs observed (2 success, 1 failure, 1 in-progress), chain continues through failures. (3) OpenRouter free models all failing — Ops workers hitting 100% failure rate across all 4 companies. External service issue, not code problem. 114 ready items, 1 dispatched.
+
+- `[code]` 2026-03-26: Manual config fixes — 4 blockers resolved: (1) ENCRYPTION_KEY set in Vercel env vars (root cause of all Growth/Outreach/Ops failures — couldn't decrypt openrouter_api_key), (2) Flolio Attack Challenge Mode disabled (was returning 429 for 8+ cycles), (3) GH_PAT workflow scope added (Engineer couldn't dispatch to company repos), (4) Verified OpenRouter key + settings decryption working. Loop should self-heal from here. Duplicate approval cleanup deferred (MCP sql_mutate can't update approvals table — 0 rows affected, root cause unknown).
 
 - `[code]` 2026-03-26: Hierarchical context — Slimmed CLAUDE.md from 673→101 lines (constitutional core only: identity, rules, naming, code standards). Rewrote ARCHITECTURE.md from scratch (fixed 14+ stale items: OpenRouter not Gemini/Groq, QStash tiers, 21 tables, context API, inter-agent communication, CiberPME). All reference material (agent flows, model routing, provisioning, teardown, email, self-healing, validation phases, cross-company learning) now in ARCHITECTURE.md. CLAUDE.md points there for details.
 - `[code]` 2026-03-26: Hierarchical context optimization — Extended `/api/agents/context` with 3 new brain agent modes (ceo, scout, evolver). CEO gets validation, cycle, research, playbook, tasks, directives, metrics, scores in one call. Scout gets companies, killed/rejected history, market coverage. Evolver gets agent stats, cycle scores, stalled companies, repeated errors, playbook coverage. Updated all 3 brain agent workflows (hive-ceo/scout/evolver.yml) to call context API instead of inline SQL. Added cost-risk gate to backlog dispatch (blocks items matching spend keywords). Added model escalation (Opus on 3rd+ attempt). Updated Engineer workflow with dynamic model resolution from dispatch payload.
@@ -436,10 +456,10 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 
 ## What's Next (in priority order)
 
-1. **Install Sentry + Upstash Redis via Vercel Marketplace** — code is deployed, needs 1-click integration install to set env vars (SENTRY_DSN, UPSTASH_REDIS_REST_URL/TOKEN). Then redeploy.
-2. **Create QStash schedules** — run `POST /api/setup/qstash-schedules` with CRON_SECRET to register 5 QStash schedules
+1. **Verify loop self-healing** — ENCRYPTION_KEY + Flolio firewall + GH_PAT fixes are deployed. Next QStash cycles should show Growth/Outreach/Ops succeeding via OpenRouter. Monitor agent_actions for success.
+2. **Install Sentry + Upstash Redis via Vercel Marketplace** — code is deployed, needs 1-click integration install to set env vars (SENTRY_DSN, UPSTASH_REDIS_REST_URL/TOKEN). Then redeploy.
 3. **Resolve email domain (P0 blocker)** — buy domain, add Resend DNS records, set `sending_domain` (outreach completely blocked without this)
-4. **Triage 15 idea-status companies** — Scout proposals accumulating, pending manual review
+4. **Triage 20+ pending approvals** — duplicate new_company proposals, resolved escalations, capability_migration dupes. MCP sql_mutate can't update approvals table — may need direct DB access or API fix.
 5. **Dashboard redesign (P1)** — Carlos directive: real-time visualization, backlog pipeline view, compact alerts, richer activity
 
 ## Open Questions

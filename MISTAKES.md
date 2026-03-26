@@ -15,6 +15,48 @@
 
 ---
 
+### 2026-03-26 Turn estimates capped too low — every Engineer run hit max_turns
+**What happened:** 79 max_turns failures in 48h. Engineer consistently ran out of turns on tasks that should have been completable. Items retried with flat 2h cooldown, failing identically each time.
+**Root cause:** Three compounding issues: (1) Turn estimate prompt used S=10-15, M=20-25, L=30-35 — systematically 40-60% too low for real tasks that need repo exploration + implementation + build verification. (2) max_turns was only sent on 3rd+ attempt — first two dispatches used the workflow default (35) regardless of spec. (3) Cooldown was flat 2h for all retries — no escalation meant the same item failed every 2h indefinitely. (4) isMaxTurns detection was hardcoded at 30 turns — missed items with higher specs.
+**Fix applied:** (1) Turn estimates: S=15-20, M=25-35, L=35-50. (2) max_turns sent on every dispatch from spec. (3) Exponential backoff: 2h/6h/24h based on attempt count. (4) Dynamic isMaxTurns at 80% of spec turns. Commit 440ff05.
+**Prevention:** Turn estimates should be calibrated from actual successful runs, not guessed. Add a post-completion step that logs actual turns used vs estimated — use this data to auto-calibrate future estimates.
+**Affects:** hive
+
+### 2026-03-26 Backlog DB sync gap — interactive sessions complete work but dispatch loop re-does it
+**What happened:** 13 backlog items were found still marked `ready` in `hive_backlog` DB despite being fully implemented in the codebase (PR auto-merge suite, recurring escalation automation, capability assessment fix, etc.). The dispatch loop picked up and re-dispatched already-completed work, wasting Claude budget on unnecessary Engineer runs.
+**Root cause:** Interactive Claude Code sessions commit code and update `BACKLOG.md` but forget to update `hive_backlog` DB status. The dispatch loop reads from DB only — it never checks BACKLOG.md or git history. This creates a sync gap: work is done but the system doesn't know.
+**Fix applied:** (1) Manually synced all 13 items via MCP `hive_backlog_update` tool. (2) Updated context-snapshot skill with mandatory Step 2: query ready/dispatched items, cross-reference against commits, mark done items before updating any context files.
+**Prevention:** Always run `/context` at end of sessions — Step 2 now catches sync gaps automatically. When completing any backlog item in an interactive session, update BOTH `BACKLOG.md` AND `hive_backlog` DB (use MCP `hive_backlog_update`).
+**Affects:** hive
+
+### 2026-03-26 Sentry DSN never configured — error tracking was completely inert for days
+**What happened:** `@sentry/nextjs` was fully integrated in the codebase (server, edge, client configs, `withSentryConfig` in next.config.js, instrumentation files) but `SENTRY_DSN` env var was never set in Vercel. `Sentry.init()` with `undefined` DSN silently does nothing — no errors, no warnings, just no error capture.
+**Root cause:** The Sentry integration was added as code changes without the corresponding Vercel Marketplace install that auto-provisions the DSN. Code was merged, build passed, deploy succeeded — all green signals while error tracking was completely inactive.
+**Fix applied:** Installed Sentry via Vercel Marketplace (auto-provisions SENTRY_DSN + SENTRY_AUTH_TOKEN). Pushed empty commit to trigger redeploy with new env vars.
+**Prevention:** For any SDK that requires external configuration (Sentry, Redis, etc.), add a startup health check that verifies the config is actually set. Log a CRITICAL warning if `SENTRY_DSN` is undefined. Consider adding a `/api/health` check that reports which integrations are active vs. configured-but-inert.
+**Affects:** hive
+
+### 2026-03-26 Backlog chain_next flag missing from manual kickstart — chain never continued
+**What happened:** Manual dispatch to restart the backlog chain used `{source: "manual_kickstart", reason: "restart_chain"}` but the chain dispatch step in hive-engineer.yml only fires if `BACKLOG_ID` is non-empty OR `chain_next: true` in the payload. Without either flag, the chain step was skipped after completion.
+**Root cause:** The chain continuation logic has two triggers: (1) Engineer completed a backlog item (`BACKLOG_ID` set), (2) explicit `chain_next: true` in dispatch payload. Manual kickstart had neither — the first successful run completed and stopped.
+**Fix applied:** Re-dispatched with `chain_next: true` in the payload. Chain is now self-sustaining.
+**Prevention:** Document the required payload fields for chain dispatch. When manually restarting the chain, always include `chain_next: true`. Consider making chain continuation the default behavior when source is "manual_kickstart".
+**Affects:** hive
+
+### 2026-03-26 ENCRYPTION_KEY missing caused all worker agents to fail silently for days
+**What happened:** Growth, Outreach, and Ops agents had 0% success rate. Error logs showed settings decryption failures but the connection to ENCRYPTION_KEY was not immediately obvious. Meanwhile, Flolio was also blocked by Attack Challenge Mode (429 errors) and Engineer couldn't dispatch to company repos (GH_PAT missing `workflow` scope).
+**Root cause:** ENCRYPTION_KEY env var was never set in Vercel after the crypto.ts encryption was implemented. All encrypted settings (openrouter_api_key, etc.) were unreadable. Three separate config issues compounded — each required manual intervention.
+**Fix applied:** (1) Set valid 64-char hex ENCRYPTION_KEY in Vercel, (2) disabled Flolio Attack Challenge Mode, (3) added `workflow` scope to existing GH_PAT.
+**Prevention:** Add a startup health check that validates ENCRYPTION_KEY format and tests one setting decryption. Log a CRITICAL-level error (not just a warning) if decryption fails. Add a Sentinel check for "worker agent 0% success rate over N hours" that creates a P0 escalation with config checklist.
+**Affects:** hive
+
+### 2026-03-26 MCP hive_sql_mutate cannot update approvals table
+**What happened:** Attempted to clean up 20+ duplicate/resolved approvals via MCP SQL mutate tool. All UPDATE queries returned `affected: 0` rows despite correct SQL syntax and matching WHERE clauses. Tried different column names, JSONB casting, different filter conditions — all returned 0.
+**Root cause:** Unknown. Possibly RLS policy, database trigger, or MCP tool restriction on the approvals table specifically. Other tables work fine with sql_mutate.
+**Fix applied:** None — issue unresolved. Workaround: use direct database access or the approvals API endpoint for mutations.
+**Prevention:** When building MCP tools that wrap DB access, test UPDATE/DELETE operations on all tables, not just SELECT. Document any tables with restricted mutation access.
+**Affects:** hive
+
 ### 2026-03-26 Dumb auto-decompose produced 63 junk sub-tasks that blocked their parents
 **What happened:** Auto-decompose chunked approach steps into 1-2 step groups with hardcoded `complexity: "S"` and generic acceptance criteria. 63 useless sub-tasks were created. Parents were marked as decomposed and stopped being dispatched. The backlog filled with narrative fragments that no Engineer could execute.
 **Root cause:** Step-based chunking has no understanding of code, dependencies, or testability. Grouping "step 1-2" and "step 3-4" produces coupled fragments, not independent tasks. Acceptance criteria like `"Implements: Add error handling to..."` tell the Engineer nothing concrete.

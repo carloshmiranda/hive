@@ -26,20 +26,36 @@ Outreach emails are skipped because `sending_domain` is not set. ALL outreach cy
 Engineer agent starts GitHub Actions runs but produces zero turns of work. 118 failures with "unknown (0 turns)". Root cause unclear — likely claude-code-action misconfiguration or resource exhaustion. This is the #1 volume failure in the system. Investigation: check recent GitHub Actions run logs for startup errors, verify CLAUDE_CODE_OAUTH_TOKEN is valid, check if concurrent agent limit is being hit.
 Theme: `zero_intervention`
 
-### 🔴 P0 — Growth agent has no working LLM provider (0% effective)
-All 3 Growth LLM providers failing: Gemini API key invalid/missing (HTTP 400), Groq rate limit exhausted (HTTP 429), Claude fallback not implemented. Circuit breakers correctly tripping for verdedesk and ciberpme. Manual fix: verify/regenerate Gemini API key in Hive settings. Code fix: ensure OpenRouter fallback chain actually works for Growth agent (ADR-034 says it should).
+### ✅ P0 — Growth agent has no working LLM provider (DONE — 2026-03-26)
+Root cause: ENCRYPTION_KEY not set in Vercel env vars → settings decryption failed → openrouter_api_key unreadable. Fixed by setting ENCRYPTION_KEY. Also: Flolio Attack Challenge Mode was blocking requests (disabled). OpenRouter is now sole LLM provider for all workers (ADR-034). Gemini/Groq removed entirely.
 Theme: `zero_intervention`
 
 ### 🟡 P1 — Deduplicate approval escalations (7 identical Neon API key escalations)
 System created 7 identical escalation approvals for the same Neon API key decryption issue. Dedup logic should prevent creating duplicate escalations for the same root cause. Fix: before creating an escalation approval, query for existing pending approvals with similar error text (ILIKE match). If found within last 24h, skip creation and log "dedup: existing escalation [id]".
 Theme: `zero_intervention`
 
-### 🟡 P1 — Engineer max_turns exhaustion (79 failures in 48h)
-Engineer hits the 35-turn limit without completing tasks — tasks are too large or agent is spinning. Investigate: are these the same tasks being retried? Are acceptance criteria too vague? Fix options: (1) Tighter task scoping in CEO plan (max 3 files per task), (2) Early termination detection — if Engineer hasn't committed after 20 turns, abort and escalate, (3) Model escalation already implemented (ADR-035) but may need lower threshold (attempt 2 instead of 3).
+### ✅ P1 — Engineer max_turns exhaustion (DONE — 2026-03-26)
+Pipeline fixes: (1) Realistic turn estimates (S:15-20, M:25-35, L:35-50), (2) spec-driven max_turns sent on every dispatch, (3) exponential backoff cooldown (2h/6h/24h), (4) dynamic isMaxTurns detection at 80% of spec. Commit 440ff05.
 Theme: `zero_intervention`
 
-### 🟡 P1 — Fix ENCRYPTION_KEY format in Vercel (blocks secret decryption)
-`ENCRYPTION_KEY` env var in Vercel is not a valid 64-char hex string, so `crypto.ts` cannot decrypt stored settings (Neon API key, other secrets). Manual fix: generate a proper key with `openssl rand -hex 32` and update in Vercel env vars. Code fix: add validation on startup that logs a clear error if ENCRYPTION_KEY is malformed.
+### ✅ P1 — Fix ENCRYPTION_KEY format in Vercel (DONE — 2026-03-26)
+Carlos set valid 64-char hex ENCRYPTION_KEY in Vercel env vars. All worker agents can now decrypt settings. This was root cause of Growth/Outreach/Ops failures.
+Theme: `zero_intervention`
+
+### 🟡 P1 — OpenRouter free model resilience (Ops 100% failure rate)
+All OpenRouter free models (Mistral 24B, Llama 70B, Hermes 405B) intermittently go down simultaneously, causing 100% failure for Ops/Growth/Outreach workers. Per-model circuit breaker exists but doesn't help when ALL models are down. Options: (1) Add a paid OpenRouter model as last-resort fallback (e.g. $0.10/1M tokens), (2) Add a non-OpenRouter fallback (Gemini free tier as emergency backup), (3) Implement exponential backoff at the Sentinel level — if all workers fail 3x consecutively, stop dispatching workers for 1h instead of retrying every few minutes.
+Theme: `zero_intervention`
+
+### ✅ P1 — Sentry webhook endpoint for event-driven error response (DONE — 2026-03-26)
+Built `POST /api/webhooks/sentry` with HMAC signature verification, issue/metric_alert parsing, error fingerprint extraction, dedup by issue ID. Commit 7aa9472.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Connect Sentry webhook to Healer agent dispatch
+When Sentry webhook fires: classify error (config/code/infra), map to company, check Healer circuit breaker, dispatch via QStash. Config errors auto-resolve. Code errors create backlog items or dispatch Healer. Infra errors dispatch Ops. Reduces error response from 2-4h (Sentinel schedule) to seconds.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Sentry issue resolution feedback loop
+After Healer fixes an error, check Sentry API for recurrence. If resolved: mark action successful, update playbook. If still occurring: escalate. Handle Sentry "resolved" webhook to update agent_actions. Closes observe→fix→verify loop.
 Theme: `zero_intervention`
 
 ### 🟡 P1 — Triage 33+ pending Scout proposals (pipeline clogged)
@@ -125,8 +141,8 @@ Already implemented in `src/lib/llm.ts` fetchWithRetry() — exponential backoff
 ### ✅ P1 — Company task completion bottleneck (DONE — 2026-03-25)
 82/102 tasks stuck in `proposed` status. CEO creates tasks via POST /api/tasks which defaulted to `proposed`. Engineer needs `approved`. Fix: CEO-sourced tasks auto-set to `approved` (already phase-gate validated).
 
-### 🟡 P1 — Hierarchical context: shrink CLAUDE.md to constitutional core
-CLAUDE.md is 672 lines / 42KB injected into every agent session. CEO burned all 25 turns just loading context (12/12 failures since 3/21). Most content is reference material agents don't need per-task. Fix: extract 3 tiers — (1) Constitutional core (~100 lines, always injected): operating rules, 4 gates, escalation protocol, naming standards. (2) Agent-specific context (already in `prompts/*.md`): move remaining agent-specific sections from CLAUDE.md to prompt files. (3) Reference docs → new `ARCHITECTURE.md`: file structure, schema details, provisioning steps, email setup, social media — readable by humans, not injected into agents. Result: CLAUDE.md drops from 42KB to ~4KB, freeing ~38KB of context window per agent run.
+### ✅ P1 — Hierarchical context: shrink CLAUDE.md to constitutional core (DONE — 2026-03-26)
+CLAUDE.md reduced from 672→101 lines. All reference material extracted to ARCHITECTURE.md. Agent-specific context in prompts/*.md. Context API serves pre-computed context to all agents.
 Theme: `self_improving`
 
 ### ✅ P1 — Hierarchical context: extend context API to brain agents (DONE — 2026-03-26)
@@ -140,6 +156,18 @@ Theme: `self_improving`
 ### ⚪ P3 — Hierarchical context: pgvector semantic retrieval for knowledge
 When metadata filtering (domain + agent) isn't precise enough, use semantic similarity. Enable Neon's pgvector extension, generate embeddings for playbook entries + mistakes + decisions using OpenRouter free embedding models. Context API falls back to vector similarity search when keyword matching returns too few results. Complements the existing P2 pgvector playbook item — extends to all knowledge types.
 Theme: `self_improving`
+
+### 🟡 P1 — 14 atomic sub-tasks for autonomous Engineer dispatch (2026-03-26)
+Decomposed from 9 P1 parent items. All in DB as `ready`. Key items:
+- Auto-category classification on dispatch
+- Specialist type detection + context snippet in Engineer prompt
+- Input sanitizer for agent task descriptions + wiring into dispatch
+- Self-review checklist in Engineer build prompt
+- Backlog scope check (reject company-specific items)
+- Backlog health endpoint (duplicates, stale items) + janitor auto-rejection
+- Pre-push YAML validation script
+- Agent display name mapping + Telegram integration
+- README.md with project overview
 
 ### 🟡 P1 — Specialist prompt profiles for agent task routing
 Agents use one broad prompt for all task types, causing poor quality on specialized work (73% cascade failure rate, generic UI, no security review). Implement specialist prompt injection: task type → load focused prompt alongside the agent's base prompt.
@@ -416,7 +444,7 @@ Cohort analysis for lifetime value. CAC tracking (if/when paid acquisition start
 Installed @upstash/redis. Created `redis-cache.ts` with cache-aside pattern: settings (10-min TTL, `s:` prefix — 118 call sites benefit), playbook (1h TTL, `pb:` prefix), company list (5m TTL). Pattern invalidation via SCAN. Graceful no-op without env vars. Health check in `/api/health`. Needs Vercel Marketplace install to activate.
 
 ### ✅ P2 — Add Sentry error tracking via Vercel Marketplace (DONE — 2026-03-26)
-Installed @sentry/nextjs v10.46. Server + edge + client instrumentation via `instrumentation.ts` pattern (Next.js 15 App Router). Global error boundary (`global-error.tsx`). 10% trace sampling, NEXT_NOT_FOUND filtered. Needs Vercel Marketplace install to activate.
+Installed @sentry/nextjs v10.46. Server + edge + client instrumentation via `instrumentation.ts` pattern (Next.js 15 App Router). Global error boundary (`global-error.tsx`). 10% trace sampling, NEXT_NOT_FOUND filtered. Vercel Marketplace install completed — SENTRY_DSN + SENTRY_AUTH_TOKEN now live in production.
 
 ### ⚪ P3 — Use Vercel Edge Config for feature flags and dispatch config
 Store feature flags (enable/disable agents, maintenance mode), health gate parameters, dispatch status in Edge Config (free: 100K reads, 100 writes/mo). Sub-millisecond reads at edge vs ~50ms Neon. Constraint: only 100 writes/month — for config that changes infrequently.
@@ -431,6 +459,9 @@ Offload large content from Neon to Vercel Blob (free on Pro, S3-backed, 99.99999
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-26 — Backlog DB audit: 13 stale items synced, dynamic model discovery deployed
+Backlog audit cross-referenced 100+ ready items against 7 days of commits. Found 13 items marked ready in DB that were already implemented: PR auto-merge suite (5 items: risk scoring, retrieval, cron job, logic, edge cases), recurring escalation automation (2 items: cross-company + spend_approval), capability assessment fix, and 4 items from earlier session work. Also rejected 1 duplicate (Edge Config P3 duped P2). Dynamic free model discovery deployed: `fetchFreeModels()` in llm.ts fetches OpenRouter catalog hourly, pads agent chains with 20-30+ free models filtered by minContext. Context-snapshot skill updated with mandatory Step 2 for DB sync.
 
 ### ✅ 2026-03-25 — CEO review saving, pr_open enforcement, Telegram enrichment, 0-turn ghost fix (P1)
 Four fixes: (1) CEO workflow now saves review scores to cycles table via `/api/cycles/[id]/review` — was generating scores but never persisting them. (2) Backlog dispatch requires pr_number for pr_open status — no PR number marks as done instead of phantom. Also stores pr_number/pr_url in hive_backlog. (3) Telegram notifications enriched with PR links, task titles, duration, error details, run URLs, human-readable agent/action labels (Carlos directive). (4) All 4 agent workflows log 0-turn failures as 'skipped' instead of 'failed' — stops inflating failure metrics.
