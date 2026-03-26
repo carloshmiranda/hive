@@ -90,7 +90,9 @@ async function buildContext(sql: any, company: any) {
     `.catch(() => []),
     sql`
       SELECT domain, insight FROM playbook
-      WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 5
+      WHERE confidence >= 0.6
+        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+      ORDER BY confidence DESC LIMIT 5
     `.catch(() => []),
     sql`
       SELECT id, title, description, priority, acceptance, status
@@ -175,7 +177,9 @@ async function growthContext(sql: any, company: any) {
     `.catch(() => []),
     sql`
       SELECT domain, insight FROM playbook
-      WHERE confidence >= 0.6 ORDER BY confidence DESC LIMIT 10
+      WHERE confidence >= 0.6
+        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+      ORDER BY confidence DESC LIMIT 10
     `.catch(() => []),
     sql`
       SELECT proposed_fix FROM evolver_proposals

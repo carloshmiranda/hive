@@ -40,19 +40,21 @@ server.registerTool(
       limit: z.number().default(50).describe("Max rows to return"),
     },
   },
-  async ({ status, priority, theme }) => {
+  async ({ status, priority, theme, limit }) => {
+    const params = [];
     const conditions = [];
-    if (status !== "all") { conditions.push(`status = '${status}'`); }
-    if (priority !== "all") { conditions.push(`priority = '${priority}'`); }
-    if (theme) { conditions.push(`theme = '${theme.replace(/'/g, "''")}'`); }
+    if (status !== "all") { params.push(status); conditions.push(`status = $${params.length}`); }
+    if (priority !== "all") { params.push(priority); conditions.push(`priority = $${params.length}`); }
+    if (theme) { params.push(theme); conditions.push(`theme = $${params.length}`); }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    params.push(limit);
     const rows = await sql.query(`
       SELECT id, priority, title, category, status, source, theme, notes, pr_number,
              created_at::date as created, dispatched_at, completed_at
       FROM hive_backlog ${where}
       ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END, created_at
-      LIMIT 100
-    `);
+      LIMIT $${params.length}
+    `, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   }
 );
@@ -121,14 +123,16 @@ server.registerTool(
     },
   },
   async ({ id, status, priority, theme, notes }) => {
+    const params = [];
     const sets = [];
-    if (status) sets.push(`status = '${status}'`);
-    if (priority) sets.push(`priority = '${priority}'`);
-    if (theme) sets.push(`theme = '${theme.replace(/'/g, "''")}'`);
-    if (notes) sets.push(`notes = COALESCE(notes, '') || ' ${notes.replace(/'/g, "''")}'`);
+    if (status) { params.push(status); sets.push(`status = $${params.length}`); }
+    if (priority) { params.push(priority); sets.push(`priority = $${params.length}`); }
+    if (theme) { params.push(theme); sets.push(`theme = $${params.length}`); }
+    if (notes) { params.push(notes); sets.push(`notes = COALESCE(notes, '') || ' ' || $${params.length}`); }
     if (status === "done") sets.push(`completed_at = NOW()`);
     if (sets.length === 0) return { content: [{ type: "text", text: "No updates specified" }] };
-    const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = '${id}' RETURNING id, title, status, priority, theme, notes`);
+    params.push(id);
+    const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id, title, status, priority, theme, notes`, params);
     return { content: [{ type: "text", text: row ? JSON.stringify(row, null, 2) : `Item ${id} not found` }] };
   }
 );
@@ -149,13 +153,15 @@ server.registerTool(
   async ({ updates }) => {
     const results = [];
     for (const { id, status, priority, notes } of updates) {
+      const params = [];
       const sets = [];
-      if (status) sets.push(`status = '${status}'`);
-      if (priority) sets.push(`priority = '${priority}'`);
-      if (notes) sets.push(`notes = COALESCE(notes, '') || ' ${notes.replace(/'/g, "''")}'`);
+      if (status) { params.push(status); sets.push(`status = $${params.length}`); }
+      if (priority) { params.push(priority); sets.push(`priority = $${params.length}`); }
+      if (notes) { params.push(notes); sets.push(`notes = COALESCE(notes, '') || ' ' || $${params.length}`); }
       if (status === "done") sets.push(`completed_at = NOW()`);
       if (sets.length === 0) continue;
-      const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = '${id}' RETURNING id, title, status, priority`);
+      params.push(id);
+      const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id, title, status, priority`, params);
       if (row) results.push(row);
     }
     return { content: [{ type: "text", text: JSON.stringify({ updated: results.length, items: results }, null, 2) }] };
@@ -171,7 +177,7 @@ server.registerTool(
     },
   },
   async ({ id }) => {
-    const [row] = await sql.query(`DELETE FROM hive_backlog WHERE id = '${id}' RETURNING id, title`);
+    const [row] = await sql.query(`DELETE FROM hive_backlog WHERE id = $1 RETURNING id, title`, [id]);
     return { content: [{ type: "text", text: row ? `Deleted: ${row.title}` : `Item ${id} not found` }] };
   }
 );
@@ -187,16 +193,18 @@ server.registerTool(
     },
   },
   async ({ status }) => {
-    const where = status ? `WHERE c.status = '${status}'` : "";
+    const params = [];
+    let where = "";
+    if (status) { params.push(status); where = `WHERE c.status = $${params.length}`; }
     const rows = await sql.query(`
-      SELECT c.id, c.name, c.slug, c.status, c.company_type, c.business_model,
+      SELECT c.id, c.name, c.slug, c.status, c.company_type,
              c.market, c.content_language,
              (SELECT count(*) FROM cycles WHERE company_id = c.id) as cycle_count,
-             (SELECT score FROM cycles WHERE company_id = c.id ORDER BY started_at DESC LIMIT 1) as last_score,
+             (SELECT (ceo_review->'review'->>'score')::int FROM cycles WHERE company_id = c.id ORDER BY started_at DESC LIMIT 1) as last_score,
              c.created_at::date as created
       FROM companies c ${where}
       ORDER BY c.status, c.name
-    `);
+    `, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   }
 );
@@ -215,9 +223,12 @@ server.registerTool(
     },
   },
   async ({ agent, status, hours, limit }) => {
-    const conditions = [`started_at > NOW() - INTERVAL '${hours} hours'`];
-    if (agent) conditions.push(`agent = '${agent}'`);
-    if (status) conditions.push(`status = '${status}'`);
+    const params = [];
+    params.push(hours);
+    const conditions = [`started_at > NOW() - INTERVAL '1 hour' * $${params.length}`];
+    if (agent) { params.push(agent); conditions.push(`agent = $${params.length}`); }
+    if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
+    params.push(limit);
     const rows = await sql.query(`
       SELECT id, agent, action_type, company_id, status,
              substring(description from 1 for 120) as description,
@@ -227,8 +238,8 @@ server.registerTool(
       FROM agent_actions
       WHERE ${conditions.join(" AND ")}
       ORDER BY started_at DESC
-      LIMIT ${limit}
-    `);
+      LIMIT $${params.length}
+    `, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   }
 );
@@ -242,25 +253,26 @@ server.registerTool(
     },
   },
   async ({ hours }) => {
+    const params = [hours];
     const byAgent = await sql.query(`
       SELECT agent, count(*)::int as failures,
              count(CASE WHEN error IS NULL THEN 1 END)::int as null_errors
       FROM agent_actions
-      WHERE status = 'failed' AND started_at > NOW() - INTERVAL '${hours} hours'
+      WHERE status = 'failed' AND started_at > NOW() - INTERVAL '1 hour' * $1
       GROUP BY agent ORDER BY failures DESC
-    `);
+    `, params);
     const topErrors = await sql.query(`
       SELECT agent, substring(error from 1 for 150) as error, count(*)::int as count
       FROM agent_actions
-      WHERE status = 'failed' AND error IS NOT NULL AND started_at > NOW() - INTERVAL '${hours} hours'
+      WHERE status = 'failed' AND error IS NOT NULL AND started_at > NOW() - INTERVAL '1 hour' * $1
       GROUP BY agent, substring(error from 1 for 150) ORDER BY count DESC LIMIT 15
-    `);
+    `, params);
     const total = await sql.query(`
       SELECT count(*)::int as total_actions,
              count(CASE WHEN status = 'failed' THEN 1 END)::int as failed,
              count(CASE WHEN status = 'success' THEN 1 END)::int as succeeded
-      FROM agent_actions WHERE started_at > NOW() - INTERVAL '${hours} hours'
-    `);
+      FROM agent_actions WHERE started_at > NOW() - INTERVAL '1 hour' * $1
+    `, params);
     return {
       content: [{
         type: "text",
@@ -281,14 +293,16 @@ server.registerTool(
     },
   },
   async ({ status }) => {
-    const where = status === "all" ? "" : `WHERE status = '${status}'`;
+    const params = [];
+    let where = "";
+    if (status !== "all") { params.push(status); where = `WHERE status = $${params.length}`; }
     const rows = await sql.query(`
       SELECT id, gate_type, title, status,
              substring(description from 1 for 200) as description,
              context, created_at
       FROM approvals ${where}
       ORDER BY created_at DESC LIMIT 30
-    `);
+    `, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   }
 );
@@ -305,18 +319,22 @@ server.registerTool(
     },
   },
   async ({ company_id, limit }) => {
-    const where = company_id ? `WHERE company_id = '${company_id}'` : "";
+    const params = [];
+    let where = "";
+    if (company_id) { params.push(company_id); where = `WHERE c.company_id = $${params.length}`; }
+    params.push(limit);
     const rows = await sql.query(`
-      SELECT c.id, co.name as company, c.status, c.score,
-             c.started_at, c.finished_at,
-             substring(c.plan::text from 1 for 200) as plan_preview,
-             substring(c.review::text from 1 for 200) as review_preview
+      SELECT c.id, co.name as company, c.status,
+             (c.ceo_review->'review'->>'score')::int as score,
+             c.started_at, c.finished_at, c.cycle_number,
+             substring(c.ceo_plan::text from 1 for 200) as plan_preview,
+             substring(c.ceo_review::text from 1 for 200) as review_preview
       FROM cycles c
       LEFT JOIN companies co ON co.id = c.company_id
       ${where}
       ORDER BY c.started_at DESC
-      LIMIT ${limit}
-    `);
+      LIMIT $${params.length}
+    `, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   }
 );
@@ -378,10 +396,12 @@ server.registerTool(
     },
   },
   async ({ company_slug, status, limit }) => {
-    const where = [];
-    if (company_slug) where.push(`c.slug = '${company_slug}'`);
-    if (status && status !== "all") where.push(`t.status = '${status}'`);
-    const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    const params = [];
+    const conditions = [];
+    if (company_slug) { params.push(company_slug); conditions.push(`c.slug = $${params.length}`); }
+    if (status && status !== "all") { params.push(status); conditions.push(`t.status = $${params.length}`); }
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    params.push(limit);
     const rows = await sql.query(`
       SELECT t.id, c.slug as company, t.category, t.title, t.status, t.priority, t.source,
              t.created_at, t.updated_at
@@ -389,8 +409,8 @@ server.registerTool(
       JOIN companies c ON c.id = t.company_id
       ${whereClause}
       ORDER BY t.priority ASC, t.created_at DESC
-      LIMIT ${limit}
-    `);
+      LIMIT $${params.length}
+    `, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   }
 );
@@ -434,7 +454,7 @@ server.registerTool(
     `;
     const pendingApprovals = await sql`SELECT count(*)::int as count FROM approvals WHERE status = 'pending'`;
     const recentCycles = await sql`
-      SELECT co.name, c.score, c.status, c.started_at::date as date
+      SELECT co.name, (c.ceo_review->'review'->>'score')::int as score, c.status, c.started_at::date as date
       FROM cycles c JOIN companies co ON co.id = c.company_id
       ORDER BY c.started_at DESC LIMIT 5
     `;
@@ -450,6 +470,132 @@ server.registerTool(
         }, null, 2),
       }],
     };
+  }
+);
+
+// ── Playbook ──────────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_playbook",
+  {
+    description: "Query the playbook table for cross-company learnings.",
+    inputSchema: {
+      domain: z.string().optional().describe("Filter by domain (e.g. 'seo', 'pricing', 'growth')"),
+      company_slug: z.string().optional().describe("Filter by source company slug"),
+      min_confidence: z.number().default(0.5).describe("Minimum confidence score"),
+      limit: z.number().default(20).describe("Max rows"),
+    },
+  },
+  async ({ domain, company_slug, min_confidence, limit }) => {
+    const params = [];
+    params.push(min_confidence);
+    const conditions = [`p.confidence >= $${params.length}`, `p.superseded_by IS NULL`];
+    if (domain) { params.push(domain); conditions.push(`p.domain = $${params.length}`); }
+    if (company_slug) { params.push(company_slug); conditions.push(`c.slug = $${params.length}`); }
+    params.push(limit);
+    const rows = await sql.query(`
+      SELECT p.id, p.domain, p.insight, p.confidence, p.content_language,
+             c.slug as source_company, p.applied_count, p.reference_count,
+             p.created_at
+      FROM playbook p
+      LEFT JOIN companies c ON c.id = p.company_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY p.confidence DESC, p.created_at DESC
+      LIMIT $${params.length}
+    `, params);
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
+// ── Error Patterns ────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_error_patterns",
+  {
+    description: "Query the error_patterns table for normalized error patterns and their fixes.",
+    inputSchema: {
+      agent: z.string().optional().describe("Filter by agent name"),
+      resolved: z.boolean().optional().describe("Filter by resolved status"),
+      limit: z.number().default(20).describe("Max rows"),
+    },
+  },
+  async ({ agent, resolved, limit }) => {
+    const params = [];
+    const conditions = [];
+    if (agent) { params.push(agent); conditions.push(`agent = $${params.length}`); }
+    if (resolved !== undefined) { params.push(resolved); conditions.push(`resolved = $${params.length}`); }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    params.push(limit);
+    const rows = await sql.query(`
+      SELECT id, pattern, agent, fix_summary, fix_detail,
+             occurrences, last_seen_at, resolved, auto_fixable
+      FROM error_patterns ${where}
+      ORDER BY occurrences DESC, last_seen_at DESC
+      LIMIT $${params.length}
+    `, params);
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
+// ── Directives ────────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_directives",
+  {
+    description: "Query directives — instructions from Carlos to agents.",
+    inputSchema: {
+      status: z.enum(["open", "closed", "all"]).default("open").describe("Filter by status"),
+      company_slug: z.string().optional().describe("Filter by company slug"),
+      limit: z.number().default(20).describe("Max rows"),
+    },
+  },
+  async ({ status, company_slug, limit }) => {
+    const params = [];
+    const conditions = [];
+    if (status !== "all") { params.push(status); conditions.push(`d.status = $${params.length}`); }
+    if (company_slug) { params.push(company_slug); conditions.push(`c.slug = $${params.length}`); }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    params.push(limit);
+    const rows = await sql.query(`
+      SELECT d.id, c.name as company, c.slug as company_slug,
+             d.agent, d.text, d.status, d.resolution,
+             d.created_at, d.closed_at
+      FROM directives d
+      LEFT JOIN companies c ON c.id = d.company_id
+      ${where}
+      ORDER BY d.created_at DESC
+      LIMIT $${params.length}
+    `, params);
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
+// ── Routing Weights ───────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_routing_weights",
+  {
+    description: "Query model routing success rates by agent, computed from agent_actions.",
+    inputSchema: {
+      hours: z.number().default(168).describe("Look back N hours (default 168 = 7 days)"),
+    },
+  },
+  async ({ hours }) => {
+    const rows = await sql.query(`
+      SELECT agent,
+             output->>'provider' as provider,
+             output->>'model' as model,
+             COUNT(*)::int as total,
+             COUNT(CASE WHEN status = 'success' THEN 1 END)::int as successes,
+             COUNT(CASE WHEN status = 'failed' THEN 1 END)::int as failures,
+             ROUND(COUNT(CASE WHEN status = 'success' THEN 1 END)::numeric / NULLIF(COUNT(*), 0) * 100, 1) as success_rate
+      FROM agent_actions
+      WHERE started_at > NOW() - INTERVAL '1 hour' * $1
+      GROUP BY agent, output->>'provider', output->>'model'
+      HAVING COUNT(*) >= 3
+      ORDER BY success_rate ASC
+    `, [hours]);
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
   }
 );
 

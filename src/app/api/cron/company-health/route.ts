@@ -108,8 +108,8 @@ export async function GET(req: Request) {
             `;
           }
         }
-      } catch {
-        // Site may be down — other checks handle this
+      } catch (e: any) {
+        console.warn(`[company-health] language check fetch for ${lc.slug} failed: ${e?.message || e}`);
       }
     }
     results.language_mismatches = languageMismatches;
@@ -177,8 +177,8 @@ export async function GET(req: Request) {
               }
             }
           }
-        } catch {
-          // API errors — skip this company, will retry next run
+        } catch (e: any) {
+          console.warn(`[company-health] stale record reconciliation for ${rc.slug} failed: ${e?.message || e}`);
         }
       }
     }
@@ -214,7 +214,7 @@ export async function GET(req: Request) {
           signal: AbortSignal.timeout(5000),
         });
         if (testsRes.ok) { hasTestDir = true; hasTestFiles = true; }
-      } catch { /* non-blocking */ }
+      } catch (e: any) { console.warn(`[company-health] check tests/ dir for ${slug} failed: ${e?.message || e}`); }
 
       try {
         const playwrightRes = await fetch(`https://api.github.com/repos/${repo}/contents/playwright.config.ts`, {
@@ -222,7 +222,7 @@ export async function GET(req: Request) {
           signal: AbortSignal.timeout(5000),
         });
         if (playwrightRes.ok) { hasPlaywrightConfig = true; hasTestFiles = true; }
-      } catch { /* non-blocking */ }
+      } catch (e: any) { console.warn(`[company-health] check playwright config for ${slug} failed: ${e?.message || e}`); }
 
       if (!hasTestFiles) {
         try {
@@ -231,7 +231,7 @@ export async function GET(req: Request) {
             signal: AbortSignal.timeout(5000),
           });
           if (srcTestsRes.ok) { hasTestFiles = true; }
-        } catch { /* non-blocking */ }
+        } catch (e: any) { console.warn(`[company-health] check src/__tests__ for ${slug} failed: ${e?.message || e}`); }
       }
 
       if (hasTestFiles) {
@@ -248,7 +248,7 @@ export async function GET(req: Request) {
             const latestRun = runsData.workflow_runs?.[0];
             if (latestRun) { latestTestRun = { conclusion: latestRun.conclusion }; }
           }
-        } catch { /* non-blocking */ }
+        } catch (e: any) { console.warn(`[company-health] check test workflow runs for ${slug} failed: ${e?.message || e}`); }
       }
 
       const testCapabilities = {
@@ -263,7 +263,7 @@ export async function GET(req: Request) {
             updated_at = NOW()
           WHERE id = ${companyId}
         `;
-      } catch { /* non-blocking */ }
+      } catch (e: any) { console.warn(`[company-health] update test capabilities for ${slug} failed: ${e?.message || e}`); }
 
       if (!hasTestFiles && totalCycles >= 3) {
         const taskTitle = `Add smoke tests for ${slug}`;
@@ -312,7 +312,7 @@ export async function GET(req: Request) {
         VALUES ('sentinel', 'test_coverage_check',
           ${`Test coverage check: ${testCoverageIssues} issues found across ${testCompanies.length} companies`},
           'success', NOW(), NOW())
-      `.catch(() => {});
+      `.catch((e: any) => { console.warn(`[company-health] log test coverage check failed: ${e?.message || e}`); });
     }
     results.test_coverage_issues = testCoverageIssues;
   } catch (e: any) {
@@ -342,7 +342,7 @@ export async function GET(req: Request) {
                 UPDATE hive_backlog SET status = 'done', notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by company-health check 38.`}
                 WHERE status = 'pr_open'
                   AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
-              `.catch(() => {});
+              `.catch((e: any) => { console.warn(`[company-health] update backlog for merged PR #${pr.number} failed: ${e?.message || e}`); });
 
               try {
                 await fetch(`${baseUrl}/api/notify`, {
@@ -350,7 +350,7 @@ export async function GET(req: Request) {
                   headers: { "Content-Type": "application/json", Authorization: `Bearer ${cronSecret}` },
                   body: JSON.stringify({ text: `✅ Auto-merged PR #${pr.number}: ${pr.title} (risk: ${analysis.riskScore})` }),
                 });
-              } catch {}
+              } catch (e: any) { console.warn(`[company-health] notify auto-merge PR #${pr.number} failed: ${e?.message || e}`); }
             }
           } else if (analysis.decision === "escalate") {
             const [existingApproval] = await sql`
@@ -380,7 +380,7 @@ export async function GET(req: Request) {
           VALUES ('sentinel', 'pr_review_check',
             ${`PR review check 38: ${hivePRs.length} open PRs — ${merged} auto-merged, ${escalated} escalated`},
             'success', NOW(), NOW())
-        `.catch(() => {});
+        `.catch((e: any) => { console.warn(`[company-health] log PR review check failed: ${e?.message || e}`); });
       }
       results.prs_merged = merged;
       results.prs_escalated = escalated;
@@ -521,7 +521,7 @@ export async function GET(req: Request) {
               const runsData = await runsRes.json();
               runFound = (runsData.total_count || 0) > 0;
             }
-          } catch { /* API error — assume not found */ }
+          } catch (e: any) { console.warn(`[company-health] check workflow runs for dispatch verification failed: ${e?.message || e}`); }
         }
 
         if (!runFound) {
@@ -533,7 +533,7 @@ export async function GET(req: Request) {
               'failed',
               ${JSON.stringify({ original_dispatch: d.id, target_agent: targetAgent, company: d.company_slug })}::jsonb,
               NOW(), NOW())
-          `.catch(() => {});
+          `.catch((e: any) => { console.warn(`[company-health] log silent dispatch failure for ${d.company_slug} failed: ${e?.message || e}`); });
         }
       }
     }
@@ -598,7 +598,7 @@ export async function GET(req: Request) {
             VALUES ('sentinel', 'stale_cycle_dispatch',
               ${`Safety net: dispatched cycle_start for ${sc.slug} (stale ${Math.round(hoursSinceActivity)}h)`},
               'success', ${sc.id}, NOW(), NOW())
-          `.catch(() => {});
+          `.catch((e: any) => { console.warn(`[company-health] log stale cycle dispatch for ${sc.slug} failed: ${e?.message || e}`); });
 
           staleCyclesDispatched++;
         }
@@ -673,10 +673,10 @@ export async function GET(req: Request) {
               VALUES ('sentinel', 'stuck_pr_dispatch',
                 ${`Stuck PR: ${pc.github_repo}#${pr.number} "${pr.title}" — CI green for ${Math.round(prAge)}h, dispatched CEO review`},
                 'success', ${pc.id}, NOW(), NOW())
-            `.catch(() => {});
+            `.catch((e: any) => { console.warn(`[company-health] log stuck PR dispatch for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
           }
         }
-      } catch { /* Per-company API errors — skip */ }
+      } catch (e: any) { console.warn(`[company-health] stuck PR check for ${pc.slug} failed: ${e?.message || e}`); }
     }
     results.stuck_prs_dispatched = stuckPRs;
   } catch (e: any) {
@@ -689,7 +689,7 @@ export async function GET(req: Request) {
     VALUES ('sentinel', 'company_health_check',
       ${`Company health checks: ${JSON.stringify(results)}`},
       'success', ${JSON.stringify(results)}::jsonb, NOW(), NOW())
-  `.catch(() => {});
+  `.catch((e: any) => { console.warn(`[company-health] log overall health check run failed: ${e?.message || e}`); });
 
   // Telegram notification if issues found
   try {
@@ -712,7 +712,7 @@ export async function GET(req: Request) {
         summary: parts.join(", "),
       });
     }
-  } catch { /* Telegram not configured */ }
+  } catch (e: any) { console.warn(`[company-health] Telegram notification failed: ${e?.message || e}`); }
 
   return Response.json({ ok: true, ...results });
 }

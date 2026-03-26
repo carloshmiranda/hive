@@ -254,7 +254,8 @@ For all phases:
 4. Score the cycle 1-10 based on phase-appropriate criteria + design quality.
 5. Identify one learning worth adding to the playbook.
 6. If `kill_signal` is true, include `"kill_flag": true` with reason.
-7. **CRITICAL:** After generating your review JSON, save it to the cycles table:
+7. **Diagnose error patterns** from failed actions this cycle (see below).
+8. **CRITICAL:** After generating your review JSON, save it to the cycles table:
 
    STEP 1 — Find the current cycle:
    ```sql
@@ -327,10 +328,28 @@ For all phases:
     "kill_flag": false,
     "kill_reason": null,
     "next_cycle_priorities": ["Priority 1", "Priority 2"],
-    "error_patterns": []
+    "error_patterns": [
+      {
+        "error_text": "Normalized error string (strip UUIDs, timestamps, paths)",
+        "agent": "engineer|growth|ops|ceo",
+        "fix_summary": "One-line description of what should fix it",
+        "severity": "critical|high|medium",
+        "auto_fixable": true
+      }
+    ]
   }
 }
 ```
+
+### Error pattern diagnosis
+
+When reviewing failed agent actions this cycle, populate `error_patterns`:
+- Query failed `agent_actions` for this cycle (status = 'error' or 'failed')
+- For each distinct error: normalize the text (strip UUIDs, timestamps, file paths, URLs) to a reusable pattern
+- Identify the responsible agent and what fix would resolve it
+- Set `severity`: **critical** = blocks the cycle or loses data, **high** = degrades output quality, **medium** = cosmetic or non-blocking
+- Set `auto_fixable: true` if the Healer agent can fix it autonomously (code bug, config issue, missing migration). Set `false` if it requires manual intervention (API key expired, external service down)
+- Max 5 patterns per review. This feeds the `error_patterns` table for automatic fix suggestions in future cycles
 
 ## Product spec (accumulated across cycles)
 

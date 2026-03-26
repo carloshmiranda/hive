@@ -64,6 +64,13 @@ export async function GET(req: Request) {
         }
       }
 
+      // Only write to DB when we got real data from the company API
+      if (source !== "company_api") {
+        console.warn(`[metrics] ${company.slug}: skipping DB write (source: ${source})`);
+        results.push({ slug: company.slug, views: 0, pricing_clicks: 0, affiliate_clicks: 0, smoke_test_pass: null, source });
+        continue;
+      }
+
       // Use convergent metrics update to handle concurrent writes
       await updateMetrics({
         company_id: company.id,

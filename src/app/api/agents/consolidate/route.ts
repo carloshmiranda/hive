@@ -1,4 +1,5 @@
 import { getDb, json, err } from "@/lib/db";
+import { dispatchEvent } from "@/lib/dispatch";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,8 @@ export async function POST(req: Request) {
     confidence_boosts: 0,
     confidence_decays: 0,
     cycle_score: null as number | null,
+    error_patterns_learned: 0,
+    healer_dispatched: false,
   };
 
   // Find the most recent completed cycle for this company
@@ -35,7 +38,7 @@ export async function POST(req: Request) {
   if (cycle_id) {
     [cycle] = await sql`
       SELECT cy.id, cy.company_id, cy.ceo_review, cy.cycle_number,
-        c.slug, c.id as cid
+        c.slug, c.id as cid, c.content_language
       FROM cycles cy JOIN companies c ON c.id = cy.company_id
       WHERE cy.id = ${cycle_id} LIMIT 1
     `.catch(() => []);
@@ -47,7 +50,7 @@ export async function POST(req: Request) {
 
     [cycle] = await sql`
       SELECT cy.id, cy.company_id, cy.ceo_review, cy.cycle_number,
-        c.slug, c.id as cid
+        c.slug, c.id as cid, c.content_language
       FROM cycles cy JOIN companies c ON c.id = cy.company_id
       WHERE cy.company_id = ${company.id}
       ORDER BY cy.started_at DESC LIMIT 1
@@ -81,7 +84,7 @@ export async function POST(req: Request) {
 
     if (!existing) {
       await sql`
-        INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
+        INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
         VALUES (
           ${cycle.company_id},
           ${entry.domain},
@@ -91,7 +94,8 @@ export async function POST(req: Request) {
             cycle_score: score,
             source: "ceo_review_consolidation",
           })}::jsonb,
-          ${Math.min(1, Math.max(0, entry.confidence || 0.6))}
+          ${Math.min(1, Math.max(0, entry.confidence || 0.6))},
+          ${cycle.content_language || null}
         )
       `.catch(() => {});
       results.playbook_entries_created++;
@@ -118,7 +122,7 @@ export async function POST(req: Request) {
 
       if (!existing) {
         await sql`
-          INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
+          INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
           VALUES (
             ${cycle.company_id},
             ${domain},
@@ -128,7 +132,8 @@ export async function POST(req: Request) {
               cycle_score: score,
               source: "win_extraction",
             })}::jsonb,
-            ${score >= 9 ? 0.8 : 0.6}
+            ${score >= 9 ? 0.8 : 0.6},
+            ${cycle.content_language || null}
           )
         `.catch(() => {});
         results.playbook_entries_created++;
@@ -188,7 +193,68 @@ export async function POST(req: Request) {
     }
   }
 
-  // --- 4. Compute roadmap theme progress ---
+  // --- 4. Extract and learn error patterns from CEO review ---
+  const errorPatterns = reviewData.error_patterns || [];
+  if (Array.isArray(errorPatterns) && errorPatterns.length > 0) {
+    let criticalHighCount = 0;
+    const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+
+    for (const pattern of errorPatterns.slice(0, 5)) {
+      if (!pattern.error_text || !pattern.agent || !pattern.fix_summary) continue;
+      try {
+        const epRes = await fetch(`${baseUrl}/api/agents/error-patterns`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.CRON_SECRET}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            action: "learn",
+            error_text: pattern.error_text,
+            agent: pattern.agent,
+            fix_summary: pattern.fix_summary,
+            fix_detail: pattern.fix_detail || null,
+            auto_fixable: pattern.auto_fixable ?? false,
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (epRes.ok) results.error_patterns_learned++;
+      } catch (e) {
+        console.warn(`[consolidate] Error pattern learn failed: ${e instanceof Error ? e.message : "unknown"}`);
+      }
+
+      if (pattern.severity === "critical" || pattern.severity === "high") {
+        criticalHighCount++;
+      }
+    }
+
+    // Dispatch healer if 2+ critical/high patterns diagnosed
+    if (criticalHighCount >= 2) {
+      try {
+        const autoFixablePatterns = errorPatterns
+          .filter((p: { auto_fixable?: boolean; severity?: string }) =>
+            p.auto_fixable && (p.severity === "critical" || p.severity === "high")
+          )
+          .map((p: { error_text: string; agent: string; fix_summary: string }) => ({
+            error_text: p.error_text,
+            agent: p.agent,
+            fix_summary: p.fix_summary,
+          }));
+
+        await dispatchEvent("healer_trigger", {
+          reason: `CEO diagnosed ${criticalHighCount} critical/high error patterns in cycle ${cycle.cycle_number}`,
+          company_slug: cycle.slug,
+          company_id: cycle.company_id,
+          patterns: autoFixablePatterns,
+        });
+        results.healer_dispatched = true;
+      } catch (e) {
+        console.warn(`[consolidate] Healer dispatch failed: ${e instanceof Error ? e.message : "unknown"}`);
+      }
+    }
+  }
+
+  // --- 5. Compute roadmap theme progress ---
   let themeProgress: Record<string, number> = {};
   try {
     const themeRows = await sql`

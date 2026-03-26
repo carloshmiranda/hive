@@ -246,6 +246,7 @@ export interface PlaybookEntry {
   insight: string;
   evidence?: Record<string, any> | null;
   confidence: number; // 0.0 to 1.0
+  content_language?: string | null; // NULL = universal, 'en'/'pt' for language-specific
 }
 
 /**
@@ -280,9 +281,10 @@ export async function upsertPlaybookEntry(entry: PlaybookEntry): Promise<string>
   if (!conflictingEntry) {
     // No conflict, insert new entry
     const [newEntry] = await sql`
-      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
+      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
       VALUES (${entry.source_company_id || null}, ${entry.domain}, ${entry.insight},
-              ${entry.evidence ? JSON.stringify(entry.evidence) : null}, ${entry.confidence})
+              ${entry.evidence ? JSON.stringify(entry.evidence) : null}, ${entry.confidence},
+              ${entry.content_language || null})
       RETURNING id
     `;
     return newEntry.id;
@@ -292,9 +294,10 @@ export async function upsertPlaybookEntry(entry: PlaybookEntry): Promise<string>
   if (entry.confidence > conflictingEntry.confidence) {
     // New entry has higher confidence - supersede the old one
     const [newEntry] = await sql`
-      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
+      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
       VALUES (${entry.source_company_id || null}, ${entry.domain}, ${entry.insight},
-              ${entry.evidence ? JSON.stringify(entry.evidence) : null}, ${entry.confidence})
+              ${entry.evidence ? JSON.stringify(entry.evidence) : null}, ${entry.confidence},
+              ${entry.content_language || null})
       RETURNING id
     `;
 
@@ -364,7 +367,8 @@ export async function addPlaybookLearning(
   insight: string,
   confidence: number = 0.5,
   source_company_id?: string,
-  evidence?: Record<string, any>
+  evidence?: Record<string, any>,
+  content_language?: string | null
 ): Promise<string> {
   if (confidence < 0 || confidence > 1) {
     throw new Error("Confidence must be between 0 and 1");
@@ -378,6 +382,7 @@ export async function addPlaybookLearning(
     domain: domain.trim(),
     insight: insight.trim(),
     evidence,
-    confidence
+    confidence,
+    content_language: content_language || null,
   });
 }

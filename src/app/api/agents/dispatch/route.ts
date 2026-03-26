@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
   try {
     // 1. Load company
     const [company] = await sql`
-      SELECT id, name, slug, status, description, capabilities, company_type, imported, github_repo
+      SELECT id, name, slug, status, description, capabilities, company_type, content_language, imported, github_repo
       FROM companies WHERE slug = ${company_slug} AND status IN ('mvp', 'active')
     `;
     if (!company) return err(`Company ${company_slug} not found or not active`);
@@ -110,8 +110,9 @@ export async function POST(req: NextRequest) {
     `;
 
     const playbook = await sql`
-      SELECT domain, insight, confidence FROM playbook 
+      SELECT domain, insight, confidence FROM playbook
       WHERE superseded_by IS NULL AND confidence >= 0.6
+        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
       ORDER BY confidence DESC LIMIT 10
     `;
 
@@ -257,7 +258,7 @@ ${capabilitiesSummary(company.capabilities)}`;
             }),
           });
         }
-      } catch { /* non-critical chain dispatch failure */ }
+      } catch (e: any) { console.warn(`[dispatch] ops escalation chain dispatch for ${company.slug} failed: ${e?.message || e}`); }
     }
 
     return json({
@@ -301,7 +302,7 @@ ${capabilitiesSummary(company.capabilities)}`;
           ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
         )
       `;
-    } catch { /* don't fail the failure logging */ }
+    } catch (e: any) { console.warn(`[dispatch] error logging for ${agentName}/${company_slug} failed: ${e?.message || e}`); }
 
     return err(`Agent dispatch failed: ${(error.error || error).message}`, 500);
   }
@@ -334,5 +335,5 @@ async function processOutreachResults(sql: any, company: any, output: string) {
           content = ${JSON.stringify(parsed)}, summary = ${`${parsed.emails_drafted.length} emails drafted`}, updated_at = now()
       `;
     }
-  } catch { /* non-critical parsing failure */ }
+  } catch (e: any) { console.warn(`[dispatch] outreach result parsing for ${company.slug} failed: ${e?.message || e}`); }
 }

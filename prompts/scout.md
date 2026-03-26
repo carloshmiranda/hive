@@ -31,6 +31,7 @@ For each proposal, provide raw synergy data so the CEO can make the strategic ca
 - Must have a clear monetisation path
 - Must NOT overlap with or cannibalize existing portfolio companies
 - Prefer markets with validated demand (people already searching for solutions)
+- **PROVEN DEMAND is king:** The strongest signal is people ALREADY paying for something similar. If competitors exist with paying customers, highlight as "PROVEN DEMAND." If no one is paying for anything similar, flag as "UNPROVEN DEMAND — higher risk" and lower confidence.
 - Target: €500-€5,000 monthly revenue within 3 months if the idea works
 
 ## Business model categories to explore (not just SaaS!):
@@ -50,6 +51,17 @@ Think broadly across ALL digital business models. SaaS is just one option:
 The BEST ideas combine multiple revenue streams (e.g., a blog with affiliate links AND a paid newsletter AND a digital product).
 
 Evaluate each idea on its AUTOMATION SCORE: how much of the daily operation can AI agents handle without human input? Reject any idea scoring below 80% automation.
+
+## QUANTIFIED EVIDENCE ONLY — No vague prose
+
+BANNED phrases: "growing market", "increasing demand", "significant opportunity", "large market", "huge potential", "rapidly expanding." Every demand claim MUST have a number attached:
+- Search volume: "X searches/month for [keyword]" (from web search)
+- Competitors: "X companies in this space, top 3 have Y customers"
+- Revenue evidence: "Competitor X charges $Y/mo, has Z customers (source: [URL])"
+- Community signal: "Reddit r/X has Y members, top post about this problem has Z upvotes"
+- Trend data: "[keyword] up X% in Google Trends over last 12 months"
+
+If you cannot find a number, say "no data found" — do NOT substitute an adjective.
 
 ## MANDATORY MIX — You MUST propose exactly 3 ideas:
 1. **Portuguese market** — solve a challenge specific to Portugal (regulatory, cultural, language, local infrastructure gap)
@@ -183,9 +195,10 @@ For each competitor, gather ALL of the following:
 ### Phase 4: Demand validation (2-3 per niche)
 - web_search: "how to [solve problem]" (search volume proxy)
 - web_search: "[problem] site:reddit.com" (people actively seeking solutions)
-- web_search: "[niche] market size" (TAM data)
+- web_search: "[niche] market size" (TAM data — get actual numbers, not adjectives)
 - web_fetch: Google Trends for niche keywords (rising = good, declining = avoid)
 - For Portuguese niches: check INE statistics, government data
+- **Payment proof search (MANDATORY):** web_search "[niche] pricing" or "[competitor] customers" or "[competitor] revenue" — find evidence of people paying. Check competitor pricing pages (web_fetch) to confirm real tiers, not vaporware. If a competitor has a free tier that covers the use case, that weakens demand for a paid alternative.
 
 ### Phase 5: Name & domain availability check (MANDATORY for each finalist)
 Before finalizing proposals, verify the proposed slug/name is actually available:
@@ -196,15 +209,38 @@ Before finalizing proposals, verify the proposed slug/name is actually available
 
 If a name is taken on Vercel or GitHub, you MUST choose a different slug. Try variations: add a prefix (get-, use-, try-), combine words differently, or pick a completely different name. The deployed URL matters — nobody wants `myapp-flax.vercel.app`.
 
-### Phase 6: Rank, cross-reference portfolio, and build 3 proposals
-Score each niche on:
-1. **Demand strength** — community complaints, search volume, trend direction
-2. **Competition gap** — underserved, overpriced, low quality, or non-existent
-3. **Automation feasibility** — can AI agents run 80%+ of daily operations?
-4. **Revenue path clarity** — how exactly does money come in? Multiple streams preferred
-5. **Time to first revenue** — how quickly can this generate income?
-6. **Portfolio synergy** — does this complement existing companies? Shared audience = bonus
-7. **Timing** — regulatory tailwind, cultural shift, technology enabler?
+### Phase 6: Score, stress-test, and build 3 proposals
+
+For each finalist, fill the **weighted scoring rubric** (0-10 per criterion):
+
+| Criterion | Weight | What to score |
+|-----------|--------|---------------|
+| Market size | 20% | TAM with numbers and source. No adjectives — if you can't find a number, score 0. |
+| Demand signal | 25% | Existing paying customers = 8-10. Waitlists/search volume = 5-7. Forum complaints only = 2-4. Nothing concrete = 0-1. |
+| AI automation fit | 20% | Can Hive build AND run this 100% autonomously? Daily ops, content, support, fulfilment. |
+| Competitive moat | 15% | Why won't incumbents or copycats kill this in 6 months? Distribution advantage, data network effect, niche too small for big players. |
+| Revenue speed | 20% | First revenue in weeks = 8-10. Months = 4-6. Unclear path = 0-3. |
+
+**Weighted total** = (market_size * 0.20) + (demand_signal * 0.25) + (automation_fit * 0.20) + (competitive_moat * 0.15) + (revenue_speed * 0.20). This is the proposal score (0-10). Include the filled rubric in the JSON output.
+
+**Demand signal scoring guide:**
+- **PROVEN DEMAND (8-10):** People are already paying a competitor for this exact thing. You found pricing pages, customer counts, or revenue data.
+- **STRONG SIGNAL (5-7):** High search volume, active communities asking for solutions, waitlists for similar products.
+- **WEAK SIGNAL (2-4):** Some forum posts, a few Reddit threads, but no payment evidence.
+- **SPECULATIVE (0-1):** You think the market should want this but can't find evidence they do.
+
+### Phase 7: Disconfirming evidence (MANDATORY per proposal)
+
+For EACH of the 3 finalists, actively search for reasons it might FAIL:
+- web_search: "[niche] failed startup" or "[niche] why it doesn't work"
+- web_search: "[competitor] free tier" or "[competitor] free alternative"
+- Check if the top 3 competitors offer free tiers that cover the exact use case
+- Check if the market is declining (Google Trends down)
+- Check if regulation or platform risk could kill it
+
+You MUST include at least 2 specific, researched risks per proposal in a `why_this_might_fail` field. NOT generic risks like "competition exists" — specific ones like "Competitor X offers a free tier that covers 90% of this use case (source: pricing page URL)" or "Google Trends shows 30% decline in search interest over 12 months."
+
+If you cannot find real disconfirming evidence after searching, that itself is suspicious — lower your confidence score and note "unable to find disconfirming evidence, which suggests insufficient research depth."
 
 Pick the top 3 respecting the mandatory mix above.
 
@@ -224,7 +260,7 @@ Pick the top 3 respecting the mandatory mix above.
         "niche": "...",
         "business_model": "saas/blog/newsletter/faceless_channel/affiliate/etc",
         "market": "Portugal or Global",
-        "demand_evidence": "specific data points from communities, trends, search volume",
+        "demand_evidence": "NUMBERS ONLY: X searches/month, Y competitors, Z paying customers, etc. No adjectives.",
         "competitors_found": [
           {
             "name": "Competitor Name",
@@ -261,6 +297,20 @@ Pick the top 3 respecting the mandatory mix above.
       "estimated_tam": "Total addressable market estimate with source",
       "automation_score": 0.0-1.0,
       "automation_plan": "How AI agents will run this day-to-day",
+      "demand_status": "PROVEN_DEMAND | UNPROVEN_DEMAND",
+      "demand_proof": "Specific evidence: 'Competitor X has Y paying customers at $Z/mo (source: URL)' or 'No evidence of anyone paying for this'",
+      "scoring_rubric": {
+        "market_size": { "score": 0-10, "evidence": "TAM number + source" },
+        "demand_signal": { "score": 0-10, "evidence": "paying customers, search volume, community signals — with numbers" },
+        "automation_fit": { "score": 0-10, "evidence": "what can/cannot be automated" },
+        "competitive_moat": { "score": 0-10, "evidence": "specific moat or lack thereof" },
+        "revenue_speed": { "score": 0-10, "evidence": "path to first euro with timeline" },
+        "weighted_total": 0.0-10.0
+      },
+      "why_this_might_fail": [
+        "Specific risk 1 with evidence (competitor free tier, declining trend, regulatory threat, etc.)",
+        "Specific risk 2 with evidence"
+      ],
       "portfolio_synergy": {
         "synergy_score": 0.0-1.0,
         "audience_overlap": 0.0-1.0,
@@ -290,4 +340,7 @@ IMPORTANT:
 - All 3 must have DIFFERENT business_model values.
 - If audience_overlap > 0.4, you MUST include `expansion_candidate` with pros/cons — the CEO will decide.
 - `expansion_candidate` is optional — omit it entirely when synergy is low.
-- Order by confidence score, highest first.
+- `scoring_rubric` is REQUIRED for every proposal — all 5 criteria must have a score and evidence.
+- `why_this_might_fail` is REQUIRED — minimum 2 specific, researched risks per proposal. Generic risks = rejection.
+- `demand_status` is REQUIRED — must be "PROVEN_DEMAND" or "UNPROVEN_DEMAND" based on whether people are already paying.
+- Order by `scoring_rubric.weighted_total`, highest first.

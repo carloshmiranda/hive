@@ -3,6 +3,107 @@ import { getSettingValue } from "./settings";
 // Unified LLM calling interface for worker agents
 // Handles provider selection, automatic failover, rate limiting, and response normalization
 
+// ---------------------------------------------------------------------------
+// Circuit Breaker — per-provider health tracking with EMA error rate
+// ---------------------------------------------------------------------------
+
+export interface ProviderHealth {
+  errorRate: number;       // EMA of error rate (0-1), alpha=0.3
+  lastError: number;       // timestamp of last error
+  lastSuccess: number;     // timestamp of last success
+  state: "closed" | "half_open" | "open";
+  openedAt: number;        // when circuit opened
+  requestCount: number;    // total requests tracked
+}
+
+const EMA_ALPHA = 0.3;
+const ERROR_RATE_THRESHOLD = 0.5;   // 50% failure rate trips the breaker
+const COOLDOWN_MS = 60_000;         // 60s before allowing a test request
+const MIN_REQUESTS = 3;             // need at least 3 data points before tripping
+
+const healthMap = new Map<string, ProviderHealth>();
+
+function getOrCreateHealth(provider: string): ProviderHealth {
+  let h = healthMap.get(provider);
+  if (!h) {
+    h = {
+      errorRate: 0,
+      lastError: 0,
+      lastSuccess: 0,
+      state: "closed",
+      openedAt: 0,
+      requestCount: 0,
+    };
+    healthMap.set(provider, h);
+  }
+  return h;
+}
+
+/** Update EMA after a successful call. May transition half_open → closed. */
+export function recordProviderSuccess(provider: string): void {
+  const h = getOrCreateHealth(provider);
+  h.requestCount++;
+  h.lastSuccess = Date.now();
+  h.errorRate = h.errorRate * (1 - EMA_ALPHA); // EMA towards 0
+
+  if (h.state === "half_open") {
+    h.state = "closed";
+    console.warn(`[circuit-breaker] ${provider}: HALF_OPEN → CLOSED (test request succeeded)`);
+  }
+}
+
+/** Update EMA after a failed call. May transition closed → open or half_open → open. */
+export function recordProviderFailure(provider: string): void {
+  const h = getOrCreateHealth(provider);
+  h.requestCount++;
+  h.lastError = Date.now();
+  h.errorRate = h.errorRate * (1 - EMA_ALPHA) + EMA_ALPHA; // EMA towards 1
+
+  if (h.state === "half_open") {
+    // Test request failed — reopen circuit, reset cooldown
+    h.state = "open";
+    h.openedAt = Date.now();
+    console.warn(`[circuit-breaker] ${provider}: HALF_OPEN → OPEN (test request failed, cooldown reset)`);
+    return;
+  }
+
+  if (h.state === "closed" && h.requestCount >= MIN_REQUESTS && h.errorRate > ERROR_RATE_THRESHOLD) {
+    h.state = "open";
+    h.openedAt = Date.now();
+    console.warn(`[circuit-breaker] ${provider}: CLOSED → OPEN (error rate ${(h.errorRate * 100).toFixed(1)}% > ${ERROR_RATE_THRESHOLD * 100}%)`);
+  }
+}
+
+/** Check whether a provider should receive traffic. Handles open → half_open transition. */
+export function isProviderAvailable(provider: string): boolean {
+  const h = healthMap.get(provider);
+  if (!h) return true; // no data = healthy
+
+  if (h.state === "closed") return true;
+
+  if (h.state === "open") {
+    const elapsed = Date.now() - h.openedAt;
+    if (elapsed >= COOLDOWN_MS) {
+      h.state = "half_open";
+      console.warn(`[circuit-breaker] ${provider}: OPEN → HALF_OPEN (cooldown elapsed, allowing test request)`);
+      return true;
+    }
+    return false;
+  }
+
+  // half_open — allow the single test request
+  return true;
+}
+
+/** Return a snapshot of all tracked provider health (for monitoring / API exposure). */
+export function getProviderHealth(): Record<string, ProviderHealth> {
+  const out: Record<string, ProviderHealth> = {};
+  healthMap.forEach((v, k) => {
+    out[k] = { ...v };
+  });
+  return out;
+}
+
 export interface LLMOptions {
   maxTokens?: number;
   temperature?: number;
@@ -276,6 +377,12 @@ export async function callLLM(
     const provider = PROVIDERS[providerName];
     if (!provider) continue;
 
+    // Circuit breaker: skip providers with open circuits
+    if (!isProviderAvailable(providerName)) {
+      console.warn(`[circuit-breaker] Skipping ${providerName} (circuit open)`);
+      continue;
+    }
+
     try {
       // Check historical success rate for adaptive routing
       const successRate = await getProviderSuccessRate(providerName, agent, sql);
@@ -313,6 +420,9 @@ export async function callLLM(
           throw new Error(`Unknown provider: ${providerName}`);
       }
 
+      // Record success for circuit breaker
+      recordProviderSuccess(providerName);
+
       return {
         content,
         provider: providerName,
@@ -327,10 +437,15 @@ export async function callLLM(
       console.warn(`Provider ${providerName} failed:`, error.message);
       lastError = error;
 
+      // Record failure for circuit breaker
+      recordProviderFailure(providerName);
+
       // If this is Gemini Flash, try Flash-Lite before moving to next provider
       if (providerName === "gemini" && routing.model === "gemini-2.5-flash") {
         try {
           const content = await callGemini(prompt, "gemini-2.5-flash-lite", llmOptions);
+          // Flash-Lite success still counts as gemini success
+          recordProviderSuccess(providerName);
           return {
             content,
             provider: "gemini",
@@ -339,6 +454,7 @@ export async function callLLM(
             routing_reason: "gemini_flash_lite_fallback",
           };
         } catch {
+          // Flash-Lite also failed — failure already recorded above
           // Continue to next provider
         }
       }

@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { source_company_id, domain, insight, evidence, confidence } = body;
+  const { source_company_id, domain, insight, evidence, confidence, content_language } = body;
   if (!domain || !insight) {
     return err("Missing required fields: domain, insight", 400);
   }
@@ -36,9 +36,9 @@ export async function POST(req: NextRequest) {
   }
 
   const [entry] = await sql`
-    INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence)
-    VALUES (${source_company_id || null}, ${domain}, ${insight}, ${evidence || null}, ${confidence ?? 0.7})
-    RETURNING id, domain, insight, confidence
+    INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
+    VALUES (${source_company_id || null}, ${domain}, ${insight}, ${evidence || null}, ${confidence ?? 0.7}, ${content_language || null})
+    RETURNING id, domain, insight, confidence, content_language
   `;
 
   return json(entry, 201);

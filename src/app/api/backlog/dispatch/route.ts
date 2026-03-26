@@ -12,7 +12,7 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
   const workers: { company: string; agent: string }[] = [];
   const companies = await sql`
     SELECT slug FROM companies WHERE status IN ('mvp', 'active')
-  `.catch(() => []);
+  `.catch((e: any) => { console.warn(`[backlog] fetch companies for free workers failed: ${e?.message || e}`); return []; });
 
   for (const c of companies) {
     for (const agent of ["growth", "ops"] as const) {
@@ -22,7 +22,7 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
         AND company_id = (SELECT id FROM companies WHERE slug = ${c.slug})
         AND started_at > NOW() - INTERVAL '12 hours'
         LIMIT 1
-      `.catch(() => []);
+      `.catch((e: any) => { console.warn(`[backlog] check recent ${agent} for ${c.slug} failed: ${e?.message || e}`); return []; });
       if (!recent) workers.push({ company: c.slug, agent });
     }
   }
@@ -34,7 +34,7 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
       headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
       body: JSON.stringify({ company_slug: w.company, agent: w.agent, trigger: "cascade_free_worker" }),
       signal: AbortSignal.timeout(30000),
-    }).then(r => { if (r.ok) dispatched.push(`${w.agent}:${w.company}`); }).catch(() => {});
+    }).then(r => { if (r.ok) dispatched.push(`${w.agent}:${w.company}`); }).catch((e: any) => { console.warn(`[backlog] free worker dispatch ${w.agent}:${w.company} failed: ${e?.message || e}`); });
   }
   return dispatched;
 }
@@ -94,8 +94,8 @@ export async function POST(req: Request) {
                 const files = await filesRes.json();
                 changed_files = files.map((f: any) => f.filename);
               }
-            } catch {
-              // Non-blocking
+            } catch (e: any) {
+              console.warn(`[backlog] fetch PR #${pr_number} files failed: ${e?.message || e}`);
             }
 
             console.log(`[backlog] Auto-extracted PR tracking: #${pr_number} on ${branch}`);
@@ -126,7 +126,7 @@ export async function POST(req: Request) {
               pr_url = ${`https://github.com/carloshmiranda/hive/pull/${pr_number}`},
               notes = COALESCE(notes, '') || ${prInfo}
           WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-        `.catch(() => {});
+        `.catch((e: any) => { console.warn(`[backlog] update item ${completed_id} to pr_open failed: ${e?.message || e}`); });
       } else {
         // No PR number — Engineer completed via direct commit or the PR info was lost.
         // Mark as done to prevent phantom pr_open items.
@@ -135,7 +135,7 @@ export async function POST(req: Request) {
           SET status = 'done', completed_at = NOW(),
               notes = COALESCE(notes, '') || ' Completed via chain dispatch (no PR created — direct commit or PR info missing).'
           WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-        `.catch(() => {});
+        `.catch((e: any) => { console.warn(`[backlog] mark item ${completed_id} done failed: ${e?.message || e}`); });
       }
 
       // Store PR tracking data in the agent_actions record
@@ -158,21 +158,24 @@ export async function POST(req: Request) {
           AND company_id IS NULL
           AND started_at > NOW() - INTERVAL '1 hour'
           AND (output::text ILIKE ${'%' + completed_id + '%'} OR description ILIKE ${'%' + completed_id + '%'})
-        `.catch(() => {});
+        `.catch((e: any) => { console.warn(`[backlog] store PR tracking for ${completed_id} failed: ${e?.message || e}`); });
       }
 
     } else {
       // Failed: learn from it. Track attempts, decompose if too big.
       const [item] = await sql`
         SELECT id, title, description, notes, priority, category, spec FROM hive_backlog WHERE id = ${completed_id}
-      `.catch(() => []);
+      `.catch((e: any) => { console.warn(`[backlog] fetch item ${completed_id} for failure handling failed: ${e?.message || e}`); return []; });
       const prevAttempts = (item?.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
       const attempt = prevAttempts + 1;
       const errorMsg = body.error || "";
-      const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns");
+      const turnsMatch = errorMsg.match(/\((\d+) turns\)/);
+      const turnsUsed = turnsMatch ? parseInt(turnsMatch[1]) : 0;
+      const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns") || turnsUsed >= 30;
 
       // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
-      if (item && attempt < 3) {
+      const maxAttempts = isMaxTurns ? 2 : 3;
+      if (item && attempt < maxAttempts) {
         trackFailedBacklogItem(item.id, attempt);
       }
 
@@ -224,7 +227,7 @@ export async function POST(req: Request) {
                       risks: []
                     })}
                   )
-                `.catch(() => {});
+                `.catch((e: any) => { console.warn(`[backlog] insert decomposed sub-item failed: ${e?.message || e}`); });
               }
 
               // (3) Mark the parent item as blocked with reason auto-decomposed-on-failure
@@ -233,7 +236,7 @@ export async function POST(req: Request) {
                 SET status = 'blocked', dispatched_at = NULL,
                     notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [auto-decomposed-on-failure] Hit max_turns — split into ${subItems.length} sub-tasks.`}
                 WHERE id = ${completed_id}
-              `.catch(() => {});
+              `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as auto-decomposed failed: ${e?.message || e}`); });
               decomposed = true;
               console.log(`[backlog] Auto-decomposed "${item.title}" (complexity: ${spec.complexity}) into ${subItems.length} sub-tasks after max_turns failure`);
             }
@@ -244,15 +247,15 @@ export async function POST(req: Request) {
       }
 
       if (!decomposed) {
-        // Auto-block: 3 attempts for all error types to prevent infinite retries
-        const blockThreshold = 3;
+        // Auto-block: 2 attempts for max_turns errors (saves 35 wasted turns), 3 for others
+        const blockThreshold = isMaxTurns ? 2 : 3;
         if (attempt >= blockThreshold) {
           await sql`
             UPDATE hive_backlog
             SET status = 'blocked', dispatched_at = NULL,
                 notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Auto-blocked after ${attempt} ${isMaxTurns ? 'max_turns' : ''} failures — needs decomposition or manual review.`}
             WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-          `.catch(() => {});
+          `.catch((e: any) => { console.warn(`[backlog] block item ${completed_id} after ${attempt} failures failed: ${e?.message || e}`); });
         } else {
           // Back to ready with attempt context
           await sql`
@@ -260,7 +263,7 @@ export async function POST(req: Request) {
             SET status = 'ready', dispatched_at = NULL,
                 notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
             WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
-          `.catch(() => {});
+          `.catch((e: any) => { console.warn(`[backlog] reset item ${completed_id} to ready after attempt ${attempt} failed: ${e?.message || e}`); });
         }
       }
 

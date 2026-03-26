@@ -121,7 +121,7 @@ async function dispatchToActions(eventType: string, payload: Record<string, unkn
       status: "started",
       summary: `Dispatched ${eventType} via GitHub Actions`,
     })
-  ).catch(() => {});
+  ).catch((e: any) => { console.warn(`[sentinel] Telegram notify for ${eventType} failed: ${e?.message || e}`); });
 }
 
 async function dispatchToWorker(agent: string, companySlug: string, trigger: string) {
@@ -148,7 +148,7 @@ async function dispatchToWorker(agent: string, companySlug: string, trigger: str
       status: "started",
       summary: `Dispatched ${agent} worker for ${companySlug}`,
     })
-  ).catch(() => {});
+  ).catch((e: any) => { console.warn(`[sentinel] Telegram notify for worker ${agent}/${companySlug} failed: ${e?.message || e}`); });
 }
 
 async function dispatchToCompanyWorkflow(
@@ -182,7 +182,7 @@ async function dispatchToCompanyWorkflow(
       status: "started",
       summary: `Dispatched ${workflow} on ${githubRepo.split("/")[1]}`,
     })
-  ).catch(() => {});
+  ).catch((e: any) => { console.warn(`[sentinel] Telegram notify for company workflow ${workflow}/${company} failed: ${e?.message || e}`); });
 }
 
 
@@ -1554,7 +1554,7 @@ export async function GET(req: Request) {
             `;
           }
         }
-      } catch { /* non-blocking */ }
+      } catch (e: any) { console.warn(`[sentinel] check 13c-pre: backfill error failed: ${e?.message || e}`); }
     }
   }
 
@@ -1695,7 +1695,7 @@ export async function GET(req: Request) {
         AND severity = 'critical'
         AND created_at < NOW() - INTERVAL '24 hours'
         AND created_at > NOW() - INTERVAL '14 days'
-    `.catch(() => {});
+    `.catch((e: any) => { console.warn(`[sentinel] check 13a: auto-approve critical proposals failed: ${e?.message || e}`); });
 
     // (A) Approved self-improvement proposals → route to hive_backlog (not directly to Engineer)
     // This ensures they go through the planning phase, get specs, and compete on priority.
@@ -1709,7 +1709,7 @@ export async function GET(req: Request) {
         CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
         created_at ASC
       LIMIT 2
-    `.catch(() => []);
+    `.catch((e: any) => { console.warn(`[sentinel] check 13a: fetch approved improvements failed: ${e?.message || e}`); return []; });
 
     // (B) Systemic errors — same error in 2+ companies in last 48h, no fix dispatched yet
     const systemicErrors = await sql`
@@ -1723,7 +1723,7 @@ export async function GET(req: Request) {
       HAVING COUNT(DISTINCT company_id) >= 2
       ORDER BY COUNT(*) DESC
       LIMIT 3
-    `.catch(() => []);
+    `.catch((e: any) => { console.warn(`[sentinel] check 13a: fetch systemic errors failed: ${e?.message || e}`); return []; });
 
     // (C) Agent failure rate — if >50% of all agent runs are failing, Hive needs fixing
     // Exclude 0-turn actions (GitHub Actions dispatch failures, not real agent execution failures)
@@ -1750,7 +1750,7 @@ export async function GET(req: Request) {
       FROM agent_actions
       WHERE agent NOT IN ('sentinel', 'healer')
         AND finished_at > NOW() - INTERVAL '48 hours'
-    `.catch(() => [{ rate: 0 }]);
+    `.catch((e: any) => { console.warn(`[sentinel] check 13a: compute failure rate failed: ${e?.message || e}`); return [{ rate: 0 }]; });
     const overallFailureRate = Number(failureRate[0]?.rate || 0);
 
     // Dispatch Hive fixes if there are approved proposals or critical systemic issues
@@ -1773,7 +1773,7 @@ export async function GET(req: Request) {
             UPDATE evolver_proposals SET status = 'rejected',
               notes = COALESCE(notes, '') || ' | Auto-rejected: proposal lacks specific file paths or actionable implementation steps. Resubmit with concrete code changes.'
             WHERE id = ${proposal.id}
-          `.catch(() => {});
+          `.catch((e: any) => { console.warn(`[sentinel] reject vague proposal ${proposal.id} failed: ${e?.message || e}`); });
           console.log(`[sentinel] Rejected vague evolver proposal ${proposal.id}: "${(proposal.title as string).slice(0, 60)}"`);
           continue;
         }
@@ -1782,7 +1782,7 @@ export async function GET(req: Request) {
             UPDATE evolver_proposals SET status = 'rejected',
               notes = COALESCE(notes, '') || ' | Auto-rejected: description too short and lacks file references. Need specific implementation details.'
             WHERE id = ${proposal.id}
-          `.catch(() => {});
+          `.catch((e: any) => { console.warn(`[sentinel] reject short proposal ${proposal.id} failed: ${e?.message || e}`); });
           console.log(`[sentinel] Rejected short evolver proposal ${proposal.id}: "${(proposal.title as string).slice(0, 60)}"`);
           continue;
         }
@@ -1793,14 +1793,14 @@ export async function GET(req: Request) {
           WHERE title ILIKE ${proposal.title.slice(0, 50) + "%"}
             AND status NOT IN ('done', 'rejected')
           LIMIT 1
-        `.catch(() => []);
+        `.catch((e: any) => { console.warn(`[sentinel] check backlog dedup for proposal ${proposal.id} failed: ${e?.message || e}`); return []; });
         if (existing) {
           // Already in backlog — mark as implemented so it doesn't loop
           await sql`
             UPDATE evolver_proposals SET implemented_at = NOW(),
               notes = COALESCE(notes, '') || ' | Already in hive_backlog, marked implemented'
             WHERE id = ${proposal.id}
-          `.catch(() => {});
+          `.catch((e: any) => { console.warn(`[sentinel] mark proposal ${proposal.id} as already in backlog failed: ${e?.message || e}`); });
           continue;
         }
 
@@ -1812,12 +1812,12 @@ export async function GET(req: Request) {
             ${`Source: evolver proposal ${proposal.id}\n${typeof proposal.proposed_fix === 'string' ? proposal.proposed_fix : JSON.stringify(proposal.proposed_fix)}`},
             ${priority}, 'infra', 'ready'
           )
-        `.catch(() => {});
+        `.catch((e: any) => { console.warn(`[sentinel] insert backlog item from proposal ${proposal.id} failed: ${e?.message || e}`); });
         await sql`
           UPDATE evolver_proposals SET implemented_at = NOW(),
             notes = COALESCE(notes, '') || ' | Routed to hive_backlog for planning + dispatch'
           WHERE id = ${proposal.id}
-        `.catch(() => {});
+        `.catch((e: any) => { console.warn(`[sentinel] mark proposal ${proposal.id} as routed to backlog failed: ${e?.message || e}`); });
         dispatches.push({
           type: "brain",
           target: "hive_self_fix",
@@ -1850,7 +1850,7 @@ export async function GET(req: Request) {
         await sql`
           INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
           VALUES ('sentinel', 'hive_triage', ${`Hive-first: dispatched ${hiveFixesDispatched} fix(es) before company cycles. Failure rate: ${Math.round(overallFailureRate * 100)}%, approved proposals: ${approvedImprovements.length}, systemic errors: ${systemicErrors.length}`}, 'success', NOW(), NOW())
-        `.catch(() => {});
+        `.catch((e: any) => { console.warn(`[sentinel] log hive triage action failed: ${e?.message || e}`); });
       }
     }
   } catch (e: unknown) {
@@ -2017,8 +2017,8 @@ export async function GET(req: Request) {
         headers: { Authorization: `Bearer ${cronSecret}` },
         signal: AbortSignal.timeout(10000),
       });
-    } catch {
-      // best-effort
+    } catch (e: any) {
+      console.warn(`[sentinel] metrics cron trigger failed: ${e?.message || e}`);
     }
     dispatches.push({
       type: "internal",
@@ -2558,6 +2558,7 @@ export async function GET(req: Request) {
           AND tc.id != p.source_company_id
           AND p.confidence >= 0.7
           AND p.superseded_by IS NULL
+          AND (p.content_language IS NULL OR p.content_language = tc.content_language OR tc.content_language IS NULL)
           -- No venture_brain directive for this company in the last 7 days
           AND NOT EXISTS (
             SELECT 1 FROM directives d
@@ -2769,7 +2770,7 @@ export async function GET(req: Request) {
   try {
     // Fetch all active playbook entries grouped by domain
     const consolidationEntries = await sql`
-      SELECT id, source_company_id, domain, insight, confidence, applied_count, reference_count
+      SELECT id, source_company_id, domain, insight, confidence, applied_count, reference_count, content_language
       FROM playbook
       WHERE superseded_by IS NULL AND confidence > 0.2
       ORDER BY domain, confidence DESC
@@ -2846,6 +2847,10 @@ export async function GET(req: Request) {
         for (let j = i + 1; j < companyEntries.length && playbookComposites < PB_MAX_COMPOSITES; j++) {
           const b = companyEntries[j];
           if (a.source_company_id === b.source_company_id) continue; // must be different companies
+          // Skip cross-language composites: only merge if languages are compatible
+          const langA = a.content_language as string | null;
+          const langB = b.content_language as string | null;
+          if (langA && langB && langA !== langB) continue;
           const insightB = b.insight as string;
 
           const similarity = jaccardSimilarity(insightA, insightB);
@@ -2866,9 +2871,11 @@ export async function GET(req: Request) {
           const compositeConfidence = Math.min(1.0, Math.max(Number(a.confidence), Number(b.confidence)) + 0.05);
           // Use the longer insight as the composite (it likely has more detail)
           const compositeInsight = insightA.length >= insightB.length ? insightA : insightB;
+          // Composite inherits language if both entries share the same one, otherwise NULL (universal)
+          const compositeLang = (langA && langB && langA === langB) ? langA : (langA || langB || null);
 
           await sql`
-            INSERT INTO playbook (source_company_id, domain, insight, confidence, evidence, applied_count, reference_count)
+            INSERT INTO playbook (source_company_id, domain, insight, confidence, evidence, applied_count, reference_count, content_language)
             VALUES (
               NULL,
               ${domain},
@@ -2876,7 +2883,8 @@ export async function GET(req: Request) {
               ${compositeConfidence},
               ${JSON.stringify({ composite_from: [a.id, b.id], created_by: "sentinel_consolidation" })}::jsonb,
               0,
-              0
+              0,
+              ${compositeLang}
             )
           `;
 

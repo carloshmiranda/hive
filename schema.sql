@@ -146,9 +146,12 @@ CREATE TABLE playbook (
   applied_count INTEGER DEFAULT 0, -- how many times other agents used this
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   superseded_by TEXT REFERENCES playbook(id), -- if a newer insight replaces this
+  content_language TEXT DEFAULT NULL, -- NULL = universal/language-agnostic, 'en'/'pt' for language-specific
   last_referenced_at TIMESTAMPTZ,
   reference_count INTEGER DEFAULT 0
 );
+
+-- Backfill: UPDATE playbook p SET content_language = c.content_language FROM companies c WHERE p.source_company_id = c.id AND p.source_company_id IS NOT NULL AND c.content_language IS NOT NULL;
 
 -- Agent prompts: versioned system prompts (for Prompt Evolver)
 CREATE TABLE agent_prompts (

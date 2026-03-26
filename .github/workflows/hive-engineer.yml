@@ -882,6 +882,14 @@ jobs:
               echo "  Error type: $ERROR_TYPE (no exec file at $EXEC_FILE)"
             fi
 
+            # Explicit max_turns detection — if agent used most turns and failed, it's max_turns
+            if [ -z "$ERROR_TYPE" ] || [ "$ERROR_TYPE" = "" ]; then
+              if [ "$TURNS" -ge 30 ] 2>/dev/null; then
+                ERROR_TYPE="error_max_turns"
+                ERROR_DETAIL="${ERROR_DETAIL:-No error message in execution output}"
+              fi
+            fi
+
             # Fallback: if still empty, capture GitHub Actions step conclusion
             if [ -z "$ERROR_TYPE" ]; then
               ERROR_TYPE="error_unknown"
@@ -917,7 +925,7 @@ jobs:
             # Build callback payload with PR tracking data
             CALLBACK_PAYLOAD="{\"completed_id\":\"${BACKLOG_ID}\",\"completed_status\":\"${STATUS}\""
             if [ -n "$ERROR_TYPE" ]; then
-              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"error\":\"${ERROR_TYPE}: ${ERROR_DETAIL:0:200}\""
+              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"error\":\"${ERROR_TYPE}: ${ERROR_DETAIL:0:200} (${TURNS:-0} turns)\""
             fi
             if [ -n "$PR_NUMBER" ]; then
               CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"pr_number\":\"${PR_NUMBER}\""

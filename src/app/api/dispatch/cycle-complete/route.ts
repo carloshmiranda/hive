@@ -12,7 +12,7 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
 
   const companies = await sql`
     SELECT c.slug FROM companies c WHERE c.status IN ('mvp', 'active')
-  `.catch(() => []);
+  `.catch((e: any) => { console.warn(`[cycle-complete] fetch companies for free workers failed: ${e?.message || e}`); return []; });
 
   for (const c of companies) {
     // Growth: dispatch if no success in last 12h
@@ -22,7 +22,7 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
       AND company_id = (SELECT id FROM companies WHERE slug = ${c.slug})
       AND started_at > NOW() - INTERVAL '12 hours'
       LIMIT 1
-    `.catch(() => []);
+    `.catch((e: any) => { console.warn(`[cycle-complete] check recent growth for ${c.slug} failed: ${e?.message || e}`); return []; });
     if (!lastGrowth) workers.push({ company: c.slug, agent: "growth" });
 
     // Ops: dispatch if no success in last 12h
@@ -32,7 +32,7 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
       AND company_id = (SELECT id FROM companies WHERE slug = ${c.slug})
       AND started_at > NOW() - INTERVAL '12 hours'
       LIMIT 1
-    `.catch(() => []);
+    `.catch((e: any) => { console.warn(`[cycle-complete] check recent ops for ${c.slug} failed: ${e?.message || e}`); return []; });
     if (!lastOps) workers.push({ company: c.slug, agent: "ops" });
   }
 
@@ -50,7 +50,7 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
         trigger: "cascade_free_worker",
       }),
       signal: AbortSignal.timeout(30000),
-    }).catch(() => null);
+    }).catch((e: any) => { console.warn(`[cycle-complete] dispatch free worker ${w.agent}:${w.company} failed: ${e?.message || e}`); return null; });
     if (res?.ok) results.push(`${w.agent}:${w.company}`);
   }
   return results;
@@ -78,7 +78,7 @@ export async function POST(req: Request) {
   if (agent && company) {
     const [companyRecord] = await sql`
       SELECT id FROM companies WHERE slug = ${company} LIMIT 1
-    `.catch(() => []);
+    `.catch((e: any) => { console.warn(`[cycle-complete] lookup company ${company} failed: ${e?.message || e}`); return []; });
 
     if (companyRecord) {
       await sql`
@@ -86,7 +86,7 @@ export async function POST(req: Request) {
         VALUES (${agent}, ${action_type || "cycle_callback"}, 'success',
           ${`Chain callback: ${agent} completed ${status || "unknown"} for ${company}`},
           NOW(), NOW(), ${companyRecord.id})
-      `.catch(() => {});
+      `.catch((e: any) => { console.warn(`[cycle-complete] log chain callback for ${company} failed: ${e?.message || e}`); });
 
       // Invalidate cache for the completed company since cycle state changed
       await invalidateCompanyCache(companyRecord.id);
@@ -112,7 +112,7 @@ export async function POST(req: Request) {
 
   if (health.recommendation === "stop") {
     // Claude is blocked but free workers can still run
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch((e: any) => { console.warn(`[cycle-complete] dispatch free workers on health stop failed: ${e?.message || e}`); return []; });
     return json({ chained: false, reason: "health_gate_stop", blockers: health.blockers, free_workers_dispatched: freeWorkers });
   }
 
@@ -144,7 +144,7 @@ export async function POST(req: Request) {
   // Step 3: Score companies and pick the next one
   if (health.recommendation === "wait") {
     // Claude is throttled but free workers can still run
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch((e: any) => { console.warn(`[cycle-complete] dispatch free workers on health wait failed: ${e?.message || e}`); return []; });
     return json({ chained: false, reason: "health_gate_wait", blockers: health.blockers, free_workers_dispatched: freeWorkers });
   }
 
@@ -160,7 +160,7 @@ export async function POST(req: Request) {
     WHERE agent = 'dispatch' AND action_type = 'chain_cycle'
     AND started_at > NOW() - INTERVAL '10 minutes'
     LIMIT 1
-  `.catch(() => []);
+  `.catch((e: any) => { console.warn(`[cycle-complete] check recent cycle dispatch failed: ${e?.message || e}`); return []; });
   if (recentCycleDispatch) {
     return json({ chained: false, reason: "recent_cycle_dispatched" });
   }
@@ -182,7 +182,7 @@ export async function POST(req: Request) {
     FROM companies c
     WHERE c.status IN ('mvp', 'active')
     ORDER BY c.created_at ASC
-  `.catch(() => []);
+  `.catch((e: any) => { console.warn(`[cycle-complete] fetch candidate companies failed: ${e?.message || e}`); return []; });
 
   if (candidates.length === 0) {
     return json({ chained: false, reason: "no_eligible_companies" });
@@ -197,7 +197,7 @@ export async function POST(req: Request) {
     WHERE agent IN ('ceo', 'engineer')
     AND status = 'running'
     AND started_at > NOW() - INTERVAL '2 hours'
-  `.catch(() => []);
+  `.catch((e: any) => { console.warn(`[cycle-complete] check running cycles failed: ${e?.message || e}`); return []; });
   const runningIds = new Set(runningCycles.map((r) => r.company_id));
 
   // Score each company (same formula as Sentinel)
@@ -290,7 +290,7 @@ export async function POST(req: Request) {
       VALUES ('dispatch', 'chain_cycle', 'success',
         ${`Chain dispatch: ${company || "unknown"} → ${next.slug} (score ${next.priority_score})`},
         ${next.id}, NOW(), NOW())
-    `.catch(() => {});
+    `.catch((e: any) => { console.warn(`[cycle-complete] log chain dispatch ${company} -> ${next.slug} failed: ${e?.message || e}`); });
 
     // Notify via Telegram
     await fetch(`${HIVE_URL}/api/notify`, {
@@ -307,7 +307,7 @@ export async function POST(req: Request) {
         summary: `Chained: ${company} done → dispatching ${next.slug} (score: ${next.priority_score})`,
       }),
       signal: AbortSignal.timeout(5000),
-    }).catch(() => {});
+    }).catch((e: any) => { console.warn(`[cycle-complete] notify chain dispatch ${next.slug} failed: ${e?.message || e}`); });
 
     return json({
       chained: true,
