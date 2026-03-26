@@ -443,7 +443,7 @@ Respond with ONLY valid JSON array (no markdown, no explanation):
   }
 ]
 
-Complexity: S = 1-3 files, simple logic (10-15 turns). M = 3-5 files, moderate logic (20-25 turns).
+Complexity: S = 1-3 files, simple logic (15-20 turns). M = 3-5 files, moderate logic (25-35 turns).
 Never output complexity "L" — if a sub-task would be L, break it further.`;
 
   try {
@@ -475,7 +475,9 @@ Never output complexity "L" — if a sub-task would be L, break it further.`;
       }
       // Clamp
       st.complexity = st.complexity === "M" ? "M" : "S";
-      st.estimated_turns = Math.max(10, Math.min(25, st.estimated_turns || 15));
+      const subCaps: Record<string, [number, number]> = { S: [15, 25], M: [25, 40] };
+      const [subMin, subMax] = subCaps[st.complexity] || [15, 25];
+      st.estimated_turns = Math.max(subMin, Math.min(subMax, st.estimated_turns || 20));
       valid.push(st);
     }
 
@@ -546,7 +548,7 @@ Rules:
 - approach: Max 5 steps. Be specific about what to change in each file.
 - risks: 0-3 risks. Empty array if straightforward.
 - complexity: S = 1-3 files changed, simple logic. M = 3-6 files, moderate logic. L = 6+ files or architectural change.
-- estimated_turns: S=10-15, M=20-25, L=30-35. If previous attempts failed, add 5.`;
+- estimated_turns: S=15-20, M=25-35, L=35-50. If previous attempts failed, add 10.`;
 
   try {
     const response = await callLLM("planner", prompt, {
@@ -582,10 +584,13 @@ Rules:
       spec.acceptance_criteria.push("npx next build passes without errors");
     }
 
-    // Clamp estimated_turns
+    // Clamp estimated_turns based on complexity
+    // S tasks: 15-25 turns, M tasks: 25-40 turns, L tasks: 35-50 turns
+    const turnCaps: Record<string, [number, number]> = { S: [15, 25], M: [25, 40], L: [35, 50] };
+    const [minTurns, maxTurns] = turnCaps[spec.complexity] || [15, 35];
     spec.estimated_turns = Math.max(
-      10,
-      Math.min(35, spec.estimated_turns || 20)
+      minTurns,
+      Math.min(maxTurns, spec.estimated_turns || 25)
     );
 
     return spec;

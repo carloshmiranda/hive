@@ -173,7 +173,9 @@ export async function POST(req: Request) {
       const errorMsg = body.error || "";
       const turnsMatch = errorMsg.match(/\((\d+) turns\)/);
       const turnsUsed = turnsMatch ? parseInt(turnsMatch[1]) : 0;
-      const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns") || turnsUsed >= 30;
+      // Detect max_turns failures — use spec.estimated_turns as baseline (80% threshold)
+      const specTurns = item?.spec?.estimated_turns || 35;
+      const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns") || turnsUsed >= Math.floor(specTurns * 0.8);
 
       // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
       // max_turns = immediate decompose (1 attempt) — retrying same item with same turn budget fails identically
@@ -429,7 +431,11 @@ export async function POST(req: Request) {
       AND NOT (
         notes ILIKE '%[attempt %]%'
         AND dispatched_at IS NOT NULL
-        AND dispatched_at > NOW() - INTERVAL '2 hours'
+        AND dispatched_at > NOW() - CASE
+          WHEN notes ILIKE '%[attempt 3]%' THEN INTERVAL '24 hours'
+          WHEN notes ILIKE '%[attempt 2]%' THEN INTERVAL '6 hours'
+          ELSE INTERVAL '2 hours'
+        END
       )
       AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
            OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
@@ -882,8 +888,12 @@ export async function POST(req: Request) {
         attempt: attemptCount + 1,
         chain_next: true,
         spec: spec || undefined,
-        // Model escalation: use Opus on 3rd+ attempt for harder reasoning
-        ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514", max_turns: 50 } : {}),
+        // Spec-driven max_turns: use estimated_turns from spec (default 35)
+        // On 3rd+ attempt: escalate to Opus with +15 bonus turns
+        max_turns: attemptCount >= 2
+          ? Math.min(50, (spec?.estimated_turns || 35) + 15)
+          : spec?.estimated_turns || 35,
+        ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
       },
     }),
     signal: AbortSignal.timeout(10000),
