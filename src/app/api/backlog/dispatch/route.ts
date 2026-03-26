@@ -333,6 +333,19 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "engineer_busy", running_id: running.id });
   }
 
+  // PR queue gate: don't pile up PRs that increase merge conflict risk.
+  // If 3+ PRs are open, force the system to clear its queue first.
+  const [prQueue] = await sql`
+    SELECT COUNT(*)::int as open_prs FROM hive_backlog
+    WHERE status = 'pr_open' AND pr_number IS NOT NULL
+  `.catch(() => [{ open_prs: 0 }]);
+  const openPRCount = Number(prQueue?.open_prs || 0);
+  if (openPRCount >= 3) {
+    // Still try to merge what we have before giving up
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers });
+  }
+
   // Stale dispatch cleanup: items stuck in 'dispatched' for >30 min
   // with no Engineer run picking them up — reset to ready so they can be retried.
   // This prevents items from blocking the cascade indefinitely.

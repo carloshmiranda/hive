@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { createHmac, timingSafeEqual } from "crypto";
 import { dispatchEvent } from "@/lib/dispatch";
 import { analyzePR, autoMergePR } from "@/lib/pr-risk-scoring";
+import { qstashPublish } from "@/lib/qstash";
 
 // Receives GitHub webhook events
 // Auth: HMAC-SHA256 signature verification via GITHUB_WEBHOOK_SECRET
@@ -332,6 +333,13 @@ export async function POST(req: Request) {
                   })
                 ).catch(() => {});
               }
+
+              // Post-merge verification: check build health after 5 minutes
+              qstashPublish("/api/dispatch/verify-merge", {
+                pr_number: prNumber,
+                backlog_ids: itemIds,
+                merged_at: new Date().toISOString(),
+              }, { delay: 300, retries: 2 }).catch(() => {});
             } else {
               // Closed without merge — reset to ready
               await sql`

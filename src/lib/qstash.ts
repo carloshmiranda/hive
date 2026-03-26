@@ -38,7 +38,7 @@ function getReceiver(): Receiver | null {
 export async function qstashPublish(
   path: string,
   body: Record<string, unknown>,
-  options?: { retries?: number; deduplicationId?: string }
+  options?: { retries?: number; deduplicationId?: string; delay?: number }
 ): Promise<{ messageId: string } | null> {
   const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
   const cronSecret = process.env.CRON_SECRET;
@@ -67,6 +67,7 @@ export async function qstashPublish(
       ...(cronSecret && { Authorization: `Bearer ${cronSecret}` }),
     },
     ...(options?.deduplicationId && { deduplicationId: options.deduplicationId }),
+    ...(options?.delay && { delay: options.delay }),
   });
 
   return { messageId: result.messageId };

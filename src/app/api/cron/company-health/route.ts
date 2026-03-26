@@ -340,9 +340,9 @@ export async function GET(req: Request) {
             if (result.success) {
               merged++;
               await sql`
-                UPDATE hive_backlog SET status = 'done', notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by company-health check 38.`}
-                WHERE status = 'pr_open'
-                  AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
+                UPDATE hive_backlog SET status = 'done', completed_at = NOW(),
+                  notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by company-health check 38.`}
+                WHERE status = 'pr_open' AND pr_number = ${pr.number}
               `.catch((e: any) => { console.warn(`[company-health] update backlog for merged PR #${pr.number} failed: ${e?.message || e}`); });
 
               try {
@@ -656,13 +656,16 @@ export async function GET(req: Request) {
                     'success', ${pc.id}, NOW(), NOW())
                 `.catch((e: any) => { console.warn(`[company-health] log auto-merge for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
 
-                // Update any related company tasks to completed
-                await sql`
-                  UPDATE company_tasks SET status = 'completed',
-                    notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by auto-merge check 45.`}
-                  WHERE company_id = ${pc.id} AND status IN ('proposed', 'in_progress')
-                  AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
-                `.catch((e: any) => { console.warn(`[company-health] update company tasks for merged PR #${pr.number} failed: ${e?.message || e}`); });
+                // Update any related company tasks to completed (extract task_id from branch name)
+                const branchRef = pr.head?.ref || "";
+                const taskIdMatch = branchRef.match(/^hive\/cycle-\d+-(.+)$/);
+                if (taskIdMatch?.[1]) {
+                  await sql`
+                    UPDATE company_tasks SET status = 'done', updated_at = NOW()
+                    WHERE id = ${taskIdMatch[1]} AND company_id = ${pc.id}
+                    AND status IN ('proposed', 'in_progress')
+                  `.catch((e: any) => { console.warn(`[company-health] update task ${taskIdMatch[1]} for merged PR #${pr.number} failed: ${e?.message || e}`); });
+                }
 
                 // Telegram notification for auto-merge
                 try {
