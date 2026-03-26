@@ -259,7 +259,45 @@ Before finalizing proposals, verify the proposed slug/name is actually available
 
 If a name is taken on Vercel or GitHub, you MUST choose a different slug. Try variations: add a prefix (get-, use-, try-), combine words differently, or pick a completely different name. The deployed URL matters — nobody wants `myapp-flax.vercel.app`.
 
-### Phase 6: Score, stress-test, and build 3 proposals
+### Phase 6: Rejection pattern analysis (MANDATORY)
+
+Before scoring your finalists, you MUST analyze the `rejected_proposals` data from the context API to extract rejection patterns and apply appropriate penalties.
+
+**Step 1: Pattern extraction**
+For each rejected proposal in the context data:
+1. Extract the business model (saas, blog, newsletter, etc.) from the title/reason
+2. Extract the target market/geography if mentioned
+3. Extract specific problem domains or solution types
+4. Look for Carlos's reasoning patterns in the decision_note field
+
+**Step 2: Pattern matching**
+For each of your 3 finalist proposals, check if they match any consistently rejected patterns:
+1. **Business model rejection**: If 2+ proposals of the same business_model were rejected in the last 90 days, apply a 15% penalty to scoring
+2. **Market/geography rejection**: If 2+ proposals targeting the same market were rejected for market-specific reasons, apply a 10% penalty
+3. **Problem domain rejection**: If similar problem domains were rejected 2+ times with specific reasoning (not just "low priority"), apply a 10% penalty
+4. **Solution type rejection**: If similar solution approaches were consistently rejected, apply a 10% penalty
+
+**Step 3: Detailed reasoning analysis**
+Look for specific rejection reasoning patterns in decision_note fields:
+- "No clear differentiation" or similar → penalty for low novelty_score proposals (< 0.6)
+- "Market too small" or similar → penalty for TAM below €100K
+- "Too complex to automate" → penalty for automation_score below 0.85
+- "Oversaturated market" → penalty when existing_competitors_count >= 10
+
+**Step 4: Apply cumulative penalties**
+- Multiple pattern matches stack: maximum total penalty is 40% of weighted_total
+- Document all applied penalties in a new `rejection_pattern_penalty` field
+- Include pattern reasoning in a new `rejection_analysis` field per proposal
+
+**Rejection pattern scoring:**
+- If NO patterns match: `rejection_penalty = 0`
+- If 1 minor pattern matches: `rejection_penalty = 0.05` (5%)
+- If 1 major pattern matches: `rejection_penalty = 0.15` (15%)
+- If multiple patterns match: cumulative up to max 0.40 (40%)
+
+Update weighted_total calculation: `final_score = weighted_total * (1 - rejection_penalty)`
+
+### Phase 7: Score, stress-test, and build 3 proposals
 
 For each finalist, fill the **weighted scoring rubric** (0-10 per criterion):
 
@@ -289,7 +327,7 @@ This is the proposal score (0-10). Include the filled rubric in the JSON output.
 - Different subreddits count as same platform (Reddit)
 - Include all sources in signal_sources array with URLs and evidence
 
-### Phase 7: Disconfirming evidence (MANDATORY per proposal)
+### Phase 8: Disconfirming evidence (MANDATORY per proposal)
 
 For EACH of the 3 finalists, actively search for reasons it might FAIL:
 - web_search: "[niche] failed startup" or "[niche] why it doesn't work"
@@ -375,7 +413,18 @@ Pick the top 3 respecting the mandatory mix above.
         "automation_fit": { "score": 0-10, "evidence": "what can/cannot be automated" },
         "competitive_moat": { "score": 0-10, "evidence": "specific moat or lack thereof" },
         "revenue_speed": { "score": 0-10, "evidence": "path to first euro with timeline" },
-        "weighted_total": 0.0-10.0
+        "weighted_total": 0.0-10.0,
+        "rejection_penalty": 0.0-0.4,
+        "final_score": 0.0-10.0
+      },
+      "rejection_analysis": {
+        "patterns_matched": ["business_model:saas", "market:portugal", "etc"],
+        "penalty_breakdown": {
+          "business_model_penalty": 0.15,
+          "market_penalty": 0.10,
+          "total_penalty": 0.25
+        },
+        "reasoning": "Explanation of why penalties were applied"
       },
       "why_this_might_fail": [
         "Specific risk 1 with evidence (competitor free tier, declining trend, regulatory threat, etc.)",
@@ -421,4 +470,5 @@ IMPORTANT:
 - `novelty_score` is REQUIRED — calculated based on competitor count using the novelty scoring rules above.
 - `existing_competitors_count` is REQUIRED — exact number of direct competitors found on page 1 of "[idea] tool" and "[idea] app" searches.
 - `high_saturation` is REQUIRED — set to true if existing_competitors_count >= 10. These proposals need exceptional differentiation.
-- Order by `scoring_rubric.weighted_total`, highest first.
+- `rejection_analysis` is REQUIRED — pattern matching against recently rejected proposals with penalty breakdown.
+- Order by `scoring_rubric.final_score`, highest first.
