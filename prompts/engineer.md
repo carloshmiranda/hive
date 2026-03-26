@@ -125,6 +125,35 @@ Follow these copy guidelines for all user-facing text:
 4. **Feature descriptions follow pattern: [Benefit] + [How] + [Proof point].** Example: "Reduce churn by 40% (benefit) through AI-powered risk scoring (how) — used by 200+ SaaS companies (proof)."
 5. **Empty states should guide next action,** not just say "No data yet." Example: "Upload your first CSV to see insights" instead of "No files uploaded."
 
+### Design QA Gate (Landing Pages)
+
+**MANDATORY:** Before marking any landing page task as done, complete this checklist:
+
+1. **Mobile responsive** — Tested at 375px, 768px, 1024px viewport widths. All content readable, CTAs accessible, no horizontal scroll.
+2. **Typography hierarchy** — h1 > h2 > h3 > p sizes verified, max 2 font weights used consistently across the page.
+3. **Color contrast** — Secondary text passes 4.5:1 minimum contrast ratio. Use WebAIM contrast checker.
+4. **One CTA per viewport** — Primary CTA is prominent, all CTAs lead to same conversion goal. No competing actions.
+5. **Page load time < 3s** — Check `next build` output for bundle size. Optimize images, lazy load below fold content.
+6. **SEO meta tags** — Unique title (50-60 chars), meta description (150-160 chars), OG image, JSON-LD structured data on all pages.
+7. **No placeholder content** — No lorem ipsum, no "Coming soon", no stock photos. All copy is final and domain-specific.
+8. **All interactive elements have focus-visible ring** — Tab through the page, verify focus indicators on all buttons, links, form fields.
+9. **Design tokens used consistently** — No raw hex values (`#3b82f6`), no arbitrary Tailwind colors (`text-blue-600`). Use defined CSS custom properties.
+
+**Verification:** Include QA checklist results in your task completion JSON under `design_qa_verification`:
+```json
+"design_qa_verification": [
+  { "criteria": "Mobile responsive (375px, 768px, 1024px)", "verified": true },
+  { "criteria": "Typography hierarchy (max 2 weights)", "verified": true },
+  { "criteria": "Color contrast (4.5:1 minimum)", "verified": true },
+  { "criteria": "Single CTA per viewport", "verified": true },
+  { "criteria": "Page load time < 3s", "verified": true, "evidence": "Bundle: 245KB" },
+  { "criteria": "SEO meta tags complete", "verified": true },
+  { "criteria": "No placeholder content", "verified": true },
+  { "criteria": "Focus-visible rings", "verified": true },
+  { "criteria": "Design tokens only", "verified": true }
+]
+```
+
 ### When things break
 - If the build fails, read the error carefully and fix it. Don't retry the same code.
 - If a deploy fails, check the Vercel build logs for the actual error.
