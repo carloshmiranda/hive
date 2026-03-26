@@ -2,6 +2,44 @@ import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { dispatchEvent } from "@/lib/dispatch";
 
+// Batch reject proposals based on criteria
+async function batchRejectProposals(criteria: any, notes?: string) {
+  const sql = getDb();
+
+  if (criteria.title_patterns && Array.isArray(criteria.title_patterns)) {
+    // Handle recurring-escalation-automation patterns
+    const patterns = criteria.title_patterns;
+    const proposals = await sql`
+      SELECT id, title FROM evolver_proposals
+      WHERE status = 'pending'
+      AND (
+        title ILIKE ANY(${patterns.map((p: string) => `%${p}%`)})
+        ${criteria.gap_type ? sql`AND gap_type = ${criteria.gap_type}` : sql``}
+      )
+    `;
+
+    if (proposals.length === 0) {
+      return json({ rejected_count: 0, message: "No proposals matched criteria" });
+    }
+
+    const proposalIds = proposals.map(p => p.id);
+    const rejectionNote = notes || "Batch rejected: describes symptoms rather than root causes";
+
+    await sql`
+      UPDATE evolver_proposals
+      SET status = 'rejected', reviewed_at = NOW(), notes = ${rejectionNote}
+      WHERE id = ANY(${proposalIds})
+    `;
+
+    return json({
+      rejected_count: proposals.length,
+      rejected_proposals: proposals.map(p => ({ id: p.id, title: p.title }))
+    });
+  }
+
+  return err("No valid criteria provided for batch rejection");
+}
+
 // GET /api/evolver          → list proposals (default: pending)
 // GET /api/evolver?status=all → all proposals
 export async function GET(req: Request) {
@@ -36,13 +74,21 @@ export async function GET(req: Request) {
   return json(proposals);
 }
 
-// PATCH /api/evolver — approve/reject/defer a proposal
+// PATCH /api/evolver — approve/reject/defer a proposal or batch reject
 export async function PATCH(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
-  const { id, decision, notes } = body;
+  const { id, decision, notes, batch_action, criteria } = body;
+
+  // Handle batch operations
+  if (batch_action) {
+    if (batch_action === "batch_reject" && criteria) {
+      return await batchRejectProposals(criteria, notes);
+    }
+    return err("Invalid batch action or missing criteria");
+  }
 
   if (!id || !decision) return err("id and decision required");
   if (!["approved", "rejected", "deferred"].includes(decision)) {
@@ -132,5 +178,67 @@ export async function PATCH(req: Request) {
   }
 
   return json({ ok: true, status: decision });
+}
+
+// POST /api/evolver/auto-approve — auto-approve proposals after 48h
+export async function POST(req: Request) {
+  // This endpoint should only be called by system/cron, not by users
+  const authHeader = req.headers.get("authorization");
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return err("Unauthorized", 401);
+  }
+
+  const sql = getDb();
+
+  // Auto-approve capability gaps with medium severity + concrete fix after 48h
+  const autoApproveProposals = await sql`
+    SELECT id, title, proposed_fix, affected_companies
+    FROM evolver_proposals
+    WHERE status = 'pending'
+      AND gap_type = 'capability'
+      AND severity = 'medium'
+      AND proposed_fix->>'change' IS NOT NULL
+      AND LENGTH(proposed_fix->>'change') > 50
+      AND created_at < NOW() - INTERVAL '48 hours'
+  `;
+
+  let approvedCount = 0;
+
+  for (const proposal of autoApproveProposals) {
+    // Auto-approve the proposal
+    await sql`
+      UPDATE evolver_proposals
+      SET status = 'approved',
+          reviewed_at = NOW(),
+          notes = 'Auto-approved after 48h: capability gap with medium severity and concrete fix'
+      WHERE id = ${proposal.id}
+    `;
+
+    // Handle the implementation based on fix type
+    const fixType = proposal.proposed_fix?.type;
+
+    if (fixType === "setup_action") {
+      const affectedCompanies = proposal.affected_companies || [];
+      const firstCompany = affectedCompanies[0];
+      let companyId = null;
+      if (firstCompany) {
+        const [comp] = await sql`SELECT id FROM companies WHERE slug = ${firstCompany} LIMIT 1`;
+        companyId = comp?.id || null;
+      }
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at, company_id)
+        VALUES ('evolver', 'setup_action', ${`Auto-approved evolver proposal: ${proposal.title}`}, 'pending_manual',
+          ${JSON.stringify({ proposal_id: proposal.id, proposed_fix: proposal.proposed_fix, auto_approved: true })}::jsonb,
+          NOW(), NOW(), ${companyId})
+      `;
+    }
+
+    approvedCount++;
+  }
+
+  return json({
+    auto_approved_count: approvedCount,
+    auto_approved_proposals: autoApproveProposals.map(p => ({ id: p.id, title: p.title }))
+  });
 }
 

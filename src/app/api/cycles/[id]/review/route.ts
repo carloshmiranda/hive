@@ -2,6 +2,71 @@ import { getDb, json, err } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
+// Deduplicate CEO PR review proposals - keep most recent, reject older ones
+async function deduplicateCeoPrReviewProposals(sql: any) {
+  // Find all pending CEO review proposals
+  const ceoReviewProposals = await sql`
+    SELECT id, title, created_at
+    FROM evolver_proposals
+    WHERE status = 'pending'
+      AND gap_type = 'outcome'
+      AND (title ILIKE '%CEO%' AND title ILIKE '%review%')
+    ORDER BY created_at DESC
+  `;
+
+  if (ceoReviewProposals.length <= 1) {
+    return; // No duplicates to handle
+  }
+
+  // Group similar proposals (those with overlapping keywords)
+  const groups: Array<typeof ceoReviewProposals> = [];
+  const processed = new Set<string>();
+
+  for (const proposal of ceoReviewProposals) {
+    if (processed.has(proposal.id)) continue;
+
+    const group = [proposal];
+    processed.add(proposal.id);
+
+    // Find similar proposals (simple keyword overlap approach)
+    const keyWords = proposal.title.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3);
+
+    for (const other of ceoReviewProposals) {
+      if (processed.has(other.id)) continue;
+
+      const otherWords = other.title.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3);
+      const overlap = keyWords.filter((w: string) => otherWords.includes(w)).length;
+
+      // If significant overlap (>30% of words), consider them duplicates
+      if (overlap >= Math.ceil(Math.min(keyWords.length, otherWords.length) * 0.3)) {
+        group.push(other);
+        processed.add(other.id);
+      }
+    }
+
+    if (group.length > 1) {
+      groups.push(group);
+    }
+  }
+
+  // For each group, keep the most recent and reject older ones
+  for (const group of groups) {
+    group.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const [keep, ...reject] = group;
+
+    if (reject.length > 0) {
+      const rejectIds = reject.map((p: any) => p.id);
+      await sql`
+        UPDATE evolver_proposals
+        SET status = 'rejected',
+            reviewed_at = NOW(),
+            notes = ${`Deduplicated: keeping most recent proposal ${keep.id} (${keep.title})`}
+        WHERE id = ANY(${rejectIds})
+      `;
+    }
+  }
+}
+
 // PATCH /api/cycles/[id]/review
 // Updates cycle with CEO review data (agent-authorized endpoint)
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -66,6 +131,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!cycle) {
       return err("Cycle not found", 404);
     }
+
+    // Deduplicate CEO PR review proposals - keep most recent, reject older ones
+    await deduplicateCeoPrReviewProposals(sql);
 
     return json({
       ok: true,
