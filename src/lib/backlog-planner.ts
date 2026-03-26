@@ -9,6 +9,7 @@ export interface BacklogSpec {
   risks: string[];
   complexity: "S" | "M" | "L";
   estimated_turns: number;
+  specialist?: 'frontend' | 'backend' | 'database' | 'devops' | 'security';
 }
 
 interface BacklogItem {
@@ -494,6 +495,49 @@ Never output complexity "L" — if a sub-task would be L, break it further.`;
   }
 }
 
+/**
+ * Detect specialist type from affected files using pattern matching rules
+ */
+function detectSpecialistFromFiles(affectedFiles: string[]): 'frontend' | 'backend' | 'database' | 'devops' | 'security' {
+  for (const file of affectedFiles) {
+    const fileLower = file.toLowerCase();
+
+    // Frontend patterns
+    if (file.startsWith('src/app/') ||
+        fileLower.includes('page') ||
+        fileLower.includes('layout') ||
+        fileLower.includes('component')) {
+      return 'frontend';
+    }
+
+    // DevOps patterns
+    if (file.startsWith('.github/workflows/')) {
+      return 'devops';
+    }
+
+    // Security patterns (check before database since auth files are in src/lib/)
+    if (file.startsWith('src/lib/') &&
+        (fileLower.includes('security') ||
+         fileLower.includes('auth') ||
+         fileLower.includes('encrypt'))) {
+      return 'security';
+    }
+
+    // Database patterns
+    if (file === 'schema.sql' ||
+        (file.startsWith('src/lib/') &&
+         (fileLower.includes('db') ||
+          fileLower.includes('sql') ||
+          fileLower.includes('database') ||
+          fileLower.includes('migration')))) {
+      return 'database';
+    }
+  }
+
+  // Default to backend
+  return 'backend';
+}
+
 // Generate a spec for a backlog item using a cheap LLM call
 export async function generateSpec(
   item: BacklogItem,
@@ -592,6 +636,9 @@ Rules:
       minTurns,
       Math.min(maxTurns, spec.estimated_turns || 25)
     );
+
+    // Detect specialist from affected_files
+    spec.specialist = detectSpecialistFromFiles(spec.affected_files);
 
     return spec;
   } catch (error) {
