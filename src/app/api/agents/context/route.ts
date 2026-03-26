@@ -6,6 +6,7 @@ import { getCapabilitySummary } from "@/lib/hive-capabilities";
 import { checkForbidden } from "@/lib/phase-gate";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
+import { selectEntriesWithMMR } from "@/lib/mmr";
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
@@ -368,7 +369,7 @@ async function fixContext(sql: any, company: any) {
 // ─── CEO context (per-company, strategic planning + review) ───
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function ceoContext(sql: any, company: any) {
-  const [cycle, reports, playbook, engTasks, growthTasks, metrics, directives, recentCycles] = await Promise.all([
+  const [cycle, reports, allPlaybookEntries, engTasks, growthTasks, metrics, directives, recentCycles] = await Promise.all([
     sql`
       SELECT id, cycle_number, ceo_plan, ceo_review FROM cycles
       WHERE company_id = ${company.id}
@@ -381,10 +382,11 @@ async function ceoContext(sql: any, company: any) {
       ORDER BY updated_at DESC
     `.catch(() => []),
     sql`
-      SELECT domain, insight FROM playbook
-      WHERE confidence >= 0.6
-        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
-      ORDER BY confidence DESC LIMIT 10
+      SELECT domain, insight, confidence FROM playbook
+      WHERE (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+        AND superseded_by IS NULL
+        AND confidence >= 0.3
+      ORDER BY confidence DESC
     `.catch(() => []),
     sql`
       SELECT id, title, status, priority FROM company_tasks
@@ -427,6 +429,9 @@ async function ceoContext(sql: any, company: any) {
   const businessType = normalizeBusinessType(company.company_type);
   const validation = computeValidationScore(businessType, metrics, company.created_at);
 
+  // Apply MMR to select diverse, relevant playbook entries
+  const selectedPlaybook = selectEntriesWithMMR(allPlaybookEntries, 10, 0.7);
+
   return {
     company: {
       name: company.name,
@@ -448,7 +453,7 @@ async function ceoContext(sql: any, company: any) {
       cycle: c.cycle_number, score: c.score, grades: c.agent_grades,
     })),
     research,
-    playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
+    playbook: selectedPlaybook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     engineering_tasks: engTasks,
     growth_tasks: growthTasks,
     directives: directives.map((d: { id: string; instruction: string }) => ({ id: d.id, instruction: d.instruction })),
