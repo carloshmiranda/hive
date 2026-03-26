@@ -297,6 +297,149 @@ export async function checkBacklogCircuitBreaker(
   }
 }
 
+/**
+ * Regenerate BACKLOG.md from the hive_backlog database table
+ * Groups items by status and priority for better organization
+ */
+export async function regenerateBacklogMd(sql: any): Promise<void> {
+  if (!sql) {
+    console.warn("Cannot regenerate BACKLOG.md: no database connection");
+    return;
+  }
+
+  try {
+    // Fetch all backlog items grouped by status and priority
+    const items = await sql`
+      SELECT id, priority, title, description, status, notes,
+             pr_number, pr_url, completed_at, created_at, theme
+      FROM hive_backlog
+      ORDER BY
+        CASE status
+          WHEN 'in_progress' THEN 0
+          WHEN 'planning' THEN 1
+          WHEN 'dispatched' THEN 2
+          WHEN 'ready' THEN 3
+          WHEN 'approved' THEN 4
+          WHEN 'pr_open' THEN 5
+          WHEN 'blocked' THEN 6
+          WHEN 'rejected' THEN 7
+          WHEN 'done' THEN 8
+          ELSE 9
+        END,
+        CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+        created_at ASC
+    `;
+
+    // Group items by status
+    const statusGroups: Record<string, any[]> = {};
+    for (const item of items) {
+      if (!statusGroups[item.status]) {
+        statusGroups[item.status] = [];
+      }
+      statusGroups[item.status].push(item);
+    }
+
+    // Generate markdown content
+    let markdown = `# Backlog
+
+> Prioritized improvements for Hive itself. The orchestrator's CEO agent reviews this weekly and can self-assign items during low-activity cycles. Carlos can add items via the dashboard command bar with \`hive: <description>\` or by editing this file directly.
+>
+> **⚠️  This file is auto-generated from the database.** Use \`POST /api/backlog\` to add new items, not direct file edits.
+
+## Priority Legend
+- 🔴 **P0** — Blocking or degrading core functionality
+- 🟡 **P1** — Important for next phase, not blocking today
+- 🟢 **P2** — Nice to have, improves quality of life
+- ⚪ **P3** — Future vision, no urgency
+
+---
+
+`;
+
+    // Helper to format priority emoji
+    const formatPriority = (priority: string) => {
+      switch (priority) {
+        case 'P0': return '🔴 P0';
+        case 'P1': return '🟡 P1';
+        case 'P2': return '🟢 P2';
+        case 'P3': return '⚪ P3';
+        default: return priority;
+      }
+    };
+
+    // Helper to format item with status indicators
+    const formatItem = (item: any) => {
+      const priority = formatPriority(item.priority);
+      const title = item.title;
+      const description = item.description || '';
+
+      let statusIndicator = '';
+      if (item.status === 'done') {
+        const date = item.completed_at ? new Date(item.completed_at).toISOString().split('T')[0] : 'unknown';
+        statusIndicator = ` (DONE — ${date})`;
+      } else if (item.status === 'pr_open' && item.pr_number) {
+        statusIndicator = ` — [PR #${item.pr_number}]${item.pr_url ? `(${item.pr_url})` : ''}`;
+      } else if (item.status === 'blocked') {
+        statusIndicator = ' — BLOCKED';
+      }
+
+      return `### ${priority} — ${title}${statusIndicator}\n${description}\n\n`;
+    };
+
+    // Add sections in order
+    const sectionOrder = [
+      { status: 'in_progress', title: 'In Progress', description: 'Items currently being worked on' },
+      { status: 'planning', title: 'Planning', description: 'Spec generation in progress' },
+      { status: 'dispatched', title: 'Dispatched', description: 'Sent to Engineer agents' },
+      { status: 'ready', title: 'Up Next', description: 'Ready to be dispatched' },
+      { status: 'approved', title: 'Approved', description: 'Approved and ready for planning/dispatch' },
+      { status: 'pr_open', title: 'Awaiting Merge', description: 'PRs created, awaiting review/merge' },
+      { status: 'blocked', title: 'Blocked', description: 'Need manual intervention' },
+      { status: 'done', title: 'Recently Completed', description: 'Completed items (last 30 days)' }
+    ];
+
+    for (const section of sectionOrder) {
+      const sectionItems = statusGroups[section.status] || [];
+
+      // For "done" items, only show recent completions (last 30 days)
+      const filteredItems = section.status === 'done'
+        ? sectionItems.filter(item => {
+            if (!item.completed_at) return false;
+            const completedDate = new Date(item.completed_at);
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            return completedDate > thirtyDaysAgo;
+          }).slice(0, 10) // Only show last 10 completed items
+        : sectionItems;
+
+      if (filteredItems.length > 0) {
+        markdown += `## ${section.title}\n<!-- ${section.description} -->\n\n`;
+
+        for (const item of filteredItems) {
+          markdown += formatItem(item);
+        }
+
+        markdown += '---\n\n';
+      }
+    }
+
+    // Add footer with generation timestamp
+    const timestamp = new Date().toISOString().replace('T', ' ').split('.')[0] + ' UTC';
+    markdown += `---\n\n*Generated from database at ${timestamp}*\n`;
+
+    // Write to file using Node.js fs
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const backlogPath = path.join(process.cwd(), 'BACKLOG.md');
+    await fs.writeFile(backlogPath, markdown, 'utf8');
+
+    console.log(`[backlog-planner] Regenerated BACKLOG.md with ${items.length} items across ${Object.keys(statusGroups).length} statuses`);
+  } catch (error) {
+    console.error('Failed to regenerate BACKLOG.md:', error instanceof Error ? error.message : 'unknown error');
+    throw error;
+  }
+}
+
 // Generate a spec for a backlog item using a cheap LLM call
 export async function generateSpec(
   item: BacklogItem,
