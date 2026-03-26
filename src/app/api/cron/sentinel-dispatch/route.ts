@@ -836,12 +836,42 @@ export async function GET(request: Request) {
     }
 
     // ========================================================================
-    // CHECK 13b: Backlog dispatch
+    // CHECK 13b: Backlog dispatch (with chain stall detection)
     // ========================================================================
+
+    // Chain health check: if ready items exist but nothing dispatched recently
+    // and no Engineer is running, the chain is stalled — restart it regardless
+    // of remaining budget slots (Sentinel becomes a gap detector).
+    let chainStalled = false;
+    try {
+      const [readyCount] = await sql`
+        SELECT COUNT(*)::int as cnt FROM hive_backlog WHERE status IN ('ready', 'approved')
+      `.catch(() => [{ cnt: 0 }]);
+      const [runningEngineer] = await sql`
+        SELECT id FROM agent_actions
+        WHERE agent = 'engineer' AND status = 'running'
+        AND action_type IN ('feature_request', 'self_improvement')
+        AND company_id IS NULL
+        AND started_at > NOW() - INTERVAL '1 hour'
+        LIMIT 1
+      `.catch(() => []);
+      const [recentDispatch] = await sql`
+        SELECT id FROM hive_backlog
+        WHERE status = 'dispatched' AND dispatched_at > NOW() - INTERVAL '30 minutes'
+        LIMIT 1
+      `.catch(() => []);
+
+      if (Number(readyCount?.cnt || 0) > 0 && !runningEngineer && !recentDispatch) {
+        chainStalled = true;
+        console.log(`[sentinel-dispatch] Chain stalled: ${readyCount.cnt} ready items, no Engineer running, no recent dispatch — restarting`);
+      }
+    } catch (e: unknown) {
+      console.warn("[sentinel-dispatch] Chain health check failed:", e instanceof Error ? e.message : String(e));
+    }
 
     let backlogDispatched = 0;
     try {
-      if (remainingSlots > 0) {
+      if (remainingSlots > 0 || chainStalled) {
         const backlogUrl = `${process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app"}/api/backlog/dispatch`;
         const backlogRes = await fetch(backlogUrl, {
           method: "POST",

@@ -3,7 +3,7 @@ import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
-import { filterBacklogItemsByCooldown, checkBacklogCircuitBreaker, flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
+import { filterBacklogItemsByCooldown, flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -177,7 +177,8 @@ export async function POST(req: Request) {
       const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns") || turnsUsed >= 30;
 
       // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
-      const maxAttempts = isMaxTurns ? 2 : 3;
+      // max_turns = immediate decompose (1 attempt) — retrying same item with same turn budget fails identically
+      const maxAttempts = isMaxTurns ? 1 : 3;
       if (item && attempt < maxAttempts) {
         trackFailedBacklogItem(item.id, attempt);
       }
@@ -242,8 +243,8 @@ export async function POST(req: Request) {
       }
 
       if (!decomposed) {
-        // Auto-block: 2 attempts for max_turns errors (saves 35 wasted turns), 3 for others
-        const blockThreshold = isMaxTurns ? 2 : 3;
+        // Auto-block: 1 attempt for max_turns errors (decompose immediately), 3 for others
+        const blockThreshold = isMaxTurns ? 1 : 3;
         if (attempt >= blockThreshold) {
           await sql`
             UPDATE hive_backlog
@@ -262,15 +263,15 @@ export async function POST(req: Request) {
         }
       }
 
-      // After 3 failures, notify Carlos (QStash guarantees delivery)
-      if (attempt >= 3) {
+      // Notify on decomposition or repeated failures
+      if (decomposed || attempt >= 3) {
         await qstashPublish("/api/notify", {
           agent: "backlog",
           action: decomposed ? "auto_decomposed" : "repeated_failure",
           company: "hive",
           status: decomposed ? "decomposed" : "failed",
           summary: decomposed
-            ? `"${item?.title || completed_id}" hit max_turns ${attempt}x — auto-decomposed into smaller tasks.`
+            ? `"${item?.title || completed_id}" hit max_turns — auto-decomposed into smaller tasks. Dispatching first sub-task.`
             : `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
         }, { retries: 2 }).catch(() => {});
       }
@@ -315,19 +316,6 @@ export async function POST(req: Request) {
     }
   }
 
-  // Backlog circuit breaker: check last 5 Engineer backlog runs
-  // If >50% failed, pause cascade for 1 hour to prevent cascading failures
-  // Bypass: P0 items always dispatch, and force=true skips the breaker
-  const hasP0Ready = await sql`
-    SELECT id FROM hive_backlog WHERE priority = 'P0' AND status IN ('ready', 'approved', 'planning') LIMIT 1
-  `.catch(() => []);
-  const forceDispatch = body.force === true || hasP0Ready.length > 0;
-
-  const circuitBreakerResult = await checkBacklogCircuitBreaker(sql, forceDispatch);
-  if (!circuitBreakerResult.dispatched) {
-    return json(circuitBreakerResult);
-  }
-
   // Check budget — don't dispatch if Claude budget is exhausted
   const [usage] = await sql`
     SELECT COALESCE(SUM(tokens_used), 0)::int as turns
@@ -341,35 +329,27 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), free_workers_dispatched: freeWorkers });
   }
 
-  // Check for rate-limit failures (2h window — these indicate weekly/session cap)
+  // Rate-limit check: if the most recent rate-limit failure was <30 min ago,
+  // pause brain-agent dispatch but still dispatch free workers.
+  // Time-based (not count-based) so we resume as soon as the limit resets.
   const [rateLimitRow] = await sql`
-    SELECT COUNT(*) FILTER (WHERE status = 'failed'
-      AND (error ILIKE '%rate limit%' OR error ILIKE '%session limit%'
-        OR error ILIKE '%usage cap%' OR error ILIKE '%too many%'
-        OR error ILIKE '%quota%' OR error ILIKE '%limit reached%'
-        OR error ILIKE '%max_tokens%' OR error ILIKE '%capacity%'))::int as rate_limited
+    SELECT MAX(finished_at) as last_rate_limit
     FROM agent_actions
     WHERE agent IN ('ceo', 'scout', 'engineer', 'evolver', 'healer')
-    AND started_at > NOW() - INTERVAL '2 hours'
-  `.catch(() => [{ rate_limited: 0 }]);
-  const rateLimited = Number((rateLimitRow as Record<string, number>)?.rate_limited || 0);
-  if (rateLimited >= 2) {
+    AND status = 'failed'
+    AND (error ILIKE '%rate limit%' OR error ILIKE '%session limit%'
+      OR error ILIKE '%usage cap%' OR error ILIKE '%too many%'
+      OR error ILIKE '%quota%' OR error ILIKE '%limit reached%'
+      OR error ILIKE '%max_tokens%' OR error ILIKE '%capacity%')
+    AND finished_at > NOW() - INTERVAL '2 hours'
+  `.catch(() => [{ last_rate_limit: null }]);
+  const lastRateLimit = rateLimitRow?.last_rate_limit ? new Date(rateLimitRow.last_rate_limit) : null;
+  const rateLimitCooldownActive = lastRateLimit && (Date.now() - lastRateLimit.getTime()) < 30 * 60 * 1000;
+  if (rateLimitCooldownActive) {
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
-    return json({ dispatched: false, reason: "claude_rate_limited", rate_limit_failures: rateLimited, window: "2h", free_workers_dispatched: freeWorkers });
+    const minutesRemaining = Math.round(30 - (Date.now() - lastRateLimit!.getTime()) / 60000);
+    return json({ dispatched: false, reason: "rate_limit_cooldown", cooldown_remaining_minutes: minutesRemaining, free_workers_dispatched: freeWorkers });
   }
-
-  // Circuit breaker: short 30-min window so it recovers quickly after limit resets
-  const [recentFailureRow] = await sql`
-    SELECT COUNT(*)::int as total,
-           COUNT(*) FILTER (WHERE status = 'failed')::int as failed
-    FROM agent_actions
-    WHERE agent IN ('ceo', 'scout', 'engineer', 'evolver', 'healer')
-    AND started_at > NOW() - INTERVAL '30 minutes'
-  `.catch(() => [{ total: 0, failed: 0 }]);
-  const recentFailed = Number((recentFailureRow as Record<string, number>)?.failed || 0);
-  const recentTotal = Number((recentFailureRow as Record<string, number>)?.total || 0);
-  const circuitBreakerTripped = recentTotal >= 3 && recentFailed / recentTotal > 0.6 && !forceDispatch;
-  // Don't return yet — P0 items bypass circuit breaker (checked after item selection)
 
   // Check for running Hive Engineer jobs (dedup)
   const [running] = await sql`
@@ -420,58 +400,34 @@ export async function POST(req: Request) {
     // Non-blocking, continue with dispatch
   }
 
-  // Fetch ready backlog items
-  // Cooldown: items with recent attempt failures wait 30min before retry.
-  // Uses dispatched_at (reset on failure) as proxy for "last attempt time".
-  // When called from chain (completed_id present), only auto-dispatch P0 items
-  // This prevents cascade waste on lower-priority items that can wait for regular dispatch
+  // Fetch ready backlog items — priority-ordered (P0 first, then P1, P2, P3).
+  // Budget check above already gates total spend. Chain dispatch uses the same
+  // query as regular dispatch — no P0/P1 filter. If high-priority items exist
+  // they go first; if not, P2/P3 dispatch immediately instead of waiting for Sentinel.
   const isChainDispatch = !!completed_id;
   let backlogItems: any[];
   try {
-    if (isChainDispatch) {
-      // CRITICAL: Cascade auto-dispatch ONLY processes P0 items to prevent waste
-      // Non-P0 items must be dispatched manually or via Sentinel for deliberate scheduling
-      backlogItems = await sql`
-        SELECT * FROM hive_backlog
-        WHERE (
-          status IN ('ready', 'approved')
-          OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
-        )
-        AND NOT (
-          notes ILIKE '%[attempt %]%'
-          AND dispatched_at IS NOT NULL
-          AND dispatched_at > NOW() - INTERVAL '30 minutes'
-        )
-        AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
-             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
-        AND priority IN ('P0', 'P1')
-        ORDER BY
-          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 ELSE 2 END,
-          created_at ASC
-        LIMIT 10
-      `;
+    backlogItems = await sql`
+      SELECT * FROM hive_backlog
+      WHERE (
+        status IN ('ready', 'approved')
+        OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
+      )
+      AND NOT (
+        notes ILIKE '%[attempt %]%'
+        AND dispatched_at IS NOT NULL
+        AND dispatched_at > NOW() - INTERVAL '30 minutes'
+      )
+      AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
+           OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
+      ORDER BY
+        CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+        created_at ASC
+      LIMIT 10
+    `;
 
-      // Log cascade dispatch decision for debugging
-      console.log(`[backlog] Chain dispatch: filtering to P0+P1 (triggered by completion of ${completed_id})`);
-    } else {
-      backlogItems = await sql`
-        SELECT * FROM hive_backlog
-        WHERE (
-          status IN ('ready', 'approved')
-          OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
-        )
-        AND NOT (
-          notes ILIKE '%[attempt %]%'
-          AND dispatched_at IS NOT NULL
-          AND dispatched_at > NOW() - INTERVAL '30 minutes'
-        )
-        AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
-             OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
-        ORDER BY
-          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
-          created_at ASC
-        LIMIT 10
-      `;
+    if (isChainDispatch) {
+      console.log(`[backlog] Chain dispatch: all priorities, budget-gated (triggered by completion of ${completed_id})`);
     }
   } catch (e) {
     console.error("[backlog] Query failed:", e instanceof Error ? e.message : String(e));
@@ -643,8 +599,7 @@ export async function POST(req: Request) {
   const backlogItemsFiltered = automatableFiltered;
 
   if (backlogItemsFiltered.length === 0) {
-    // For chain dispatch, specifically report when no P0 items are available
-    const reason = isChainDispatch ? "no_p0_items" : "backlog_empty";
+    const reason = "backlog_empty";
     const extra = isChainDispatch ? { chain_dispatch: true } : {};
 
     return json({
@@ -747,12 +702,6 @@ export async function POST(req: Request) {
 
   if (!topItem) {
     return json({ dispatched: false, reason: "no_scorable_items" });
-  }
-
-  // Circuit breaker: block non-P0 items when failure rate is high
-  if (circuitBreakerTripped && topItem.priority !== "P0") {
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
-    return json({ dispatched: false, reason: "circuit_breaker", failed: recentFailed, total: recentTotal, rate: Math.round((recentFailed / recentTotal) * 100), window: "30m", p0_bypass: false, free_workers_dispatched: freeWorkers });
   }
 
   // Dispatch via GitHub Actions
