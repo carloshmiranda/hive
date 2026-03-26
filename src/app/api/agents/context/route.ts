@@ -7,6 +7,7 @@ import { checkForbidden } from "@/lib/phase-gate";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
 import { selectEntriesWithMMR } from "@/lib/mmr";
+import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
@@ -432,6 +433,10 @@ async function ceoContext(sql: any, company: any) {
   // Apply MMR to select diverse, relevant playbook entries
   const selectedPlaybook = selectEntriesWithMMR(allPlaybookEntries, 10, 0.7);
 
+  // Calculate WoW growth rates
+  const growthRates = calculateWoWGrowthRates(metrics);
+  const growthSummary = generateGrowthSummary(growthRates);
+
   return {
     company: {
       name: company.name,
@@ -456,8 +461,10 @@ async function ceoContext(sql: any, company: any) {
     playbook: selectedPlaybook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     engineering_tasks: engTasks,
     growth_tasks: growthTasks,
-    directives: directives.map((d: { id: string; instruction: string }) => ({ id: d.id, instruction: d.instruction })),
+    directives: directives.map((d: { id: string; text: string }) => ({ id: d.id, instruction: d.text })),
     metrics: metrics.slice(0, 7),
+    growth_rates: growthRates,
+    growth_summary: growthSummary,
     hive_capabilities: getCapabilitySummary(),
   };
 }
