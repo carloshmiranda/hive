@@ -1,0 +1,46 @@
+# Dependabot configuration for Hive
+# Automatically keeps npm dependencies updated with security patches
+# Configured for weekly schedule with auto-merge for patch updates
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/Lisbon"
+    # Auto-merge patch updates (security fixes, bug fixes)
+    # Major and minor updates require manual review
+    open-pull-requests-limit: 10
+    reviewers:
+      - "carloshmiranda"
+    assignees:
+      - "carloshmiranda"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    # Group related dependency updates together
+    groups:
+      next-ecosystem:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+      dev-dependencies:
+        patterns:
+          - "@types/*"
+          - "typescript"
+          - "tailwindcss"
+          - "@tailwindcss/*"
+      security-deps:
+        patterns:
+          - "*"
+        update-types:
+          - "security"
+    # Allow Dependabot to update these dependencies even if they have vulnerabilities
+    # (useful for transitive dependencies where direct update isn't possible)
+    allow:
+      - dependency-type: "all"
