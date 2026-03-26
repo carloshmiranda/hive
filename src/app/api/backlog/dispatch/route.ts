@@ -246,6 +246,13 @@ export async function POST(req: Request) {
         }
       }
 
+      // After successful decomposition, skip circuit breaker checks and proceed
+      // directly to dispatch selection. Freshly-created sub-tasks (S/M complexity)
+      // should be the next items dispatched.
+      if (decomposed) {
+        console.log(`[backlog] Post-decompose: proceeding to dispatch first sub-task immediately`);
+      }
+
       if (!decomposed) {
         // Auto-block: 1 attempt for max_turns errors (decompose immediately), 3 for others
         const blockThreshold = isMaxTurns ? 1 : 3;

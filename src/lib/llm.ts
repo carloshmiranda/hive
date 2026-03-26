@@ -149,6 +149,7 @@ export const AGENT_ROUTING: Record<string, { models: string[] }> = {
       OPENROUTER_MODELS.hermes_405b,       // 405B for content quality
       OPENROUTER_MODELS.llama_70b,
       OPENROUTER_MODELS.gemma_27b,
+      OPENROUTER_MODELS.qwen_coder,        // Fallback: good instruction following
       OPENROUTER_MODELS.mistral_24b,
     ],
   },
@@ -157,6 +158,7 @@ export const AGENT_ROUTING: Record<string, { models: string[] }> = {
       OPENROUTER_MODELS.llama_70b,          // 70B sufficient for emails
       OPENROUTER_MODELS.hermes_405b,
       OPENROUTER_MODELS.gemma_27b,
+      OPENROUTER_MODELS.qwen_coder,         // Fallback: broader model diversity
       OPENROUTER_MODELS.mistral_24b,
     ],
   },
@@ -165,6 +167,7 @@ export const AGENT_ROUTING: Record<string, { models: string[] }> = {
       OPENROUTER_MODELS.mistral_24b,        // 24B fast for health checks
       OPENROUTER_MODELS.phi4,
       OPENROUTER_MODELS.gemma_27b,
+      OPENROUTER_MODELS.qwen_coder,         // Fallback: strong coding model
       OPENROUTER_MODELS.llama_70b,
     ],
   },
