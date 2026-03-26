@@ -2,8 +2,8 @@ import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
-import { trackFailedBacklogItem, resetBacklogItemCooldown, getFailedItemsInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
-import { filterBacklogItemsByCooldown, flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
+import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch";
+import { flagProblemStatementsAsNeedingDecomposition } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -111,8 +111,7 @@ export async function POST(req: Request) {
     }
   }
 
-  // Periodic cleanup of expired cooldown entries
-  cleanupFailedItemsCache();
+  // Cooldown is now SQL-based (no in-memory cleanup needed)
 
   // If a completed item was passed, update its status
   if (completed_id && completed_status) {
@@ -184,8 +183,13 @@ export async function POST(req: Request) {
       }
 
       // On max_turns failure: LLM-assisted decompose if complexity is M or L
+      // Depth limit: don't decompose items that were already auto-decomposed (prevents infinite chains)
+      const isAutoDecomposed = item?.source === 'auto_decompose' || item?.source === 'decomposed';
       let decomposed = false;
-      if (isMaxTurns && item) {
+      if (isMaxTurns && item && isAutoDecomposed) {
+        console.log(`[backlog] Skipping decomposition for "${item.title}" — already a sub-task (source: ${item.source}). Blocking instead.`);
+      }
+      if (isMaxTurns && item && !isAutoDecomposed) {
         try {
           const { generateSpec, decomposeTask } = await import("@/lib/backlog-planner");
           let spec = item.spec;
@@ -253,10 +257,12 @@ export async function POST(req: Request) {
             WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
           `.catch((e: any) => { console.warn(`[backlog] block item ${completed_id} after ${attempt} failures failed: ${e?.message || e}`); });
         } else {
-          // Back to ready with attempt context
+          // Back to ready with attempt context.
+          // Keep dispatched_at = NOW() so the 2h SQL cooldown filter works
+          // even across Vercel restarts (persistent, not in-memory).
           await sql`
             UPDATE hive_backlog
-            SET status = 'ready', dispatched_at = NULL,
+            SET status = 'ready', dispatched_at = NOW(),
                 notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
             WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
           `.catch((e: any) => { console.warn(`[backlog] reset item ${completed_id} to ready after attempt ${attempt} failed: ${e?.message || e}`); });
@@ -416,7 +422,7 @@ export async function POST(req: Request) {
       AND NOT (
         notes ILIKE '%[attempt %]%'
         AND dispatched_at IS NOT NULL
-        AND dispatched_at > NOW() - INTERVAL '30 minutes'
+        AND dispatched_at > NOW() - INTERVAL '2 hours'
       )
       AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
            OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
@@ -592,11 +598,10 @@ export async function POST(req: Request) {
     }, { retries: 2 }).catch(() => {});
   }
 
-  // Apply cooldown filter to remove recently failed items from actionable items
-  const automatableFiltered = filterBacklogItemsByCooldown(actionableItems);
-  const cooldownCount = actionableItems.length - automatableFiltered.length;
-
-  const backlogItemsFiltered = automatableFiltered;
+  // Cooldown is now SQL-based (dispatched_at > NOW() - 2 hours for items with attempt notes)
+  // No in-memory filter needed — survives Vercel restarts.
+  const backlogItemsFiltered = actionableItems;
+  const cooldownCount = 0; // SQL-level filtering already applied
 
   if (backlogItemsFiltered.length === 0) {
     const reason = "backlog_empty";
@@ -608,7 +613,7 @@ export async function POST(req: Request) {
       manual_blocked: manualItems.length,
       decomposition_blocked: decompositionItems.length,
       cooldown_blocked: cooldownCount,
-      items_in_cooldown: getFailedItemsInCooldown().length,
+      items_in_cooldown: 0, // cooldown is now SQL-level
       ...extra
     });
   }

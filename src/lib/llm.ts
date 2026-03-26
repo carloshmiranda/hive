@@ -123,37 +123,66 @@ export interface LLMResponse {
   routing_reason: string;
 }
 
-// Available OpenRouter free models (ordered by capability)
+// Available OpenRouter free models (ordered by capability tier)
+// Verified models only — non-existent models waste rate limit budget
 export const OPENROUTER_MODELS = {
-  hermes_405b: "nousresearch/hermes-3-llama-3.1-405b:free",   // 405B — strongest free reasoning
-  llama_70b: "meta-llama/llama-3.3-70b-instruct:free",         // 70B — solid general purpose
-  mistral_24b: "mistralai/mistral-small-3.1-24b-instruct:free", // 24B — fast, good for simple tasks
-  qwen_coder: "qwen/qwen3-coder:free",                         // Best free coding model
-  claude_sonnet: "anthropic/claude-sonnet-4:free",              // Claude Sonnet 4 free — best reasoning
+  // Tier 1: Large models (best quality)
+  hermes_405b: "nousresearch/hermes-3-llama-3.1-405b:free",        // 405B — strongest free reasoning
+  llama_70b: "meta-llama/llama-3.3-70b-instruct:free",              // 70B — solid general purpose
+  qwen_coder: "qwen/qwen3-coder:free",                              // Best free coding model
+
+  // Tier 2: Medium models (good balance)
+  gemma_27b: "google/gemma-3-27b-it:free",                          // 27B — Google, strong instruction following
+  mistral_24b: "mistralai/mistral-small-3.1-24b-instruct:free",     // 24B — fast, good for simple tasks
+  phi4: "microsoft/phi-4:free",                                      // 14B — surprisingly capable for size
+
+  // Tier 3: Meta-routers (ultimate fallbacks)
+  auto_free: "openrouter/auto",                                      // OpenRouter picks best available free model
 } as const;
 
 // Agent-specific model routing — all through OpenRouter
-// Primary model + fallback models (tried in order if primary fails)
-export const AGENT_ROUTING: Record<string, { primary: string; fallbacks: string[] }> = {
+// Uses native `models` array: OpenRouter tries each server-side in ONE request.
+// This saves rate limit budget (1 request vs N) and is faster (no round-trips).
+export const AGENT_ROUTING: Record<string, { models: string[] }> = {
   growth: {
-    primary: OPENROUTER_MODELS.hermes_405b,       // 405B for content quality
-    fallbacks: [OPENROUTER_MODELS.llama_70b, OPENROUTER_MODELS.mistral_24b],
+    models: [
+      OPENROUTER_MODELS.hermes_405b,       // 405B for content quality
+      OPENROUTER_MODELS.llama_70b,
+      OPENROUTER_MODELS.gemma_27b,
+      OPENROUTER_MODELS.mistral_24b,
+    ],
   },
   outreach: {
-    primary: OPENROUTER_MODELS.llama_70b,          // 70B sufficient for emails
-    fallbacks: [OPENROUTER_MODELS.hermes_405b, OPENROUTER_MODELS.mistral_24b],
+    models: [
+      OPENROUTER_MODELS.llama_70b,          // 70B sufficient for emails
+      OPENROUTER_MODELS.hermes_405b,
+      OPENROUTER_MODELS.gemma_27b,
+      OPENROUTER_MODELS.mistral_24b,
+    ],
   },
   ops: {
-    primary: OPENROUTER_MODELS.mistral_24b,        // 24B fast for health checks
-    fallbacks: [OPENROUTER_MODELS.llama_70b, OPENROUTER_MODELS.hermes_405b],
+    models: [
+      OPENROUTER_MODELS.mistral_24b,        // 24B fast for health checks
+      OPENROUTER_MODELS.phi4,
+      OPENROUTER_MODELS.gemma_27b,
+      OPENROUTER_MODELS.llama_70b,
+    ],
   },
   planner: {
-    primary: OPENROUTER_MODELS.qwen_coder,         // Best free coding model
-    fallbacks: [OPENROUTER_MODELS.claude_sonnet, OPENROUTER_MODELS.hermes_405b],
+    models: [
+      OPENROUTER_MODELS.qwen_coder,         // Best free coding model
+      OPENROUTER_MODELS.hermes_405b,
+      OPENROUTER_MODELS.llama_70b,
+      OPENROUTER_MODELS.gemma_27b,
+    ],
   },
   decomposer: {
-    primary: OPENROUTER_MODELS.claude_sonnet,       // Best reasoning for task decomposition
-    fallbacks: [OPENROUTER_MODELS.hermes_405b, OPENROUTER_MODELS.qwen_coder],
+    models: [
+      OPENROUTER_MODELS.hermes_405b,        // 405B for complex decomposition
+      OPENROUTER_MODELS.llama_70b,
+      OPENROUTER_MODELS.qwen_coder,
+      OPENROUTER_MODELS.gemma_27b,
+    ],
   },
 };
 
@@ -202,8 +231,14 @@ async function fetchWithRetry(
   throw new Error("fetchWithRetry: unreachable");
 }
 
-// Single provider: OpenRouter
-async function callOpenRouter(prompt: string, model: string, options: LLMOptions = {}): Promise<string> {
+// Single provider: OpenRouter with native server-side fallback
+// Uses `models` array — OpenRouter tries each model in order in ONE request.
+// Falls back server-side without consuming additional rate limit.
+async function callOpenRouter(
+  prompt: string,
+  models: string[],
+  options: LLMOptions = {}
+): Promise<{ content: string; model: string }> {
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
 
@@ -216,25 +251,35 @@ async function callOpenRouter(prompt: string, model: string, options: LLMOptions
       "X-Title": "Hive Venture Orchestrator",
     },
     body: JSON.stringify({
-      model,
+      // Native models array: OpenRouter tries each in order server-side
+      models,
       messages: [{ role: "user", content: prompt }],
       max_tokens: options.maxTokens || 8192,
       temperature: options.temperature || 0.7,
+      provider: {
+        allow_fallbacks: true,
+        sort: "throughput",
+      },
     }),
-  }, options.maxRetries || 3);
+  }, options.maxRetries || 2);
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`OpenRouter ${model} HTTP ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`OpenRouter HTTP ${res.status}: ${body.slice(0, 300)}`);
   }
 
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`OpenRouter ${model} returned empty response`);
-  return text.trim();
+  if (!text) throw new Error(`OpenRouter returned empty response (models: ${models[0]}...)`);
+
+  // OpenRouter returns which model actually handled the request
+  const actualModel = data.model || models[0];
+  return { content: text.trim(), model: actualModel };
 }
 
 // Main unified LLM calling interface
+// Uses OpenRouter's native `models` array for server-side fallback.
+// One API request covers all fallback models — saves rate limit budget.
 export async function callLLM(
   agent: string,
   prompt: string,
@@ -246,47 +291,50 @@ export async function callLLM(
   }
 
   const { sql, ...llmOptions } = options;
-  const models = [routing.primary, ...routing.fallbacks];
-  let lastError: Error | null = null;
 
-  // Try each model in order until one succeeds
-  for (const model of models) {
+  // Filter out models with open circuit breakers
+  const availableModels = routing.models.filter(model => {
     const circuitKey = `openrouter:${model}`;
-
-    // Circuit breaker: skip models with open circuits
     if (!isProviderAvailable(circuitKey)) {
       console.warn(`[circuit-breaker] Skipping ${model} (circuit open)`);
-      continue;
+      return false;
     }
+    return true;
+  });
 
-    const isPrimary = model === routing.primary;
-    const routingReason = isPrimary ? `primary:${model}` : `fallback:${model}`;
-
-    try {
-      const content = await callOpenRouter(prompt, model, llmOptions);
-
-      // Record success for circuit breaker
-      recordProviderSuccess(circuitKey);
-
-      return {
-        content,
-        provider: "openrouter",
-        model,
-        usage: { cost_usd: 0 },
-        routing_reason: routingReason,
-      };
-    } catch (error: any) {
-      console.warn(`[llm] Model ${model} failed for ${agent}: ${error.message}`);
-      lastError = error;
-
-      // Record failure for circuit breaker
-      recordProviderFailure(circuitKey);
-      continue;
-    }
+  // Always append openrouter/auto as ultimate fallback
+  if (!availableModels.includes(OPENROUTER_MODELS.auto_free)) {
+    availableModels.push(OPENROUTER_MODELS.auto_free);
   }
 
-  // All models failed
-  throw new Error(`All OpenRouter models failed for agent ${agent}. Models tried: ${models.join(", ")}. Last error: ${lastError?.message}`);
+  if (availableModels.length === 0) {
+    throw new Error(`All models circuit-broken for agent ${agent}`);
+  }
+
+  try {
+    // Single request — OpenRouter handles fallback server-side
+    const result = await callOpenRouter(prompt, availableModels, llmOptions);
+
+    // Record success for the model that actually responded
+    recordProviderSuccess(`openrouter:${result.model}`);
+
+    return {
+      content: result.content,
+      provider: "openrouter",
+      model: result.model,
+      usage: { cost_usd: 0 },
+      routing_reason: result.model === routing.models[0]
+        ? `primary:${result.model}`
+        : `fallback:${result.model}`,
+    };
+  } catch (error: any) {
+    // Record failure for all attempted models (we don't know which failed server-side)
+    for (const model of availableModels) {
+      recordProviderFailure(`openrouter:${model}`);
+    }
+
+    throw new Error(`All OpenRouter models failed for agent ${agent}. Models sent: ${availableModels.slice(0, 3).join(", ")}... Last error: ${error.message}`);
+  }
 }
 
 // Convenience wrapper for simple text generation
