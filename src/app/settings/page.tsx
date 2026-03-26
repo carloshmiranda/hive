@@ -25,13 +25,19 @@ const LABELS: Record<string, { label: string; placeholder: string; help: string 
   openrouter_api_key: { label: "OpenRouter API Key", placeholder: "sk-or-v1-...", help: "openrouter.ai/keys — sole LLM provider for all worker agents (free models)" },
   bing_webmaster_key: { label: "Bing Webmaster Key", placeholder: "bing_...", help: "bing.com/webmasters — for Bing search data (future)" },
   indexnow_key: { label: "IndexNow Key", placeholder: "hexstring...", help: "Random hex key for instant re-indexing via IndexNow protocol" },
+  telegram_bot_token: { label: "Telegram Bot Token", placeholder: "123456:ABC-DEF...", help: "t.me/BotFather → /mybots → API Token — for Hive notifications" },
+  telegram_chat_id: { label: "Telegram Chat ID", placeholder: "-100...", help: "Your chat/group ID where Hive sends notifications" },
+  claude_code_oauth_token: { label: "Claude Code OAuth Token", placeholder: "cco_...", help: "Claude Max OAuth token for brain agent workflows on GitHub Actions" },
+  cron_secret: { label: "Cron Secret", placeholder: "secret...", help: "Shared secret for QStash/cron endpoint auth — must match CRON_SECRET env var on Vercel" },
 };
 
 const GROUPS = [
   { title: "Infrastructure", keys: ["vercel_token", "vercel_team_id", "neon_api_key", "github_token", "github_owner"] },
   { title: "Revenue & Analytics", keys: ["stripe_secret_key", "google_search_console_key", "bing_webmaster_key", "indexnow_key"] },
   { title: "Communications", keys: ["resend_api_key", "sending_domain", "digest_email", "notification_email"] },
-  { title: "AI Providers", keys: ["openrouter_api_key"] },
+  { title: "AI Providers", keys: ["openrouter_api_key", "claude_code_oauth_token"] },
+  { title: "Notifications", keys: ["telegram_bot_token", "telegram_chat_id"] },
+  { title: "Security", keys: ["cron_secret"] },
 ];
 
 export default function SettingsPage() {
