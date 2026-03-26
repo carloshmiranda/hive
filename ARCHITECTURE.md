@@ -1,6 +1,7 @@
 # Hive Architecture
 
-> Visual guide to how Hive works. Open this to understand the system at a glance.
+> Visual guide to how Hive works. Reference document for detailed flows, procedures, and diagrams.
+> For rules and standards, see CLAUDE.md. For current state, see BRIEFING.md.
 
 ## System Overview
 
@@ -25,21 +26,24 @@ Hive is an autonomous venture orchestrator. It builds, runs, and evaluates digit
 │  │  │  Opus    │ │  Opus    │ │ Sonnet   │ │ Opus   │ │Sonnet  │ │    │
 │  │  └──────────┘ └──────────┘ └──────────┘ └────────┘ └────────┘ │    │
 │  │                                                                  │    │
-│  │  ┌──────────────┐  ┌──────────────┐                             │    │
-│  │  │   Sentinel   │  │    Digest    │   (no AI, Node.js only)     │    │
-│  │  │  (cron, 4h)  │  │ (cron, 8am) │                              │    │
-│  │  └──────────────┘  └──────────────┘                             │    │
+│  │  ┌──────────────┐                                                │    │
+│  │  │  Decomposer  │  (Claude Max, 8 turns)                        │    │
+│  │  └──────────────┘                                                │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 │                                                                          │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │              Vercel (Dashboard + APIs + Workers)                 │    │
 │  │                                                                  │    │
-│  │  Dashboard │ Webhooks │ Crons │ /api/agents/token (OIDC)        │    │
+│  │  Dashboard │ Webhooks │ QStash schedules │ Context API          │    │
+│  │  /api/agents/token (OIDC) │ /api/agents/context                 │    │
 │  │                                                                  │    │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │    │
 │  │  │   Growth     │  │  Outreach    │  │    Ops       │          │    │
-│  │  │ Gemini Flash │  │ Gemini Flash │  │ Groq Llama   │          │    │
+│  │  │  OpenRouter  │  │  OpenRouter  │  │  OpenRouter  │          │    │
+│  │  │  (free tier) │  │  (free tier) │  │  (free tier) │          │    │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘          │    │
+│  │                                                                  │    │
+│  │  Sentinel (3 tiers via QStash) │ Digest (QStash daily)          │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────────────┘
          │                    │                       │
@@ -49,27 +53,28 @@ Hive is an autonomous venture orchestrator. It builds, runs, and evaluates digit
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                       COMPANY REPOS (public, free Actions)               │
 │                                                                          │
-│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐        │
-│  │    verdedesk      │ │    senhorio       │ │     flolio       │        │
-│  │                   │ │                   │ │                  │        │
-│  │  hive-build.yml   │ │  hive-build.yml   │ │  hive-build.yml  │        │
-│  │  hive-growth.yml  │ │  hive-growth.yml  │ │  hive-growth.yml │        │
-│  │  hive-fix.yml     │ │  hive-fix.yml     │ │  hive-fix.yml    │        │
-│  │                   │ │                   │ │                  │        │
-│  │  Next.js app      │ │  Next.js app      │ │  Next.js app     │        │
-│  │  (deployed on     │ │  (deployed on     │ │  (deployed on    │        │
-│  │   Vercel Hobby)   │ │   Vercel Hobby)   │ │   Vercel Hobby)  │        │
-│  └──────────────────┘ └──────────────────┘ └──────────────────┘        │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐  │
+│  │  verdedesk    │ │  senhorio    │ │    flolio     │ │   ciberpme   │  │
+│  │               │ │              │ │              │ │              │  │
+│  │ hive-build.yml│ │hive-build.yml│ │hive-build.yml│ │hive-build.yml│  │
+│  │ (Sonnet, OIDC)│ │(Sonnet,OIDC) │ │(Sonnet,OIDC) │ │(Sonnet,OIDC) │  │
+│  │               │ │              │ │              │ │              │  │
+│  │ Next.js app   │ │ Next.js app  │ │ Next.js app  │ │ Next.js app  │  │
+│  │ (Vercel Pro)  │ │ (Vercel Pro) │ │ (Vercel Pro) │ │ (Vercel Pro) │  │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘  │
 └──────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                         NEON POSTGRES                                     │
-│                    (single shared database)                               │
+│                    (single shared database, eu-central-1)                │
 │                                                                          │
 │  companies │ cycles │ approvals │ agent_actions │ metrics │ settings     │
 │  playbook │ research_reports │ company_tasks │ infra │ directives        │
 │  social_accounts │ evolver_proposals │ agent_prompts │ context_log       │
+│  hive_backlog │ error_patterns │ routing_weights │ email_log             │
+│  email_sequences │ customers                                             │
+│                                     (21 tables — see schema.sql)         │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -85,8 +90,8 @@ Hive is an autonomous venture orchestrator. It builds, runs, and evaluates digit
          ┌─────────────────┼─────────────────────────────┐
          │                 │                              │
          ▼                 ▼                              ▼
-  Stripe webhook     Sentinel (4h)              Manual dispatch
-  (payment event)    (health checks)            (dashboard/CLI)
+  Stripe webhook     Sentinel (QStash)           Manual dispatch
+  (payment event)    (3 urgency tiers)           (dashboard/CLI)
          │                 │                              │
          └────────┬────────┘──────────────────────────────┘
                   │
@@ -101,47 +106,75 @@ Hive is an autonomous venture orchestrator. It builds, runs, and evaluates digit
       ▼          ▼              ▼                   ▼
  ┌─────────┐ ┌─────────┐ ┌──────────┐      ┌──────────────┐
  │Engineer │ │ Growth  │ │ Outreach │      │    Scout     │
- │(company │ │(company │ │ (Vercel  │      │  (Hive repo) │
- │  repo)  │ │  repo)  │ │ worker)  │      │              │
+ │(company │ │(Vercel  │ │ (Vercel  │      │  (Hive repo) │
+ │  repo)  │ │ worker) │ │ worker)  │      │              │
  └────┬────┘ └────┬────┘ └──────────┘      └──────────────┘
       │           │
-      │ PR opened │ content pushed
+      │ PR opened │ content created
       │           │
       ▼           ▼
  ┌────────────────────┐
  │     CEO Review     │  Scores cycle, grades agents, extracts learnings
  │    (Hive repo)     │
+ └─────────┬──────────┘
+           │ chain dispatch
+           ▼
+ ┌────────────────────┐
+ │ cycle-complete →   │  Health gate → score companies → dispatch next
+ │ backlog/dispatch   │
  └────────────────────┘
 ```
+
+### Continuous Dispatch (Chain Callbacks)
+
+Work chains automatically without waiting for Sentinel:
+- **CEO cycle_complete** → `/api/dispatch/cycle-complete` → health gate → score companies → dispatch next
+- **Engineer backlog done** → `/api/backlog/dispatch` → if empty, falls through to cycle-complete
+- **Health gate** (`/api/dispatch/health-gate`): checks Claude budget, concurrent agents, failure rate, Hive backlog priority
+- **Hive-first**: P0/P1 backlog items always dispatched before company cycles
+- **Sentinel remains as safety net** — catches work missed by chain dispatch
 
 ### Decentralized Dispatch (company-scoped work)
 
 Brain agents (CEO, Scout, Evolver, Healer) run on the **Hive private repo**.
-Company-scoped work (build, fix, growth) runs on **company public repos** (free Actions).
+Company-scoped work (build, fix) runs on **company public repos** (free Actions).
+Worker agents (Growth, Outreach, Ops) run on **Vercel serverless** via `/api/agents/dispatch`.
+
+---
+
+## Context API (ADR-035)
+
+All agents fetch pre-computed context from a single endpoint instead of running inline SQL:
 
 ```
-Hive CEO plans cycle for VerdeDesk
-  │
-  ├──► dispatches workflow_dispatch to carloshmiranda/verdedesk
-  │    └── hive-build.yml runs on verdedesk (free, public repo)
-  │        └── Claude builds feature, opens PR
-  │
-  ├──► dispatches workflow_dispatch to carloshmiranda/verdedesk
-  │    └── hive-growth.yml runs on verdedesk (free, public repo)
-  │        └── Gemini creates content, pushes to main
-  │
-  └──► dispatches to Vercel /api/agents/dispatch
-       └── Outreach worker runs (Gemini, serverless)
+Agent workflow step                     Hive Vercel API
+──────────────────                      ────────────────
+curl "$HIVE_URL/api/agents/context      Computes context for agent:
+  ?agent=ceo&company_slug=senhorio"     - Company data + metrics
+  -H "Authorization: Bearer $SECRET"    - Recent cycles + tasks
+                                        - Playbook entries
+Returns JSON blob with everything       - Research reports
+the agent needs for its prompt          - Validation score + phase
+                                        Cached 5min per agent+company
 ```
 
-**Fallback:** If a company has no `github_repo`, work falls back to the Hive repo workflows.
+### Agent modes
+
+| Mode | Query | Scope |
+|------|-------|-------|
+| `?agent=ceo&company_slug=X` | Single company cycle planning | Company metrics, tasks, directives, validation |
+| `?agent=build&company_slug=X` | Engineer build context | Company stack, open tasks, recent errors |
+| `?agent=fix&company_slug=X` | Healer fix context | Company errors, similar fixes from other companies |
+| `?agent=growth&company_slug=X` | Growth worker context | Company SEO, content strategy, playbook |
+| `?agent=scout` | Portfolio-level scouting | All companies, killed list, market coverage |
+| `?agent=evolver` | Portfolio-level evolution | Agent stats, stalled companies, repeated errors |
 
 ---
 
 ## OIDC Token Exchange (Zero Secrets on Public Repos)
 
-Company repos are public. Auth tokens (Claude, Gemini, GH PAT) are NOT stored as repo secrets.
-Instead, workflows use GitHub OIDC to prove their identity and fetch tokens at runtime.
+Company repos are public. Auth tokens are NOT stored as repo secrets.
+Workflows use GitHub OIDC to prove identity and fetch tokens at runtime.
 
 ```
 Company Repo Workflow                          Hive Vercel API
@@ -165,7 +198,7 @@ Company Repo Workflow                          Hive Vercel API
 6. Pass token to
    claude-code-action
 
-Company repo secrets: only DATABASE_URL (for context loading)
+Company repo secrets: ZERO (all fetched via OIDC at runtime)
 All auth tokens: stored once in Hive's encrypted settings table
 ```
 
@@ -173,44 +206,138 @@ All auth tokens: stored once in Hive's encrypted settings table
 Only these workflow files can request tokens:
 - `hive-build.yml` → requests `claude` + `github_pat`
 - `hive-fix.yml` → requests `claude` + `github_pat`
-- `hive-growth.yml` → requests `gemini` + `github_pat`
 
 ---
 
-## Sentinel: Health Monitor (hourly)
+## Sentinel: Health Monitor (QStash, 3 Urgency Tiers — ADR-031)
 
-Sentinel is the primary scheduled cron. It runs 39 checks split across two endpoints for timeout safety (ADR-030).
+Sentinel is split into 3 endpoints scheduled via QStash (not Vercel crons). Shared helpers in `src/lib/sentinel-helpers.ts`.
 
-**Sentinel** (`/api/cron/sentinel`, 2933 lines) — 33 DB-only checks, runs hourly:
+**Sentinel-urgent** (`/api/cron/sentinel-urgent`, every 2h):
 ```
-Sentinel runs (GitHub Actions cron → Vercel endpoint)
-  │
-  ├── Dispatch: Priority-scored company cycles + backlog items
-  ├── Approval management: expiry, auto-approve safe proposals
-  ├── Stuck cycle/action cleanup + stale dispatch reclaim
-  ├── Schema drift detection (vs schema-map.ts)
-  ├── Anomaly detection (2σ rolling average)
-  ├── Error pattern auto-learning (Check 35)
-  ├── Agent performance regression (Check 34)
-  ├── Playbook maintenance: decay, prune, consolidate (Checks 27, 29)
-  ├── Venture Brain: cross-company intelligence (Check 28)
-  ├── Self-improvement proposals (Check 37)
-  ├── Auto-decompose blocked items (Check 39)
-  ├── Deploy drift check
-  └── Fire company-health (non-blocking)
+├── Stuck cycles, orphaned companies, deploy drift
+├── Phantom PRs, unverified provisions
+├── Dispatch verification (check 43)
+├── Stale cycle safety net (check 44)
+└── Stuck PRs with green CI (check 45)
 ```
 
-**Company-Health** (`/api/cron/company-health`, ~500 lines) — 6 HTTP-heavy checks, fired by Sentinel:
+**Sentinel-dispatch** (`/api/cron/sentinel-dispatch`, every 4h):
 ```
-Company-health runs (fired by Sentinel, own 60s window)
-  │
-  ├── Check 31: Stats endpoint health      ──► Create fix tasks
-  ├── Check 32: Language consistency        ──► Create fix tasks
-  ├── Check 33: Stale record reconciliation ──► Auto-fix DB records
-  ├── Check 36: Test coverage health        ──► Create test tasks
-  ├── Check 38: PR review + auto-merge     ──► Merge or escalate
-  └── Check 30: Broken deploys + repair    ──► Infra repair → code fix
+├── Priority-scored company cycle dispatch (safety net)
+├── Hive backlog item dispatch (P0/P1 first)
+├── Chain gap detection, budget checks
+├── Failed task re-dispatch
+├── Worker agent dispatch (Growth/Outreach/Ops)
+└── Fires company-health (non-blocking delegate)
 ```
+
+**Sentinel-janitor** (`/api/cron/sentinel-janitor`, daily 2am):
+```
+├── Playbook maintenance: decay, prune, consolidate
+├── Error pattern auto-learning
+├── Agent performance regression detection
+├── Self-improvement proposals
+├── Auto-decompose blocked L-complexity items
+├── Schema drift detection (vs schema-map.ts)
+├── BACKLOG.md regeneration from DB
+└── Anomaly detection (2σ rolling average)
+```
+
+**Company-health** (`/api/cron/company-health`, fired by sentinel-dispatch):
+```
+├── Check 31: Stats endpoint health        → Create fix tasks
+├── Check 32: Language consistency          → Create fix tasks
+├── Check 33: Stale record reconciliation  → Auto-fix DB records
+├── Check 36: Test coverage health          → Create test tasks
+├── Check 38: PR review + auto-merge       → Merge or escalate
+├── Check 30: Broken deploys + repair      → Infra repair → code fix
+├── Check 43: Dispatch verification        → Flag missed dispatches
+├── Check 44: Stale cycle safety net       → Re-dispatch stalled companies
+└── Check 45: Stuck PRs with green CI      → Auto-merge or escalate
+```
+
+### QStash Schedules (5 total, consolidated — ADR-031)
+
+| Schedule | Endpoint | Frequency |
+|----------|----------|-----------|
+| sentinel-urgent | `/api/cron/sentinel-urgent` | `0 */2 * * *` (every 2h) |
+| sentinel-dispatch | `/api/cron/sentinel-dispatch` | `0 */4 * * *` (every 4h) |
+| sentinel-janitor | `/api/cron/sentinel-janitor` | `0 2 * * *` (daily 2am) |
+| metrics | `/api/cron/metrics` | `0 8,18 * * *` (twice daily) |
+| digest | `/api/cron/digest` | `0 8 * * *` (daily 8am) |
+
+Auth: `verifyCronAuth()` accepts QStash signatures OR CRON_SECRET. Free tier: 1,000 msgs/day, 10 schedules. Using 5/10 schedules, ~82 msgs/day.
+
+---
+
+## Agent Execution Flow
+
+```
+PRE-FLIGHT: Health check (DB, Claude CLI, recent errors)
+
+STEP 1: Idea Scout + CEO Venture Evaluation (condition: pipeline < 3 AND active < 5)
+  1a. Scout RESEARCHES via web search, generates 3 proposals
+      - Mix: 1 Portuguese, 1 Global, 1 best-pick
+      - Uses context API (?agent=scout) for portfolio awareness
+  1b. CEO EVALUATES each: new_company | expansion | question
+  - Carlos approves which to build via dashboard
+
+STEP 2: Provision approved companies (status: 'approved' → 'mvp')
+  - GitHub repo (PUBLIC), Vercel project, Stripe product, env vars
+  - ZERO secrets on company repos (OIDC token exchange)
+
+STEP 3: Onboard imported projects (prioritized over regular cycles)
+
+STEP 4: Company cycles — dispatched by Sentinel priority score:
+  FOR EACH company WHERE status IN ('mvp', 'active'):
+    1. CEO: fetch context API → write STRUCTURED plan gated by validation phase
+    2. Engineer: execute engineering_tasks → commit → deploy (on company repo)
+    3. Growth: execute growth_tasks → SEO, content (Vercel serverless)
+    4. Outreach: build leads, draft emails (Vercel serverless)
+    5. Ops: verify metrics, check health (Vercel serverless)
+    6. CEO: review cycle → score 1-10, grade agents → playbook
+
+  Structured handoffs (JSON):
+    CEO plan → Engineer: engineering_tasks[{id, task, acceptance}]
+    CEO plan → Growth: growth_tasks[{id, task, rationale, target_keyword}]
+    Engineer → CEO review: tasks_completed[{task_id, status, commit}]
+
+STEP 5: Self-healing (Healer agent)
+  - Systemic errors → fix in Hive repo
+  - Company errors → dispatch fix to company repo (max 3/night)
+
+STEP 6: Evolver (data-driven, triggered by Sentinel)
+  - Three-layer gap detection: outcome, capability, knowledge
+  - Uses context API (?agent=evolver) for portfolio stats
+  - Max 5 proposals per run → dashboard Inbox
+
+STEP 7: Daily digest email (portfolio summary via Resend)
+```
+
+---
+
+## Validation-Gated Build System (ADR-024)
+
+Companies progress through phases based on a validation score (0-100) computed from real metrics, not cycle count. Computed in `src/lib/validation.ts`, injected via context API.
+
+### How it works
+1. `normalizeBusinessType()` maps `company_type` to canonical type (saas, blog, affiliate_site, etc.)
+2. `computeValidationScore()` scores 0-100 based on type-specific metrics
+3. Score determines phase → defines what CEO can plan (gating_rules + forbidden actions)
+4. Kill signals are organic-patient: 60/120/180 day windows. Any revenue = infinite patience.
+
+### Phase examples
+- **SaaS validate (0-24):** Landing page, waitlist, SEO. FORBIDDEN: auth, dashboards, CRUD.
+- **SaaS test_intent (25-49):** Fake-door pricing. FORBIDDEN: building the product.
+- **SaaS build_mvp (50-74):** Core value flow only. Max 2 eng tasks/cycle.
+- **Blog seed_content (0-24):** Publish articles, SEO scaffolding. FORBIDDEN: monetization.
+
+### Data collection (from day 1 via boilerplate)
+- `page_views` table + middleware → pageview tracking (all types)
+- `pricing_clicks` table + `/api/pricing-intent` → fake-door CTA clicks (SaaS)
+- `affiliate_clicks` table + `/api/affiliate-click` → outbound click tracking (affiliate)
+- Hive's metrics cron fetches all three via company `/api/stats`
 
 ---
 
@@ -221,65 +348,66 @@ Company-health runs (fired by Sentinel, own 60s window)
 │  idea   │───►│ approved │───►│ provisioning │───►│  mvp  │───►│ active │
 │         │    │          │    │              │    │       │    │        │
 │ Scout   │    │ Carlos   │    │ Engineer     │    │ Build │    │Revenue │
-│proposes │    │approves  │    │scaffolds:    │    │cycles │    │> $0    │
-│         │    │          │    │- GitHub repo │    │       │    │        │
-│         │    │          │    │- Vercel proj │    │       │    │        │
-│         │    │          │    │- Neon DB     │    │       │    │        │
-│         │    │          │    │- Stripe prod │    │       │    │        │
+│proposes │    │approves  │    │scaffolds     │    │cycles │    │> $0    │
 └─────────┘    └──────────┘    └──────────────┘    └───────┘    └────────┘
-                                                        │
-                                               ┌────────┴────────┐
-                                               │  BUILD mode     │
-                                               │  (cycles 0-2)   │
-                                               │  Features +     │
-                                               │  waitlist        │
-                                               ├─────────────────┤
-                                               │  LAUNCH mode    │
-                                               │  (cycles 3-5)   │
-                                               │  Conversion +   │
-                                               │  growth         │
-                                               ├─────────────────┤
-                                               │  OPTIMIZE mode  │
-                                               │  (cycles 6+)    │
-                                               │  Metrics-driven │
-                                               └─────────────────┘
+                                                        │            │
+                                                        │     ┌──────┴──────┐
+                                                        │     │ Validation  │
+                                                        │     │ score gates │
+                                                        │     │ what CEO    │
+                                                        │     │ can plan    │
+                                                        │     └─────────────┘
                                                         │
                                                         ▼
                                                ┌─────────────────┐
                                                │    killed        │
-                                               │  (if no traction │
-                                               │   after LAUNCH)  │
+                                               │  (kill signals:  │
+                                               │  60/120/180 day  │
+                                               │  windows by type)│
                                                └─────────────────┘
 ```
 
 ---
 
-## Task Tracking
+## Model Routing (ADR-034: OpenRouter-Only for Workers)
 
-Tasks flow from CEO plans to agent execution with status tracking.
+Two tiers: brain agents on Claude Max (GitHub Actions CLI), worker agents on OpenRouter free models (Vercel serverless).
 
-```
-CEO writes cycle plan
-  │
-  ├── engineering_tasks ──► company_tasks table (category: engineering)
-  └── growth_tasks      ──► company_tasks table (category: growth)
-         │
-         ▼
-  ┌──────────┐    ┌─────────────┐    ┌──────────┐    ┌──────┐
-  │ proposed │───►│  approved   │───►│in_progress│───►│ done │
-  └──────────┘    └─────────────┘    └──────────┘    └──────┘
-                        │                  │
-                        │            Agent marks         Agent verifies
-                        │            before starting     acceptance criteria
-                        │                                then marks done
-                        ▼
-                  ┌───────────┐
-                  │ dismissed │  (if no longer relevant)
-                  └───────────┘
+### Brain Agents (Hive private repo, Claude via Max subscription)
 
-Dashboard: Tasks tab with company + category filters
-Sentinel: Check 13 detects approved-but-not-done tasks, re-dispatches
-```
+| Agent | Workflow | Model | Max Turns | Triggers |
+|-------|----------|-------|-----------|----------|
+| CEO | `hive-ceo.yml` | Opus | 40 | `cycle_start`, `cycle_complete`, `gate_approved`, `stripe_payment`, `ceo_review` |
+| Scout | `hive-scout.yml` | Opus | 35 | `pipeline_low`, `company_killed`, `research_request` |
+| Engineer | `hive-engineer.yml` | Sonnet (→Opus on 3rd attempt) | 15 prov / 35 build | `feature_request`, `new_company`, `ops_escalation` |
+| Evolver | `hive-evolver.yml` | Opus | 20 | `evolve_trigger` (data-driven via Sentinel) |
+| Healer | `hive-healer.yml` | Sonnet | 20 | `healer_trigger` (circuit breaker: 3 failures/48h → skip) |
+| Decomposer | `hive-decompose.yml` | Claude (Max) | 8 | `decompose_task` |
+
+### Worker Agents (Vercel serverless, OpenRouter free models)
+
+| Agent | Endpoint | Primary Model | Fallback Chain |
+|-------|----------|---------------|----------------|
+| Growth | `/api/agents/dispatch` | Hermes 3 405B:free | → Llama 70B:free → Mistral 24B:free |
+| Outreach | `/api/agents/dispatch` | Llama 70B:free | → Hermes 405B:free → Mistral 24B:free |
+| Ops | `/api/agents/dispatch` | Mistral 24B:free | → Llama 70B:free → Hermes 405B:free |
+| Planner | `/api/agents/dispatch` | Qwen3 Coder:free | → Claude Sonnet 4:free → Hermes 405B:free |
+
+### Company Repo Workflows (public repos, free Actions)
+
+| Workflow | Model | Token Source | Purpose |
+|----------|-------|-------------|---------|
+| `hive-build.yml` | Claude Sonnet (via OIDC) | `/api/agents/token` | Build features, fix bugs |
+
+### Dynamic Model Escalation (ADR-035)
+Engineer workflow has a "Resolve model" step checking attempt count:
+- Attempt 1-2: Sonnet, standard turns
+- Attempt 3+: Opus + 50 max turns (for harder problems)
+
+### Fallback & Circuit Breaker
+- Worker agents: model-to-model within OpenRouter only. Per-model EMA error rate tracking (CLOSED/HALF_OPEN/OPEN).
+- No cross-provider fallback — Claude Max is CLI-only, not in the serverless chain.
+- `openrouter_api_key` stored in settings DB (single key for all workers).
 
 ---
 
@@ -305,80 +433,144 @@ All companies share one database. Knowledge flows automatically.
 │                                                              │
 │  ┌────────────────────┐                                      │
 │  │ research_reports    │◄── Scout writes market research      │
-│  │                     │──► CEO reads for planning            │
-│  │                     │──► Engineer reads for context         │
-│  │                     │──► Growth reads for content strategy  │
+│  │                     │──► CEO, Engineer, Growth read        │
 │  └────────────────────┘                                      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
+### Three cross-company mechanisms
+
+1. **Playbook injection at provisioning** — New companies start with all playbook entries (confidence >= 0.6) and known error patterns.
+2. **Cross-company error correlation** — Healer queries agent_actions for fixes of similar errors in OTHER companies before dispatching repairs.
+3. **Venture Brain cross-pollination** — Reads recent playbook entries, creates directives when learnings from company A benefit company B.
+
 ---
 
-## Agent Details
+## Self-Healing Architecture
 
-### Brain Agents (Hive private repo, Claude via Max subscription)
+### Layer 1: Agent retry (within a cycle)
+- Attempt 2: full error message + fix instructions
+- Attempt 3: more time (8min timeout, 15 turns)
+- After 3 failures: escalation approval gate
 
-| Agent | Workflow | Model | Max Turns | Triggers |
-|-------|----------|-------|-----------|----------|
-| CEO | `hive-ceo.yml` | Opus | 40 | `cycle_start`, `cycle_complete`, `gate_approved`, `stripe_payment`, `ceo_review` |
-| Scout | `hive-scout.yml` | Opus | 50 | `research_request`, Sentinel (pipeline low) |
-| Engineer | `hive-engineer.yml` | Sonnet | 35 | `feature_request`, `new_company`, `ops_escalation` |
-| Evolver | `hive-evolver.yml` | Opus | 30 | Sentinel (weekly, high failure, anomaly) |
-| Healer | `hive-healer.yml` | Sonnet | 25 | Sentinel (systemic errors) |
+### Layer 2: Healer agent (post-cycle)
+- **Systemic errors** (2+ companies or 3+ occurrences): fix in Hive repo
+- **Company errors** (isolated): dispatch fix to company repo (max 3/night)
+- Circuit breaker: 3 failures in 48h → skip company
 
-### Worker Agents (Vercel serverless, free-tier LLMs)
+### Layer 3: Pre-flight health check
+Verify DB, Claude CLI, recent errors before any dispatch. Abort on failure.
 
-| Agent | Endpoint | Model | Triggers |
-|-------|----------|-------|----------|
-| Growth | `/api/agents/dispatch` | Gemini 2.5 Flash | CEO plan, Sentinel (stale content) |
-| Outreach | `/api/agents/dispatch` | Gemini 2.5 Flash | CEO plan, Sentinel (stale leads) |
-| Ops | `/api/agents/dispatch` | Groq Llama 3.3 70B | Sentinel (health checks), deploy events |
+### Error classification
+Errors normalized (strip UUIDs, timestamps, URLs) and grouped into patterns via `error_patterns` table.
 
-### Company Repo Agents (public repos, free Actions, Claude/Gemini)
+---
 
-| Workflow | Model | Token Source | Purpose |
-|----------|-------|-------------|---------|
-| `hive-build.yml` | Claude Sonnet (via OIDC) | `/api/agents/token` | Build features, fix bugs |
-| `hive-fix.yml` | Claude Sonnet (via OIDC) | `/api/agents/token` | Emergency fixes |
-| `hive-growth.yml` | Gemini Flash (via OIDC) | `/api/agents/token` | SEO content, blog posts |
+## Inter-Agent Communication
+
+| From | To | Mechanism |
+|------|----|-----------|
+| Sentinel → Brain agents | `repository_dispatch` via GitHub API |
+| Sentinel → Workers | QStash publish to `/api/agents/dispatch` |
+| CEO → Engineer | `repository_dispatch` (feature_request) |
+| CEO → Scout | `repository_dispatch` (research_request) |
+| CEO → Growth/Outreach | Direct Vercel call or QStash |
+| Engineer → company repo | `workflow_dispatch` to company's hive-build.yml |
+| Scout → CEO | `repository_dispatch` (cycle_start) |
+| Engineer → CEO | `repository_dispatch` from company hive-build.yml |
+| Chain dispatch | cycle-complete → health-gate → next cycle | HTTP calls between Vercel endpoints |
+
+---
+
+## Provisioning a New Company
+
+When `gate_type='new_company'` is approved:
+
+1. Create GitHub repo (`carloshmiranda/{slug}`) — **PUBLIC** (unlimited Actions minutes)
+2. Push Next.js boilerplate with CLAUDE.md, Stripe, auth scaffold, `hive-build.yml`
+3. Replace ALL `{{PLACEHOLDER}}` strings with real company data
+4. ZERO secrets on company repos (all via OIDC token exchange — ADR-022)
+5. Create Vercel project linked to GitHub repo
+6. Set env vars in Vercel (Neon connection, Stripe keys, etc.)
+7. Write resource IDs to `infra` table
+8. Update company status to 'mvp'
+
+**Why public repos?** Unlimited Actions minutes. No secrets in code — all tokens fetched via OIDC at runtime.
+
+---
+
+## Importing Existing Projects
+
+1. User triggers import via dashboard (name, slug, GitHub URL)
+2. Hive scans repo: tech stack, CLAUDE.md, env files, tests, CI, Stripe
+3. Scan report → approval gate with onboarding plan
+4. On approval: clone → generate CLAUDE.md → verify build → link Vercel → register in Hive
+5. Pattern extraction: pricing, email, SEO, landing pages, growth → playbook
+6. **KEY RULE:** Never overwrite existing files.
+
+---
+
+## Tearing Down a Company
+
+When `gate_type='kill_company'` is approved:
+
+1. Delete Vercel project, archive GitHub repo (don't delete — learnings valuable)
+2. Deactivate Stripe, update infra to 'torn_down', set status 'killed'
+3. Extract playbook learnings before teardown
+
+---
+
+## Email (Resend)
+
+| Mode | `sending_domain` | Digest | Outreach | Transactional |
+|------|-------------------|--------|----------|---------------|
+| **Test** | not set | `onboarding@resend.dev` (owner only) | SKIPPED | `onboarding@resend.dev` |
+| **Verified** | e.g. `mail.hivehq.io` | `digest@mail.hivehq.io` | `Company <outreach@...>` | `Company <hello@...>` |
+
+Setup: buy domain → add to Vercel → add sending subdomain to Resend → verify DNS (DKIM, SPF, MX) → set `sending_domain` in Hive settings.
+
+Code: `src/lib/resend.ts` — `sendEmail()`, `buildFromAddress()`, `canSendOutreach()` + templates (welcome, receipt, password reset).
+
+---
+
+## Social Media
+
+Tracked in `social_accounts` table. Account creation is ALWAYS manual. Flow:
+1. Growth proposes → approval gate
+2. Carlos creates account manually → adds credentials
+3. Growth posts via `postToSocial()`
+
+X free tier: 1,500 posts/month. No accounts until first paying customer.
 
 ---
 
 ## Security Model
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ HIVE PRIVATE REPO                                                       │
-│                                                                          │
-│ Secrets (GitHub Actions):                                                │
-│   DATABASE_URL          — Neon connection string                         │
-│   CLAUDE_CODE_OAUTH_TOKEN — Claude Max subscription                     │
-│   GH_PAT               — GitHub Personal Access Token                   │
-│   CRON_SECRET           — Vercel cron/worker auth                       │
-│   VERCEL_TOKEN          — Vercel API                                    │
-│   NEON_API_KEY          — Neon management API                           │
-│                                                                          │
-│ Settings table (encrypted AES-256-GCM in Neon):                         │
-│   claude_code_oauth_token, gemini_api_key, groq_api_key,                │
-│   github_token, stripe_secret_key, resend_api_key, ...                  │
-└─────────────────────────────────────────────────────────────────────────┘
+HIVE PRIVATE REPO
+  Secrets (GitHub Actions):
+    DATABASE_URL, CLAUDE_CODE_OAUTH_TOKEN, GH_PAT, CRON_SECRET,
+    VERCEL_TOKEN, NEON_API_KEY
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│ COMPANY PUBLIC REPOS                                                     │
-│                                                                          │
-│ Secrets: DATABASE_URL only (for context loading queries)                 │
-│                                                                          │
-│ Auth tokens: fetched at runtime via OIDC token exchange                  │
-│   GitHub OIDC JWT proves repo identity → Hive API validates →            │
-│   returns token from encrypted settings table                            │
-│                                                                          │
-│ Protection:                                                              │
-│   - Secrets not available to fork PRs (GitHub security)                  │
-│   - Only workflow_dispatch trigger (no pull_request_target)              │
-│   - Only repo owner can trigger workflow_dispatch                        │
-│   - OIDC validates: issuer, audience, repo owner, workflow allowlist     │
-└─────────────────────────────────────────────────────────────────────────┘
+  Settings table (encrypted AES-256-GCM in Neon):
+    claude_code_oauth_token, openrouter_api_key,
+    github_token, stripe_secret_key, resend_api_key,
+    telegram_bot_token, telegram_chat_id, ...
+
+COMPANY PUBLIC REPOS
+  Secrets: ZERO (all via OIDC token exchange at runtime)
+  Protection: only workflow_dispatch trigger, only repo owner can trigger,
+  OIDC validates issuer + audience + owner + workflow allowlist
 ```
+
+---
+
+## Observability & Caching
+
+- **Sentry**: @sentry/nextjs — server/edge/client. Free tier: 5K errors/mo, 7-day retention.
+- **Upstash Redis**: cache-aside for settings (10min TTL), playbook (1h), company list (5m). Free tier: 500K cmds/mo, 256 MB.
+- **QStash**: Guaranteed delivery for agent dispatch. Deduplication via hourly-bucket IDs.
+- **Telegram**: Bot notifications for agent results, approval buttons, PR merge buttons.
 
 ---
 
@@ -387,35 +579,92 @@ All companies share one database. Knowledge flows automatically.
 | Resource | Tier | Limit | Current Usage |
 |----------|------|-------|---------------|
 | Claude | Max 5x ($100/mo) | ~225 msgs/5hr | CEO, Scout, Engineer, Evolver, company builds |
-| Gemini | Free API | 250 RPD | Growth, Outreach (~10 req/day) |
-| Groq | Free API | ~6,000 RPD | Ops (~4 req/day) |
-| GitHub Actions | Free (public repos) | Unlimited | Company builds, growth, fixes |
+| OpenRouter | Free (:free models) | Rate-limited | Growth, Outreach, Ops, Planner |
+| GitHub Actions | Free (public repos) | Unlimited | Company builds, fixes |
 | GitHub Actions | 2,000 min/mo (private) | ~33 hrs | Brain agents on Hive repo |
-| Vercel | Hobby (free) | 100 GB bandwidth | Company sites |
 | Vercel | Pro ($20/mo) | Generous | Hive dashboard + serverless |
-| Neon | Free tier | 0.5 GB, 10 projects | All data |
+| Neon | Free tier | 0.5 GB, 100 CU-hrs | All data |
+| Upstash Redis | Free tier | 500K cmds/mo, 256 MB | Cache layer |
+| Upstash QStash | Free tier | 1,000 msgs/day, 10 schedules | Cron + dispatch |
 | Resend | Free tier | 100 emails/day | Digest + outreach |
+| Sentry | Free tier | 5K errors/mo | Error tracking |
 
-**Philosophy:** MVP companies use only free tiers. Better infra after revenue proves the business.
+**Philosophy:** Free tiers until revenue proves the business.
 
 ---
 
-## Key Files
+## File Structure
 
-| File | Purpose |
-|------|---------|
-| `CLAUDE.md` | Constitution — rules, flows, standards |
-| `BRIEFING.md` | Current state — read first every session |
-| `ARCHITECTURE.md` | This file — visual system design |
-| `BACKLOG.md` | Prioritized improvements (P0-P3) |
-| `DECISIONS.md` | Architectural decision records |
-| `MISTAKES.md` | Production learnings (30+ entries) |
-| `ROADMAP.md` | Strategic phases and milestones |
-| `schema.sql` | Database schema (17 tables) |
-| `.github/workflows/` | 7 agent workflows + sentinel + digest |
-| `prompts/` | Agent system prompts |
-| `templates/boilerplate/` | Company repo starter (Next.js + workflows) |
-| `src/app/api/agents/token/` | OIDC token exchange endpoint |
-| `src/app/api/agents/dispatch/` | Worker agent dispatch endpoint |
-| `src/app/api/cron/sentinel/` | Sentinel health checks |
-| `src/app/page.tsx` | Dashboard (portfolio, tasks, approvals) |
+```
+hive/
+├── CLAUDE.md              ← constitution (rules, standards, operating principles)
+├── ARCHITECTURE.md        ← this file (detailed flows, diagrams, procedures)
+├── BRIEFING.md            ← current state (read first every session)
+├── BACKLOG.md             ← prioritised improvements (P0-P3)
+├── DECISIONS.md           ← architectural decision records (ADRs)
+├── MISTAKES.md            ← production learnings (50+ entries)
+├── ROADMAP.md             ← strategic phases and milestones
+├── schema.sql             ← Neon schema (21 tables)
+├── src/
+│   ├── middleware.ts       ← auth redirect
+│   ├── app/
+│   │   ├── page.tsx        ← dashboard (portfolio, tasks, approvals)
+│   │   ├── settings/       ← API key management
+│   │   └── api/
+│   │       ├── agents/token/    ← OIDC token exchange
+│   │       ├── agents/dispatch/ ← worker agent dispatch
+│   │       ├── agents/context/  ← pre-computed agent context (ADR-035)
+│   │       ├── cron/sentinel-*  ← 3 sentinel tier endpoints
+│   │       ├── cron/company-health/ ← HTTP-heavy checks
+│   │       ├── cron/metrics/    ← analytics scraping
+│   │       ├── cron/digest/     ← daily email
+│   │       ├── dispatch/health-gate/  ← chain dispatch gating
+│   │       ├── dispatch/cycle-complete/ ← chain callback
+│   │       ├── backlog/dispatch/ ← Hive backlog dispatch
+│   │       ├── webhooks/stripe/ ← payment events
+│   │       ├── webhooks/github/ ← deploy events
+│   │       ├── webhooks/telegram/ ← button callbacks
+│   │       ├── notify/          ← Telegram notifications
+│   │       ├── companies/       ← CRUD
+│   │       ├── cycles/          ← cycle records
+│   │       ├── approvals/       ← approval gates
+│   │       ├── playbook/        ← cross-company learnings
+│   │       ├── portfolio/       ← aggregated stats
+│   │       ├── settings/        ← encrypted credential store
+│   │       ├── directives/      ← command bar → GitHub Issues
+│   │       ├── tasks/           ← per-company task backlog
+│   │       ├── metrics/         ← KPI tracking
+│   │       ├── actions/         ← agent activity log
+│   │       ├── roadmap/         ← theme progress
+│   │       └── imports/         ← scan + onboard projects
+│   ├── lib/
+│   │   ├── db.ts               ← Neon connection + response helpers
+│   │   ├── auth.ts             ← NextAuth config + requireAuth guard
+│   │   ├── crypto.ts           ← AES-256-GCM encryption
+│   │   ├── llm.ts              ← OpenRouter LLM routing + circuit breaker
+│   │   ├── validation.ts       ← Validation score engine
+│   │   ├── sentinel-helpers.ts ← Shared Sentinel utilities
+│   │   ├── redis-cache.ts      ← Upstash Redis cache layer
+│   │   ├── qstash.ts           ← QStash guaranteed delivery
+│   │   ├── settings.ts         ← cachedSetting() with Redis
+│   │   ├── stripe.ts           ← Stripe (single account, metadata-tagged)
+│   │   ├── vercel.ts           ← Vercel API
+│   │   ├── github.ts           ← GitHub API
+│   │   ├── neon-api.ts         ← Neon management API
+│   │   └── resend.ts           ← Resend email helpers
+│   └── components/
+├── prompts/                ← agent system prompts
+├── templates/
+│   ├── company-claude.md   ← CLAUDE.md template for new companies
+│   └── boilerplate/        ← Next.js starter for company repos
+└── .github/workflows/      ← 9 workflow files (brain agents + CI)
+    ├── hive-ceo.yml        ← Opus 40 turns
+    ├── hive-scout.yml      ← Opus 35 turns
+    ├── hive-engineer.yml   ← Sonnet (→Opus on 3rd attempt)
+    ├── hive-evolver.yml    ← Opus 20 turns
+    ├── hive-healer.yml     ← Sonnet 20 turns
+    ├── hive-decompose.yml  ← Claude Max 8 turns
+    ├── hive-crons.yml      ← Manual-trigger fallback
+    ├── hive-digest.yml     ← Manual-trigger fallback
+    └── ci.yml              ← Build + schema-map check
+```

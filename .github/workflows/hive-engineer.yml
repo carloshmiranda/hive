@@ -768,6 +768,17 @@ jobs:
           fetch_token "claude" "claude_token" "true"
           fetch_token "github_pat" "gh_pat" "true"
 
+      - name: Resolve model (escalation on retry)
+        id: model
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
+        run: |
+          # Model escalation: payload may override model/max_turns for retries
+          MODEL=$(echo "$PAYLOAD_JSON" | jq -r '.model // empty' 2>/dev/null)
+          MAX_TURNS=$(echo "$PAYLOAD_JSON" | jq -r '.max_turns // empty' 2>/dev/null)
+          echo "model=${MODEL:-claude-sonnet-4-20250514}" >> $GITHUB_OUTPUT
+          echo "max_turns=${MAX_TURNS:-35}" >> $GITHUB_OUTPUT
+
       - name: Run build agent (Hive-internal only)
         id: agent
         env:
@@ -775,7 +786,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 35 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns ${{ steps.model.outputs.max_turns }} --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You are working on the Hive repo itself.
 

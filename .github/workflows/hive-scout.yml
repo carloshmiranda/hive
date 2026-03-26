@@ -119,6 +119,9 @@ jobs:
 
       - name: Run Scout agent
         id: agent
+        env:
+          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
+          HIVE_URL: https://hive-phi.vercel.app
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
@@ -141,15 +144,13 @@ jobs:
             ## STEP 1: Read your full prompt and context
             1. Read `prompts/scout.md` — this contains your COMPLETE research methodology, business model categories, output format, and constraints. Follow it exactly.
             2. Read `BRIEFING.md` for current state.
-            3. Read `CLAUDE.md` for architecture context.
 
-            ## STEP 2: Gather dynamic context from Neon
-            Query the database (use DATABASE_URL env var) for:
-            - All existing companies: `SELECT name, slug, description, status, kill_reason FROM companies ORDER BY created_at`
-            - Recently rejected: `SELECT name, description, kill_reason FROM companies WHERE status = 'killed' AND kill_reason IS NOT NULL AND killed_at > NOW() - INTERVAL '90 days'`
-            - Rejected approvals: `SELECT title, decision_note FROM approvals WHERE gate_type = 'new_company' AND status = 'rejected' AND decided_at > NOW() - INTERVAL '90 days'`
-            - Playbook: `SELECT domain, insight, confidence FROM playbook WHERE superseded_by IS NULL ORDER BY confidence DESC LIMIT 10`
-
+            ## STEP 2: Gather dynamic context from the context API
+            Fetch all context in one call (all companies, killed/rejected history, playbook, market coverage):
+            ```bash
+            curl -s "$HIVE_URL/api/agents/context?agent=scout" -H "Authorization: Bearer $CRON_SECRET"
+            ```
+            This returns: companies, killed_companies, rejected_proposals, pending_proposal_count, playbook, markets_covered, types_covered.
             Inject all of this as context into your research — the prompt file tells you how.
 
             ## STEP 3: Execute research following prompts/scout.md methodology

@@ -113,7 +113,8 @@ jobs:
             ## Context loading (be efficient — do NOT read CLAUDE.md)
             1. Read `prompts/ceo.md` for your role, validation phases, and output format
             2. Only read `BRIEFING.md` if trigger is cycle_start or cycle_complete (skip for ceo_review)
-            3. Fetch validation context: curl -s "$HIVE_URL/api/agents/context?agent=build&company_slug=<slug>" -H "Authorization: Bearer $CRON_SECRET"
+            3. Fetch CEO context: curl -s "$HIVE_URL/api/agents/context?agent=ceo&company_slug=<slug>" -H "Authorization: Bearer $CRON_SECRET"
+               This returns validation phase, cycle info, research summaries, playbook, tasks, directives, metrics, and recent scores — all in one call.
 
             ## Trigger-specific instructions
 

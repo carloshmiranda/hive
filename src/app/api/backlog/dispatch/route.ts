@@ -502,6 +502,40 @@ export async function POST(req: Request) {
   // Filter out items that require manual/human work (can't be automated)
   // Only match terms that genuinely indicate non-automatable work.
   // "manual" alone is too broad — it matches "manual review" in technical contexts.
+  // Cost-risk gate: items that could incur real costs or break billing must be approval-gated
+  const COST_RISK_KEYWORDS = /\b(upgrade plan|vercel pro|paid tier|increase budget|billing|subscription|paid addon|spending limit|add credit card|scale up infra)\b/i;
+  const costRiskItems = [];
+  const safeBudgetItems = [];
+  for (const item of backlogItems) {
+    const text = `${item.title} ${item.description}`;
+    if (COST_RISK_KEYWORDS.test(text)) {
+      costRiskItems.push(item);
+    } else {
+      safeBudgetItems.push(item);
+    }
+  }
+  // Mark cost-risk items as blocked with reason
+  for (const item of costRiskItems) {
+    if (item.status === "ready") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', notes = COALESCE(notes, '') || ' [auto] Cost-risk: may incur spend — needs approval.'
+        WHERE id = ${item.id} AND status = 'ready'
+      `.catch(() => {});
+    }
+  }
+  if (costRiskItems.length > 0) {
+    const titles = costRiskItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
+    await qstashPublish("/api/notify", {
+      agent: "backlog",
+      action: "cost_risk_blocked",
+      company: "hive",
+      status: "needs_carlos",
+      summary: `${costRiskItems.length} backlog item(s) blocked (cost risk):\n${titles}`,
+    }, { retries: 2 }).catch(() => {});
+  }
+  backlogItems = safeBudgetItems;
+
   const MANUAL_KEYWORDS = /\b(buy domain|DNS records|sign up manually|create account manually|register manually|purchase|human intervention)\b/i;
   const automatable = [];
   const manualItems = [];
@@ -887,6 +921,8 @@ export async function POST(req: Request) {
         attempt: attemptCount + 1,
         chain_next: true,
         spec: spec || undefined,
+        // Model escalation: use Opus on 3rd+ attempt for harder reasoning
+        ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514", max_turns: 50 } : {}),
       },
     }),
     signal: AbortSignal.timeout(10000),

@@ -453,6 +453,33 @@ Move ~12 checks to event-driven (no cron):
 - Keep dumb chunking with better heuristics: fundamental limit — heuristics can't understand codebase context
 **Consequences:** Task decomposition quality matches what a senior engineer would produce. L-complexity tasks no longer exhaust max_turns. Actions minutes used only for genuinely complex decomposition (~5min per task, max 8 turns). Serverless path handles simpler cases at zero cost.
 
+### ADR-035: Context API for all agents (brain + worker)
+**Date:** 2026-03-26
+**Status:** accepted
+**Context:** Brain agents (CEO, Scout, Evolver) embedded SQL queries inline in their workflow YAML prompts. This caused: (1) prompt bloat (~8 SQL blocks in Evolver alone), (2) inconsistent data fetching across agents, (3) no caching for repeated reads, (4) agents spending turns on DB queries instead of reasoning. Worker agents already used `/api/agents/context` for task-specific data.
+**Decision:** Extend the context API with `agent=ceo|scout|evolver` parameter. Each returns role-appropriate pre-computed data. Portfolio-level agents (scout, evolver) don't require `company_slug`. All brain agent workflows updated to fetch context via API call instead of inline SQL. Agents still have DATABASE_URL for writes.
+**Alternatives considered:**
+- Keep inline SQL: simpler but wastes agent turns on repetitive queries and grows YAML files
+- Move all data access to API: cleaner but agents need direct DB for writes (INSERT agent_actions, proposals, etc.)
+**Consequences:** Brain agents save 2-5 turns per run by getting pre-computed context. Context is cached (10-min TTL). Consistent data shapes across runs. Workflow YAML files are shorter and more maintainable. Agents still need DATABASE_URL for writes.
+
+### ADR-034: OpenRouter-only LLM routing for worker agents
+**Date:** 2026-03-26
+**Status:** accepted (supersedes ADR-009's multi-provider routing for workers)
+**Context:** Hive used 3 separate LLM providers for worker agents: Gemini Flash for Growth/Outreach, Groq Llama for Ops, and OpenRouter as fallback. This meant managing 3 API keys, 3 fallback chains, and provider-specific code paths. Carlos directed: "We shouldn't use Gemini key at all, just OpenRouter for Hive and any company that needs LLMs. Then we have Claude Max for complex work or fallback — this is outside OpenRouter as it isn't API based."
+**Decision:** Consolidate all Vercel serverless LLM calls to OpenRouter as sole provider. Remove Gemini and Groq entirely. Claude Max stays for brain agents (GitHub Actions CLI only — not API, not in fallback chain). Per-model fallback within OpenRouter (e.g., Hermes 405B → Llama 70B → Mistral 24B). Circuit breaker keyed per model (`openrouter:model-name`), not per provider.
+**Key routing:**
+- Growth: `nousresearch/hermes-3-llama-3.1-405b:free` → Llama 70B → Mistral 24B
+- Outreach: `meta-llama/llama-3.3-70b-instruct:free` → Hermes 405B → Mistral 24B
+- Ops: `mistralai/mistral-small-3.1-24b-instruct:free` → Llama 70B → Hermes 405B
+- Planner: `qwen/qwen3-coder:free` → Claude Sonnet 4 free → Hermes 405B
+- Decomposer: `anthropic/claude-sonnet-4:free` → Hermes 405B → Qwen Coder
+**Alternatives considered:**
+- Keep multi-provider: more resilient but 3x key management, 3x code paths, provider-specific quirks
+- OpenRouter + Groq fallback: Groq is fast but adds another key to manage for marginal benefit
+- Claude API as fallback: burns money when free models are available on OpenRouter
+**Consequences:** Single API key, single code path, simpler circuit breaker. All free models — $0 cost for worker agents. If OpenRouter goes down, worker agents stop (brain agents on Claude Max unaffected). Acceptable trade-off: OpenRouter has 99.9%+ uptime and Sentinel can retry failed dispatches.
+
 ### ADR-033: Redis caching layer separate from Postgres context cache
 **Date:** 2026-03-26
 **Status:** accepted

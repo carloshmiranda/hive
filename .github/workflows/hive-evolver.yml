@@ -54,8 +54,19 @@ jobs:
           echo "::add-mask::$CLAUDE_TOKEN"
           echo "claude_token=$CLAUDE_TOKEN" >> $GITHUB_OUTPUT
 
+          CRON_RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"token_type":"cron_secret"}')
+          CRON_SECRET=$(echo "$CRON_RESPONSE" | jq -r '.data.token // empty')
+          echo "::add-mask::$CRON_SECRET"
+          echo "cron_secret=$CRON_SECRET" >> $GITHUB_OUTPUT
+
       - name: Run Evolver agent
         id: agent
+        env:
+          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
+          HIVE_URL: https://hive-phi.vercel.app
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
@@ -68,62 +79,21 @@ jobs:
 
             Read BRIEFING.md for current state context.
 
-            Connect to the Neon database using DATABASE_URL and perform your three-layer gap detection:
+            ## STEP 1: Fetch Evolver context from the context API
+            ```bash
+            curl -s "$HIVE_URL/api/agents/context?agent=evolver" -H "Authorization: Bearer $CRON_SECRET"
+            ```
+            This returns pre-computed data for your three-layer gap detection:
+            - agent_stats: success/failure counts per agent (14d)
+            - cycle_scores: company scores (30d)
+            - stalled_companies: mvp/active with no activity in 48h (CRITICAL if they have infra)
+            - repeated_errors: errors occurring 3+ times (14d)
+            - playbook_coverage: entries/confidence/unreferenced per domain
+            - pending_proposals: your existing pending/deferred proposals (check for duplicates)
 
-            1. OUTCOME GAPS — Query agent_actions (last 14 days):
-               ```sql
-               SELECT agent,
-                 COUNT(*) FILTER (WHERE status = 'success') as successes,
-                 COUNT(*) FILTER (WHERE status = 'failed') as failures,
-                 COUNT(*) as total
-               FROM agent_actions
-               WHERE started_at > now() - interval '14 days'
-               GROUP BY agent
-               ```
-               Also query cycle scores:
-               ```sql
-               SELECT c.company_id, co.slug, c.cycle_number, c.ceo_review->>'score' as score
-               FROM cycles c JOIN companies co ON co.id = c.company_id
-               WHERE c.started_at > now() - interval '30 days'
-               ORDER BY c.company_id, c.cycle_number DESC
-               ```
+            Use this data to perform your three-layer gap detection (outcome, capability, knowledge).
 
-            1b. STALLED COMPANIES — Companies with no agent activity at all:
-               ```sql
-               SELECT c.slug, c.status,
-                 MAX(aa.finished_at) as last_activity,
-                 (SELECT COUNT(*) FROM cycles cy WHERE cy.company_id = c.id) as total_cycles,
-                 (SELECT COUNT(*) FROM infra i WHERE i.company_id = c.id) as infra_count
-               FROM companies c
-               LEFT JOIN agent_actions aa ON aa.company_id = c.id
-               WHERE c.status IN ('mvp', 'active')
-               GROUP BY c.id, c.slug, c.status
-               HAVING MAX(aa.finished_at) < NOW() - INTERVAL '48 hours'
-                  OR MAX(aa.finished_at) IS NULL
-               ```
-               If a company has infra but no activity in 48h, that's a CRITICAL gap — something in the dispatch chain is broken.
-
-            2. CAPABILITY GAPS — Query escalations and repeated failures:
-               ```sql
-               SELECT agent, error, COUNT(*) as occurrences
-               FROM agent_actions
-               WHERE status = 'failed' AND started_at > now() - interval '14 days'
-               GROUP BY agent, error
-               HAVING COUNT(*) >= 3
-               ```
-               Also check company capabilities:
-               ```sql
-               SELECT slug, capabilities, company_type FROM companies WHERE status IN ('mvp', 'active')
-               ```
-
-            3. KNOWLEDGE GAPS — Query playbook coverage:
-               ```sql
-               SELECT domain, COUNT(*) as entries, AVG(confidence) as avg_confidence,
-                 SUM(CASE WHEN reference_count = 0 AND created_at < now() - interval '14 days' THEN 1 ELSE 0 END) as unreferenced
-               FROM playbook WHERE superseded_by IS NULL
-               GROUP BY domain
-               ```
-
+            ## STEP 2: Write proposals and log results
             4. CHECK FOR DUPLICATES — Before creating proposals:
                ```sql
                SELECT id, title, status FROM evolver_proposals WHERE status IN ('pending', 'deferred')

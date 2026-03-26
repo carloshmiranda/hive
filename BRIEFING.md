@@ -25,9 +25,9 @@
 | Scout | GitHub Actions + Claude | Pipeline low, CEO requests, company killed | Ideas, market research, SEO keywords |
 | Engineer | GitHub Actions + Claude | Features, bugs, Ops escalation, new companies | Code, deploy, scaffold, fix |
 | Evolver | GitHub Actions + Claude | Cycle threshold, failure rate | Prompt analysis + improvement |
-| Ops | Vercel serverless + Groq | Deploys, sentinel, agent failures | Health check, metrics, error detect |
-| Growth | Company repo Actions + Claude (fallback: Vercel + Gemini) | Scout research delivered, sentinel (stale content) | Blog, SEO, social content |
-| Outreach | Vercel serverless + Gemini | Scout leads found, sentinel (stale leads) | Prospects, cold email, follow-up |
+| Ops | Vercel serverless + OpenRouter | Deploys, sentinel, agent failures | Health check, metrics, error detect |
+| Growth | Vercel serverless + OpenRouter | Scout research delivered, sentinel (stale content) | Blog, SEO, social content |
+| Outreach | Vercel serverless + OpenRouter | Scout leads found, sentinel (stale leads) | Prospects, cold email, follow-up |
 
 ### Execution Model
 
@@ -55,7 +55,7 @@
   - 50+ silent catch blocks → structured `console.warn` logging across 7 files
   - Max_turns quota burn: explicit turns detection in workflow + reduced block threshold (2 vs 3)
   - Scout prompt: weighted scoring rubric + mandatory disconfirming evidence + demand proof
-  - Per-provider circuit breaker: EMA error rate tracking in llm.ts (CLOSED/HALF_OPEN/OPEN)
+  - Per-model circuit breaker: EMA error rate tracking in llm.ts (CLOSED/HALF_OPEN/OPEN), keyed per OpenRouter model
   - MCP server: fixed broken hive_companies/hive_cycles tools, parameterized queries, new tools (playbook, error_patterns, directives, routing_weights)
   - ADR-031 Phase 2: Sentinel monolith split into 3 urgency-tier endpoints (urgent/dispatch/janitor) + shared helpers
   - Sentinel infra_repair loop eliminated: 262 repairs/48h → 0
@@ -70,6 +70,11 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-26: Hierarchical context — Slimmed CLAUDE.md from 673→101 lines (constitutional core only: identity, rules, naming, code standards). Rewrote ARCHITECTURE.md from scratch (fixed 14+ stale items: OpenRouter not Gemini/Groq, QStash tiers, 21 tables, context API, inter-agent communication, CiberPME). All reference material (agent flows, model routing, provisioning, teardown, email, self-healing, validation phases, cross-company learning) now in ARCHITECTURE.md. CLAUDE.md points there for details.
+- `[code]` 2026-03-26: Hierarchical context optimization — Extended `/api/agents/context` with 3 new brain agent modes (ceo, scout, evolver). CEO gets validation, cycle, research, playbook, tasks, directives, metrics, scores in one call. Scout gets companies, killed/rejected history, market coverage. Evolver gets agent stats, cycle scores, stalled companies, repeated errors, playbook coverage. Updated all 3 brain agent workflows (hive-ceo/scout/evolver.yml) to call context API instead of inline SQL. Added cost-risk gate to backlog dispatch (blocks items matching spend keywords). Added model escalation (Opus on 3rd+ attempt). Updated Engineer workflow with dynamic model resolution from dispatch payload.
+
+- `[code]` 2026-03-26: OpenRouter-only LLM routing (ADR-034) — Consolidated all worker agent LLM calls to OpenRouter as sole provider. Removed Gemini and Groq entirely. Rewrote `src/lib/llm.ts` (-275 lines, +88): single `callOpenRouter()`, per-model circuit breaker, model-level fallbacks within OpenRouter (free models only). Claude Max remains for brain agents (GitHub Actions CLI, not in serverless chain). Updated 8 files: llm.ts, settings page/API, token route, costs, log, task-classifier, hive-capabilities. Deployed to production (dpl_HBkyq58NUYMajY63EBX8z1JMA7Da READY).
 
 - `[code]` 2026-03-26: Sentry + Redis caching — Added @sentry/nextjs (server/edge/client instrumentation, global-error.tsx boundary, 10% trace sampling). Added @upstash/redis caching layer (redis-cache.ts): settings cache (10-min TTL, 118 call sites benefit), playbook cache (1h), company list cache (5m), health check endpoint. Both gracefully no-op without env vars. Needs Vercel Marketplace install for SENTRY_DSN + UPSTASH_REDIS_REST_URL/TOKEN.
 

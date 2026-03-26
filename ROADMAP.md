@@ -68,7 +68,9 @@ Key outcomes:
 - Evolver detects gaps and proposes prompt improvements
 - Playbook entries auto-applied to struggling companies
 - Backlog items auto-decomposed when too complex
-- Context optimization prevents max_turns exhaustion
+- Context optimization: CLAUDE.md shrunk from 42KB to <5KB constitutional core
+- Brain agents use context API (like workers), not raw file reads
+- Mistakes/decisions stored in structured DB tables with agent-filtered injection
 - Model routing adapts based on task success rates
 
 ### `code_quality` — Companies ship reliable code

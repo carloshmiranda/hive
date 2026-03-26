@@ -16,16 +16,41 @@ export async function GET(req: NextRequest) {
   const agent = searchParams.get("agent");
   const slug = searchParams.get("company_slug");
 
-  if (!agent || !slug) {
-    return err("Missing agent or company_slug query params", 400);
-  }
+  // Portfolio-level agents (scout, evolver) don't need a company_slug
+  const PORTFOLIO_AGENTS = ['scout', 'evolver'];
+  const COMPANY_AGENTS = ['build', 'growth', 'fix', 'ceo'];
+  const ALL_AGENTS = [...COMPANY_AGENTS, ...PORTFOLIO_AGENTS];
 
-  if (!['build', 'growth', 'fix'].includes(agent)) {
+  if (!agent) {
+    return err("Missing agent query param", 400);
+  }
+  if (!ALL_AGENTS.includes(agent)) {
     return err(`Unknown agent type: ${agent}`, 400);
+  }
+  if (COMPANY_AGENTS.includes(agent) && !slug) {
+    return err(`Agent type '${agent}' requires company_slug query param`, 400);
   }
 
   const sql = getDb();
+  const agentType = agent as AgentType;
 
+  // Portfolio-level agents don't need a company
+  if (PORTFOLIO_AGENTS.includes(agent)) {
+    const cacheKey = `_portfolio:${agent}`;
+    const cached = await getCachedContext(cacheKey, agentType);
+    if (cached) return json(cached);
+
+    let contextData;
+    if (agent === "scout") {
+      contextData = await scoutContext(sql);
+    } else {
+      contextData = await evolverContext(sql);
+    }
+    await setCachedContext(cacheKey, agentType, contextData);
+    return json(contextData);
+  }
+
+  // Company-level agents
   const [company] = await sql`
     SELECT id, name, slug, description, capabilities, company_type, market, content_language, created_at
     FROM companies WHERE slug = ${slug} LIMIT 1
@@ -43,7 +68,6 @@ export async function GET(req: NextRequest) {
   `.catch(() => []);
 
   const cycleId = currentCycle?.id || null;
-  const agentType = agent as AgentType;
 
   // Try cache first
   const cached = await getCachedContext(company.id, agentType, cycleId);
@@ -59,6 +83,8 @@ export async function GET(req: NextRequest) {
     contextData = await growthContext(sql, company);
   } else if (agent === "fix") {
     contextData = await fixContext(sql, company);
+  } else if (agent === "ceo") {
+    contextData = await ceoContext(sql, company);
   } else {
     return err(`Unknown agent type: ${agent}`, 400);
   }
@@ -336,5 +362,213 @@ async function fixContext(sql: any, company: any) {
     cross_company_patterns: patterns.map((p: { description: string }) => p.description),
     ...(knownFixes.length > 0 ? { known_fixes: knownFixes } : {}),
     hive_capabilities: getCapabilitySummary(),
+  };
+}
+
+// ─── CEO context (per-company, strategic planning + review) ───
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function ceoContext(sql: any, company: any) {
+  const [cycle, reports, playbook, engTasks, growthTasks, metrics, directives, recentCycles] = await Promise.all([
+    sql`
+      SELECT id, cycle_number, ceo_plan, ceo_review FROM cycles
+      WHERE company_id = ${company.id}
+      ORDER BY started_at DESC LIMIT 1
+    `.catch(() => []),
+    sql`
+      SELECT report_type, summary FROM research_reports
+      WHERE company_id = ${company.id}
+        AND report_type IN ('market_research','competitive_analysis','seo_keywords','product_spec')
+      ORDER BY updated_at DESC
+    `.catch(() => []),
+    sql`
+      SELECT domain, insight FROM playbook
+      WHERE confidence >= 0.6
+        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+      ORDER BY confidence DESC LIMIT 10
+    `.catch(() => []),
+    sql`
+      SELECT id, title, status, priority FROM company_tasks
+      WHERE company_id = ${company.id} AND category = 'engineering'
+        AND status IN ('proposed', 'approved', 'in_progress')
+      ORDER BY priority ASC LIMIT 10
+    `.catch(() => []),
+    sql`
+      SELECT id, title, status, priority FROM company_tasks
+      WHERE company_id = ${company.id} AND category = 'growth'
+        AND status IN ('proposed', 'approved', 'in_progress')
+      ORDER BY priority ASC LIMIT 5
+    `.catch(() => []),
+    sql`
+      SELECT date, page_views, signups, waitlist_signups, waitlist_total,
+        revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
+        affiliate_clicks, affiliate_revenue
+      FROM metrics WHERE company_id = ${company.id}
+      ORDER BY date DESC LIMIT 14
+    `.catch(() => []),
+    sql`
+      SELECT id, instruction FROM directives
+      WHERE company_id = ${company.id} AND status = 'open'
+      ORDER BY created_at DESC LIMIT 5
+    `.catch(() => []),
+    sql`
+      SELECT cycle_number, ceo_review->>'score' as score,
+             ceo_review->>'agent_grades' as agent_grades
+      FROM cycles WHERE company_id = ${company.id}
+        AND ceo_review IS NOT NULL
+      ORDER BY started_at DESC LIMIT 3
+    `.catch(() => []),
+  ]);
+
+  const research: Record<string, string> = {};
+  for (const r of reports) {
+    research[r.report_type] = r.summary;
+  }
+
+  const businessType = normalizeBusinessType(company.company_type);
+  const validation = computeValidationScore(businessType, metrics, company.created_at);
+
+  return {
+    company: {
+      name: company.name,
+      slug: company.slug,
+      description: company.description,
+      capabilities: company.capabilities,
+      business_type: businessType,
+      content_language: company.content_language || "en",
+      market: company.market || "global",
+    },
+    validation,
+    cycle: cycle[0] ? {
+      id: cycle[0].id,
+      cycle_number: cycle[0].cycle_number,
+      ceo_plan: cycle[0].ceo_plan,
+      last_review: cycle[0].ceo_review,
+    } : null,
+    recent_scores: recentCycles.map((c: { cycle_number: number; score: string; agent_grades: string }) => ({
+      cycle: c.cycle_number, score: c.score, grades: c.agent_grades,
+    })),
+    research,
+    playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
+    engineering_tasks: engTasks,
+    growth_tasks: growthTasks,
+    directives: directives.map((d: { id: string; instruction: string }) => ({ id: d.id, instruction: d.instruction })),
+    metrics: metrics.slice(0, 7),
+    hive_capabilities: getCapabilitySummary(),
+  };
+}
+
+// ─── Scout context (portfolio-level, idea generation + research) ───
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function scoutContext(sql: any) {
+  const [companies, killed, rejected, pendingCount, playbook] = await Promise.all([
+    sql`
+      SELECT name, slug, description, status, company_type, market, content_language
+      FROM companies ORDER BY created_at DESC
+    `.catch(() => []),
+    sql`
+      SELECT name, description, kill_reason FROM companies
+      WHERE status = 'killed' AND killed_at > NOW() - INTERVAL '90 days'
+    `.catch(() => []),
+    sql`
+      SELECT title, decision_note FROM approvals
+      WHERE gate_type = 'new_company' AND status = 'rejected'
+        AND decided_at > NOW() - INTERVAL '90 days'
+    `.catch(() => []),
+    sql`
+      SELECT COUNT(*)::int as count FROM approvals
+      WHERE gate_type = 'new_company' AND status = 'pending'
+    `.catch(() => [{ count: 0 }]),
+    sql`
+      SELECT domain, insight, confidence FROM playbook
+      WHERE superseded_by IS NULL AND confidence >= 0.5
+      ORDER BY confidence DESC LIMIT 20
+    `.catch(() => []),
+  ]);
+
+  const active = companies.filter((c: { status: string }) => ['mvp', 'active'].includes(c.status));
+  const pipeline = companies.filter((c: { status: string }) => ['idea', 'approved', 'provisioning'].includes(c.status));
+
+  return {
+    portfolio: {
+      active_companies: active.map((c: { name: string; slug: string; description: string; company_type: string; market: string }) => ({
+        name: c.name, slug: c.slug, description: c.description, type: c.company_type, market: c.market,
+      })),
+      pipeline_count: pipeline.length,
+      pending_proposals: pendingCount[0]?.count || 0,
+    },
+    killed_companies: killed.map((c: { name: string; description: string; kill_reason: string }) => ({
+      name: c.name, description: c.description, kill_reason: c.kill_reason,
+    })),
+    rejected_proposals: rejected.map((r: { title: string; decision_note: string }) => ({
+      title: r.title, reason: r.decision_note,
+    })),
+    playbook: playbook.map((p: { domain: string; insight: string; confidence: number }) =>
+      `${p.domain} (${p.confidence}): ${p.insight}`
+    ),
+    markets_covered: [...new Set(active.map((c: { market: string }) => c.market).filter(Boolean))],
+    types_covered: [...new Set(active.map((c: { company_type: string }) => c.company_type).filter(Boolean))],
+  };
+}
+
+// ─── Evolver context (portfolio-level, gap detection + prompt improvement) ───
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function evolverContext(sql: any) {
+  const [agentStats, cycleScores, stalled, repeatedErrors, playbookCoverage, pendingProposals] = await Promise.all([
+    // Layer 1: Outcome gaps — agent success/failure rates (14 days)
+    sql`
+      SELECT agent,
+        COUNT(*) FILTER (WHERE status = 'success')::int as successes,
+        COUNT(*) FILTER (WHERE status = 'failed')::int as failures,
+        COUNT(*)::int as total
+      FROM agent_actions WHERE started_at > NOW() - INTERVAL '14 days'
+      GROUP BY agent
+    `.catch(() => []),
+    // Cycle scores (30 days)
+    sql`
+      SELECT co.slug, c.cycle_number, c.ceo_review->>'score' as score
+      FROM cycles c JOIN companies co ON co.id = c.company_id
+      WHERE c.started_at > NOW() - INTERVAL '30 days' AND c.ceo_review IS NOT NULL
+      ORDER BY co.slug, c.cycle_number DESC
+    `.catch(() => []),
+    // Stalled companies (no activity in 48h)
+    sql`
+      SELECT c.slug, c.status, MAX(aa.finished_at) as last_activity
+      FROM companies c LEFT JOIN agent_actions aa ON aa.company_id = c.id
+      WHERE c.status IN ('mvp', 'active')
+      GROUP BY c.id, c.slug, c.status
+      HAVING MAX(aa.finished_at) < NOW() - INTERVAL '48 hours' OR MAX(aa.finished_at) IS NULL
+    `.catch(() => []),
+    // Layer 2: Capability gaps — repeated failures
+    sql`
+      SELECT agent, error, COUNT(*)::int as occurrences
+      FROM agent_actions WHERE status = 'failed' AND started_at > NOW() - INTERVAL '14 days'
+      GROUP BY agent, error HAVING COUNT(*) >= 3
+      ORDER BY COUNT(*) DESC LIMIT 10
+    `.catch(() => []),
+    // Layer 3: Knowledge gaps — playbook coverage
+    sql`
+      SELECT domain, COUNT(*)::int as entries, ROUND(AVG(confidence)::numeric, 2) as avg_confidence
+      FROM playbook WHERE superseded_by IS NULL
+      GROUP BY domain ORDER BY entries DESC
+    `.catch(() => []),
+    // Existing pending proposals
+    sql`
+      SELECT id, title, status, gap_type FROM evolver_proposals
+      WHERE status IN ('pending', 'deferred')
+      ORDER BY created_at DESC LIMIT 10
+    `.catch(() => []),
+  ]);
+
+  return {
+    agent_performance: agentStats,
+    cycle_scores: cycleScores,
+    stalled_companies: stalled,
+    repeated_errors: repeatedErrors.map((e: { agent: string; error: string; occurrences: number }) => ({
+      agent: e.agent,
+      error: (e.error || "").substring(0, 200),
+      occurrences: e.occurrences,
+    })),
+    playbook_coverage: playbookCoverage,
+    pending_proposals: pendingProposals,
   };
 }

@@ -22,6 +22,29 @@
 ### 🔴 P0 — Email domain for Resend (outreach fully blocked)
 Outreach emails are skipped because `sending_domain` is not set. ALL outreach cycles produce 0 emails. Need a real domain (e.g. `hivehq.io`) to add DNS records for Resend verification. Steps: buy domain → add to Vercel DNS → add Resend DKIM/SPF/MX records → verify → set `sending_domain` in Hive settings. ~10 min manual task once domain is chosen.
 
+### 🔴 P0 — Engineer "0 turns" failures (118 occurrences in 48h, 27% success rate)
+Engineer agent starts GitHub Actions runs but produces zero turns of work. 118 failures with "unknown (0 turns)". Root cause unclear — likely claude-code-action misconfiguration or resource exhaustion. This is the #1 volume failure in the system. Investigation: check recent GitHub Actions run logs for startup errors, verify CLAUDE_CODE_OAUTH_TOKEN is valid, check if concurrent agent limit is being hit.
+Theme: `zero_intervention`
+
+### 🔴 P0 — Growth agent has no working LLM provider (0% effective)
+All 3 Growth LLM providers failing: Gemini API key invalid/missing (HTTP 400), Groq rate limit exhausted (HTTP 429), Claude fallback not implemented. Circuit breakers correctly tripping for verdedesk and ciberpme. Manual fix: verify/regenerate Gemini API key in Hive settings. Code fix: ensure OpenRouter fallback chain actually works for Growth agent (ADR-034 says it should).
+Theme: `zero_intervention`
+
+### 🟡 P1 — Deduplicate approval escalations (7 identical Neon API key escalations)
+System created 7 identical escalation approvals for the same Neon API key decryption issue. Dedup logic should prevent creating duplicate escalations for the same root cause. Fix: before creating an escalation approval, query for existing pending approvals with similar error text (ILIKE match). If found within last 24h, skip creation and log "dedup: existing escalation [id]".
+Theme: `zero_intervention`
+
+### 🟡 P1 — Engineer max_turns exhaustion (79 failures in 48h)
+Engineer hits the 35-turn limit without completing tasks — tasks are too large or agent is spinning. Investigate: are these the same tasks being retried? Are acceptance criteria too vague? Fix options: (1) Tighter task scoping in CEO plan (max 3 files per task), (2) Early termination detection — if Engineer hasn't committed after 20 turns, abort and escalate, (3) Model escalation already implemented (ADR-035) but may need lower threshold (attempt 2 instead of 3).
+Theme: `zero_intervention`
+
+### 🟡 P1 — Fix ENCRYPTION_KEY format in Vercel (blocks secret decryption)
+`ENCRYPTION_KEY` env var in Vercel is not a valid 64-char hex string, so `crypto.ts` cannot decrypt stored settings (Neon API key, other secrets). Manual fix: generate a proper key with `openssl rand -hex 32` and update in Vercel env vars. Code fix: add validation on startup that logs a clear error if ENCRYPTION_KEY is malformed.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Triage 33+ pending Scout proposals (pipeline clogged)
+9 new_company proposals pending approval, 33+ total Scout proposals accumulating. Scout keeps generating because pipeline count includes pending proposals but dispatch logic doesn't distinguish approved from pending. Manual: approve or reject proposals to clear the queue. Code: Scout should skip if >5 proposals already pending (not just pipeline count).
+
 
 ### ✅ P1 — Phase 1: Replace GitHub Actions cron proxy with Vercel native crons (DONE — 2026-03-25)
 Added `crons` array to `vercel.json` (sentinel hourly, metrics 2x/day, digest daily 8am). Removed schedule triggers from `hive-crons.yml`, kept as manual-only fallback. Vercel sends `Authorization: Bearer CRON_SECRET` natively — no code changes needed. Saves ~24 GitHub Actions runs/day on private repo quota. ADR-031 Phase 1.
@@ -61,7 +84,7 @@ Added "Visual quality rules for content pages" section to growth.md: reference d
 Added Tailwind v4 @theme block to globals.css with constrained tokens: brand/accent colors, neutrals, feedback colors, typography scale (5 sizes), 8px spacing grid, 3 radius options, 2 shadow options. Added 10 design rules as CSS comments (no gradients, max 2 font weights, max 3 colors, etc.). Engineer prompt updated with 10 visual quality standards. Company CLAUDE.md template updated to reference tokens.
 
 ### 🟡 P1 — Public documentation for open-source usage
-Hive has no public-facing documentation. CLAUDE.md is agent-focused, not human-readable for someone wanting to fork and run their own venture orchestrator. Need: (1) **README.md** — what Hive does, architecture overview diagram (ASCII or Mermaid), feature highlights, screenshots of dashboard. (2) **ARCHITECTURE.md** — technical deep dive: agent flow, event-driven dispatch, model routing, 3-tier cost optimization, data model (18 tables), cross-company learning, validation-gated builds. (3) **SETUP.md** — step-by-step fork guide: create Neon DB, configure Vercel, add API keys (Claude Max, Gemini, Groq, Resend, Stripe), GitHub Actions setup, first company creation, first cycle. (4) Verify no secrets in code (already clean via OIDC). Implementation: Engineer can generate initial drafts from CLAUDE.md + BRIEFING.md + DECISIONS.md content, then CEO reviews for clarity and completeness.
+ARCHITECTURE.md now exists (comprehensive, rewritten 2026-03-26). Still need: (1) **README.md** — what Hive does, architecture overview diagram, feature highlights, screenshots. (2) **SETUP.md** — step-by-step fork guide: create Neon DB, configure Vercel, add API keys (Claude Max, OpenRouter, Resend, Stripe), GitHub Actions setup, first company creation, first cycle. (3) Verify no secrets in code (already clean via OIDC).
 
 ### ✅ P1 — Fix CEO review not recording scores (DONE — 2026-03-25)
 CEO workflow now has `CRON_SECRET` + `HIVE_URL` env vars and explicit instructions to save review via `/api/cycles/[id]/review` after scoring. Review endpoint validates score (1-10), agent_grades, kill_flag, validation_phase.
@@ -101,6 +124,22 @@ Already implemented in `src/lib/llm.ts` fetchWithRetry() — exponential backoff
 
 ### ✅ P1 — Company task completion bottleneck (DONE — 2026-03-25)
 82/102 tasks stuck in `proposed` status. CEO creates tasks via POST /api/tasks which defaulted to `proposed`. Engineer needs `approved`. Fix: CEO-sourced tasks auto-set to `approved` (already phase-gate validated).
+
+### 🟡 P1 — Hierarchical context: shrink CLAUDE.md to constitutional core
+CLAUDE.md is 672 lines / 42KB injected into every agent session. CEO burned all 25 turns just loading context (12/12 failures since 3/21). Most content is reference material agents don't need per-task. Fix: extract 3 tiers — (1) Constitutional core (~100 lines, always injected): operating rules, 4 gates, escalation protocol, naming standards. (2) Agent-specific context (already in `prompts/*.md`): move remaining agent-specific sections from CLAUDE.md to prompt files. (3) Reference docs → new `ARCHITECTURE.md`: file structure, schema details, provisioning steps, email setup, social media — readable by humans, not injected into agents. Result: CLAUDE.md drops from 42KB to ~4KB, freeing ~38KB of context window per agent run.
+Theme: `self_improving`
+
+### ✅ P1 — Hierarchical context: extend context API to brain agents (DONE — 2026-03-26)
+Extended `/api/agents/context` with `agent=ceo|scout|evolver` modes. CEO gets validation, cycle, research, playbook, tasks, directives, metrics, scores. Scout gets companies, killed/rejected history, market coverage. Evolver gets agent stats, cycle scores, stalled companies, repeated errors, playbook coverage. All 3 brain agent workflows updated to call context API instead of inline SQL. Portfolio-level agents (scout, evolver) don't require company_slug.
+Theme: `self_improving`
+
+### 🟢 P2 — Hierarchical context: migrate mistakes/decisions to structured DB tables
+MISTAKES.md and DECISIONS.md are flat files that agents either read entirely (wasting context) or skip entirely (repeating mistakes). Fix: create `hive_mistakes` and `hive_decisions` tables in Neon with metadata columns: `domain` (infra/dispatch/workflow/schema/etc), `agent` (which agents should see this), `company_slug` (if company-specific), `severity`, `created_at`. Context API filters by agent + domain + task type, injecting only the 3-5 most relevant entries. MD files kept as human-readable archives, DB is the operational source.
+Theme: `self_improving`
+
+### ⚪ P3 — Hierarchical context: pgvector semantic retrieval for knowledge
+When metadata filtering (domain + agent) isn't precise enough, use semantic similarity. Enable Neon's pgvector extension, generate embeddings for playbook entries + mistakes + decisions using OpenRouter free embedding models. Context API falls back to vector similarity search when keyword matching returns too few results. Complements the existing P2 pgvector playbook item — extends to all knowledge types.
+Theme: `self_improving`
 
 ### 🟡 P1 — Specialist prompt profiles for agent task routing
 Agents use one broad prompt for all task types, causing poor quality on specialized work (73% cascade failure rate, generic UI, no security review). Implement specialist prompt injection: task type → load focused prompt alongside the agent's base prompt.
@@ -143,8 +182,8 @@ Database Engineer, DevOps, Code Reviewer, UX Researcher, Content Strategist, Soc
 - "SEO", "sitemap", "meta tags", "structured data" → `seo` → SEO Specialist prompt
 - "pricing page", "conversion", "CTA", "signup" → `cro` → CRO prompt
 
-### 🟡 P1 — Cost-risk gate for backlog dispatch
-Backlog items that could impact costs must require manual approval before dispatch. In `backlog/dispatch/route.ts`, after scoring the top item, check title+description against cost-risk keywords (SDK, API key, paid, billing, stripe, model routing, provider, migration, architecture). If matched, create a `spend_approval` gate with item details + Telegram notification, then skip to the next non-risky item. Same pattern as the manual-work keyword filter already in place.
+### ✅ P1 — Cost-risk gate for backlog dispatch (DONE — 2026-03-26)
+Added `COST_RISK_KEYWORDS` regex in backlog dispatch that blocks items matching spend-related terms (upgrade plan, vercel pro, paid tier, billing, subscription, etc.). Matched items get status='blocked' with auto-note and Telegram notification. Placed before existing MANUAL_KEYWORDS filter.
 
 ### ✅ DONE — Spec-driven dispatch: CEO micro-plan with file scope + acceptance criteria
 Enhanced CEO and Engineer prompts with bounded context file restrictions. CEO now generates detailed specs with `files_allowed`, `files_forbidden`, `acceptance_criteria`, `specialist`, and `complexity`. Engineer enforces file scope restrictions and reports verification of acceptance criteria. Prevents cross-domain pollution where simple tasks accidentally break auth/payments. Implemented 2026-03-24.
@@ -155,11 +194,11 @@ Circuit breaker in `backlog/dispatch/route.ts` blocks dispatches when >60% failu
 ### ✅ P1 — Priority floor for cascade dispatch (DONE — 2026-03-25)
 Chain dispatch now filters to P0+P1 only (was P0-only after PR #35, previously dispatched all priorities). P2/P3 items only dispatched by Sentinel's scheduled runs or manual trigger. Saves Claude turns on aspirational items.
 
-### 🟡 P1 — Failed item cooldown period
-Failed items get re-dispatched within minutes (LTV/CAC failed at 11:59, retried at 12:05). The novelty penalty lowers the score but the item still wins if others score lower. Fix: add a 30-minute cooldown after failure — items with `[attempt N]` note updated in the last 30min are excluded from dispatch. Implementation: in `backlog/dispatch/route.ts`, add WHERE clause `AND (notes NOT LIKE '%attempt%' OR updated_at < NOW() - INTERVAL '30 minutes')` to the ready items query.
+### ✅ P1 — Failed item cooldown period (DONE — already implemented)
+`filterBacklogItemsByCooldown()` in backlog dispatch already excludes items with recent failed attempts. No additional work needed.
 
-### 🟡 P1 — Model escalation on backlog retry
-When a backlog item fails twice on Sonnet, the third attempt should escalate to Opus. Pass `model_override` in the dispatch payload so `hive-engineer.yml` can use it. Cheap way to avoid wasting retries — harder tasks need stronger reasoning. Implementation: `backlog/dispatch/route.ts` checks attempt count, adds `model: "opus"` to `client_payload` when attempt ≥ 3; `hive-engineer.yml` reads `model` from payload and overrides the `model` input on `claude-code-action`.
+### ✅ P1 — Model escalation on backlog retry (DONE — 2026-03-26)
+Backlog dispatch adds `model: "claude-opus-4-20250514"` and `max_turns: 50` to payload when attempt count >= 2. Engineer workflow has new "Resolve model" step that reads these from payload with Sonnet/35 defaults. Harder tasks get stronger reasoning on retry.
 
 ### ~~P1 — Pre-dispatch complexity classifier~~ → merged into P0 OpenRouter + Model Routing
 

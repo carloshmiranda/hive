@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 
-export type AgentType = 'build' | 'growth' | 'fix';
+export type AgentType = 'build' | 'growth' | 'fix' | 'ceo' | 'scout' | 'evolver';
 
 /**
  * Generate cache key for agent context
