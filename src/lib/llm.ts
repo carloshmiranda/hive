@@ -359,6 +359,8 @@ async function callOpenRouter(
       provider: {
         allow_fallbacks: true,
         sort: "throughput",
+        max_price: { prompt: 0, completion: 0 },  // Hard-enforce free-only routing
+        require_parameters: true,  // Only route to providers that support all request parameters
       },
     }),
   }, options.maxRetries || 2);
