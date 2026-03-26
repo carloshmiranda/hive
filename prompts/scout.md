@@ -63,6 +63,39 @@ BANNED phrases: "growing market", "increasing demand", "significant opportunity"
 
 If you cannot find a number, say "no data found" — do NOT substitute an adjective.
 
+## SIGNAL SOURCE VALIDATION — Multi-platform verification required
+
+**CRITICAL VALIDATION RULE:** A pain point is only considered validated if you find demand evidence from at least 3 independent sources across different platforms. A single Reddit thread or forum post is NOT validation.
+
+**Approved source platforms:**
+- Reddit (different subreddits count as separate sources)
+- Hacker News
+- G2 / Capterra / TrustPilot (review platforms)
+- Google Trends (trending data)
+- Product Hunt (launch activity)
+- YouTube (content/channel research)
+- TikTok/Instagram (social signals)
+- Indie Hackers (revenue reports)
+- GitHub (developer pain points)
+- Stack Overflow (technical challenges)
+- LinkedIn (professional discussions)
+- Industry-specific forums
+
+**Source diversity requirements:**
+- Each proposal MUST track all signal sources in a "signal_sources" array
+- Minimum 3 sources from different platforms (e.g., Reddit + HN + Google Trends)
+- Multiple posts from the same platform count as 1 source unless they're from clearly different communities
+- Include specific URLs and what signal each source provided
+- If you find fewer than 3 independent sources, flag the proposal as "weak_signal": true
+
+**Example valid source diversity:**
+✅ Reddit r/entrepreneur, Hacker News discussion, G2 reviews, Google Trends data
+✅ TrustPilot complaints, YouTube tutorial demand, Stack Overflow questions
+❌ 3 different Reddit posts (same platform)
+❌ 1 HN post + 1 tweet (only 2 sources)
+
+This rule prevents false positives from echo chambers and ensures genuine market demand.
+
 ## MANDATORY MIX — You MUST propose exactly 3 ideas:
 1. **Portuguese market** — solve a challenge specific to Portugal (regulatory, cultural, language, local infrastructure gap)
 2. **Global/English market** — any digital business model, English-first
@@ -110,7 +143,9 @@ You have access to web_search AND web_fetch. Use BOTH actively. Do not rely on y
 You MUST use web_fetch on at least 5 different URLs during your research. Simply web searching is not enough — you need to READ actual community pages.
 
 ### Phase 1: Community & forum mining (5-8 actions)
-This is your richest signal source. Visit actual communities where people express frustration and demand:
+This is your richest signal source. Visit actual communities where people express frustration and demand.
+
+**IMPORTANT:** Track every source that provides evidence for each proposal. You need 3+ independent platforms per validated pain point. Keep a running list of platform + URL + signal for each potential idea.
 
 **Reddit** — fetch these subreddits and look for recurring complaints, requests, and pain points:
 - web_fetch: https://www.reddit.com/r/SaaS/top/?t=month
@@ -224,10 +259,16 @@ For each finalist, fill the **weighted scoring rubric** (0-10 per criterion):
 **Weighted total** = (market_size * 0.20) + (demand_signal * 0.25) + (automation_fit * 0.20) + (competitive_moat * 0.15) + (revenue_speed * 0.20). This is the proposal score (0-10). Include the filled rubric in the JSON output.
 
 **Demand signal scoring guide:**
-- **PROVEN DEMAND (8-10):** People are already paying a competitor for this exact thing. You found pricing pages, customer counts, or revenue data.
-- **STRONG SIGNAL (5-7):** High search volume, active communities asking for solutions, waitlists for similar products.
-- **WEAK SIGNAL (2-4):** Some forum posts, a few Reddit threads, but no payment evidence.
-- **SPECULATIVE (0-1):** You think the market should want this but can't find evidence they do.
+- **PROVEN DEMAND (8-10):** People are already paying a competitor for this exact thing. You found pricing pages, customer counts, or revenue data. MUST have 3+ independent platform sources.
+- **STRONG SIGNAL (5-7):** High search volume, active communities asking for solutions, waitlists for similar products. MUST have 3+ independent platform sources.
+- **WEAK SIGNAL (2-4):** Some forum posts, limited evidence, OR fewer than 3 independent platform sources. Mark as "weak_signal": true.
+- **SPECULATIVE (0-1):** You think the market should want this but can't find evidence they do. Mark as "weak_signal": true.
+
+**Signal source validation:**
+- Count the distinct platforms where you found evidence for each proposal
+- If < 3 independent platforms: automatically cap demand_signal score at 4 and set "weak_signal": true
+- Different subreddits count as same platform (Reddit)
+- Include all sources in signal_sources array with URLs and evidence
 
 ### Phase 7: Disconfirming evidence (MANDATORY per proposal)
 
@@ -299,6 +340,16 @@ Pick the top 3 respecting the mandatory mix above.
       "automation_plan": "How AI agents will run this day-to-day",
       "demand_status": "PROVEN_DEMAND | UNPROVEN_DEMAND",
       "demand_proof": "Specific evidence: 'Competitor X has Y paying customers at $Z/mo (source: URL)' or 'No evidence of anyone paying for this'",
+      "signal_sources": [
+        {
+          "platform": "reddit|hackernews|g2|capterra|trustpilot|google_trends|youtube|tiktok|instagram|indie_hackers|github|stackoverflow|linkedin|other",
+          "url": "https://...",
+          "signal_type": "community_pain|competitor_review|search_volume|trend_data|revenue_report|technical_discussion|other",
+          "evidence": "what specific signal this source provided",
+          "strength": "strong|medium|weak"
+        }
+      ],
+      "weak_signal": false,
       "scoring_rubric": {
         "market_size": { "score": 0-10, "evidence": "TAM number + source" },
         "demand_signal": { "score": 0-10, "evidence": "paying customers, search volume, community signals — with numbers" },
@@ -343,4 +394,6 @@ IMPORTANT:
 - `scoring_rubric` is REQUIRED for every proposal — all 5 criteria must have a score and evidence.
 - `why_this_might_fail` is REQUIRED — minimum 2 specific, researched risks per proposal. Generic risks = rejection.
 - `demand_status` is REQUIRED — must be "PROVEN_DEMAND" or "UNPROVEN_DEMAND" based on whether people are already paying.
+- `signal_sources` is REQUIRED — minimum 3 sources from different platforms. Include specific URLs and evidence.
+- `weak_signal` is REQUIRED — set to true if fewer than 3 independent platform sources found. Weak signal proposals have lower priority.
 - Order by `scoring_rubric.weighted_total`, highest first.
