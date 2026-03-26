@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
+import { verifyCronAuth } from "@/lib/qstash";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -11,9 +12,9 @@ export const maxDuration = 60;
 //         43 (dispatch verification), 44 (stale cycle safety net), 45 (stuck PRs with green CI)
 
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await verifyCronAuth(req);
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: 401 });
   }
 
   const sql = getDb();
@@ -716,3 +717,6 @@ export async function GET(req: Request) {
 
   return Response.json({ ok: true, ...results });
 }
+
+// QStash sends POST — re-export GET handler for dual-mode auth
+export { GET as POST };

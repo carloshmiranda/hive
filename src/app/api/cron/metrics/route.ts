@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { updateMetrics } from "@/lib/convergent";
+import { verifyCronAuth } from "@/lib/qstash";
 
 // Vercel Cron: runs at 8am and 6pm (configure in vercel.json)
 // Collects page_views from each company's /api/stats endpoint
@@ -11,10 +12,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(req: Request) {
-  // Verify this is a legit Vercel cron call
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await verifyCronAuth(req);
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: 401 });
   }
 
   const sql = getDb();
@@ -111,3 +111,6 @@ export async function GET(req: Request) {
 
   return Response.json({ ok: true, collected: results.length, results });
 }
+
+// QStash sends POST — re-export GET handler for dual-mode auth
+export { GET as POST };

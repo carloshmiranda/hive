@@ -1,13 +1,14 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { verifyCronAuth } from "@/lib/qstash";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await verifyCronAuth(req);
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: 401 });
   }
 
   const sql = getDb();
@@ -302,3 +303,6 @@ function buildDigestHtml(d: DigestData): string {
 </body>
 </html>`;
 }
+
+// QStash sends POST — re-export GET handler for dual-mode auth
+export { GET as POST };

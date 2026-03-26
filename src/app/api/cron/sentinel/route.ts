@@ -4,6 +4,7 @@ import { getBoilerplateGaps } from "@/lib/capabilities";
 import { SCHEMA_MAP, getExpectedTables } from "@/lib/schema-map";
 import { findCapabilityForProblem } from "@/lib/hive-capabilities";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
+import { verifyCronAuth } from "@/lib/qstash";
 import boilerplateManifest from "../../../../../templates/boilerplate-manifest.json";
 
 export const dynamic = "force-dynamic";
@@ -235,9 +236,9 @@ async function isCircuitOpen(sql: any, agent: string, companyId: string | null):
 }
 
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const auth = await verifyCronAuth(req);
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: 401 });
   }
 
   try {
@@ -3387,3 +3388,6 @@ export async function GET(req: Request) {
     return Response.json({ ok: false, error: message, stack }, { status: 500 });
   }
 }
+
+// QStash sends POST — re-export GET handler for dual-mode auth
+export { GET as POST };
