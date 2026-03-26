@@ -26,11 +26,11 @@ jobs:
             echo "run_metrics=true" >> $GITHUB_OUTPUT
             echo "run_digest=true" >> $GITHUB_OUTPUT
           else
-            echo "run_sentinel_urgent=$( [ '$MANUAL' = 'sentinel-urgent' ] && echo true || echo false )" >> $GITHUB_OUTPUT
-            echo "run_sentinel_dispatch=$( [ '$MANUAL' = 'sentinel-dispatch' ] && echo true || echo false )" >> $GITHUB_OUTPUT
-            echo "run_sentinel_janitor=$( [ '$MANUAL' = 'sentinel-janitor' ] && echo true || echo false )" >> $GITHUB_OUTPUT
-            echo "run_metrics=$( [ '$MANUAL' = 'metrics' ] && echo true || echo false )" >> $GITHUB_OUTPUT
-            echo "run_digest=$( [ '$MANUAL' = 'digest' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_sentinel_urgent=$( [ "$MANUAL" = 'sentinel-urgent' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_sentinel_dispatch=$( [ "$MANUAL" = 'sentinel-dispatch' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_sentinel_janitor=$( [ "$MANUAL" = 'sentinel-janitor' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_metrics=$( [ "$MANUAL" = 'metrics' ] && echo true || echo false )" >> $GITHUB_OUTPUT
+            echo "run_digest=$( [ "$MANUAL" = 'digest' ] && echo true || echo false )" >> $GITHUB_OUTPUT
           fi
 
       - name: Trigger Sentinel Urgent
