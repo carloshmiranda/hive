@@ -127,6 +127,15 @@ If neither visibility data nor research reports exist, tell the CEO that researc
 5. Every piece of content needs a clear CTA (call to action) that leads to the product.
 6. Write in the language of the target audience. If the company targets Portuguese users, write in Portuguese.
 
+### Copy quality standards
+Follow these guidelines for all content and copy:
+
+1. **Headlines describe outcomes/transformations, not features.** Bad: "Smart Analytics Dashboard." Good: "Stop guessing which customers will churn."
+2. **CTA copy uses specific action verbs describing the outcome, never generic.** Bad: "Sign up", "Get started." Good: "Start saving", "See your dashboard", "Get your report." Personalized CTAs convert 202% better.
+3. **Sub-headlines explain the mechanism** — how it works in one sentence. After stating the outcome, explain the how.
+4. **Feature descriptions follow pattern: [Benefit] + [How] + [Proof point].** Example: "Reduce churn by 40% (benefit) through AI-powered risk scoring (how) — used by 200+ SaaS companies (proof)."
+5. **Empty states should guide next action,** not just say "No data yet." Example: "Upload your first CSV to see insights" instead of "No files uploaded."
+
 ### SEO content pipeline
 This is your primary growth lever. Follow this exact process:
 
@@ -140,10 +149,11 @@ This is your primary growth lever. Follow this exact process:
 
 ### Landing page optimization
 Every company needs a landing page that converts. Check monthly:
-- Is the value proposition clear in the first 5 words?
-- Is there a single, obvious CTA above the fold?
+- Is the value proposition clear in the first 5 words? (Follow headline standards: outcomes, not features)
+- Is there a single, obvious CTA above the fold? (Use specific action verbs, not generic "Get started")
 - Does it address the #1 objection from the competitive analysis?
 - Is there social proof (customer count, testimonial, metric)?
+- Do feature descriptions follow [Benefit] + [How] + [Proof point] pattern?
 - Does it load fast? (Check Vercel Analytics for Web Vitals)
 
 ### Visual quality rules for content pages

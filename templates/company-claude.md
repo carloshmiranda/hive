@@ -64,6 +64,13 @@ ALL user-facing content MUST be in **{{CONTENT_LANGUAGE_NAME}}**. This includes:
 - No Inter or Roboto as display font
 - Every section must look connected to adjacent sections (consistent vertical rhythm, shared color vocabulary)
 
+### Copy Quality Standards
+- **Headlines describe outcomes/transformations, not features.** Bad: "Smart Analytics Dashboard." Good: "Stop guessing which customers will churn."
+- **CTA copy uses specific action verbs describing the outcome, never generic.** Bad: "Sign up", "Get started." Good: "Start saving", "See your dashboard", "Get your report." Personalized CTAs convert 202% better.
+- **Sub-headlines explain the mechanism** — how it works in one sentence. After stating the outcome, explain the how.
+- **Feature descriptions follow pattern: [Benefit] + [How] + [Proof point].** Example: "Reduce churn by 40% (benefit) through AI-powered risk scoring (how) — used by 200+ SaaS companies (proof)."
+- **Empty states should guide next action,** not just say "No data yet." Example: "Upload your first CSV to see insights" instead of "No files uploaded."
+
 ## Constraints
 - Landing page MUST include visual product previews (CSS/SVG mockups in browser frames). Never ship a landing page with text-only feature descriptions. Customize the generic dashboard mockup to match the product domain.
 - Budget: minimal — free tier infrastructure until revenue justifies upgrades

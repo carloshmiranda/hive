@@ -116,6 +116,15 @@ Read `globals.css` before writing ANY UI code. It contains design tokens and rul
 17. **No Inter or Roboto as display font.**
 18. **Every section must look connected to adjacent sections (consistent vertical rhythm, shared color vocabulary).**
 
+### Copy quality standards
+Follow these copy guidelines for all user-facing text:
+
+1. **Headlines describe outcomes/transformations, not features.** Bad: "Smart Analytics Dashboard." Good: "Stop guessing which customers will churn."
+2. **CTA copy uses specific action verbs describing the outcome, never generic.** Bad: "Sign up", "Get started." Good: "Start saving", "See your dashboard", "Get your report." Personalized CTAs convert 202% better.
+3. **Sub-headlines explain the mechanism** — how it works in one sentence. After stating the outcome, explain the how.
+4. **Feature descriptions follow pattern: [Benefit] + [How] + [Proof point].** Example: "Reduce churn by 40% (benefit) through AI-powered risk scoring (how) — used by 200+ SaaS companies (proof)."
+5. **Empty states should guide next action,** not just say "No data yet." Example: "Upload your first CSV to see insights" instead of "No files uploaded."
+
 ### When things break
 - If the build fails, read the error carefully and fix it. Don't retry the same code.
 - If a deploy fails, check the Vercel build logs for the actual error.
