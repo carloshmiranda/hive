@@ -61,55 +61,9 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   let { completed_id, completed_status, pr_number, branch, changed_files } = body;
 
-  // Auto-extract PR tracking data if not provided and status is success
-  if (completed_id && completed_status === "success" && (!pr_number || !branch)) {
-    try {
-      const ghToken = await getSettingValue("github_token");
-      if (ghToken) {
-        // Look for recent open PRs on hive repo that might be related to this backlog item
-        const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=10", {
-          headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
-          signal: AbortSignal.timeout(5000),
-        });
-
-        if (prListRes.ok) {
-          const openPRs = await prListRes.json();
-          // Find PRs created in the last hour that start with "hive/"
-          const recentPRs = openPRs.filter((pr: any) => {
-            const createdAt = new Date(pr.created_at);
-            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-            return pr.head?.ref?.startsWith("hive/") && createdAt > oneHourAgo;
-          });
-
-          // Take the most recent one as likely candidate
-          if (recentPRs.length > 0) {
-            const candidatePR = recentPRs[0];
-            pr_number = candidatePR.number;
-            branch = candidatePR.head.ref;
-
-            // Get changed files for this PR
-            try {
-              const filesRes = await fetch(`https://api.github.com/repos/carloshmiranda/hive/pulls/${pr_number}/files`, {
-                headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
-                signal: AbortSignal.timeout(5000),
-              });
-              if (filesRes.ok) {
-                const files = await filesRes.json();
-                changed_files = files.map((f: any) => f.filename);
-              }
-            } catch (e: any) {
-              console.warn(`[backlog] fetch PR #${pr_number} files failed: ${e?.message || e}`);
-            }
-
-            console.log(`[backlog] Auto-extracted PR tracking: #${pr_number} on ${branch}`);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("[backlog] Failed to auto-extract PR tracking:", e instanceof Error ? e.message : "unknown");
-      // Non-blocking, continue without PR data
-    }
-  }
+  // PR tracking: only trust pr_number explicitly provided by the Engineer callback.
+  // Previously auto-extracted from recent open PRs, but this caused wrong PR attribution
+  // when multiple Engineer runs overlapped (grabbed most recent hive/* PR, not the right one).
 
   // Cooldown is now SQL-based (no in-memory cleanup needed)
 
@@ -314,10 +268,10 @@ export async function POST(req: Request) {
                 const result = await autoMergePR("carloshmiranda", "hive", pr.number, ghToken, "squash");
                 if (result.success) {
                   await sql`
-                    UPDATE hive_backlog SET status = 'done',
+                    UPDATE hive_backlog SET status = 'done', completed_at = NOW(),
                       notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged on callback.`}
                     WHERE status = 'pr_open'
-                      AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
+                      AND pr_number = ${pr.number}
                   `.catch(() => {});
                   console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
                 }

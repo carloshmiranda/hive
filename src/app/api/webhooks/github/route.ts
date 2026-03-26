@@ -292,14 +292,10 @@ export async function POST(req: Request) {
         // Only handle Hive repo PRs for backlog tracking (backlog items are Hive self-improvement)
         if (prRepo === "hive") {
           // Find backlog items in pr_open status that match this PR
-          const prTitle = (pr.title || "").slice(0, 50);
           const matchingItems = await sql`
             SELECT id, title FROM hive_backlog
             WHERE status = 'pr_open'
-            AND (
-              pr_number = ${prNumber}
-              OR title ILIKE ${"%" + prTitle.replace(/^feat: |^fix: |^refactor: |^chore: /i, "").slice(0, 40) + "%"}
-            )
+            AND pr_number = ${prNumber}
           `.catch(() => []);
 
           const itemIds = matchingItems.map((i: Record<string, string>) => i.id);

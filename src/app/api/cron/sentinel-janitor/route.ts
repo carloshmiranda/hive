@@ -27,6 +27,7 @@
  * 37  — Self-improvement proposals
  * 39  — Auto-decompose blocked backlog items
  * 42  — Evolver proposal completion tracking
+ * 46  — Close decomposed parents when all sub-tasks done
  *      Self-improvement routing (approved proposals -> backlog)
  *      Telegram notification + BACKLOG.md regeneration
  */
@@ -1753,6 +1754,55 @@ export async function GET(request: Request) {
       }
     } catch (check39Err: any) {
       console.warn(`[sentinel-janitor] Check 39 failed: ${check39Err.message}`);
+    }
+
+    // -----------------------------------------------------------------------
+    // Check 46: Close decomposed parents when all sub-tasks are done
+    // -----------------------------------------------------------------------
+    try {
+      // Find blocked items that were decomposed into sub-tasks
+      const decomposedParents = await sql`
+        SELECT id, title, notes FROM hive_backlog
+        WHERE status = 'blocked'
+        AND notes LIKE '%[decomposed]%'
+      `;
+
+      let parentsClosed = 0;
+      for (const parent of decomposedParents) {
+        // Extract sub-task IDs from notes (format: "sub-task: abc123de (title)")
+        const subTaskIds = (parent.notes || "").match(/[0-9a-f]{8}(?=-[0-9a-f]{4})/g) || [];
+        if (subTaskIds.length === 0) continue;
+
+        // Check if ALL referenced sub-tasks are done (or rejected)
+        const [result] = await sql`
+          SELECT
+            COUNT(*) FILTER (WHERE status IN ('done', 'rejected')) as completed,
+            COUNT(*) as total
+          FROM hive_backlog
+          WHERE id::text LIKE ANY(${subTaskIds.map((id: string) => id + '%')})
+        `;
+
+        if (result && result.total > 0 && result.completed === result.total) {
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'done', completed_at = NOW(),
+                notes = COALESCE(notes, '') || ' [parent-closed] All sub-tasks completed.'
+            WHERE id = ${parent.id} AND status = 'blocked'
+          `;
+          parentsClosed++;
+          console.log(`[sentinel-janitor] Check 46: Closed decomposed parent "${parent.title}"`);
+        }
+      }
+      if (parentsClosed > 0) {
+        await sql`
+          INSERT INTO agent_actions (agent, company_id, action_type, description, status, output, started_at, completed_at)
+          VALUES ('sentinel', NULL, 'janitor_check',
+            ${`Check 46: Closed ${parentsClosed} decomposed parents (all sub-tasks done)`},
+            'success', NULL, now(), now())
+        `;
+      }
+    } catch (check46Err: any) {
+      console.warn(`[sentinel-janitor] Check 46 failed: ${check46Err.message}`);
     }
 
     // -----------------------------------------------------------------------
