@@ -185,7 +185,7 @@ async function buildContext(sql: any, company: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function growthContext(sql: any, company: any) {
-  const [cycle, reports, metrics, playbook, proposals, tasks] = await Promise.all([
+  const [cycle, reports, metrics, playbook, proposals, tasks, seoMetrics] = await Promise.all([
     sql`
       SELECT ceo_plan FROM cycles
       WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 1
@@ -222,6 +222,18 @@ async function growthContext(sql: any, company: any) {
         AND status IN ('proposed', 'approved')
       ORDER BY priority ASC, created_at ASC LIMIT 5
     `.catch(() => []),
+    // Get SEO and email metrics for channel evaluation
+    sql`
+      SELECT
+        SUM(CASE WHEN report_type = 'visibility_snapshot' AND summary LIKE '%impressions%' THEN
+          CAST(REGEXP_REPLACE(summary, '.*?(\d+).*impressions.*', '\1') AS INT) ELSE 0 END) as total_seo_impressions,
+        COUNT(CASE WHEN report_type = 'content_performance' THEN 1 END) as content_pieces,
+        AVG(CASE WHEN report_type = 'email_performance' AND summary LIKE '%open rate%' THEN
+          CAST(REGEXP_REPLACE(summary, '.*?(\d+\.?\d*)%.*open.*', '\1') AS DECIMAL) END) as avg_email_open_rate
+      FROM research_reports
+      WHERE company_id = ${company.id}
+        AND updated_at >= CURRENT_DATE - INTERVAL '60 days'
+    `.catch(() => [{ total_seo_impressions: 0, content_pieces: 0, avg_email_open_rate: null }]),
   ]);
 
   // Context optimization: summaries only (saves 20-50KB per Growth context call)
@@ -240,6 +252,86 @@ async function growthContext(sql: any, company: any) {
     ORDER BY date DESC LIMIT 14
   `.catch(() => []);
   const validation = computeValidationScore(businessType, growthMetrics as Parameters<typeof computeValidationScore>[1], company.created_at);
+
+  // Calculate company age-based channel selection rules
+  const companyAge = Math.floor((Date.now() - new Date(company.created_at).getTime()) / (1000 * 60 * 60 * 24));
+  const recentMetrics = growthMetrics.slice(0, 7);
+  const totalPageViews = recentMetrics.reduce((sum: number, m: any) => sum + (m.page_views || 0), 0);
+  const hasTraffic = totalPageViews > 100; // Weekly threshold for "traffic"
+
+  // Get SEO performance data
+  const seoData = seoMetrics[0] || { total_seo_impressions: 0, content_pieces: 0, avg_email_open_rate: null };
+
+  // Generate age-based channel rules
+  const channelRules = generateChannelRules(companyAge, hasTraffic, seoData);
+
+  function generateChannelRules(ageInDays: number, hasTraffic: boolean, seoData: any) {
+    const rules = {
+      allowed_channels: [] as string[],
+      focus_channels: [] as string[],
+      forbidden_channels: [] as string[],
+      phase: '',
+      abandon_signals: {} as Record<string, string>,
+      recommendations: [] as string[],
+    };
+
+    if (ageInDays < 30) {
+      // <30 days = SEO/content foundation only
+      rules.phase = 'foundation';
+      rules.allowed_channels = ['seo', 'content'];
+      rules.forbidden_channels = ['social', 'paid', 'outreach', 'email'];
+      rules.focus_channels = ['seo', 'content'];
+      rules.recommendations = [
+        'Build content foundation with SEO-optimized blog posts',
+        'Focus on keyword research and content creation',
+        'Establish domain authority before expanding channels'
+      ];
+    } else if (ageInDays >= 30 && ageInDays <= 90) {
+      // 30-90 days = add social distribution + email list building
+      rules.phase = 'distribution';
+      rules.allowed_channels = ['seo', 'content', 'social', 'email'];
+      rules.forbidden_channels = ['paid', 'outreach'];
+      rules.focus_channels = ['social', 'email'];
+      rules.recommendations = [
+        'Add social media distribution for content amplification',
+        'Start building email list with lead magnets',
+        'Cross-post content to relevant communities'
+      ];
+    } else if (ageInDays > 90) {
+      // >90 days with/without traffic determines next phase
+      if (hasTraffic) {
+        rules.phase = 'acquisition';
+        rules.allowed_channels = ['seo', 'content', 'social', 'email', 'paid', 'outreach'];
+        rules.focus_channels = ['paid', 'outreach'];
+        rules.recommendations = [
+          'Test paid acquisition channels',
+          'Begin targeted outreach campaigns',
+          'Optimize conversion funnel for paid traffic'
+        ];
+      } else {
+        rules.phase = 'seo_audit';
+        rules.allowed_channels = ['seo', 'content'];
+        rules.focus_channels = ['seo'];
+        rules.forbidden_channels = ['social', 'paid', 'outreach', 'email'];
+        rules.recommendations = [
+          'Conduct SEO audit to identify content gaps',
+          'Pivot content strategy to better-performing keywords',
+          'Analyze competitor content strategies'
+        ];
+      }
+    }
+
+    // Set abandon signals for all phases
+    rules.abandon_signals = {
+      seo: 'Zero impressions after 60 days of consistent content publishing',
+      email: 'Open rate below 0.5% across multiple campaigns',
+      social: 'Less than 5 engagements per post after 10 posts',
+      paid: 'CAC exceeds LTV by 3x after optimization attempts',
+      outreach: 'Response rate below 1% after testing different approaches'
+    };
+
+    return rules;
+  }
 
   // Phase gate: filter out growth tasks that violate the current validation phase
   type GrowthTask = { id: string; title: string; description: string; priority: number; acceptance: string; status: string };
@@ -265,9 +357,11 @@ async function growthContext(sql: any, company: any) {
       capabilities: company.capabilities,
       content_language: company.content_language || "en",
       market: company.market || "global",
+      age_days: companyAge,
     },
     language_rule: `ALL content MUST be written in ${(company.content_language || "en") === "pt" ? "Portuguese" : "English"}. Blog posts, SEO pages, social media, meta tags — everything in one language. Do NOT mix languages.`,
     validation,
+    channel_rules: channelRules,
     ceo_plan: cycle[0]?.ceo_plan || null,
     research,
     metrics: metrics.map((m: Record<string, unknown>) => ({
