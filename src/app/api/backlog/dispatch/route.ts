@@ -383,6 +383,9 @@ export async function POST(req: Request) {
   }
 
   // Fetch ready backlog items — priority-ordered (P0 first, then P1, P2, P3).
+  // Within same priority, items WITH specs are preferred (they have actionable plans
+  // and estimated turns, reducing max_turns failures). Items without specs are picked
+  // only when no spec'd items of same priority exist.
   // Budget check above already gates total spend. Chain dispatch uses the same
   // query as regular dispatch — no P0/P1 filter. If high-priority items exist
   // they go first; if not, P2/P3 dispatch immediately instead of waiting for Sentinel.
@@ -408,6 +411,7 @@ export async function POST(req: Request) {
            OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
       ORDER BY
         CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+        CASE WHEN spec IS NOT NULL AND spec->>'approach' IS NOT NULL THEN 0 ELSE 1 END,
         created_at ASC
       LIMIT 10
     `;
@@ -512,12 +516,49 @@ export async function POST(req: Request) {
     }, { retries: 2 }).catch(() => {});
   }
 
+  // Filter out CI-impossible tasks: items that require external service access,
+  // dashboard UI operations, CLI-only operations, or account configuration.
+  // These burn 36 turns in GitHub Actions CI and always fail with max_turns.
+  // CI-impossible: items requiring external service UI interaction, manual CLI, or account ops.
+  // Be very specific to avoid blocking legitimate code tasks.
+  const CI_IMPOSSIBLE_KEYWORDS = /\b((?:go to|open|access|configure in|set up in|log into|navigate to) (the )?(sentry|vercel|neon|stripe|upstash|resend) (dashboard|console|settings page|UI|web interface)|run CREATE EXTENSION|execute SQL (on|against|in) (neon|postgres|production)|psql -c|neon-cli|vercel-cli|install .* globally|npm install -g|sign up for .* account|register an account|log into .* (dashboard|console|portal)|open .* in (the |a )?browser|click (the |a )?.* button|manually configure|manually create|manually set up)\b/i;
+  const ciImpossibleItems: any[] = [];
+  const ciPossibleItems: any[] = [];
+  for (const item of automatable) {
+    const text = `${item.title} ${item.description}`;
+    if (CI_IMPOSSIBLE_KEYWORDS.test(text)) {
+      ciImpossibleItems.push(item);
+    } else {
+      ciPossibleItems.push(item);
+    }
+  }
+  // Block CI-impossible items
+  for (const item of ciImpossibleItems) {
+    if (item.status === "ready") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', notes = COALESCE(notes, '') || ' [ci_impossible] Requires external service access or UI interaction — cannot be done in GitHub Actions CI.'
+        WHERE id = ${item.id} AND status = 'ready'
+      `.catch(() => {});
+    }
+  }
+  if (ciImpossibleItems.length > 0) {
+    const titles = ciImpossibleItems.map((i: any) => `• [${i.priority}] ${i.title}`).join("\n");
+    await qstashPublish("/api/notify", {
+      agent: "backlog",
+      action: "ci_impossible_blocked",
+      company: "hive",
+      status: "needs_carlos",
+      summary: `${ciImpossibleItems.length} backlog item(s) blocked (CI-impossible):\n${titles}`,
+    }, { retries: 2 }).catch(() => {});
+  }
+
   // Detect items that need decomposition (problem statements vs actionable tasks)
   // Problem statements describe what's wrong without specifying what to build/fix,
   // causing Claude to exhaust at 0 turns. Flag these for manual decomposition.
   const decompositionItems: any[] = [];
   const actionableItems: any[] = [];
-  for (const item of automatable) {
+  for (const item of ciPossibleItems) {
     const description = (item.description || '').toLowerCase();
     const title = (item.title || '').toLowerCase();
     const combined = `${title} ${description}`;
@@ -591,6 +632,7 @@ export async function POST(req: Request) {
       dispatched: false,
       reason,
       manual_blocked: manualItems.length,
+      ci_impossible_blocked: ciImpossibleItems.length,
       decomposition_blocked: decompositionItems.length,
       cooldown_blocked: cooldownCount,
       items_in_cooldown: 0, // cooldown is now SQL-level

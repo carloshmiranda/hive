@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-26 CI-impossible regex false positives — keyword matching is fragile for task classification
+**What happened:** First regex iteration for CI-impossible task filter matched 18 ready items as false positives. Bare `dashboard` keyword caught "Add Neon Consumption API monitoring to dashboard" (a code task). Second iteration caught "Add custom Sentry tags to all API routes" because the description mentioned "in Sentry dashboard" as a benefit description, not a required action. PostgreSQL `~*` regex behaved differently from JavaScript `.test()` in some edge cases.
+**Root cause:** Keyword-based classification conflates "mentions a service" with "requires interacting with a service." A task description saying "enables filtering in Sentry dashboard" is describing where results appear, not where work happens. The regex needed to match action verbs ("go to", "open", "configure in") before service names, not just "in [service] dashboard".
+**Fix applied:** Changed regex from `in (the )?(sentry|...) (dashboard|...)` to `(?:go to|open|access|configure in|set up in|log into|navigate to) (the )?(sentry|...) (dashboard|...)`. Verified zero false positives against all 90+ ready items.
+**Prevention:** When using regex for task classification: (1) always test against the full DB dataset, not just a few examples, (2) require action verbs before nouns to distinguish "about X" from "do X", (3) PostgreSQL `~*` regex may match differently than JS — always verify in both environments.
+**Affects:** hive
+
 ### 2026-03-26 Turn estimates capped too low — every Engineer run hit max_turns
 **What happened:** 79 max_turns failures in 48h. Engineer consistently ran out of turns on tasks that should have been completable. Items retried with flat 2h cooldown, failing identically each time.
 **Root cause:** Three compounding issues: (1) Turn estimate prompt used S=10-15, M=20-25, L=30-35 — systematically 40-60% too low for real tasks that need repo exploration + implementation + build verification. (2) max_turns was only sent on 3rd+ attempt — first two dispatches used the workflow default (35) regardless of spec. (3) Cooldown was flat 2h for all retries — no escalation meant the same item failed every 2h indefinitely. (4) isMaxTurns detection was hardcoded at 30 turns — missed items with higher specs.
@@ -34,6 +41,27 @@
 **Root cause:** The Sentry integration was added as code changes without the corresponding Vercel Marketplace install that auto-provisions the DSN. Code was merged, build passed, deploy succeeded — all green signals while error tracking was completely inactive.
 **Fix applied:** Installed Sentry via Vercel Marketplace (auto-provisions SENTRY_DSN + SENTRY_AUTH_TOKEN). Pushed empty commit to trigger redeploy with new env vars.
 **Prevention:** For any SDK that requires external configuration (Sentry, Redis, etc.), add a startup health check that verifies the config is actually set. Log a CRITICAL warning if `SENTRY_DSN` is undefined. Consider adding a `/api/health` check that reports which integrations are active vs. configured-but-inert.
+**Affects:** hive
+
+### 2026-03-26 SQL linter errors on main blocked ALL PR CI for days
+**What happened:** PRs #48, #49, #51 all had failing `lint-and-build` CI despite being valid code changes. No PR could merge.
+**Root cause:** Two SQL linter errors were committed to main: (1) `company-health/route.ts` referenced `dispatched_at` on `company_tasks` (column doesn't exist), (2) `sentinel-janitor/route.ts` referenced `dispatched_at` and `pr_url` on `hive_backlog` (columns exist but janitor was checking wrong table context). The SQL linter (`scripts/lint-sql.ts`) validates column names against `schema.sql` — these errors were on main, so every PR branch that built on top of main inherited them.
+**Fix applied:** Commit 3f6c667 fixed both linter errors on main. All 3 PRs were rebased onto fixed main and CI passed.
+**Prevention:** Always run `npx next build` locally before pushing to main. The SQL linter runs as part of build — catching errors before they reach CI prevents days-long blocks on all PRs.
+**Affects:** hive
+
+### 2026-03-26 Engineer death spiral: empty specs caused 100% failure rate
+**What happened:** 112 ready backlog items, 0 moving. Last 5 Engineer runs ALL failed with `error_max_turns`. Circuit breaker blocked all dispatch.
+**Root cause:** `hive_backlog.spec` column was empty/null for most items. Without specs (`{files, do, done}`), Engineer spent 36 turns exploring the codebase to figure out what to do, ran out of turns, and failed. The spec is what tells Engineer exactly which files to edit and what to implement — without it, every task becomes L-complexity exploration.
+**Fix applied:** Populated 11 P1 items with actionable specs containing file paths, specific code changes, and acceptance criteria. Data-driven dispatch plan (per-item skip instead of global circuit breaker) already implemented.
+**Prevention:** Every backlog item dispatched to Engineer MUST have a non-empty `spec` with at minimum: `files` (which files to touch), `do` (what to implement), `done` (how to verify). The planner/decomposer should refuse to mark items as `ready` without specs. Add a pre-dispatch validation check.
+**Affects:** hive
+
+### 2026-03-26 company_tasks has no pr_number column — assumed schema match with hive_backlog
+**What happened:** company-health Check 45 (company PR merge) tried to update `company_tasks` using `pr_number = ${pr.number}`, but `company_tasks` table has no `pr_number` column. The query silently matched nothing. Similarly, Check 38 (Hive PR merge) used `notes LIKE '%PR #N%'` which is fragile text matching.
+**Root cause:** Assumed `company_tasks` had the same schema as `hive_backlog` (which does have `pr_number`). Different tables, different schemas — `company_tasks` links to PRs via branch naming convention (`hive/cycle-<N>-<task-id>`), not a column.
+**Fix applied:** Check 38 now uses `WHERE pr_number = ${pr.number}` (hive_backlog has this column). Check 45 now extracts task_id from branch name pattern, matching the webhook handler's existing approach.
+**Prevention:** Always verify column existence with `schema.sql` before writing SQL. Don't assume two tables have the same columns even if they serve similar purposes. The webhook handler (`webhooks/github/route.ts` line 358-362) was already correct — check existing code for patterns before writing new queries.
 **Affects:** hive
 
 ### 2026-03-26 Backlog chain_next flag missing from manual kickstart — chain never continued

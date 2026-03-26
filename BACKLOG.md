@@ -50,6 +50,18 @@ Theme: `zero_intervention`
 Built `POST /api/webhooks/sentry` with HMAC signature verification, issue/metric_alert parsing, error fingerprint extraction, dedup by issue ID. Commit 7aa9472.
 Theme: `zero_intervention`
 
+### 🟡 P1 — Add Resend webhook handler for delivery/open/click/bounce tracking
+Create `POST /api/webhooks/resend` to handle Resend webhook events (email.delivered, email.opened, email.clicked, email.bounced, email.complained). Verify signatures via svix. Populate email_log table (exists but empty). Feed delivery/open/click rates into CEO scoring and outreach effectiveness metrics. Detect bad addresses and auto-suppress. Currently zero visibility into email delivery.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Add Stripe Checkout Sessions + Customer Portal to company provisioning
+During company provisioning, create Stripe Checkout Session configuration and enable Customer Portal. Hosted payment page supporting subscriptions, one-time payments, free trials, 100+ payment methods. Customer Portal: self-service billing with zero maintenance. Both FREE (standard Stripe pricing). Currently companies have no payment flow.
+Theme: `first_revenue`
+
+### 🟡 P1 — Create Payment Links via API during company setup
+Generate Stripe Payment Links programmatically when Engineer creates products/prices for a company. No-code shareable checkout URLs — fastest path to first revenue. Free, API-creatable, support subscriptions and one-time payments. Currently products/prices are created but no checkout mechanism exists.
+Theme: `first_revenue`
+
 ### 🟢 P2 — Connect Sentry webhook to Healer agent dispatch
 When Sentry webhook fires: classify error (config/code/infra), map to company, check Healer circuit breaker, dispatch via QStash. Config errors auto-resolve. Code errors create backlog items or dispatch Healer. Infra errors dispatch Ops. Reduces error response from 2-4h (Sentinel schedule) to seconds.
 Theme: `zero_intervention`
@@ -70,6 +82,298 @@ Split the 3391-line Sentinel monolith into 3 focused endpoints by urgency tier: 
 
 ### ✅ P3 — Phase 3: Upstash QStash for guaranteed chain dispatch delivery (DONE — 2026-03-26)
 Replaced fire-and-forget HTTP dispatch calls with `qstashPublish()` in cycle-complete, sentinel, and backlog/dispatch. Guaranteed delivery with 3 retries + hourly deduplication. Synchronous calls (health-gate, backlog response) kept as direct fetch. Phase 1 (QStash schedules) also deployed. ADR-031 Phases 1+3 complete. Remaining: Phase 2 (Sentinel split), Phase 4 (delayed verification patterns).
+
+### ✅ P1 — PR queue gate for dispatch (DONE — 2026-03-26)
+Blocks new backlog dispatch when 3+ PRs are in `pr_open` status. Prevents merge conflict accumulation when merging is slow. Dispatches free workers instead of blocking entirely. Added in backlog/dispatch after engineer-busy check. Commit ee301db.
+Theme: `dispatch_chain`
+
+### ✅ P1 — Post-merge verification (DONE — 2026-03-26)
+New endpoint `/api/dispatch/verify-merge` called via QStash with 5-min delay after Hive PR merge. Checks health endpoint + context_log for deploy failures. If build broke: auto-creates P0 fix item + Telegram alert. Triggered from GitHub webhook on PR close (merged). Added `delay` option to `qstashPublish`. Commit ee301db.
+Theme: `dispatch_chain`
+
+### ✅ P1 — Fix fragile pattern matching in company-health (DONE — 2026-03-26)
+Check 38 (Hive PR merge) used `notes LIKE '%PR #N%'` — fragile text matching. Now uses `pr_number` column directly + adds `completed_at = NOW()`. Check 45 (company PR merge) referenced nonexistent `pr_number` column on `company_tasks` table. Now uses branch-name task ID extraction (pattern: `hive/cycle-<N>-<task-id>`), matching the webhook handler approach. Commit ee301db.
+Theme: `code_quality`
+
+### 🔴 P0 — Buy $10 OpenRouter credits (manual action)
+Free tier without credits = 50 requests/day. With $10 purchase = 1,000/day (20x). Hive dispatches ~30-50 worker calls/day. Without this, free tier rate limit will block Growth/Outreach/Ops. Go to openrouter.ai → Credits → buy $10.
+Theme: `zero_intervention`
+
+### 🟡 P1 — QStash failure callbacks for dead dispatch detection
+Add `failureCallback` to agent dispatch publishes so Hive gets notified immediately when a dispatch fails all retries (instead of waiting 2-4h for Sentinel scan). Create `/api/dispatch/failed` endpoint that receives callback, logs to agent_actions, and triggers auto-decompose or re-queue. Includes `dlqId` for DLQ management.
+Theme: `dispatch_chain`
+
+### 🟢 P2 — QStash Flow Control for Engineer dispatch (replace DB-based engineer-busy gate)
+Replace DB-based engineer-busy check with QStash Flow Control: `flowControl: { key: "engineer", parallelism: 1 }`. QStash natively ensures only 1 engineer runs at a time — no DB polling or race conditions.
+Theme: `dispatch_chain`
+
+### 🟢 P2 — QStash Workflow for durable agent dispatch chains
+Replace fragile cycle-complete → health-gate → next-dispatch HTTP chain with QStash Workflow (`@upstash/workflow/nextjs`). Each step becomes a durable `context.run()` that survives restarts, retries individually, with no 60s timeout risk. Use `context.sleep()` for cooldowns (zero compute).
+Theme: `dispatch_chain`
+
+### 🟢 P2 — QStash batch publishing for Sentinel worker dispatch
+Sentinel currently does N sequential `qstashPublish()` calls. Use `client.batchJSON([...])` to send all dispatch + notification messages in a single API call. Reduces latency and round-trips.
+Theme: `dispatch_chain`
+
+### 🟢 P2 — QStash LLM proxy for worker agent calls (2hr timeout + auto-retry)
+Route worker agent LLM calls through QStash LLM proxy instead of direct OpenRouter HTTP. Benefits: 2hr timeout (vs 60s), automatic retry on rate limits (respects Retry-After headers), callback-based async. Eliminates "all free models down" failure mode.
+Theme: `llm_optimization`
+
+### 🟢 P2 — Switch outreach to batch sending with idempotency keys
+Replace individual sendEmail() calls in outreach agent with Resend batch API (POST /emails/batch, up to 100/call). Add idempotency keys (Idempotency-Key header) to prevent duplicate sends on QStash retries. Fewer API calls, atomic sends, safer retries.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Migrate email templates to React Email components
+Replace 4 raw HTML template renderers in src/lib/resend.ts (digest, welcome, receipt, password_reset) with @react-email/components. Type-safe, component-based, preview-able templates. Current templates are string concatenation with inline styles.
+Theme: `code_quality`
+
+### 🟢 P2 — Expand Stripe webhook handler with checkout and subscription events
+Add handling for: checkout.session.completed (conversions), checkout.session.expired (abandonment), customer.subscription.updated (plan changes), payment_method.attached/detached, invoice.created/upcoming (pre-dunning). Currently only 5 event types handled. Feeds CEO scoring, churn detection, revenue metrics.
+Theme: `first_revenue`
+
+### 🟢 P2 — Add Stripe MCP Server to Hive's MCP config
+Add @stripe/mcp to .mcp.json so Claude Code sessions and agents can perform Stripe operations directly: create products/prices, generate payment links, list invoices/subscriptions, manage customers. 26 tools available. Use restricted API key (rk_*) for security.
+Theme: `zero_intervention`
+
+### ⚪ P3 — QStash URL Group for fan-out notifications (Telegram + context_log)
+Create URL Group with `/api/notify` + `/api/log` endpoints. Single publish fans out to both — replaces separate notification calls. Uses 1 of 1 free-tier URL Group allocation.
+Theme: `dispatch_chain`
+
+### 🟡 P1 — Wire up unused Redis caches (playbook + company list reads)
+cachedPlaybook() and cachedCompanyList() are implemented in redis-cache.ts but never called from read paths. Wire /api/playbook GET to use cachedPlaybook() and company list queries to use cachedCompanyList(). Zero new code — just call existing functions. Saves ~30% more Neon queries.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Add @upstash/ratelimit middleware for API endpoint protection
+No rate limiting on any Hive API endpoint. Add @upstash/ratelimit with sliding window (100 req/min) as middleware. Use analytics: true for dashboard visibility. Apply to public endpoints and agent dispatch routes. Use ephemeral cache for DDoS resilience.
+Theme: `code_quality`
+
+### 🟢 P2 — Redis distributed lock for engineer-busy (replace DB query)
+Replace DB-based engineer-busy check with atomic Redis lock: `SET lock:engineer {runId} NX EX 600`. Faster, race-condition-free, auto-expires if agent crashes. Release on cycle-complete.
+Theme: `dispatch_chain`
+
+### 🟢 P2 — Enable Redis auto-pipelining for settings batch fetches
+Agent context builds read 5-10 settings sequentially (separate HTTP calls each). Enable `enableAutoPipelining: true` and refactor to Promise.all(). Batches N Redis calls into 1 HTTP request.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Add Redis cache hit/miss metrics tracking
+Add INCR counters for cache hits/misses in redis-cache.ts (keys: metrics:cache:hit, metrics:cache:miss, per-prefix). Expose via /api/health. Currently no way to verify if the 60-70% Neon reduction target is being met.
+Theme: `zero_intervention`
+
+### ⚪ P3 — Redis Sorted Set for dispatch priority queue
+Maintain Redis sorted set `dispatch:queue` where score = computed priority. Use ZADD to insert, ZPOPMIN to atomically pick next item. Replaces complex SQL ORDER BY. Rebuild on Sentinel runs. Redis is the fast dispatch index, DB remains source of truth.
+Theme: `dispatch_chain`
+
+### 🟡 P1 — Structured JSON output for brain agents via --json-schema
+Use claude-code-action's --json-schema flag to get structured JSON output from CEO, Scout, and other brain agents instead of free-text that gets regex-parsed. Eliminates parsing failures and makes result extraction reliable. Define schemas for each agent's expected output format.
+Theme: `dispatch_chain`
+
+### 🟡 P1 — Engineer session resume across workflow runs
+Use claude-code-action's session_id output + --resume flag to let Engineer resume interrupted work across workflow runs instead of starting fresh. Saves 30-50% of turns on multi-step tasks. Store session_id in agent_actions or hive_backlog when a task is partially complete, pass it back on retry/continuation.
+Theme: `dispatch_chain`
+
+### 🟢 P2 — Add concurrency groups to agent workflows
+Add GitHub Actions concurrency groups to prevent duplicate agent runs. Pattern: `concurrency: { group: "engineer-${{ company }}", cancel-in-progress: false }`. Currently enforced via DB check in dispatch logic — Actions-level enforcement is more reliable as defense-in-depth.
+Theme: `dispatch_chain`
+
+### 🟢 P2 — Extract reusable workflow for brain agent pattern
+9 brain agent workflows share ~70% logic (context fetch → agent run → result parse → chain dispatch). Extract into a reusable workflow via workflow_call trigger with inputs for agent name, prompt template, max-turns, and chain-next events. Reduces maintenance burden and ensures consistency.
+Theme: `zero_intervention`
+
+### ⚪ P3 — Integrate Resend Audiences/Contacts API for lead management
+Use Resend Audiences + Contacts API to manage outreach leads. Create per-company audiences, sync leads from Neon, handle unsubscribes and suppression lists automatically. Currently leads are only in Neon with no suppression management. Free tier: unlimited contacts and audiences.
+Theme: `zero_intervention`
+
+### ⚪ P3 — Add scheduled sending for optimal outreach timing
+Use Resend's scheduled_at parameter to queue outreach emails for optimal send times (e.g., Tuesday 10am local time) instead of immediate fire. 2-3x better open rates with timed sends. Outreach agent calculates optimal time per lead timezone.
+Theme: `zero_intervention`
+
+### ⚪ P3 — Implement Stripe Entitlements API for feature gating by subscription tier
+Use Stripe Entitlements to map features to subscription products and gate access by plan tier. Define features in Stripe, query active entitlements per customer, webhook on changes. Replaces custom feature-gating code. Free (standard Stripe). Requires Checkout Sessions first.
+Theme: `first_revenue`
+
+### ⚪ P3 — Add Stripe Agent Toolkit for autonomous payment management
+Integrate @stripe/agent-toolkit (free, open source) to expose Stripe operations as LLM function-calling tools. Works with Vercel AI SDK. Agents can autonomously create products, generate payment links, manage subscriptions, issue refunds. Use restricted API keys for per-agent security.
+Theme: `zero_intervention`
+
+### ⚪ P3 — Matrix strategy for parallel company processing
+Use GitHub Actions matrix + fromJSON() to run CEO scoring or Sentinel checks for all active companies in parallel instead of sequential. Prior job queries active companies, outputs JSON array, matrix job fans out. Only beneficial at 4+ companies.
+Theme: `dispatch_chain`
+
+### ✅ P2 — Post-decompose immediate dispatch: bypass gates for freshly split sub-tasks (DONE — 2026-03-26)
+Completed in commit d253862. Code at dispatch/route.ts:205-209 skips circuit breaker checks after decompose and proceeds to dispatch first sub-task immediately.
+Theme: `dispatch_chain`
+
+### 🟢 P2 — Rate-limit gate: per-item skip instead of global dispatch pause
+Current rate-limit detection does an early return that stops ALL dispatch for the cycle. Instead of returning early, mark rate-limited provider items as skipped and continue selecting the next item. Free-worker items and items using different providers should still dispatch. Only pause brain-agent dispatch for the specific provider that hit the limit.
+Theme: `dispatch_chain`
+
+### 🟡 P1 — Split LLM prompts into system + user messages
+Current: single `user` role message with everything. OpenRouter docs: system message enables prompt caching (50% cost reduction) and better model behavior. Change `callOpenRouter()` in `src/lib/llm.ts` to accept `{ system, user }` format. Update all 6 callers.
+Theme: `llm_optimization`
+
+### 🟡 P1 — Add structured output / response_format to LLM calls
+OpenRouter supports `response_format: { type: "json_schema", json_schema: {...} }`. Eliminates JSON parse failures from worker agents. Add to `callOpenRouter()` options, use for task-classifier, backlog-planner, and worker agents that return structured data.
+Theme: `llm_optimization`
+
+### 🟡 P1 — Add max_price + require_parameters to LLM calls
+`max_price: { prompt, completion }` caps per-token cost. `require_parameters: true` skips models that don't support requested features. Prevents surprise paid model fallbacks and ensures structured output works.
+Theme: `llm_optimization`
+
+### 🟢 P2 — Add user parameter for per-company LLM tracking
+OpenRouter `user` field enables per-company cost attribution in dashboard. Set to company slug or `_hive` for internal calls. Zero code cost, high observability value.
+Theme: `llm_optimization`
+
+### 🟢 P2 — Add verbosity parameter for worker agents
+OpenRouter `verbosity` (0-2) controls response length. Growth/content agents → 2 (detailed). Ops/classifier → 0 (concise). Reduces token waste on agents that don't need long responses.
+Theme: `llm_optimization`
+
+### 🟢 P2 — Enable Sentry broadcast in OpenRouter
+Toggle in OpenRouter dashboard sends LLM traces to Sentry. Zero code change, gives visibility into LLM call patterns, latencies, errors alongside app errors.
+Theme: `llm_optimization`
+
+### 🟢 P2 — Use :online suffix for Growth agent web research
+OpenRouter `:online` model suffix adds web search context. Growth agent (SEO/content) benefits from current data. Add `:online` variant to Growth model chain in `src/lib/llm.ts`.
+Theme: `llm_optimization`
+
+### ⚪ P3 — Create OpenRouter presets for agent profiles
+OpenRouter presets = saved model configs (temperature, top_p, frequency_penalty). Create presets for each agent type, reference by ID instead of per-call params.
+Theme: `llm_optimization`
+
+### ⚪ P3 — Add tool calling for worker agents
+OpenRouter supports `tools` parameter (function calling). Growth agent could call SEO-check/keyword-research functions. Outreach could call CRM-lookup. Requires defining tool schemas per agent.
+Theme: `llm_optimization`
+
+### 🟡 P1 — Enable pg_stat_statements for query performance tracking
+Run `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` on Neon. Track slowest queries across sentinel runs (30-50 queries per run). Also enable `neon` extension for cache hit ratio monitoring (target 99%+). Surface slow queries in sentinel-janitor.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Enable pg_cron for in-database scheduled cleanup
+Enable `pg_cron` extension (now free on all Neon plans). Schedule: DELETE agent_actions >90 days (daily), ANALYZE on high-churn tables (weekly). Runs inside Postgres — no external cron or serverless function needed.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Verify Neon pooled connections in all serverless functions
+Audit DATABASE_URL to confirm `-pooler` hostname. PgBouncer built-in, 10K pooled connections. Direct (unpooled) only for schema migrations. Critical for serverless where each invocation opens a new connection.
+Theme: `zero_intervention`
+
+### ✅ P1 — Add Schema Diff GitHub Action for migration PRs (DONE — 2026-03-26)
+Install Neon Schema Diff GitHub Action. Auto-comments schema changes on `hive/improvement/*` PRs. Uses `compare_schema` API (free). Catches migration issues before merge. PR #48 merged.
+Theme: `code_quality`
+
+### ✅ P2 — Partition agent_actions table with pg_partman (DONE — 2026-03-26)
+100+ rows/day = biggest storage risk on 0.5 GB free tier. Monthly partitions on `started_at`, auto-drop >6 months. Extends storage runway significantly. PR #49 merged. Migration 009 creates monthly partitions.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Add Neon Consumption API monitoring to dashboard
+Query `/consumption/projects` for CU-hours and storage usage. Alert via Telegram at 80% of free tier limits. Add to sentinel-janitor daily check.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Branch-based migration workflow for schema changes
+Neon branching for safe migrations: create branch → run migration → Schema Diff validates → apply to main → delete. Instant copy-on-write (~1s). 10 branches on free tier.
+Theme: `code_quality`
+
+### ⚪ P3 — Add pgvector for cross-company semantic search
+Store embeddings of playbook entries for semantic similarity in cross-company learning. Healer queries similar fixes, CEO finds relevant playbook. pgvector + HNSW index on Neon free tier.
+Theme: `portfolio_intelligence`
+
+### 🟡 P1 — Clean up vestigial vercel.json crons (invalid on Hobby)
+`vercel.json` still defines hourly Sentinel and twice-daily metrics crons — invalid on Hobby plan (daily-only limit). QStash is the actual scheduler. Remove or replace with valid daily-only fallbacks. Current config risks deployment failure.
+Theme: `code_quality`
+
+### 🟢 P2 — Enable Vercel Web Analytics on Hive dashboard and company sites
+Free on Hobby (50K events/mo). Zero-config, privacy-friendly. Enable on Hive + all 4 company sites for visitor tracking. Feeds into CEO metrics and Growth agent context.
+Theme: `portfolio_intelligence`
+
+### 🟡 P1 — Add concurrency groups to brain agent workflows
+Add `concurrency: { group, cancel-in-progress: true }` to all brain agent GitHub Actions workflows. Prevents duplicate runs of same agent for same company. Saves Actions minutes, prevents conflicting parallel runs.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Add job summaries to brain agent workflows
+Use `$GITHUB_STEP_SUMMARY` to write structured markdown of each agent run (actions, files changed, errors, decisions). Makes results visible in GitHub Actions UI without digging through logs.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Enable Dependabot on all company repos
+Create `.github/dependabot.yml` in Hive + all company repos. npm ecosystem, weekly schedule, auto-merge patch updates. Free for all repos. Low-risk PRs flow through auto-merge system.
+Theme: `code_quality`
+
+### 🟡 P1 — Add GitHub MCP server to Hive .mcp.json
+Add `@modelcontextprotocol/server-github` to `.mcp.json`. Provides tools for repos, issues, PRs, Actions directly in Claude Code sessions. GH_PAT already available.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Route GitHub webhooks through QStash proxy
+Critical: GitHub webhooks have NO auto-retry. If Vercel has brief downtime, push/PR/deploy events are permanently lost. Create proxy that receives webhooks and republishes via QStash (3x retries, DLQ, delivery guarantees).
+Theme: `zero_intervention`
+
+### 🟢 P2 — Migrate GH_PAT to GitHub App for Hive operations
+Replace PAT with GitHub App: scoped permissions per repo, higher rate limits (5000 vs 1000 req/hr), auto-expiring installation tokens, better audit trail.
+Theme: `code_quality`
+
+### 🟢 P2 — Extract reusable workflows from brain agent YAMLs
+Brain agent workflows share 70%+ identical YAML. Extract into reusable workflow with inputs for agent name, max-turns, prompt. Reduces duplication from ~4x100 to 4x20 lines + 1x80 shared.
+Theme: `code_quality`
+
+### 🟢 P2 — Auto-create GitHub releases with conventional commits
+Add release-please for versioned changelog, tags, audit trail. Tracks what shipped and when. Low effort, high visibility.
+Theme: `code_quality`
+
+### 🟢 P2 — Enable auto-delete branches on all repos
+Set `delete_branch_on_merge=true` via GitHub API on all repos. Prevents stale branch accumulation. One-time setup.
+Theme: `code_quality`
+
+### 🟡 P1 — Add custom Sentry tags to all API routes
+Add `Sentry.setTag()` for agent, company, action_type, route on every API handler. Currently zero custom enrichment — errors lack context for triage. Tags enable filtering by agent/company in Sentry dashboard.
+Theme: `zero_intervention`
+
+### 🟡 P1 — Sentry API polling in Sentinel for Healer dispatch
+Free tier has no webhook alerts. Add Sentinel check: poll `GET /api/0/projects/{org}/{project}/issues/?query=is:unresolved` every run. New unresolved issues → log to context_log + dispatch Healer if pattern matches known fix. Compensates for missing push notifications.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Add Sentry breadcrumbs to dispatch chain
+Add `Sentry.addBreadcrumb()` at key dispatch points: health-gate entry, budget check, item selection, engineer dispatch, chain-next. When a dispatch error occurs, breadcrumbs show the full decision path that led to failure.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Enable error-triggered Sentry Session Replay
+Set `replaysOnErrorSampleRate: 1.0` in instrumentation-client.ts (currently 0). Captures DOM replay when errors occur on dashboard. 50 replays/mo free. Helps debug UI issues without reproduction steps.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Add Sentry Cron Monitor for sentinel-dispatch
+Use `Sentry.crons.monitorCheckIn()` around sentinel-dispatch QStash schedule. Detects missed/late/failed runs. 1 free cron monitor. Most critical schedule to watch.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Add Sentry Uptime Monitor for health endpoint
+Configure Sentry uptime monitoring on `/api/health`. 1 free uptime monitor. Detects Vercel outages that would cause missed webhooks/dispatches. Alerts via Sentry dashboard (free tier = email only).
+Theme: `zero_intervention`
+
+### ⚪ P3 — Add manual Sentry spans for LLM and DB query tracing
+Use `Sentry.startSpan()` around OpenRouter calls and Neon queries in critical paths (dispatch, context API, sentinel). Surfaces slow queries and LLM latency in Sentry performance dashboard. 5M spans/mo free.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Use AI SDK generateObject() for planner/decomposer structured output
+Add `@openrouter/ai-sdk-provider` and use `generateObject()` with Zod schemas in backlog-planner.ts for spec generation and task decomposition. Eliminates manual JSON parsing (regex code-block stripping) that can fail. Zod validates output shape automatically. Additive — keeps existing callLLM for non-structured calls.
+Theme: `llm_optimization`
+
+### 🟢 P2 — Add @openrouter/ai-sdk-provider as optional LLM path
+Install `@openrouter/ai-sdk-provider` + `ai` SDK packages. Create `callLLMStructured()` wrapper that uses `generateObject()`/`generateText()` through the OpenRouter provider. Coexists with existing `callOpenRouter()` — used only where structured output or system/user split is needed. Does NOT replace circuit breaker or dynamic model chain.
+Theme: `llm_optimization`
+
+### 🟢 P2 — Archive old agent_actions output to Vercel Blob storage
+`agent_actions.output` (JSONB) is the biggest Neon storage consumer — 2-10 KB per row, 100+ rows/day. Add `@vercel/blob`, create archive job: for actions >90 days, `put()` output to Blob, replace DB column with blob URL reference. Extends 0.5 GB Neon free tier runway. 1 GB Blob free on Hobby.
+Theme: `zero_intervention`
+
+### ⚪ P3 — Store research reports in Vercel Blob instead of Neon JSONB
+Scout and Growth agents produce research reports stored as JSONB in agent_actions (2-10 KB each, rarely re-queried). Store in Blob on creation, keep DB row with `blob_url` pointer. Secondary Neon pressure relief after agent_actions archival.
+Theme: `zero_intervention`
+
+### ⚪ P3 — Edge Config feature flags for agent enable/disable + maintenance mode
+Add `@vercel/edge-config` for ~10 feature flags: `maintenance_mode`, `agent_enabled.{name}`, `budget_threshold_warn/block`, `dispatch_paused`. Reads at <1ms vs Redis ~5ms. 100K reads/mo, 100 writes/mo, 8 KB total store free. Marginal latency gain for server-side routes but provides clean feature flag layer.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Add Vercel Speed Insights to Hive dashboard
+Install `@vercel/speed-insights` and add `<SpeedInsights />` to Hive's root layout. Free tier: 10K data points/mo. Tracks Core Web Vitals (LCP, FID, CLS) per route. Helps identify slow API routes and dashboard pages. Add to company boilerplate too.
+Theme: `zero_intervention`
+
+### 🟢 P2 — Integrate Umami Analytics for programmatic metrics access
+Add Umami Cloud (free tier: 10K pageviews/mo per site) to company sites for web analytics with API access. Umami REST API provides pageviews, visitors, referrers, top pages — data agents can consume programmatically (unlike Vercel Web Analytics which has no API). Build `/api/metrics/umami` endpoint to pull data into Neon metrics table. Wire into Sentinel stats check + CEO scoring. Self-hosted fallback available (MIT, PostgreSQL). Privacy-friendly, no cookies.
+Theme: `portfolio_intelligence`
 
 ---
 
@@ -164,7 +468,7 @@ Decomposed from 9 P1 parent items. All in DB as `ready`. Key items:
 - Input sanitizer for agent task descriptions + wiring into dispatch
 - Self-review checklist in Engineer build prompt
 - Backlog scope check (reject company-specific items)
-- Backlog health endpoint (duplicates, stale items) + janitor auto-rejection
+- ~~Backlog health endpoint (duplicates, stale items) + janitor auto-rejection~~ ✅ PR #51 merged
 - Pre-push YAML validation script
 - Agent display name mapping + Telegram integration
 - README.md with project overview
@@ -449,8 +753,8 @@ Installed @sentry/nextjs v10.46. Server + edge + client instrumentation via `ins
 ### ⚪ P3 — Use Vercel Edge Config for feature flags and dispatch config
 Store feature flags (enable/disable agents, maintenance mode), health gate parameters, dispatch status in Edge Config (free: 100K reads, 100 writes/mo). Sub-millisecond reads at edge vs ~50ms Neon. Constraint: only 100 writes/month — for config that changes infrequently.
 
-### ⚪ P3 — Migrate LLM calls to Vercel AI SDK unified interface
-Replace separate HTTP implementations for Gemini/Groq/Claude in llm.ts with Vercel AI SDK (`ai` package, free/open-source). Provides `generateText()`/`generateObject()` with provider plugins, automatic retries, streaming, structured output via Zod. Simplifies fallback chain. Also evaluate AI Gateway ($5/mo free credits).
+### ❌ P3 — Migrate LLM calls to Vercel AI SDK unified interface (REJECTED — 2026-03-26)
+Full migration NOT justified — Hive's circuit breaker + dynamic model chain is well-built. Superseded by two scoped P2 items: generateObject() for planner/decomposer structured output + @openrouter/ai-sdk-provider as optional path.
 
 ### ⚪ P3 — Use Vercel Blob for report storage and Neon archival
 Offload large content from Neon to Vercel Blob (free on Pro, S3-backed, 99.999999999% durability). Store research reports, generated blog posts, agent action log archives. Reduces Neon storage pressure (0.5GB free per project).
@@ -459,6 +763,9 @@ Offload large content from Neon to Vercel Blob (free on Pro, S3-backed, 99.99999
 
 ## Done
 <!-- Move completed items here with date -->
+
+### ✅ 2026-03-26 — Merged PRs #48 (Neon Schema Diff), #49 (agent_actions partitioning), #51 (backlog health janitor)
+Three PRs merged: (1) PR #48: neon-schema-diff.yml GitHub Action auto-comments schema changes on migration PRs. (2) PR #49: Migration 009 creates monthly partitions for agent_actions table (biggest storage risk on 0.5 GB free tier). (3) PR #51: Backlog health endpoint + janitor auto-rejection of duplicates and stale items, integrated into sentinel-janitor. Also fixed SQL linter CI on main (commit 3f6c667) which had been blocking all PR builds. Populated 11 P1 backlog items with actionable specs to break Engineer death spiral (100% failure from empty specs).
 
 ### ✅ 2026-03-26 — Backlog DB audit: 13 stale items synced, dynamic model discovery deployed
 Backlog audit cross-referenced 100+ ready items against 7 days of commits. Found 13 items marked ready in DB that were already implemented: PR auto-merge suite (5 items: risk scoring, retrieval, cron job, logic, edge cases), recurring escalation automation (2 items: cross-company + spend_approval), capability assessment fix, and 4 items from earlier session work. Also rejected 1 duplicate (Edge Config P3 duped P2). Dynamic free model discovery deployed: `fetchFreeModels()` in llm.ts fetches OpenRouter catalog hourly, pads agent chains with 20-30+ free models filtered by minContext. Context-snapshot skill updated with mandatory Step 2 for DB sync.
