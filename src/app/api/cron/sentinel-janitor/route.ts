@@ -28,6 +28,7 @@
  * 39  — Auto-decompose blocked backlog items
  * 42  — Evolver proposal completion tracking
  * 46  — Close decomposed parents when all sub-tasks done
+ * 47  — Database performance monitoring (slow queries, cache hit ratio)
  *      Self-improvement routing (approved proposals -> backlog)
  *      Telegram notification + BACKLOG.md regeneration
  */
@@ -36,6 +37,7 @@ import { getBoilerplateGaps } from "@/lib/capabilities";
 import { SCHEMA_MAP, getExpectedTables } from "@/lib/schema-map";
 import { findCapabilityForProblem } from "@/lib/hive-capabilities";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
+import { generatePerformanceReport, initializeDbPerformanceMonitoring } from "@/lib/db-performance";
 import boilerplateManifest from "../../../../../templates/boilerplate-manifest.json";
 import {
   initSentinelContext,
@@ -1806,13 +1808,96 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check 47: Database performance monitoring (slow queries, cache hit ratio)
+    // -----------------------------------------------------------------------
+    let dbPerformanceIssues = 0;
+    try {
+      // Initialize extensions first (idempotent operations)
+      const initResult = await initializeDbPerformanceMonitoring();
+      console.log(`[sentinel-janitor] Check 47: Extensions enabled: ${initResult.extensions_enabled.join(', ')}`);
+
+      if (initResult.errors.length > 0) {
+        console.warn(`[sentinel-janitor] Check 47: Extension errors: ${initResult.errors.join(', ')}`);
+      }
+
+      // Generate performance report
+      const report = await generatePerformanceReport();
+
+      if (report.issues.length > 0) {
+        dbPerformanceIssues = report.issues.length;
+        console.warn(`[sentinel-janitor] Check 47: Database performance issues detected:`);
+        report.issues.forEach(issue => console.warn(`  - ${issue}`));
+
+        if (report.recommendations.length > 0) {
+          console.log(`[sentinel-janitor] Check 47: Recommendations:`);
+          report.recommendations.forEach(rec => console.log(`  - ${rec}`));
+        }
+
+        // Log slow queries that might be from sentinel runs
+        const sentinelSlowQueries = report.slow_queries.filter(q =>
+          q.calls >= 30 && q.mean_exec_time > 100
+        );
+
+        if (sentinelSlowQueries.length > 0) {
+          console.warn(`[sentinel-janitor] Check 47: Found ${sentinelSlowQueries.length} potentially slow sentinel queries`);
+          sentinelSlowQueries.slice(0, 5).forEach(q => {
+            console.warn(`  - ${q.calls} calls, ${q.mean_exec_time.toFixed(2)}ms avg: ${q.query.slice(0, 100)}...`);
+          });
+        }
+
+        // Log significant performance details
+        await sql`
+          INSERT INTO agent_actions (agent, company_id, action_type, description, status, output, started_at, completed_at)
+          VALUES ('sentinel', NULL, 'janitor_check',
+            ${`Check 47: Database performance issues detected: ${report.issues.join('; ')}`},
+            'warning', ${JSON.stringify({
+              slow_queries_count: report.slow_queries.length,
+              sentinel_slow_queries: sentinelSlowQueries.length,
+              cache_hit_rate: report.cache_stats?.file_cache_hit_rate,
+              recommendations: report.recommendations
+            })}, NOW(), NOW())
+        `;
+      } else {
+        console.log(`[sentinel-janitor] Check 47: Database performance looks healthy`);
+
+        // Log summary of healthy state
+        const cacheRate = report.cache_stats?.file_cache_hit_rate;
+        const healthMessage = cacheRate
+          ? `Database performance healthy (cache hit rate: ${(cacheRate * 100).toFixed(1)}%)`
+          : `Database performance healthy (${report.slow_queries.length} queries analyzed)`;
+
+        await sql`
+          INSERT INTO agent_actions (agent, company_id, action_type, description, status, output, started_at, completed_at)
+          VALUES ('sentinel', NULL, 'janitor_check',
+            ${`Check 47: ${healthMessage}`},
+            'success', ${JSON.stringify({
+              slow_queries_count: report.slow_queries.length,
+              cache_hit_rate: cacheRate,
+              extensions_enabled: initResult.extensions_enabled
+            })}, NOW(), NOW())
+        `;
+      }
+    } catch (check47Err: any) {
+      console.error(`[sentinel-janitor] Check 47 failed: ${check47Err.message}`);
+
+      // Log the failure
+      await sql`
+        INSERT INTO agent_actions (agent, company_id, action_type, description, status, output, started_at, completed_at)
+        VALUES ('sentinel', NULL, 'janitor_check',
+          ${`Check 47: Database performance check failed: ${check47Err.message}`},
+          'failed', NULL, NOW(), NOW())
+      `.catch(() => {}); // Don't let logging failure break everything
+    }
+
+    // -----------------------------------------------------------------------
     // Telegram notification
     // -----------------------------------------------------------------------
     try {
       const { notifyHive } = await import("@/lib/telegram");
       const interesting = dispatches.length > 0 ||
         selfImprovementProposals > 0 || agentRegressions > 0 ||
-        proposalsAutoApproved > 0 || ventureBrainDirectives > 0;
+        proposalsAutoApproved > 0 || ventureBrainDirectives > 0 ||
+        dbPerformanceIssues > 0;
       if (interesting) {
         const parts: string[] = [];
         if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
@@ -1822,6 +1907,7 @@ export async function GET(request: Request) {
         if (ventureBrainDirectives > 0) parts.push(`${ventureBrainDirectives} venture brain directives`);
         if (playbookMerged > 0) parts.push(`${playbookMerged} playbook merges`);
         if (errorPatternsLearned > 0) parts.push(`${errorPatternsLearned} error patterns learned`);
+        if (dbPerformanceIssues > 0) parts.push(`${dbPerformanceIssues} db performance issues`);
 
         await notifyHive({
           agent: "sentinel-janitor",
@@ -1871,6 +1957,7 @@ export async function GET(request: Request) {
       agent_escalations: agentEscalations,
       self_improvement_proposals: selfImprovementProposals,
       error_patterns_learned: errorPatternsLearned,
+      db_performance_issues: dbPerformanceIssues,
       backlog_regenerated: backlogRegenerated,
     });
 
