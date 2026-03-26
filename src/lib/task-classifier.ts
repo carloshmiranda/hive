@@ -343,6 +343,126 @@ export function getModelRecommendation(
 }
 
 /**
+ * Task Category Types
+ */
+export type TaskCategory = "feature" | "bug" | "refactor" | "infra" | "docs" | "research";
+
+/**
+ * Category classification patterns
+ */
+const CATEGORY_PATTERNS = {
+  bug: {
+    keywords: [
+      "fix", "broken", "error", "crash", "failing", "regression",
+      "issue", "problem", "bug", "not working", "fails", "failure"
+    ],
+    patterns: [
+      /\b(fix|resolve|debug|troubleshoot)\s+/i,
+      /\b(broken|error|crash|bug|issue|problem|failure|failing)/i,
+      /\b(not working|doesn't work|isn't working)/i
+    ]
+  },
+  refactor: {
+    keywords: [
+      "refactor", "rename", "consolidate", "simplify", "clean up",
+      "restructure", "optimize", "improve", "migrate"
+    ],
+    patterns: [
+      /\b(refactor|rename|consolidate|simplify|restructure)\s+/i,
+      /\b(clean\s*up|optimize|improve)/i,
+      /\b(migrate|move|reorganize)/i
+    ]
+  },
+  infra: {
+    keywords: [
+      "deploy", "workflow", "CI", "cron", "config", "env",
+      "github actions", "vercel", "docker", "kubernetes",
+      "pipeline", "build", "deployment"
+    ],
+    patterns: [
+      /\b(deploy|workflow|CI\/CD|github\s*actions)/i,
+      /\b(\.github|\.yml|\.yaml|dockerfile|k8s)/i,
+      /\b(config|env|environment|pipeline|build|deployment)/i,
+      /\b(vercel|docker|kubernetes|helm|terraform)/i
+    ]
+  },
+  docs: {
+    keywords: [
+      "document", "README", "SETUP", "guide", "comment",
+      "documentation", "docs", "manual", "instructions"
+    ],
+    patterns: [
+      /\b(document|README|docs?|guide|manual)/i,
+      /\b(\.md|comment|documentation|instructions)/i,
+      /\b(setup|getting\s*started|how\s*to)/i
+    ]
+  },
+  research: {
+    keywords: [
+      "research", "investigate", "evaluate", "compare",
+      "analyze", "study", "explore", "assessment", "analysis"
+    ],
+    patterns: [
+      /\b(research|investigate|evaluate|compare|analyze)/i,
+      /\b(study|explore|assessment|analysis|survey)/i,
+      /\b(feasibility|proof\s*of\s*concept|poc)/i
+    ]
+  }
+};
+
+/**
+ * Classify task category based on title and description
+ * Returns one of: feature, bug, refactor, infra, docs, research
+ * Defaults to 'feature' if no clear classification found
+ */
+export function classifyCategory(title: string, description: string = ""): TaskCategory {
+  const combined = `${title} ${description}`.toLowerCase();
+
+  // Score each category
+  const scores: Record<TaskCategory, number> = {
+    feature: 0,
+    bug: 0,
+    refactor: 0,
+    infra: 0,
+    docs: 0,
+    research: 0
+  };
+
+  // Check patterns for each category (excluding feature which is default)
+  for (const [category, config] of Object.entries(CATEGORY_PATTERNS)) {
+    const categoryKey = category as Exclude<TaskCategory, "feature">;
+
+    // Keyword matching
+    for (const keyword of config.keywords) {
+      if (combined.includes(keyword.toLowerCase())) {
+        scores[categoryKey] += 1;
+      }
+    }
+
+    // Pattern matching (weighted higher)
+    for (const pattern of config.patterns) {
+      if (pattern.test(`${title} ${description}`)) {
+        scores[categoryKey] += 1.5;
+      }
+    }
+  }
+
+  // Find the category with the highest score
+  const maxScore = Math.max(...Object.values(scores));
+
+  // Only classify if score is above threshold (confidence check)
+  if (maxScore >= 1) {
+    const winner = Object.entries(scores).find(([_, score]) => score === maxScore)?.[0] as TaskCategory;
+    if (winner && winner !== "feature") {
+      return winner;
+    }
+  }
+
+  // Default to feature
+  return "feature";
+}
+
+/**
  * Utility to test the classifier with sample tasks
  */
 export function testClassifier(): void {

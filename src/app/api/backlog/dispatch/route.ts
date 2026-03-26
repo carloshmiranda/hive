@@ -731,6 +731,30 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "no_scorable_items" });
   }
 
+  // Auto-classify category if item has default category ('feature')
+  if (topItem.category === 'feature') {
+    try {
+      const { classifyCategory } = await import("@/lib/task-classifier");
+      const autoCategory = classifyCategory(topItem.title, topItem.description);
+
+      if (autoCategory !== 'feature') {
+        await sql`
+          UPDATE hive_backlog
+          SET category = ${autoCategory}
+          WHERE id = ${topItem.id}
+        `.catch(() => {});
+
+        // Update the topItem object for consistency
+        topItem.category = autoCategory;
+
+        console.log(`[backlog] Auto-classified item "${topItem.title}" as category: ${autoCategory}`);
+      }
+    } catch (e) {
+      console.warn(`[backlog] Category auto-classification failed:`, e instanceof Error ? e.message : "unknown");
+      // Non-blocking — dispatch continues with original category
+    }
+  }
+
   // Check if item is company-specific and should be blocked
   const companySlug = await isCompanySpecific(topItem.title, topItem.description, sql);
   if (companySlug) {
