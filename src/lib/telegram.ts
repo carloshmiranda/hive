@@ -10,6 +10,7 @@
 //   5. Add chat ID as `telegram_chat_id` in Hive settings (/settings)
 
 import { getSettingValue } from "@/lib/settings";
+import { getAgentDisplay, getActionDisplay } from "@/lib/agent-display";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
@@ -58,68 +59,20 @@ export type NotificationEvent = {
   run_url?: string;
 };
 
-// Human-readable agent descriptions for Telegram
-const AGENT_LABELS: Record<string, string> = {
-  ceo: "CEO (Strategy)",
-  scout: "Scout (Ideas)",
-  engineer: "Engineer (Code)",
-  evolver: "Evolver (Prompts)",
-  growth: "Growth (Content)",
-  outreach: "Outreach (Email)",
-  ops: "Ops (Health)",
-  sentinel: "Sentinel (Monitor)",
-  healer: "Healer (Fix)",
-  digest: "Digest (Report)",
-  webhook: "Webhook",
-};
-
-// Human-readable action descriptions
-const ACTION_LABELS: Record<string, string> = {
-  cycle_start: "Starting cycle",
-  cycle_complete: "Reviewing cycle",
-  cycle_review: "Reviewing cycle",
-  ceo_review: "Reviewing PR",
-  feature_request: "Building feature",
-  research_request: "Researching market",
-  gate_approved: "Processing approval",
-  stripe_payment: "Payment received",
-  evolve_trigger: "Analyzing prompts",
-  healer_trigger: "Self-healing",
-  ops_escalation: "Handling escalation",
-  deploy_drift: "Fixing deploy drift",
-  phantom_pr_cleanup: "Cleaning phantom PRs",
-  pr_verification: "Verifying PRs",
-  auto_resolve_escalation: "Auto-resolving",
-  hive_triage: "Triaging Hive fixes",
-  backlog_dispatch: "Dispatching backlog",
-};
 
 // Format agent activity as a Telegram notification
 export function formatAgentNotification(event: NotificationEvent): string {
-  const icons: Record<string, string> = {
-    ceo: "\u{1F454}",
-    scout: "\u{1F50D}",
-    engineer: "\u2699\uFE0F",
-    evolver: "\u{1F9EC}",
-    growth: "\u{1F4C8}",
-    outreach: "\u{1F4E7}",
-    ops: "\u{1F527}",
-    sentinel: "\u{1F6E1}\uFE0F",
-    healer: "\u{1F3E5}",
-    digest: "\u{1F4EC}",
-    webhook: "\u{1F514}",
-  };
   const statusIcons: Record<string, string> = {
     started: "\u25B6\uFE0F",
     success: "\u2705",
     failed: "\u274C",
   };
-  const icon = icons[event.agent] || "\u{1F916}";
-  const statusIcon = statusIcons[event.status] || "\u2753";
-  const agentLabel = AGENT_LABELS[event.agent] || event.agent.toUpperCase();
-  const actionLabel = ACTION_LABELS[event.action] || event.action.replace(/_/g, " ");
 
-  let msg = `${statusIcon} ${icon} <b>${agentLabel}</b>`;
+  const agentInfo = getAgentDisplay(event.agent);
+  const actionLabel = getActionDisplay(event.action);
+  const statusIcon = statusIcons[event.status] || "\u2753";
+
+  let msg = `${statusIcon} ${agentInfo.icon} <b>${agentInfo.name}</b>`;
   if (event.company) msg += ` \u2192 <b>${event.company}</b>`;
 
   // Action line — human-readable
