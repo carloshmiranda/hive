@@ -43,22 +43,25 @@
   - All 4 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration — not a bug)
   - Zero metrics across all companies — stats endpoints broken at company level
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
-  - 80 existing company_tasks need bulk-approve: `UPDATE company_tasks SET status = 'approved' WHERE source = 'ceo' AND status = 'proposed'`
 - **Recently fixed:**
-  - Sentinel infra_repair loop eliminated: 262 repairs/48h → 0 (Check 9c excluded Vercel-managed DBs + 24h dedup)
-  - Evolver over-triggering eliminated: 38 gap_analyses/48h → max 2 (24h dedup on dispatch)
-  - Company task bottleneck: CEO tasks auto-approved (82 stuck tasks unblocked)
+  - Metrics pipeline: skips DB writes on fetch failure (no more zero pollution)
+  - Cross-company playbook bleed: `content_language` column + filters on all read/write paths
+  - CEO error_patterns: consolidate extracts patterns → error-patterns API + healer dispatch
+  - 50+ silent catch blocks → structured `console.warn` logging across 7 files
+  - Max_turns quota burn: explicit turns detection in workflow + reduced block threshold (2 vs 3)
+  - Scout prompt: weighted scoring rubric + mandatory disconfirming evidence + demand proof
+  - Per-provider circuit breaker: EMA error rate tracking in llm.ts (CLOSED/HALF_OPEN/OPEN)
+  - MCP server: fixed broken hive_companies/hive_cycles tools, parameterized queries, new tools (playbook, error_patterns, directives, routing_weights)
+  - Sentinel infra_repair loop eliminated: 262 repairs/48h → 0
+  - Evolver over-triggering eliminated: 38 gap_analyses/48h → max 2
   - CEO dispatch DOA fixed: prompt reduced 67%
-  - Engineer PR tracking in chain callback
-  - 3 new company-health checks: dispatch verification (43), stale safety net (44), stuck PRs (45)
-  - Evolver quality gate + problem statement detection (PR #42)
-  - Error extraction in all 4 agent workflows + 0-turn ghost fix
   - Cost-only escalation model (ADR-027) — PRs auto-merge if CI passes
-  - MCP server: added hive_sql_mutate and hive_tasks tools
 
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-26: 8-task batch — 5 bug fixes + 3 features. Metrics zeros, playbook language bleed, CEO error feedback loop, silent catch blocks, max_turns detection. Scout scoring rubric, per-provider circuit breaker, MCP server overhaul. DB migration: `content_language` column on playbook table. Backlog: 88 done, 118 ready, 35 blocked (241 total).
 
 - `[code]` 2026-03-25: Bulk backlog triage session — resolved 13 P1 items (7 already-done, 3 code fixes, 3 false alarms). Key fixes: Sentinel infra_repair loop (262/48h→0), Evolver over-trigger (38/48h→max 2), task bottleneck (82 stuck→auto-approved). Added MCP mutation tools. Groq backoff and backlog dedup verified already implemented. Engineer polling timeout reclassified (no polling exists).
 
