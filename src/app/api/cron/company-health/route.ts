@@ -8,8 +8,8 @@ export const maxDuration = 60;
 
 // Extracted from Sentinel: HTTP-heavy company health checks that were causing timeouts.
 // Sentinel fires this as non-blocking fetch. Each check logs results to agent_actions.
-// Checks: 31 (stats endpoints), 32 (language), 33 (stale records), 36 (tests), 38 (PR merge), 30 (broken deploys),
-//         43 (dispatch verification), 44 (stale cycle safety net), 45 (stuck PRs with green CI)
+// Checks: 31 (stats endpoints), 32 (language), 33 (stale records), 36 (tests), 38 (Hive PR merge), 30 (broken deploys),
+//         43 (dispatch verification), 44 (stale cycle safety net), 45 (company PR auto-merge with risk scoring)
 
 export async function GET(req: Request) {
   const auth = await verifyCronAuth(req);
@@ -610,9 +610,10 @@ export async function GET(req: Request) {
     console.warn("[company-health] Check 44 failed:", e.message);
   }
 
-  // --- Check 45: Detect company repo PRs with green CI that aren't being merged ---
+  // --- Check 45: Auto-merge company repo PRs with low risk scores and passing CI ---
   if (ghPat) try {
-    let stuckPRs = 0;
+    let autoMerged = 0;
+    let escalated = 0;
     const prCompanies = await sql`
       SELECT c.id, c.slug, c.github_repo
       FROM companies c
@@ -632,26 +633,121 @@ export async function GET(req: Request) {
         const openPRs = await prListRes.json();
 
         for (const pr of openPRs) {
-          // Check if PR is old enough to be considered stuck (>2h)
+          // Check if PR is old enough to be considered for action (>2h)
           const prAge = (Date.now() - new Date(pr.created_at).getTime()) / (1000 * 60 * 60);
           if (prAge < 2) continue;
 
-          // Check CI status
-          const checksRes = await fetch(
-            `https://api.github.com/repos/${pc.github_repo}/commits/${pr.head.sha}/check-runs`,
-            {
-              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
-              signal: AbortSignal.timeout(5000),
-            }
-          );
-          if (!checksRes.ok) continue;
-          const checksData = await checksRes.json();
-          const allPassed = checksData.check_runs?.length > 0 &&
-            checksData.check_runs.every((cr: any) => cr.conclusion === "success");
+          try {
+            // Analyze PR using the existing risk scoring system
+            const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
+            const [owner, repo] = pc.github_repo.split('/');
+            const analysis = await analyzePR(owner, repo, pr.number, ghPat!);
 
-          if (allPassed) {
-            stuckPRs++;
-            // Dispatch CEO review for this PR
+            if (analysis.decision === 'auto_merge') {
+              // Auto-merge PRs with low risk scores and passing CI
+              const mergeResult = await autoMergePR(owner, repo, pr.number, ghPat!, 'squash');
+
+              if (mergeResult.success) {
+                autoMerged++;
+                await sql`
+                  INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
+                  VALUES ('sentinel', 'pr_auto_merge',
+                    ${`Auto-merged PR: ${pc.github_repo}#${pr.number} "${pr.title}" — risk score ${analysis.riskScore}, CI passed`},
+                    'success', ${pc.id}, NOW(), NOW())
+                `.catch((e: any) => { console.warn(`[company-health] log auto-merge for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
+
+                // Update any related company tasks to completed
+                await sql`
+                  UPDATE company_tasks SET status = 'completed',
+                    notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by auto-merge check 45.`}
+                  WHERE company_id = ${pc.id} AND status IN ('proposed', 'in_progress')
+                  AND (notes LIKE ${'%PR #' + pr.number + '%'} OR notes LIKE ${'%' + pr.head.ref + '%'})
+                `.catch((e: any) => { console.warn(`[company-health] update company tasks for merged PR #${pr.number} failed: ${e?.message || e}`); });
+
+                // Telegram notification for auto-merge
+                try {
+                  const { notifyHive } = await import("@/lib/telegram");
+                  await notifyHive({
+                    agent: 'sentinel',
+                    action: 'pr_auto_merge',
+                    company: pc.slug,
+                    status: 'success',
+                    summary: `Auto-merged PR #${pr.number}: ${pr.title}`,
+                    details: `Risk score: ${analysis.riskScore}. Factors: ${analysis.riskFactors.length > 0 ? analysis.riskFactors.join(', ') : 'none'}`,
+                    pr_number: pr.number,
+                    pr_url: `https://github.com/${pc.github_repo}/pull/${pr.number}`,
+                    pr_title: pr.title
+                  });
+                } catch (e: any) { console.warn(`[company-health] notify auto-merge PR #${pr.number} failed: ${e?.message || e}`); }
+              } else {
+                // Auto-merge failed - escalate for manual review
+                escalated++;
+                await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+                  method: "POST",
+                  headers: {
+                    Authorization: `token ${ghPat}`,
+                    Accept: "application/vnd.github.v3+json",
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    event_type: "ceo_review",
+                    client_payload: {
+                      source: "sentinel_merge_failed",
+                      company: pc.slug,
+                      pr_number: pr.number,
+                      merge_error: mergeResult.message,
+                    },
+                  }),
+                });
+
+                await sql`
+                  INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
+                  VALUES ('sentinel', 'pr_merge_failed',
+                    ${`PR merge failed: ${pc.github_repo}#${pr.number} "${pr.title}" — ${mergeResult.message}, escalated for CEO review`},
+                    'escalated', ${pc.id}, NOW(), NOW())
+                `.catch((e: any) => { console.warn(`[company-health] log merge failure for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
+              }
+            } else {
+              // High risk score or safety issues - escalate to CEO review
+              escalated++;
+              await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+                method: "POST",
+                headers: {
+                  Authorization: `token ${ghPat}`,
+                  Accept: "application/vnd.github.v3+json",
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  event_type: "ceo_review",
+                  client_payload: {
+                    source: "sentinel_high_risk_pr",
+                    company: pc.slug,
+                    pr_number: pr.number,
+                    risk_score: analysis.riskScore,
+                    risk_factors: analysis.riskFactors,
+                    hard_gate_issues: analysis.hardGateIssues,
+                  },
+                }),
+              });
+
+              await sql`
+                INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
+                VALUES ('sentinel', 'pr_escalated',
+                  ${`High-risk PR: ${pc.github_repo}#${pr.number} "${pr.title}" — risk ${analysis.riskScore}, factors: ${analysis.riskFactors.join(', ')}, escalated for CEO review`},
+                  'escalated', ${pc.id}, NOW(), NOW())
+              `.catch((e: any) => { console.warn(`[company-health] log PR escalation for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
+            }
+          } catch (prErr: any) {
+            // PR analysis failed - log error and escalate
+            escalated++;
+            console.warn(`[company-health] PR #${pr.number} analysis failed: ${prErr.message}`);
+            await sql`
+              INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
+              VALUES ('sentinel', 'pr_analysis_error',
+                ${`PR analysis error: ${pc.github_repo}#${pr.number} "${pr.title}" — ${prErr.message}, escalated for manual review`},
+                'error', ${pc.id}, NOW(), NOW())
+            `.catch((e: any) => { console.warn(`[company-health] log PR analysis error for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
+
             await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
               method: "POST",
               headers: {
@@ -662,24 +758,19 @@ export async function GET(req: Request) {
               body: JSON.stringify({
                 event_type: "ceo_review",
                 client_payload: {
-                  source: "sentinel_stuck_pr",
+                  source: "sentinel_pr_analysis_error",
                   company: pc.slug,
                   pr_number: pr.number,
+                  error: prErr.message,
                 },
               }),
             });
-
-            await sql`
-              INSERT INTO agent_actions (agent, action_type, description, status, company_id, started_at, finished_at)
-              VALUES ('sentinel', 'stuck_pr_dispatch',
-                ${`Stuck PR: ${pc.github_repo}#${pr.number} "${pr.title}" — CI green for ${Math.round(prAge)}h, dispatched CEO review`},
-                'success', ${pc.id}, NOW(), NOW())
-            `.catch((e: any) => { console.warn(`[company-health] log stuck PR dispatch for ${pc.slug}#${pr.number} failed: ${e?.message || e}`); });
           }
         }
-      } catch (e: any) { console.warn(`[company-health] stuck PR check for ${pc.slug} failed: ${e?.message || e}`); }
+      } catch (e: any) { console.warn(`[company-health] PR check for ${pc.slug} failed: ${e?.message || e}`); }
     }
-    results.stuck_prs_dispatched = stuckPRs;
+    results.prs_auto_merged = autoMerged;
+    results.prs_escalated = escalated;
   } catch (e: any) {
     console.warn("[company-health] Check 45 failed:", e.message);
   }
@@ -700,11 +791,12 @@ export async function GET(req: Request) {
     if (results.language_mismatches) parts.push(`${results.language_mismatches} lang mismatches`);
     if (results.stale_records_fixed) parts.push(`${results.stale_records_fixed} stale records fixed`);
     if (results.test_coverage_issues) parts.push(`${results.test_coverage_issues} test issues`);
-    if (results.prs_merged) parts.push(`${results.prs_merged} PRs merged`);
+    if (results.prs_merged) parts.push(`${results.prs_merged} Hive PRs merged`);
+    if (results.prs_auto_merged) parts.push(`${results.prs_auto_merged} company PRs auto-merged`);
+    if (results.prs_escalated) parts.push(`${results.prs_escalated} PRs escalated for review`);
     if (results.broken_deploys) parts.push(`${results.broken_deploys} broken deploys`);
     if (results.silent_failures) parts.push(`${results.silent_failures} silent dispatch failures`);
     if (results.stale_cycles_dispatched) parts.push(`${results.stale_cycles_dispatched} stale cycles dispatched`);
-    if (results.stuck_prs_dispatched) parts.push(`${results.stuck_prs_dispatched} stuck PRs dispatched`);
     if (parts.length > 0) {
       await notifyHive({
         agent: "sentinel",
