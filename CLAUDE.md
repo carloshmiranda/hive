@@ -96,6 +96,14 @@ Format: `[agent] action: result (context)` — consistent for Sentinel parsing.
 - No ORMs — raw SQL with parameterized queries
 - API routes return: `{ ok: boolean, data?: any, error?: string }`
 
+### Accessibility Standards (EAA Compliance)
+
+- **Form validation**: Every error must name the specific field and describe how to fix it. Use `aria-describedby` to link error messages to form fields.
+- **Interactive elements**: Every icon-only button needs `aria-label`. Every image needs descriptive `alt` text.
+- **Focus management**: All interactive elements must have visible focus indicators (`:focus-visible` ring).
+- **Color contrast**: Text must meet 7:1 contrast ratio. Use `text-secondary` (gray-600) for secondary text.
+- **Semantic HTML**: Use `<main>`, skip-to-content links, and proper heading hierarchy.
+
 ## Architecture Reference
 
 For detailed system design — agent execution flow, model routing, provisioning, teardown, cross-company learning, self-healing, email setup, file structure, and diagrams — see **ARCHITECTURE.md**.
