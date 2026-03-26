@@ -75,11 +75,22 @@ export async function GET(req: Request) {
   const cycleIds = cycles.map((c) => c.id as string);
   const companyIds = Array.from(new Set(cycles.map((c) => c.company_id as string)));
 
-  // Query agent_actions for these cycles
+  // Query agent_actions for these cycles, filtering out ghost failures and internal checks
   const actions = await sql`
-    SELECT agent, status, retry_count, started_at, finished_at, error, cycle_id
+    SELECT agent, status, retry_count, started_at, finished_at, error, cycle_id, tokens_used, action_type, description
     FROM agent_actions
     WHERE cycle_id = ANY(${cycleIds})
+      AND NOT (
+        -- Exclude 0-turn ghost failures
+        (tokens_used = 0 OR tokens_used IS NULL)
+        AND (error ILIKE '%unknown (0 turns)%'
+             OR error ILIKE '%exhausted after 0 turns%'
+             OR error ILIKE '%workflow file issue%'
+             OR error ILIKE '%syntax error%'
+             OR description ILIKE '%unknown (0 turns)%')
+      )
+      -- Exclude sentinel internal checks
+      AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
   `;
 
   // Query company_tasks linked to these cycles

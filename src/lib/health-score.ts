@@ -83,8 +83,31 @@ export async function calculateHealthScore(
   // --- Error rate (20%) ---
   const errorRows = await sql`
     SELECT
-      COUNT(*) FILTER (WHERE status = 'failed') as failed,
-      COUNT(*) as total
+      COUNT(*) FILTER (WHERE status = 'failed'
+        AND NOT (
+          -- Exclude 0-turn ghost failures
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )
+        -- Exclude sentinel internal checks
+        AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
+      ) as failed,
+      COUNT(*) FILTER (WHERE NOT (
+          -- Exclude 0-turn ghost failures
+          (tokens_used = 0 OR tokens_used IS NULL)
+          AND (error ILIKE '%unknown (0 turns)%'
+               OR error ILIKE '%exhausted after 0 turns%'
+               OR error ILIKE '%workflow file issue%'
+               OR error ILIKE '%syntax error%'
+               OR description ILIKE '%unknown (0 turns)%')
+        )
+        -- Exclude sentinel internal checks
+        AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
+      ) as total
     FROM agent_actions
     WHERE company_id = ${companyId}
       AND started_at >= CURRENT_DATE - 7
