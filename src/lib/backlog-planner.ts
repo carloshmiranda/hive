@@ -649,3 +649,71 @@ Rules:
     return null;
   }
 }
+
+/**
+ * Detect if a backlog item is about a specific company rather than Hive itself.
+ * Returns the company slug if detected, null if it's a Hive-level item.
+ */
+export async function isCompanySpecific(
+  title: string,
+  description: string,
+  sql?: any
+): Promise<string | null> {
+  if (!sql) {
+    return null;
+  }
+
+  try {
+    // 1. Query company slugs and names from DB
+    const companies = await sql`
+      SELECT slug, name FROM companies WHERE status != 'killed'
+    `.catch(() => []);
+
+    const text = `${title} ${description}`.toLowerCase();
+
+    // 2. Check if title or description mentions a company slug or name (case-insensitive)
+    for (const company of companies) {
+      const slug = company.slug.toLowerCase();
+      const name = company.name.toLowerCase();
+
+      // Direct slug/name mentions
+      if (text.includes(slug) || text.includes(name)) {
+        return company.slug;
+      }
+    }
+
+    // 3. Check for company-specific patterns
+    for (const company of companies) {
+      const slug = company.slug.toLowerCase();
+      const name = company.name.toLowerCase();
+
+      // Pattern: "landing page for X", "X's homepage", "deploy X", "fix X website", etc.
+      const patterns = [
+        new RegExp(`\\blanding page for\\s+${slug}\\b`, 'i'),
+        new RegExp(`\\b${slug}'s\\s+(homepage|website|landing)\\b`, 'i'),
+        new RegExp(`\\bdeploy\\s+${slug}\\b`, 'i'),
+        new RegExp(`\\b${slug}\\s+(website|homepage|landing|app|service)\\b`, 'i'),
+        new RegExp(`\\bfix\\s+${slug}\\b`, 'i'),
+        new RegExp(`\\bupdate\\s+${slug}\\b`, 'i'),
+        new RegExp(`\\blanding page for\\s+${name}\\b`, 'i'),
+        new RegExp(`\\b${name}'s\\s+(homepage|website|landing)\\b`, 'i'),
+        new RegExp(`\\bdeploy\\s+${name}\\b`, 'i'),
+        new RegExp(`\\b${name}\\s+(website|homepage|landing|app|service)\\b`, 'i'),
+        new RegExp(`\\bfix\\s+${name}\\b`, 'i'),
+        new RegExp(`\\bupdate\\s+${name}\\b`, 'i')
+      ];
+
+      for (const pattern of patterns) {
+        if (pattern.test(text)) {
+          return company.slug;
+        }
+      }
+    }
+
+    // 4. Return null if it's a Hive-level item
+    return null;
+  } catch (error) {
+    console.warn('isCompanySpecific failed:', error instanceof Error ? error.message : 'unknown');
+    return null;
+  }
+}
