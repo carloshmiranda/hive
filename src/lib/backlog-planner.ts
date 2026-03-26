@@ -1,4 +1,5 @@
 import { callLLM } from "@/lib/llm";
+import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { getSettingValue } from "@/lib/settings";
 import { isBacklogItemInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
 
@@ -562,7 +563,7 @@ export async function generateSpec(
     : "";
 
   const prompt = `You are a technical planner for a Next.js TypeScript codebase called Hive (a venture orchestrator).
-Given a backlog task, produce a structured implementation spec.
+Given a backlog task, produce a structured implementation spec and task analysis.
 
 TASK: ${item.title}
 PRIORITY: ${item.priority}
@@ -576,37 +577,48 @@ ${fileContext}
 FULL API ROUTE STRUCTURE:
 ${files.filter((f: string) => f.startsWith("src/app/api/") && f.endsWith("route.ts")).join("\n")}
 
-Respond with ONLY valid JSON (no markdown, no explanation) matching this exact schema:
-{
-  "acceptance_criteria": ["criterion 1", "criterion 2", "criterion 3"],
-  "affected_files": ["src/path/to/file.ts"],
-  "approach": ["Step 1: ...", "Step 2: ...", "Step 3: ..."],
-  "risks": ["risk 1"],
-  "complexity": "S",
-  "estimated_turns": 15
-}
+Analyze this task and provide:
 
-Rules:
-- acceptance_criteria: 3-5 concrete, testable conditions. Include "npx next build passes" always.
-- affected_files: Exact paths from the file list above. Only files that need modification.
-- approach: Max 5 steps. Be specific about what to change in each file.
-- risks: 0-3 risks. Empty array if straightforward.
-- complexity: S = 1-3 files changed, simple logic. M = 3-6 files, moderate logic. L = 6+ files or architectural change.
-- estimated_turns: S=15-20, M=25-35, L=35-50. If previous attempts failed, add 10.`;
+1. TASK ANALYSIS:
+   - complexity: S = 1-3 files, simple logic; M = 3-6 files, moderate logic; L = 6+ files, architectural change
+   - estimated_turns: S=15-20, M=25-35, L=35-50 (add 10 if previous attempts failed)
+   - specialist_required: frontend/backend/database/devops/security (if needed)
+   - dependencies: other tasks/features this depends on
+
+2. IMPLEMENTATION SPEC:
+   - acceptance_criteria: 3-5 concrete, testable conditions (include "npx next build passes")
+   - affected_files: exact paths from file list above, only files needing modification
+   - approach: max 5 specific steps describing what to change in each file
+   - risks: 0-3 potential risks or complications
+
+3. READINESS ASSESSMENT:
+   - decomposition_needed: true if task is too large/complex for single session
+   - ready_for_dispatch: true if can be implemented immediately
+
+The response will be automatically parsed as structured JSON.`;
 
   try {
+    const responseFormat = getResponseFormat("backlog-planner");
     const response = await callLLM("planner", prompt, {
       maxTokens: 2048,
       temperature: 0.3,
       timeout: 25000,
+      responseFormat,
     });
 
-    // Parse JSON — handle markdown code blocks if LLM wraps it
-    let jsonStr = response.content.trim();
-    const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) jsonStr = codeBlockMatch[1].trim();
+    // Parse the structured JSON response directly
+    const plannerResponse = JSON.parse(response.content);
 
-    const spec = JSON.parse(jsonStr) as BacklogSpec;
+    // Extract the spec from the structured response
+    const spec: BacklogSpec = {
+      acceptance_criteria: plannerResponse.spec.acceptance_criteria,
+      affected_files: plannerResponse.spec.affected_files,
+      approach: plannerResponse.spec.approach,
+      risks: plannerResponse.spec.risks,
+      complexity: plannerResponse.task_analysis.complexity,
+      estimated_turns: plannerResponse.task_analysis.estimated_turns,
+      specialist: plannerResponse.task_analysis.specialist_required,
+    };
 
     // Validate required fields
     if (

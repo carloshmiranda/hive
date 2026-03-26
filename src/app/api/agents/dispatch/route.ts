@@ -5,6 +5,7 @@ import { capabilitiesSummary } from "@/lib/capabilities";
 import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
 import { callLLMWithLogging } from "@/lib/llm";
+import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -193,8 +194,12 @@ ${capabilitiesSummary(company.capabilities)}`;
       if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${truncateJson(contentPerf.content, 2000)}`;
     }
 
-    // 5. Call the unified LLM interface with automatic provider selection and fallback
-    const { response, logData } = await callLLMWithLogging(agentName, fullPrompt, { sql });
+    // 5. Call the unified LLM interface with structured JSON response format
+    const responseFormat = getResponseFormat(agentName as keyof typeof AGENT_SCHEMAS);
+    const { response, logData } = await callLLMWithLogging(agentName, fullPrompt, {
+      sql,
+      responseFormat
+    });
     const output = response.content;
 
     // 6. Log the result to agent_actions with provider metadata

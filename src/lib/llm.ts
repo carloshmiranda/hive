@@ -113,6 +113,14 @@ export interface LLMOptions {
   temperature?: number;
   maxRetries?: number;
   timeout?: number;
+  responseFormat?: {
+    type: "json_schema";
+    json_schema: {
+      name: string;
+      strict: true;
+      schema: any;
+    };
+  };
 }
 
 export interface LLMResponse {
@@ -342,6 +350,26 @@ async function callOpenRouter(
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
 
+  const requestBody: any = {
+    // Native models array: OpenRouter tries each in order server-side
+    models,
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: options.maxTokens || 8192,
+    temperature: options.temperature || 0.7,
+    provider: {
+      allow_fallbacks: true,
+      sort: "throughput",
+      max_price: { prompt: 0, completion: 0 },  // Hard-enforce free-only routing
+      require_parameters: true,  // Only route to providers that support all request parameters
+    },
+  };
+
+  // Add structured JSON response format if specified
+  if (options.responseFormat) {
+    requestBody.response_format = options.responseFormat;
+    requestBody.plugins = [{ id: "response-healing" }]; // Safety net for malformed JSON
+  }
+
   const res = await fetchWithRetry("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -350,19 +378,7 @@ async function callOpenRouter(
       "HTTP-Referer": "https://hive-phi.vercel.app",
       "X-Title": "Hive Venture Orchestrator",
     },
-    body: JSON.stringify({
-      // Native models array: OpenRouter tries each in order server-side
-      models,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: options.maxTokens || 8192,
-      temperature: options.temperature || 0.7,
-      provider: {
-        allow_fallbacks: true,
-        sort: "throughput",
-        max_price: { prompt: 0, completion: 0 },  // Hard-enforce free-only routing
-        require_parameters: true,  // Only route to providers that support all request parameters
-      },
-    }),
+    body: JSON.stringify(requestBody),
   }, options.maxRetries || 2);
 
   if (!res.ok) {
