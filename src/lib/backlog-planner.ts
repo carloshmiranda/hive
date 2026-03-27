@@ -364,14 +364,46 @@ export async function regenerateBacklogMd(sql: any): Promise<void> {
     const timestamp = new Date().toISOString().replace('T', ' ').split('.')[0] + ' UTC';
     markdown += `---\n\n*Generated from database at ${timestamp}*\n`;
 
-    // Write to file using Node.js fs
-    const fs = await import('fs/promises');
-    const path = await import('path');
+    // Commit to GitHub via Contents API (fs.writeFile doesn't persist on Vercel)
+    const ghPat = process.env.GH_PAT;
+    if (!ghPat) {
+      console.warn("[backlog-planner] No GH_PAT — skipping BACKLOG.md commit");
+      return;
+    }
 
-    const backlogPath = path.join(process.cwd(), 'BACKLOG.md');
-    await fs.writeFile(backlogPath, markdown, 'utf8');
+    const repo = "carloshmiranda/hive";
+    const filePath = "BACKLOG.md";
+    const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}`;
 
-    console.log(`[backlog-planner] Regenerated BACKLOG.md with ${items.length} items across ${Object.keys(statusGroups).length} statuses`);
+    // Get current file SHA (required for update)
+    const getResp = await fetch(apiUrl, {
+      headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+    });
+    const currentFile = getResp.ok ? await getResp.json() : null;
+    const sha = currentFile?.sha;
+
+    // Commit the new content
+    const putResp = await fetch(apiUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${ghPat}`,
+        Accept: "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: "chore: auto-regenerate BACKLOG.md from database",
+        content: Buffer.from(markdown, "utf8").toString("base64"),
+        ...(sha ? { sha } : {}),
+      }),
+    });
+
+    if (!putResp.ok) {
+      const err = await putResp.text();
+      console.error(`[backlog-planner] GitHub commit failed (${putResp.status}): ${err}`);
+      return;
+    }
+
+    console.log(`[backlog-planner] Committed BACKLOG.md to GitHub with ${items.length} items across ${Object.keys(statusGroups).length} statuses`);
   } catch (error) {
     console.error('Failed to regenerate BACKLOG.md:', error instanceof Error ? error.message : 'unknown error');
     throw error;

@@ -95,8 +95,8 @@ Theme: `dispatch_chain`
 Check 38 (Hive PR merge) used `notes LIKE '%PR #N%'` — fragile text matching. Now uses `pr_number` column directly + adds `completed_at = NOW()`. Check 45 (company PR merge) referenced nonexistent `pr_number` column on `company_tasks` table. Now uses branch-name task ID extraction (pattern: `hive/cycle-<N>-<task-id>`), matching the webhook handler approach. Commit ee301db.
 Theme: `code_quality`
 
-### 🔴 P0 — Buy $10 OpenRouter credits (manual action)
-Free tier without credits = 50 requests/day. With $10 purchase = 1,000/day (20x). Hive dispatches ~30-50 worker calls/day. Without this, free tier rate limit will block Growth/Outreach/Ops. Go to openrouter.ai → Credits → buy $10.
+### ✅ P0 — Buy $10 OpenRouter credits (DONE — 2026-03-27)
+Carlos purchased $10 credits. Rate limit lifted from 50/day to 1,000/day. Was root cause of cascading worker failures.
 Theme: `zero_intervention`
 
 ### 🟡 P1 — QStash failure callbacks for dead dispatch detection
@@ -123,8 +123,8 @@ Theme: `llm_optimization`
 Replace individual sendEmail() calls in outreach agent with Resend batch API (POST /emails/batch, up to 100/call). Add idempotency keys (Idempotency-Key header) to prevent duplicate sends on QStash retries. Fewer API calls, atomic sends, safer retries.
 Theme: `zero_intervention`
 
-### 🟢 P2 — Migrate email templates to React Email components
-Replace 4 raw HTML template renderers in src/lib/resend.ts (digest, welcome, receipt, password_reset) with @react-email/components. Type-safe, component-based, preview-able templates. Current templates are string concatenation with inline styles.
+### ✅ P2 — Migrate email templates to React Email components (DONE — 2026-03-27)
+Autonomous loop replaced raw HTML templates with React Email components. Commit 442c3b9.
 Theme: `code_quality`
 
 ### 🟢 P2 — Expand Stripe webhook handler with checkout and subscription events
@@ -151,8 +151,8 @@ Theme: `code_quality`
 Replace DB-based engineer-busy check with atomic Redis lock: `SET lock:engineer {runId} NX EX 600`. Faster, race-condition-free, auto-expires if agent crashes. Release on cycle-complete.
 Theme: `dispatch_chain`
 
-### 🟢 P2 — Enable Redis auto-pipelining for settings batch fetches
-Agent context builds read 5-10 settings sequentially (separate HTTP calls each). Enable `enableAutoPipelining: true` and refactor to Promise.all(). Batches N Redis calls into 1 HTTP request.
+### ✅ P2 — Enable Redis auto-pipelining for settings batch fetches (DONE — 2026-03-27)
+Autonomous loop enabled auto-pipelining and batched settings fetches. Commit fa69832.
 Theme: `zero_intervention`
 
 ### 🟢 P2 — Add Redis cache hit/miss metrics tracking
@@ -223,16 +223,16 @@ Theme: `llm_optimization`
 OpenRouter `user` field enables per-company cost attribution in dashboard. Set to company slug or `_hive` for internal calls. Zero code cost, high observability value.
 Theme: `llm_optimization`
 
-### 🟢 P2 — Add verbosity parameter for worker agents
-OpenRouter `verbosity` (0-2) controls response length. Growth/content agents → 2 (detailed). Ops/classifier → 0 (concise). Reduces token waste on agents that don't need long responses.
+### ✅ P2 — Add verbosity parameter for worker agents (DONE — 2026-03-27)
+Autonomous loop added per-agent verbosity. Commit 90c8e17.
 Theme: `llm_optimization`
 
 ### 🟢 P2 — Enable Sentry broadcast in OpenRouter
 Toggle in OpenRouter dashboard sends LLM traces to Sentry. Zero code change, gives visibility into LLM call patterns, latencies, errors alongside app errors.
 Theme: `llm_optimization`
 
-### 🟢 P2 — Use :online suffix for Growth agent web research
-OpenRouter `:online` model suffix adds web search context. Growth agent (SEO/content) benefits from current data. Add `:online` variant to Growth model chain in `src/lib/llm.ts`.
+### ✅ P2 — Use :online suffix for Growth agent web research (DONE — 2026-03-27)
+Autonomous loop added :online suffix to Growth model chain. Commit 67eaa34.
 Theme: `llm_optimization`
 
 ### ⚪ P3 — Create OpenRouter presets for agent profiles

@@ -45,20 +45,16 @@
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
   - MCP `hive_sql_mutate` tool cannot update `approvals` table (returns 0 affected rows) — root cause unknown, possibly RLS or trigger
   - 20+ pending approvals need triage (duplicate new_company proposals, resolved escalations, capability_migration dupes)
-  - OpenRouter free models intermittently down — mitigated by dynamic model discovery (20-30+ models per agent chain) but still affects workers when ALL free models are down simultaneously
-- **Recently resolved (2026-03-26):**
-  - PRs #48 (Neon Schema Diff Action), #49 (agent_actions partitioning), #51 (backlog health janitor) merged
-  - SQL linter CI fix on main (commit 3f6c667) — was blocking all PR builds
-  - Engineer death spiral root cause identified: empty specs → populated 11 P1 items with actionable specs. Further hardened: CI-impossible filter blocks undoable tasks, spec preference ensures specced items dispatch first
-  - PR queue gate: dispatch blocks when 3+ PRs in `pr_open` status — prevents merge conflict accumulation
-  - Post-merge verification: QStash-delayed health check 5 min after merge, auto-creates P0 fix item if build broke
-  - Pattern match fixes in company-health: Check 38 uses `pr_number` column (not fragile LIKE), Check 45 uses branch-name task ID extraction
-  - PRs #45 (auto-merge system) and #46 (evolver cleanup) merged
-  - Sentry activated via Vercel Marketplace — SENTRY_DSN now live in production, error tracking active
-  - Backlog dispatch chain running — kickstarted with `chain_next: true` flag, self-sustaining chain observed
-  - ENCRYPTION_KEY set in Vercel env vars — worker agents (Growth/Outreach/Ops) can now decrypt settings
-  - Flolio Attack Challenge Mode disabled — was blocking all requests with 429 for 8+ cycles
-  - GH_PAT `workflow` scope added — Engineer can now dispatch builds to company repos
+  - OpenRouter free models intermittently down — mitigated by dynamic model discovery (20-30+ models per agent chain) + $10 credits (1,000 req/day)
+- **Recently resolved (2026-03-27):**
+  - OpenRouter $10 credit purchased — rate limit lifted from 50/day to 1,000/day. Was root cause of cascading worker failures.
+  - Data-driven dispatch: turn-budget gate, post-decompose dispatch, specless item blocking, first-attempt 35-turn cap
+  - 75 items bulk-unblocked from systemic failures (max_turns before gate, OpenRouter outages)
+  - PR #55 auto-merged (Sentry uptime + cron monitoring)
+  - Autonomous loop active: 30 commits in 24h (React Email, Redis auto-pipelining, Growth web search, Scout improvements, CEO context enrichment, Revenue Readiness Score, design QA gate, kill evaluation triggers, CI template, Evolver pipeline fix)
+  - Sentry uptime monitoring for /api/health + cron monitoring for sentinel-dispatch
+  - Redis auto-pipelining enabled + batch settings fetches
+  - OpenRouter verbosity parameter per agent + :online suffix for Growth web research
 - **Recently fixed:**
   - Schema-map drift: auto-sync from schema.sql (22 tables), CI check prevents drift, generator fixed for UNLOGGED tables
   - Healer Flolio loop: success logging step in workflow + per-company circuit breaker (3 failures/48h → skip)
@@ -87,6 +83,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-27: **Context snapshot + OpenRouter gap assessment + Umami research** — OpenRouter audit found 6 code-level gaps: rate limit header parsing missing, `openrouter/auto` conflicts with `max_price:0`, circuit breaker doesn't track dynamic pool failures, provider sort strategy suboptimal, no account health check, no provider blacklisting. All added to backlog DB. Carlos purchased $10 OpenRouter credits (50→1,000 req/day). Dispatch loop restarted with chain_next:true. Umami analytics researched: REST API solves "zero metrics" problem (Vercel Web Analytics has NO API). Context snapshot completed — synced backlog DB, updated BRIEFING.md, memory files.
 
 - `[code]` 2026-03-27: **Data-driven dispatch complete + bulk unblock** — Implemented all 6 plan changes. Turn-budget gate decomposes items >28 estimated_turns. Post-decompose dispatch immediately looks up first sub-task. Specless non-P0 items blocked with [no_spec]. First-attempt max_turns capped at 35. Bulk-unblocked 75 items that were auto-blocked by systemic failures (max_turns before gate existed, OpenRouter outages). Closed 3 failing PRs (#50, #52, #53) to clear PR queue gate. 109 ready items now dispatchable.
 

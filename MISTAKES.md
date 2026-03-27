@@ -36,6 +36,13 @@
 **Prevention:** Turn estimates should be calibrated from actual successful runs, not guessed. Add a post-completion step that logs actual turns used vs estimated — use this data to auto-calibrate future estimates.
 **Affects:** hive
 
+### 2026-03-27 fs.writeFile silently fails on Vercel — BACKLOG.md never auto-synced
+**What happened:** `regenerateBacklogMd()` in `backlog-planner.ts` generated the correct markdown from DB data but wrote it using `fs.writeFile`. The function ran without errors in production, but BACKLOG.md was never updated — it drifted from the DB for weeks (305 items in DB, ~40 in the file).
+**Root cause:** Vercel serverless functions run on a read-only filesystem. `fs.writeFile` succeeds (writes to ephemeral container tmpfs) but the file disappears when the container recycles. No error is thrown. The sentinel-janitor called `regenerateBacklogMd()` daily, generating correct content into the void.
+**Fix applied:** Replaced `fs.writeFile` with GitHub Contents API (`PUT /repos/{owner}/{repo}/contents/BACKLOG.md`). The function now commits directly to the repo via GH_PAT. Falls back gracefully (logs warning) if GH_PAT is not available.
+**Prevention:** Never use `fs.writeFile` for persistent file changes on Vercel. For git-tracked files, use the GitHub Contents API. For temporary storage, use Vercel Blob or Upstash Redis. Add this to the "Known Gotchas" in MEMORY.md.
+**Affects:** hive
+
 ### 2026-03-26 Backlog DB sync gap — interactive sessions complete work but dispatch loop re-does it
 **What happened:** 13 backlog items were found still marked `ready` in `hive_backlog` DB despite being fully implemented in the codebase (PR auto-merge suite, recurring escalation automation, capability assessment fix, etc.). The dispatch loop picked up and re-dispatched already-completed work, wasting Claude budget on unnecessary Engineer runs.
 **Root cause:** Interactive Claude Code sessions commit code and update `BACKLOG.md` but forget to update `hive_backlog` DB status. The dispatch loop reads from DB only — it never checks BACKLOG.md or git history. This creates a sync gap: work is done but the system doesn't know.
