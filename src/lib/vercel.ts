@@ -159,25 +159,25 @@ export async function findNeonIntegrationConfig(): Promise<{ id: string; slug: s
 }
 
 /**
- * Discover the Neon Postgres product slug for this integration configuration.
+ * Discover the Neon Postgres product ID/slug for this integration configuration.
  * Needed for the store creation API — product slugs vary by integration.
  */
 async function discoverNeonProductSlug(configId: string): Promise<string> {
   try {
     const res = await vercel(`/v1/integrations/configurations/${configId}/products`);
     const products = Array.isArray(res) ? res : res.products || [];
-    // Find a Postgres-related product
+    // Find a Postgres-related product — prefer ID (iap_*) over slug
     const pg = products.find((p: any) =>
       (p.slug || p.id || "").toLowerCase().includes("postgres") ||
       (p.name || "").toLowerCase().includes("postgres") ||
       (p.slug || p.id || "").toLowerCase().includes("neon")
     );
-    if (pg) return pg.slug || pg.id;
+    if (pg) return pg.id || pg.slug;
   } catch (e: any) {
     console.warn(`[vercel] Could not discover Neon products for ${configId}: ${e.message}`);
   }
-  // Fallback slugs to try in order (Vercel Marketplace conventions)
-  return "neon_postgres_neon";
+  // Fallback: known Neon product slug from Vercel Marketplace
+  return "neon";
 }
 
 /**
@@ -202,22 +202,28 @@ export async function provisionNeonStore(
   const productSlug = await discoverNeonProductSlug(neonConfig.id);
 
   // Step 3: Create the store via Marketplace direct provisioning API
+  // Region must match the existing Neon setup (fra1 = Frankfurt)
+  const storePayload = {
+    name,
+    integrationConfigurationId: neonConfig.id,
+    integrationProductIdOrSlug: productSlug,
+    metadata: { region: "fra1" },
+    source: "marketplace",
+  };
+
   let store: any;
   try {
-    store = await vercel("/v1/storage/stores/integration/direct", "POST", {
-      name,
-      integrationConfigurationId: neonConfig.id,
-      integrationProductIdOrSlug: productSlug,
-      source: "marketplace",
-    });
+    store = await vercel("/v1/storage/stores/integration/direct", "POST", storePayload);
   } catch (e: any) {
     // Fallback: try the older /v1/integrations/store endpoint
     console.warn(`[vercel] /v1/storage/stores/integration/direct failed: ${e.message}, trying fallback`);
-    store = await vercel("/v1/integrations/store", "POST", {
-      name,
-      integrationConfigurationId: neonConfig.id,
-      integrationProductIdOrSlug: productSlug,
-    });
+    try {
+      store = await vercel("/v1/integrations/store", "POST", storePayload);
+    } catch (e2: any) {
+      // Final fallback: try POST /v1/stores
+      console.warn(`[vercel] /v1/integrations/store failed: ${e2.message}, trying /v1/stores`);
+      store = await vercel("/v1/stores", "POST", storePayload);
+    }
   }
 
   const storeData = store.store || store;
