@@ -140,13 +140,16 @@ export async function POST(req: Request) {
       }
 
       // On max_turns failure: LLM-assisted decompose if complexity is M or L
-      // Depth limit: don't decompose items that were already auto-decomposed (prevents infinite chains)
-      const isAutoDecomposed = item?.source === 'auto_decompose' || item?.source === 'decomposed';
+      // Depth limit: allow up to 3 levels of LLM decomposition before blocking
+      const MAX_DECOMPOSE_DEPTH = 3;
+      const depthMatch = (item?.notes || "").match(/\[decompose-depth:(\d+)\]/);
+      const parentDepth = depthMatch ? parseInt(depthMatch[1]) : 0;
+      const atMaxDepth = parentDepth >= MAX_DECOMPOSE_DEPTH;
       let decomposed = false;
-      if (isMaxTurns && item && isAutoDecomposed) {
-        console.log(`[backlog] Skipping decomposition for "${item.title}" — already a sub-task (source: ${item.source}). Blocking instead.`);
+      if (isMaxTurns && item && atMaxDepth) {
+        console.log(`[backlog] Skipping decomposition for "${item.title}" — at max depth ${parentDepth}. Blocking instead.`);
       }
-      if (isMaxTurns && item && !isAutoDecomposed) {
+      if (isMaxTurns && item && !atMaxDepth) {
         try {
           const { generateSpec, decomposeTask } = await import("@/lib/backlog-planner");
           let spec = item.spec;
@@ -170,9 +173,10 @@ export async function POST(req: Request) {
             );
 
             if (subTasks.length >= 2) {
+              const depthNote = `[decompose-depth:${parentDepth + 1}]`;
               for (const sub of subTasks) {
                 await sql`
-                  INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+                  INSERT INTO hive_backlog (title, description, priority, category, status, source, spec, notes)
                   VALUES (
                     ${sub.title.slice(0, 200)}, ${sub.description.slice(0, 2000)},
                     ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
@@ -183,7 +187,8 @@ export async function POST(req: Request) {
                       affected_files: sub.affected_files,
                       approach: [sub.description],
                       risks: []
-                    })}
+                    })},
+                    ${depthNote}
                   )
                 `.catch((e: any) => { console.warn(`[backlog] insert decomposed sub-item failed: ${e?.message || e}`); });
               }
@@ -200,45 +205,16 @@ export async function POST(req: Request) {
             }
           }
 
-          // (3) Fallback: if LLM decomposition failed (no spec, small complexity, or not enough sub-tasks),
-          // do a mechanical split — the task hit max_turns so it IS too large, regardless of what the planner thinks.
+          // (3) If LLM decomposition failed, block for human review.
+          // Decomposition requires reasoning — mechanical text splitting produces garbage titles.
           if (!decomposed) {
-            console.log(`[backlog] LLM decomposition didn't produce sub-tasks for "${item.title}" (spec: ${spec ? spec.complexity : 'null'}) — falling back to mechanical split`);
-            const desc = item.description || item.title;
-            // Split by common natural boundaries: "and", numbered lists, bullet points, semicolons
-            const parts = desc
-              .split(/(?:\band\b|;\s*|\n[-*]\s+|\n\d+[.)]\s+)/i)
-              .map((p: string) => p.trim())
-              .filter((p: string) => p.length > 10);
-
-            if (parts.length >= 2) {
-              const parentTitle = (item.title || "").replace(/^(?:Sub-task of:\s*)+/i, "").slice(0, 80);
-              for (let pi = 0; pi < Math.min(parts.length, 5); pi++) {
-                const part = parts[pi];
-                // Generate a clean title: "Parent title — part N" or first meaningful words of the part
-                const partPreview = part.replace(/^(?:Sub-task of:\s*)+/i, "").split("\n")[0].trim().slice(0, 100);
-                const subTitle = parentTitle
-                  ? `${parentTitle} (${pi + 1}/${Math.min(parts.length, 5)})`
-                  : partPreview.slice(0, 150);
-                await sql`
-                  INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
-                  VALUES (
-                    ${subTitle},
-                    ${`Part ${pi + 1} of: ${parentTitle}\n\n${part}\n\nAcceptance criteria:\n- Change is implemented correctly\n- npx next build passes`.slice(0, 2000)},
-                    ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
-                    ${JSON.stringify({ complexity: "S", estimated_turns: 20, acceptance_criteria: [partPreview.slice(0, 200), "npx next build passes"], affected_files: [], approach: [part], risks: [] })}
-                  )
-                `.catch((e: any) => { console.warn(`[backlog] insert mechanical sub-item failed: ${e?.message || e}`); });
-              }
-              await sql`
-                UPDATE hive_backlog
-                SET status = 'blocked', dispatched_at = NULL,
-                    notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [mechanical-split] Split into ${Math.min(parts.length, 5)} sub-tasks (LLM decompose failed).`}
-                WHERE id = ${completed_id}
-              `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as mechanical-split failed: ${e?.message || e}`); });
-              decomposed = true;
-              console.log(`[backlog] Mechanical split "${item.title}" → ${Math.min(parts.length, 5)} sub-tasks`);
-            }
+            console.log(`[backlog] LLM decomposition failed for "${item.title}" — blocking for human review`);
+            await sql`
+              UPDATE hive_backlog
+              SET status = 'blocked', dispatched_at = NULL,
+                  notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [decompose-failed] LLM decomposition produced no sub-tasks. Needs human review or better spec.`}
+              WHERE id = ${completed_id}
+            `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as decompose-failed: ${e?.message || e}`); });
           }
         } catch (e) {
           console.warn("[backlog] Auto-decompose on max_turns failure failed:", e instanceof Error ? e.message : "unknown");

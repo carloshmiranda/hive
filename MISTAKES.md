@@ -640,3 +640,10 @@
 **Fix applied:** Replaced with cost-only escalation model (ADR-027). All PRs auto-merge if CI passes. Only cost-impacting changes escalate.
 **Prevention:** Never add a decision branch without implementing its handler. Dead code paths in event-driven systems are silent failures.
 **Affects:** hive
+
+### 2026-03-27 CiberPME 404 — provisioning never set domain or added Vercel alias
+**What happened:** CiberPME showed `404: NOT_FOUND, Code: DEPLOYMENT_NOT_FOUND` at `ciberpme.vercel.app`. Sentinel logged 10+ phantom "infra_repair success" entries without actually fixing it.
+**Root cause:** Three gaps in `provision/route.ts`: (1) Never added `{slug}.vercel.app` as explicit domain alias on Vercel project (team accounts get random suffixes like `-flax`), (2) Never set `domain` field on companies table, (3) Never saved `neon_project_id` to companies table (only to `infra` table). Sentinel dispatched infra_repair but logged success without HTTP-verifying the site actually responded 200.
+**Fix applied:** Added `addDomain()` call after Vercel project creation to register `{slug}.vercel.app` alias. Updated companies UPDATE to set `domain`, `neon_project_id`. Manually added domain alias + DB records for all 4 existing companies.
+**Prevention:** Provisioning must always: (1) add explicit `.vercel.app` alias, (2) set `domain` on companies table, (3) save `neon_project_id`. Sentinel infra_repair must HTTP-verify after "fixing" — never log success without confirmation.
+**Affects:** both

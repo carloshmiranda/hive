@@ -491,6 +491,18 @@ Move ~12 checks to event-driven (no cron):
 - In-memory cache (Map/LRU): doesn't survive serverless cold starts, no cross-instance sharing
 **Consequences:** ~60-70% reduction in Neon query load. Redis gracefully no-ops when env vars missing (zero coupling). Free tier (500K commands/mo) sufficient for years at current scale. Env vars: `KV_REST_API_URL` + `KV_REST_API_TOKEN` (auto-set by Vercel Marketplace Upstash integration).
 
+### ADR-037: GitHub App authentication replacing stored PAT
+**Date:** 2026-03-27
+**Status:** accepted
+**Context:** The GitHub PAT stored in the Neon `settings` table was repeatedly corrupted by agents with DB write access, causing all `repository_dispatch` calls to fail with 422. This happened multiple times — each incident required manual token regeneration and DB update. The PAT was a single point of failure in a shared-write table.
+**Decision:** Replace stored PAT with GitHub App authentication. New `src/lib/github-app.ts` generates RS256 JWTs from the App's private key (env var `GITHUB_APP_PRIVATE_KEY`), exchanges them for installation tokens (1-hour expiry), and caches tokens for 50 minutes. App ID: 3203914, Installation ID: 119495948. All 9 callers migrated from `getSettingValue("github_token")` to `getGitHubToken()`.
+**Alternatives considered:**
+- Rotate PAT more frequently: doesn't prevent agent corruption, just reduces window
+- Read-only DB role for agents: breaks other legitimate DB writes agents need
+- Store PAT in env var only (no App): simpler but still a static long-lived token that can leak or expire
+- GitHub Actions OIDC tokens: only work inside GitHub Actions runners, not from Vercel serverless
+**Consequences:** No static token to corrupt — tokens are ephemeral and self-refreshing. Private key in env var is safe from agent DB writes. Adds dependency on GitHub App remaining installed. `jsonwebtoken` added as dependency for RS256 signing. Token generation adds ~200ms cold-start latency (cached after first call).
+
 ### ADR-036: DB-only backlog — BACKLOG.md as read-only snapshot
 **Date:** 2026-03-27
 **Status:** accepted

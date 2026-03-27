@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { createProject as createNeonProject } from "@/lib/neon-api";
-import { createProject as createVercelProject, setEnvVars } from "@/lib/vercel";
+import { createProject as createVercelProject, setEnvVars, addDomain } from "@/lib/vercel";
 import { getSettingValue } from "@/lib/settings";
 
 // POST /api/agents/provision — one-call infrastructure provisioning
@@ -91,6 +91,14 @@ export async function POST(req: NextRequest) {
     } catch {
       (results.vercel as Record<string, unknown>).web_analytics = false;
     }
+
+    // Add {slug}.vercel.app as explicit domain alias (team accounts get random suffixes otherwise)
+    try {
+      await addDomain(vercelProjectId!, `${company_slug}.vercel.app`);
+      (results.vercel as Record<string, unknown>).domain_alias = `${company_slug}.vercel.app`;
+    } catch {
+      (results.vercel as Record<string, unknown>).domain_alias_error = `Failed to add ${company_slug}.vercel.app alias`;
+    }
   } catch (e: any) {
     // Project may already exist — try to get it
     if (e.message.includes("409") || e.message.includes("already")) {
@@ -119,29 +127,19 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Step 4: Update company record with ACTUAL Vercel URL ──
-  // Read back actual domain from Vercel API instead of assuming {slug}.vercel.app
-  // (Vercel adds random suffixes like -flax when the name is taken)
-  let actualVercelUrl = `https://${company_slug}.vercel.app`;
-  if (vercelProjectId) {
-    try {
-      const { getProject } = await import("@/lib/vercel");
-      const proj = await getProject(vercelProjectId);
-      // Vercel returns aliases array or a name that may differ from the slug
-      const alias = proj.alias?.find((a: string) => a.endsWith('.vercel.app'));
-      if (alias) {
-        actualVercelUrl = `https://${alias}`;
-      } else if (proj.name && proj.name !== company_slug) {
-        actualVercelUrl = `https://${proj.name}.vercel.app`;
-      }
-    } catch {
-      // Fall back to assumed URL if API call fails
-    }
-  }
+  // ── Step 4: Update company record with Vercel + Neon details ──
+  // We always add {slug}.vercel.app as an alias (Step 2), so use that as the canonical URL.
+  // Also record neon_project_id directly on the companies table for easy access.
+  const neonProjectId = (results.neon as Record<string, unknown>)?.project_id as string | undefined;
+  const companyDomain = `${company_slug}.vercel.app`;
+  const actualVercelUrl = `https://${companyDomain}`;
+
   await sql`
     UPDATE companies SET
       vercel_project_id = COALESCE(${vercelProjectId}, vercel_project_id),
       vercel_url = COALESCE(${actualVercelUrl}, vercel_url),
+      domain = COALESCE(${companyDomain}, domain),
+      neon_project_id = COALESCE(${neonProjectId ?? null}, neon_project_id),
       updated_at = NOW()
     WHERE id = ${company_id}
   `.catch(() => {});
