@@ -280,9 +280,11 @@ export async function regenerateBacklogMd(sql: any): Promise<void> {
     // Generate markdown content
     let markdown = `# Backlog
 
-> Prioritized improvements for Hive itself. The orchestrator's CEO agent reviews this weekly and can self-assign items during low-activity cycles. Carlos can add items via the dashboard command bar with \`hive: <description>\` or by editing this file directly.
+> **⚠️ AUTO-GENERATED — DO NOT EDIT.** This file is a read-only snapshot of the \`hive_backlog\` database table, regenerated on every backlog change.
 >
-> **⚠️  This file is auto-generated from the database.** Use \`POST /api/backlog\` to add new items, not direct file edits.
+> **Agents:** use \`POST /api/agents/backlog\` (OIDC auth) to create/update items.
+> **Claude Code:** use MCP tools \`mcp__hive__hive_backlog_create\` and \`mcp__hive__hive_backlog_update\`.
+> **Dashboard:** use the command bar with \`hive: <description>\`.
 
 ## Priority Legend
 - 🔴 **P0** — Blocking or degrading core functionality

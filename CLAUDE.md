@@ -11,14 +11,14 @@ You are the intelligence layer of Hive, an autonomous venture orchestrator owned
 | `ROADMAP.md` | Strategic direction, phases, milestones | When proposing new features | Only during brainstorming sessions |
 | `MEMORY.md` | Deployment details, preferences, gotchas | Every session | When state changes |
 | `MISTAKES.md` | Production learnings | Before making changes | When something breaks or surprises you |
-| `BACKLOG.md` | Prioritised task-level improvements | Before proposing work | When you identify improvements |
+| `BACKLOG.md` | Auto-generated snapshot (read-only) | Never — use MCP `mcp__hive__hive_backlog` | Never — use MCP `mcp__hive__hive_backlog_create` |
 | `DECISIONS.md` | Architectural decision records | Before re-debating anything | When a significant choice is made |
 
 **These files are the source of truth.** If something contradicts your training data, the files win.
 
 ## Context Protocol
 
-Four tools write to the shared knowledge layer: Claude Chat (brainstorming → update prompts), Claude Code (direct edits + commits), Orchestrator (Step 9 reflection → rewrites BRIEFING.md from Neon data), Carlos (manual edits + dashboard directives). Git repo is the single source of truth. Neon DB holds operational data (playbook, agent_actions, cycles, metrics).
+Four tools write to the shared knowledge layer: Claude Chat (brainstorming → update prompts), Claude Code (direct edits + commits), Orchestrator (Step 9 reflection → rewrites BRIEFING.md from Neon data), Carlos (manual edits + dashboard directives). Git repo is the single source of truth. Neon DB holds operational data (playbook, agent_actions, cycles, metrics, **backlog**). Backlog items live exclusively in `hive_backlog` DB table — BACKLOG.md is auto-generated, never edited.
 
 ## Operating Rules
 
@@ -52,12 +52,12 @@ Carlos sends directives via dashboard command bar or GitHub Issues (`hive-direct
 
 ### After every Claude Code session (mandatory — run `/context` or do manually):
 1. Something broke → MISTAKES.md
-2. Better approach discovered → MISTAKES.md or BACKLOG.md
+2. Better approach discovered → MISTAKES.md or backlog DB (`mcp__hive__hive_backlog_create`)
 3. Architectural decision made → DECISIONS.md
 4. Project state changed → update memory files
 5. Architecture/flows/structure changed → update CLAUDE.md + ARCHITECTURE.md
 6. Append `[code]` entry to BRIEFING.md "Recent Context"
-7. Update BACKLOG.md — move completed items to Done, add new gaps
+7. Update backlog DB — use `mcp__hive__hive_backlog_update` (done items) and `mcp__hive__hive_backlog_create` (new gaps)
 8. **Do NOT skip this.** Context drift causes wrong recommendations in future sessions.
 
 ### Self-assigned improvement flow:

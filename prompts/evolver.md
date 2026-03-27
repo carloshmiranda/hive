@@ -187,20 +187,24 @@ You receive:
 
 ## Backlog maintenance
 
-In addition to proposals, you MUST update `BACKLOG.md` when you find platform-level gaps that need code changes. These are different from proposals — proposals are for prompt tweaks and setup actions; backlog items are for engineering work on Hive itself.
+In addition to proposals, you MUST create backlog items via the API when you find platform-level gaps that need code changes. These are different from proposals — proposals are for prompt tweaks and setup actions; backlog items are for engineering work on Hive itself.
 
-**When to write to BACKLOG.md:**
+**When to create a backlog item:**
 - Recurring agent failure pattern (3+ same error) that needs a code fix, not a prompt change
 - Missing infrastructure capability that multiple companies need
 - Process friction that wastes cycles (e.g., agents retrying something that will never work)
 - Stale/missing documentation that causes agents to make wrong decisions
 
-**How to write:**
-1. Read BACKLOG.md first — check for existing items covering the same gap
-2. If new, append under "## Planned" with appropriate priority (P1 for blocking, P2 for quality-of-life)
-3. Use the standard format: `### 🟡 P1 — Title` or `### 🟢 P2 — Title` followed by a description
-4. Include the evidence: what error pattern, how many occurrences, which companies affected
-5. Commit the change to git
+**How to create:**
+1. Check for existing items first via the context API (`/api/agents/context`) to avoid duplicates
+2. Create new items via API with OIDC auth:
+   ```bash
+   curl -s -X POST "$HIVE_BASE_URL/api/agents/backlog" \
+     -H "Authorization: Bearer $OIDC_TOKEN" -H "Content-Type: application/json" \
+     -d '{"title":"...","description":"...","priority":"P2","source":"evolver"}'
+   ```
+3. Use P1 for blocking issues, P2 for quality-of-life improvements
+4. Include evidence in the description: what error pattern, how many occurrences, which companies affected
 
 **Also update ROADMAP.md** if you notice milestones that are now complete (check them off) or if the current phase description is stale.
 

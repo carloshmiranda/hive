@@ -330,8 +330,8 @@ jobs:
             - Implement ONE task per run, create a branch and open a PR
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
             - If you open a PR, output: { "pr_opened": true, "pr_number": N }
-            - If you discover issues you can't fix in this run, add them to BACKLOG.md (read it first to avoid duplicates)
-            - After completing work, move the relevant BACKLOG.md item to Done with today's date
+            - If you discover issues you can't fix in this run, create a backlog item via the Hive API (`POST /api/agents/backlog` with OIDC auth, `{"title":"...","description":"...","priority":"P2","source":"build"}`)
+            - Do NOT edit BACKLOG.md — it is auto-generated from the database
 
       - name: Log result to Hive
         if: always()

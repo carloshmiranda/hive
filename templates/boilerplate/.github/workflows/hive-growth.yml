@@ -144,7 +144,7 @@ jobs:
           - Max 3 content pieces per run — quality over quantity.
           - Push directly to main (content doesn't need PR review).
           - Always run npx next build before pushing to catch errors.
-          - If you find SEO issues, missing pages, or broken links you can't fix now, add them to BACKLOG.md.
+          - If you find SEO issues, missing pages, or broken links you can't fix now, create a backlog item via the Hive API (`POST /api/agents/backlog` with OIDC auth, `{"title":"...","description":"...","priority":"P2","source":"growth"}`).
           " 2>&1 | tee /tmp/gemini-output.txt
 
       - name: Log result to Hive

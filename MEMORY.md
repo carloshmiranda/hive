@@ -27,7 +27,7 @@ Carlos Miranda — solo entrepreneur based in Amadora, Lisbon, Portugal. 15+ yea
 ## Key Files
 - `CLAUDE.md` — the constitution. Architecture, rules, flows, file structure.
 - `MISTAKES.md` — production learnings. Read before making similar changes.
-- `BACKLOG.md` — prioritized improvement list. Check before proposing new work.
+- `BACKLOG.md` — auto-generated snapshot of `hive_backlog` DB. Read-only, never edit. Use MCP tools or `/api/agents/backlog`.
 - `DECISIONS.md` — ADRs. Read before re-debating settled architecture.
 - `schema.sql` — 13 Neon tables. Source of truth for data model.
 - `orchestrator.ts` — nightly loop runner. Excluded from Next.js build (runs via ts-node).
@@ -50,6 +50,8 @@ Carlos Miranda — solo entrepreneur based in Amadora, Lisbon, Portugal. 15+ yea
 - Without gemini_api_key and groq_api_key in settings, ALL agents fall back to Claude — works for 1-2 companies, burns quota at 3+. Get free keys: aistudio.google.com/apikey and console.groq.com/keys.
 - Gemini free tier RPD resets at midnight Pacific Time, not UTC. Factor this into nightly loop timing.
 - Vercel Functions have 60s timeout on Hobby. Chain long tasks via QStash or sequential API calls.
+- Vercel has a read-only filesystem. Never use `fs.writeFile` for persistent changes — use GitHub Contents API for git files, Vercel Blob for storage.
+- BACKLOG.md is auto-generated from DB. Never edit it manually — use MCP tools or `/api/agents/backlog`.
 
 ## What NOT to Do
 - Don't propose Stripe Connect. We use single account + metadata. See ADR-002.
@@ -71,7 +73,7 @@ Before starting work in any Claude Code session:
 1. Read CLAUDE.md (architecture)
 2. Read MEMORY.md (this file — current state)
 3. Scan MISTAKES.md (don't repeat known errors)
-4. Check BACKLOG.md (maybe the work is already planned)
+4. Check backlog DB via MCP `mcp__hive__hive_backlog` (maybe the work is already planned)
 5. Check DECISIONS.md (maybe this was already decided)
 6. Check open GitHub Issues (maybe there's a directive)
 

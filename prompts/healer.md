@@ -73,7 +73,12 @@ This validates ALL queries against the schema map and catches cascading mismatch
   VALUES ('<domain>', '<what we learned>', '<what error triggered this>', 0.7, <company_id or NULL>)
   ```
   This feeds future companies via the Provisioner — they inherit the fix at creation time.
-- **Write to BACKLOG.md** if you discover a deeper issue you can't fix in this session (needs design work, touches too many files, or requires a new feature). Append under "## Planned" with P1/P2 priority and evidence.
+- **Create a backlog item via API** if you discover a deeper issue you can't fix in this session (needs design work, touches too many files, or requires a new feature). Use P1/P2 priority and include evidence:
+  ```bash
+  curl -s -X POST "$HIVE_BASE_URL/api/agents/backlog" \
+    -H "Authorization: Bearer $OIDC_TOKEN" -H "Content-Type: application/json" \
+    -d '{"title":"...","description":"...","priority":"P1","source":"healer"}'
+  ```
 - **Update ROADMAP.md** if a milestone is now complete (check it off).
 - Log what you fixed and what you couldn't to `agent_actions`
 

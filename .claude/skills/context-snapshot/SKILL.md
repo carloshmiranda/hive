@@ -47,11 +47,10 @@ For EACH file, read the current version, compare against what you know, and upda
 - If something broke unexpectedly or we discovered a gotcha, add an entry
 - Include the prevention rule
 
-### BACKLOG.md
-- Move completed items to Done with date
-- Add newly discovered gaps
-- Update priority if context changed
-- **Cross-check against Step 2** — any items marked done in DB should also move to Done here
+### Backlog (DB only — do NOT edit BACKLOG.md)
+- Use `mcp__hive__hive_backlog_update` to mark completed items as done
+- Use `mcp__hive__hive_backlog_create` for newly discovered gaps
+- BACKLOG.md is auto-generated from the DB — never edit it manually
 
 ### CLAUDE.md
 - If architecture, flows, or file structure changed, update the relevant section
@@ -65,7 +64,7 @@ For EACH file, read the current version, compare against what you know, and upda
 
 ## Step 4: Verify completeness
 
-Run: `grep -r 'as of 202' BRIEFING.md BACKLOG.md` and memory files to find stale date references.
+Run: `grep -r 'as of 202' BRIEFING.md` and memory files to find stale date references.
 Check that no "Known Blockers" or "Known Issues" sections contain resolved items.
 
 ## Step 5: Report
