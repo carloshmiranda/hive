@@ -115,6 +115,15 @@ To reduce Claude API usage costs, add free-tier LLM API keys:
 2. Create API key (no credit card required)
 3. Add to Vercel: `GROQ_API_KEY=your_key`
 
+### OpenRouter API (Recommended: $10 unlocks 1,000 RPD)
+
+OpenRouter provides access to multiple LLM providers with excellent free tier options:
+
+1. Sign up at [openrouter.ai](https://openrouter.ai)
+2. Go to [API Keys](https://openrouter.ai/keys) and create a key
+3. Add to Hive settings via dashboard: `openrouter_api_key=your_key`
+4. **Optional: Enable Sentry monitoring** (see [OpenRouter Observability](#openrouter-observability))
+
 ### Email Setup (Resend)
 
 1. Sign up at [resend.com](https://resend.com) (free: 100 emails/day)
@@ -205,6 +214,48 @@ Once everything is set up:
 - Scout proposals pile up without approval - check dashboard for pending approval gates
 - CEO might not have proper database access to create companies
 - Check agent_actions table for error logs
+
+## OpenRouter Observability
+
+For comprehensive LLM monitoring, OpenRouter can automatically send trace data to Sentry:
+
+### Benefits
+- **Model performance**: Latency and error rates per model
+- **Token usage**: Input/output token counts and costs per request
+- **Failure patterns**: Which models fail most often
+- **Cost tracking**: Detailed per-request billing breakdown
+
+### Setup (Manual Configuration)
+
+This requires a one-time manual configuration in the OpenRouter dashboard:
+
+1. **Get your Sentry DSN**:
+   - If Sentry is already configured (via Vercel Marketplace), the DSN is available in your environment
+   - Dashboard → Project Settings → Client Keys (DSN)
+   - Format: `https://<key>@<org>.ingest.sentry.io/<project>`
+
+2. **Configure OpenRouter**:
+   - Go to [OpenRouter Settings](https://openrouter.ai/settings)
+   - Navigate to **Broadcast** section
+   - Enable **Sentry** integration
+   - Enter your Hive Sentry DSN
+
+3. **Verify integration**:
+   - Make LLM calls via Hive agents (trigger any workflow)
+   - Check Sentry dashboard → Performance → Traces
+   - You should see OpenRouter trace data with model names, latencies, and costs
+
+### What Gets Tracked
+
+OpenRouter sends comprehensive trace data to Sentry:
+- Model used (e.g., `meta-llama/llama-3.3-70b-instruct:free`)
+- Request/response latency
+- Input and output token counts
+- Cost in USD per request
+- Error details if requests fail
+- Provider routing decisions
+
+This combines with Hive's existing Sentry error tracking for complete observability.
 
 ## Architecture Overview
 
