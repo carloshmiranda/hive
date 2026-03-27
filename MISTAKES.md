@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-27 Mechanical decomposition creates cascading garbage titles
+**What happened:** Telegram notifications showed nonsensical text like "Sub-task of: npx next build passes... Sub-task of: npx next build passes..." Backlog had 30+ items with titles like "npx next build passes" or "Change is implemented correctly" — these are acceptance criteria fragments, not task descriptions.
+**Root cause:** When LLM decomposition fails, `backlog/dispatch/route.ts` falls back to mechanical splitting. The fallback used raw text fragments as titles (`part.slice(0, 200)`) and put the parent title in the description as "Sub-task of: {parent}". When these sub-tasks also failed and got re-decomposed, the garbage cascaded — each level prepended "Sub-task of:" to the already-corrupted title. The acceptance criteria text ("npx next build passes", "Change is implemented correctly") split on "and" boundaries became standalone titles.
+**Fix applied:** (1) Mechanical decomposition now generates clean numbered titles: "Parent task (1/3)" with the parent title stripped of "Sub-task of:" prefixes. (2) Added `sanitizeTaskTitle()` to `telegram.ts` that strips cascading prefixes and acceptance criteria fragments. (3) Applied sanitizer to all notification formatting. (4) Bulk-rejected existing garbage items.
+**Prevention:** Never use raw text fragments as backlog titles. Always derive titles from the parent item's clean title with a part number. The sanitizer provides defense-in-depth for any future title corruption.
+**Affects:** hive
+
+### 2026-03-27 GitHub token corruption by agents — all dispatches returning 422
+**What happened:** Every `repository_dispatch` call failed with HTTP 422 (Unprocessable Entity). All agent dispatches dead. The stored GitHub PAT in the `settings` DB table had been corrupted — agents with DB write access overwrote or mangled the token value during normal operations.
+**Root cause:** Storing the GitHub PAT in the Neon `settings` table meant any agent with DB access could accidentally corrupt it. The token is a single row that multiple agents read/write around. Once corrupted, all dispatches fail silently (422 with no useful error message from GitHub). This had happened before — recurring pattern.
+**Fix applied:** Replaced DB-stored PAT with GitHub App authentication (`src/lib/github-app.ts`). Private key lives in `GITHUB_APP_PRIVATE_KEY` env var (Vercel), never in DB. Tokens auto-generated via RS256 JWT → installation token exchange, cached for 50 minutes. Migrated 9 files from `getSettingValue("github_token")` to `getGitHubToken()`. Added `*.pem` to .gitignore.
+**Prevention:** Never store authentication credentials in the database where agents have write access. Use env vars for secrets. GitHub App tokens are ephemeral (1-hour expiry) and self-refreshing — no single token to corrupt. If dispatch 422s recur, check: (1) App installation still active, (2) env var present in Vercel, (3) private key format (PEM with newlines).
+**Affects:** hive
+
 ### 2026-03-27 vercel.json _comment property failed schema validation — 20+ ERROR deploys
 **What happened:** All Vercel deployments went ERROR with 0s build time and empty logs. The `_comment` property added to vercel.json for documentation failed Vercel's strict JSON schema validation. Every deploy was rejected before the build even started.
 **Root cause:** Vercel's vercel.json parser rejects unknown properties. `_comment` is not a valid field. Error message: "should NOT have additional property '_comment'". This was invisible because build logs showed nothing — the validation happens pre-build.
