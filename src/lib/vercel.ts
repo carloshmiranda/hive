@@ -159,9 +159,34 @@ export async function findNeonIntegrationConfig(): Promise<{ id: string; slug: s
 }
 
 /**
+ * Discover the Neon Postgres product slug for this integration configuration.
+ * Needed for the store creation API — product slugs vary by integration.
+ */
+async function discoverNeonProductSlug(configId: string): Promise<string> {
+  try {
+    const res = await vercel(`/v1/integrations/configurations/${configId}/products`);
+    const products = Array.isArray(res) ? res : res.products || [];
+    // Find a Postgres-related product
+    const pg = products.find((p: any) =>
+      (p.slug || p.id || "").toLowerCase().includes("postgres") ||
+      (p.name || "").toLowerCase().includes("postgres") ||
+      (p.slug || p.id || "").toLowerCase().includes("neon")
+    );
+    if (pg) return pg.slug || pg.id;
+  } catch (e: any) {
+    console.warn(`[vercel] Could not discover Neon products for ${configId}: ${e.message}`);
+  }
+  // Fallback slugs to try in order (Vercel Marketplace conventions)
+  return "neon_postgres_neon";
+}
+
+/**
  * Provision a Neon Postgres database via Vercel Marketplace API.
  * This creates a Neon store and auto-injects DATABASE_URL into the Vercel project.
  * Works with Vercel-managed Neon — no separate Neon API key needed.
+ *
+ * Uses POST /v1/storage/stores/integration/direct (auto-discovers free billing plan).
+ * Fallback: POST /v1/integrations/store.
  */
 export async function provisionNeonStore(
   projectId: string,
@@ -173,12 +198,27 @@ export async function provisionNeonStore(
     throw new Error("Neon integration not found on Vercel team. Install it from vercel.com/marketplace/neon");
   }
 
-  // Step 2: Create the store via Marketplace API
-  const store = await vercel("/v1/stores", "POST", {
-    name,
-    integrationConfigurationId: neonConfig.id,
-    integrationProductIdOrSlug: "neon",
-  });
+  // Step 2: Discover the product slug
+  const productSlug = await discoverNeonProductSlug(neonConfig.id);
+
+  // Step 3: Create the store via Marketplace direct provisioning API
+  let store: any;
+  try {
+    store = await vercel("/v1/storage/stores/integration/direct", "POST", {
+      name,
+      integrationConfigurationId: neonConfig.id,
+      integrationProductIdOrSlug: productSlug,
+      source: "marketplace",
+    });
+  } catch (e: any) {
+    // Fallback: try the older /v1/integrations/store endpoint
+    console.warn(`[vercel] /v1/storage/stores/integration/direct failed: ${e.message}, trying fallback`);
+    store = await vercel("/v1/integrations/store", "POST", {
+      name,
+      integrationConfigurationId: neonConfig.id,
+      integrationProductIdOrSlug: productSlug,
+    });
+  }
 
   const storeData = store.store || store;
   const storeId = storeData.id || storeData.externalResourceId;
@@ -187,9 +227,9 @@ export async function provisionNeonStore(
     throw new Error(`Neon store creation returned no ID: ${JSON.stringify(store).slice(0, 300)}`);
   }
 
-  // Step 3: Connect store to the project (auto-injects env vars)
+  // Step 4: Connect store to the project (auto-injects DATABASE_URL env var)
   try {
-    await vercel(`/v1/stores/${storeId}/projects`, "POST", {
+    await vercel(`/v1/storage/stores/${storeId}/connections`, "POST", {
       projectId,
       environmentVariableSuffix: "",
     });
