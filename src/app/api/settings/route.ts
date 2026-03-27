@@ -23,7 +23,7 @@ const SECRET_KEYS = new Set([
   "stripe_secret_key", "resend_api_key", "google_search_console_key",
   "openrouter_api_key", "bing_webmaster_key",
   "claude_code_oauth_token", "cron_secret",
-  "telegram_bot_token",
+  "telegram_bot_token", "web_search_api_key",
 ]);
 
 // All valid setting keys
@@ -38,6 +38,7 @@ const VALID_KEYS = [
   "claude_code_oauth_token", "cron_secret",
   "digest_email", "notification_email",
   "telegram_bot_token", "telegram_chat_id",
+  "web_search_api_key",
 ];
 
 export async function GET() {

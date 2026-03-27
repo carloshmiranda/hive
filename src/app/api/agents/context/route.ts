@@ -8,6 +8,7 @@ import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
 import { selectEntriesWithMMR } from "@/lib/mmr";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
+import { getSettingValue } from "@/lib/settings";
 
 // Domain mappings for agent-specific playbook filtering
 function getAgentDomains(agent: string): string[] | null {
@@ -276,6 +277,21 @@ async function growthContext(sql: any, company: any) {
     }
   }
 
+  // Check if web search is available
+  const webSearchAvailable = !!(await getSettingValue("web_search_api_key"));
+  const searchCapabilities = webSearchAvailable ? {
+    web_search_available: true,
+    search_tools: {
+      search_web: "Search the web for current information. Use searchWeb(query, options) for general searches.",
+      search_competitors: "Find competitor information in specific markets. Use searchCompetitors(market, product?, location?) for competitor analysis.",
+      search_trends: "Research industry trends and news. Use searchTrends(industry, timeframe?) for current developments."
+    },
+    search_note: "Web search provides live data beyond your training cutoff. Use it to validate market assumptions, analyze competitors, and research current trends."
+  } : {
+    web_search_available: false,
+    search_note: "Web search unavailable. Set web_search_api_key in /settings to enable live competitor research and market validation."
+  };
+
   return {
     company: {
       name: company.name,
@@ -297,6 +313,7 @@ async function growthContext(sql: any, company: any) {
     evolver_proposals: proposals.map((p: { proposed_fix: string }) => p.proposed_fix),
     growth_tasks: filteredGrowthTasks,
     ...(gatedGrowthTasks.length > 0 ? { phase_gated_tasks: gatedGrowthTasks } : {}),
+    search_capabilities: searchCapabilities,
     hive_capabilities: getCapabilitySummary(),
   };
 }
@@ -538,6 +555,21 @@ async function scoutContext(sql: any) {
   const active = companies.filter((c: { status: string }) => ['mvp', 'active'].includes(c.status));
   const pipeline = companies.filter((c: { status: string }) => ['idea', 'approved', 'provisioning'].includes(c.status));
 
+  // Check if web search is available
+  const webSearchAvailable = !!(await getSettingValue("web_search_api_key"));
+  const scoutSearchCapabilities = webSearchAvailable ? {
+    web_search_available: true,
+    search_tools: {
+      search_web: "Search the web for current information. Use searchWeb(query, options) for general market research.",
+      search_market_data: "Research market size and validation data. Use searchMarketData(market, location?) for market analysis.",
+      search_trends: "Find recent industry trends and developments. Use searchTrends(industry, timeframe?) for trend analysis."
+    },
+    search_note: "Web search provides live market data and trends beyond your training cutoff. Use it to validate market opportunities, research demand signals, and discover emerging niches."
+  } : {
+    web_search_available: false,
+    search_note: "Web search unavailable. Set web_search_api_key in /settings to enable live market research and trend analysis for better opportunity discovery."
+  };
+
   return {
     portfolio: {
       active_companies: active.map((c: { name: string; slug: string; description: string; company_type: string; market: string }) => ({
@@ -557,6 +589,7 @@ async function scoutContext(sql: any) {
     ),
     markets_covered: [...new Set(active.map((c: { market: string }) => c.market).filter(Boolean))],
     types_covered: [...new Set(active.map((c: { company_type: string }) => c.company_type).filter(Boolean))],
+    search_capabilities: scoutSearchCapabilities,
   };
 }
 
