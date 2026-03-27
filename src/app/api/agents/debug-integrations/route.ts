@@ -25,15 +25,44 @@ export async function GET(req: NextRequest) {
     results.account_error = e.message;
   }
 
-  // Try listing stores
+  // Try listing stores via correct endpoint
   try {
-    const res = await fetch(`https://api.vercel.com/v1/stores?teamId=${teamId}`, {
+    const res = await fetch(`https://api.vercel.com/v1/storage/stores?teamId=${teamId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     results.stores_status = res.status;
     results.stores = await res.json();
   } catch (e: any) {
     results.stores_error = e.message;
+  }
+
+  // Find Neon integration config and list its products
+  const configs = results.account as any;
+  const neonConfig = configs?.configurations?.find((c: any) =>
+    c.slug === "neon" || c.integration?.slug === "neon"
+  );
+  if (neonConfig) {
+    results.neon_config_id = neonConfig.id;
+    try {
+      const res = await fetch(`https://api.vercel.com/v1/integrations/configurations/${neonConfig.id}/products?teamId=${teamId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results.neon_products_status = res.status;
+      results.neon_products = await res.json();
+    } catch (e: any) {
+      results.neon_products_error = e.message;
+    }
+
+    // Also try listing existing stores for this integration
+    try {
+      const res = await fetch(`https://api.vercel.com/v1/storage/stores?integrationConfigurationId=${neonConfig.id}&teamId=${teamId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results.neon_stores_status = res.status;
+      results.neon_stores = await res.json();
+    } catch (e: any) {
+      results.neon_stores_error = e.message;
+    }
   }
 
   return json(results);
