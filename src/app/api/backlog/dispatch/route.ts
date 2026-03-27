@@ -160,7 +160,8 @@ export async function POST(req: Request) {
           }
 
           // (2) LLM-assisted decomposition — produces independent, testable sub-tasks
-          if (spec && (spec.complexity === "M" || spec.complexity === "L") && Array.isArray(spec.approach) && spec.approach.length >= 2) {
+          // No complexity gate: max_turns is empirical proof the task is too large, regardless of spec estimate.
+          if (spec && Array.isArray(spec.approach) && spec.approach.length >= 1) {
             const subTasks = await decomposeTask(
               { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
               spec,
@@ -196,6 +197,40 @@ export async function POST(req: Request) {
               `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as auto-decomposed failed: ${e?.message || e}`); });
               decomposed = true;
               console.log(`[backlog] LLM-decomposed "${item.title}" → ${subTasks.length} sub-tasks: ${subTasks.map(s => s.title).join(", ")}`);
+            }
+          }
+
+          // (3) Fallback: if LLM decomposition failed (no spec, small complexity, or not enough sub-tasks),
+          // do a mechanical split — the task hit max_turns so it IS too large, regardless of what the planner thinks.
+          if (!decomposed) {
+            console.log(`[backlog] LLM decomposition didn't produce sub-tasks for "${item.title}" (spec: ${spec ? spec.complexity : 'null'}) — falling back to mechanical split`);
+            const desc = item.description || item.title;
+            // Split by common natural boundaries: "and", numbered lists, bullet points, semicolons
+            const parts = desc
+              .split(/(?:\band\b|;\s*|\n[-*]\s+|\n\d+[.)]\s+)/i)
+              .map((p: string) => p.trim())
+              .filter((p: string) => p.length > 10);
+
+            if (parts.length >= 2) {
+              for (const part of parts.slice(0, 5)) {
+                await sql`
+                  INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+                  VALUES (
+                    ${part.slice(0, 200)},
+                    ${`Sub-task of: ${item.title}\n\n${part}\n\nAcceptance criteria:\n- Change is implemented correctly\n- npx next build passes`.slice(0, 2000)},
+                    ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
+                    ${JSON.stringify({ complexity: "S", estimated_turns: 20, acceptance_criteria: [part.slice(0, 200), "npx next build passes"], affected_files: [], approach: [part], risks: [] })}
+                  )
+                `.catch((e: any) => { console.warn(`[backlog] insert mechanical sub-item failed: ${e?.message || e}`); });
+              }
+              await sql`
+                UPDATE hive_backlog
+                SET status = 'blocked', dispatched_at = NULL,
+                    notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [mechanical-split] Split into ${Math.min(parts.length, 5)} sub-tasks (LLM decompose failed).`}
+                WHERE id = ${completed_id}
+              `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as mechanical-split failed: ${e?.message || e}`); });
+              decomposed = true;
+              console.log(`[backlog] Mechanical split "${item.title}" → ${Math.min(parts.length, 5)} sub-tasks`);
             }
           }
         } catch (e) {
@@ -299,6 +334,23 @@ export async function POST(req: Request) {
     }
   }
 
+  // Helper: schedule a chain retry via QStash when dispatch is temporarily blocked.
+  // This ensures the loop self-sustains instead of dying on transient blocks.
+  const scheduleChainRetry = async (reason: string, delayMinutes: number) => {
+    try {
+      await qstashPublish("/api/backlog/dispatch", {
+        trigger: "chain_retry",
+        retry_reason: reason,
+      }, {
+        deduplicationId: `chain-retry-${reason}-${Date.now().toString(36)}`,
+        delay: delayMinutes * 60, // QStash delay is in seconds
+      });
+      console.log(`[backlog] Chain retry scheduled in ${delayMinutes}m (reason: ${reason})`);
+    } catch (e) {
+      console.warn(`[backlog] Chain retry scheduling failed:`, e instanceof Error ? e.message : "unknown");
+    }
+  };
+
   // Check budget — don't dispatch if Claude budget is exhausted
   const [usage] = await sql`
     SELECT COALESCE(SUM(tokens_used), 0)::int as turns
@@ -309,7 +361,8 @@ export async function POST(req: Request) {
   const budgetUsedPct = Number(usage?.turns || 0) / 225;
   if (budgetUsedPct > 0.85) {
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
-    return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), free_workers_dispatched: freeWorkers });
+    await scheduleChainRetry("budget_exhausted", 30);
+    return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
   // Rate-limit check: if the most recent rate-limit failure was <30 min ago,
@@ -331,7 +384,8 @@ export async function POST(req: Request) {
   if (rateLimitCooldownActive) {
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     const minutesRemaining = Math.round(30 - (Date.now() - lastRateLimit!.getTime()) / 60000);
-    return json({ dispatched: false, reason: "rate_limit_cooldown", cooldown_remaining_minutes: minutesRemaining, free_workers_dispatched: freeWorkers });
+    await scheduleChainRetry("rate_limit_cooldown", minutesRemaining + 1);
+    return json({ dispatched: false, reason: "rate_limit_cooldown", cooldown_remaining_minutes: minutesRemaining, free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
   // Check for running Hive Engineer jobs (dedup)
@@ -344,6 +398,7 @@ export async function POST(req: Request) {
     LIMIT 1
   `.catch(() => []);
   if (running) {
+    // Don't retry — the running engineer will chain-dispatch when it finishes
     return json({ dispatched: false, reason: "engineer_busy", running_id: running.id });
   }
 
@@ -357,7 +412,8 @@ export async function POST(req: Request) {
   if (openPRCount >= 3) {
     // Still try to merge what we have before giving up
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
-    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers });
+    await scheduleChainRetry("pr_queue_full", 10);
+    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
   // Stale dispatch cleanup: items stuck in 'dispatched' for >30 min
@@ -754,6 +810,11 @@ export async function POST(req: Request) {
   if (backlogItemsFiltered.length === 0) {
     const reason = "backlog_empty";
     const extra = isChainDispatch ? { chain_dispatch: true } : {};
+    // If items were blocked this cycle, retry later — new items may become ready
+    const totalBlocked = manualItems.length + ciImpossibleItems.length + decompositionItems.length;
+    if (totalBlocked > 0) {
+      await scheduleChainRetry("backlog_items_blocked", 15);
+    }
 
     return json({
       dispatched: false,
@@ -763,6 +824,7 @@ export async function POST(req: Request) {
       decomposition_blocked: decompositionItems.length,
       cooldown_blocked: cooldownCount,
       items_in_cooldown: 0, // cooldown is now SQL-level
+      chain_retry: totalBlocked > 0,
       ...extra
     });
   }
@@ -1198,5 +1260,15 @@ export async function POST(req: Request) {
   }
 
   console.error(`[backlog] GitHub dispatch failed: ${res.status} for "${topItem.title}" (${topItem.priority})`);
-  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title });
+  // Block the item that caused the 422 to prevent it from being picked again
+  if (res.status === 422) {
+    await sql`
+      UPDATE hive_backlog
+      SET status = 'blocked',
+          notes = COALESCE(notes, '') || ${` [dispatch_failed] GitHub API returned ${res.status} — needs investigation.`}
+      WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
+    `.catch(() => {});
+  }
+  await scheduleChainRetry("github_dispatch_failed", 5);
+  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
 }

@@ -16,7 +16,6 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
   `.catch((e: any) => { console.warn(`[cycle-complete] fetch companies for free workers failed: ${e?.message || e}`); return []; });
 
   for (const c of companies) {
-    // Growth: dispatch if no success in last 12h
     const [lastGrowth] = await sql`
       SELECT id FROM agent_actions
       WHERE agent = 'growth' AND status = 'success'
@@ -26,7 +25,6 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
     `.catch((e: any) => { console.warn(`[cycle-complete] check recent growth for ${c.slug} failed: ${e?.message || e}`); return []; });
     if (!lastGrowth) workers.push({ company: c.slug, agent: "growth" });
 
-    // Ops: dispatch if no success in last 12h
     const [lastOps] = await sql`
       SELECT id FROM agent_actions
       WHERE agent = 'ops' AND status = 'success'
@@ -51,6 +49,26 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
   return results;
 }
 
+// Schedule a chain retry via QStash when the chain is temporarily blocked.
+// This ensures the loop restarts instead of dying on transient blocks.
+async function scheduleChainRetry(reason: string, delaySeconds: number) {
+  try {
+    await qstashPublish("/api/dispatch/cycle-complete", {
+      agent: "chain_retry",
+      company: "_retry",
+      status: "retry",
+      action_type: "chain_retry",
+      retry_reason: reason,
+    }, {
+      deduplicationId: `cycle-chain-retry-${reason}-${Date.now().toString(36)}`,
+      delay: delaySeconds,
+    });
+    console.log(`[cycle-complete] Chain retry scheduled in ${Math.round(delaySeconds / 60)}m (reason: ${reason})`);
+  } catch (e) {
+    console.warn(`[cycle-complete] Chain retry scheduling failed:`, e instanceof Error ? e.message : "unknown");
+  }
+}
+
 // POST /api/dispatch/cycle-complete — completion callback for continuous dispatch
 // Called by agent workflows when they finish. Chains to the next company cycle.
 // Flow: agent completes → calls this → health gate → score companies → dispatch next
@@ -69,8 +87,8 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const { agent, company, status, action_type } = body;
 
-  // Log the completion
-  if (agent && company) {
+  // Log the completion (skip for chain retries)
+  if (agent && company && agent !== "chain_retry") {
     const [companyRecord] = await sql`
       SELECT id FROM companies WHERE slug = ${company} LIMIT 1
     `.catch((e: any) => { console.warn(`[cycle-complete] lookup company ${company} failed: ${e?.message || e}`); return []; });
@@ -83,7 +101,6 @@ export async function POST(req: Request) {
           NOW(), NOW(), ${companyRecord.id})
       `.catch((e: any) => { console.warn(`[cycle-complete] log chain callback for ${company} failed: ${e?.message || e}`); });
 
-      // Invalidate cache for the completed company since cycle state changed
       await invalidateCompanyCache(companyRecord.id);
     }
   }
@@ -99,57 +116,50 @@ export async function POST(req: Request) {
   }).catch(() => null);
 
   if (!healthRes || !healthRes.ok) {
-    return json({ chained: false, reason: "health_gate_unreachable" });
+    // Health gate unreachable — retry in 5 min instead of dying
+    await scheduleChainRetry("health_gate_unreachable", 5 * 60);
+    return json({ chained: false, reason: "health_gate_unreachable", chain_retry: true });
   }
 
   const healthRaw = await healthRes.json();
   const health = healthRaw.data || healthRaw;
 
   if (health.recommendation === "stop") {
-    // Claude is blocked but free workers can still run
+    // Claude is blocked — dispatch free workers and retry when budget resets
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch((e: any) => { console.warn(`[cycle-complete] dispatch free workers on health stop failed: ${e?.message || e}`); return []; });
-    return json({ chained: false, reason: "health_gate_stop", blockers: health.blockers, free_workers_dispatched: freeWorkers });
+    await scheduleChainRetry("health_gate_stop", 30 * 60); // Retry in 30 min
+    return json({ chained: false, reason: "health_gate_stop", blockers: health.blockers, free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
-  // Step 2: If Hive needs fixes first, dispatch backlog instead of company cycle
+  if (health.recommendation === "wait") {
+    // Claude is throttled — dispatch free workers and retry in 15 min
+    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch((e: any) => { console.warn(`[cycle-complete] dispatch free workers on health wait failed: ${e?.message || e}`); return []; });
+    await scheduleChainRetry("health_gate_wait", 15 * 60);
+    return json({ chained: false, reason: "health_gate_wait", blockers: health.blockers, free_workers_dispatched: freeWorkers, chain_retry: true });
+  }
+
+  // Step 2: If Hive needs fixes first, dispatch backlog via QStash (guaranteed delivery)
   if (health.hive_first) {
-    const backlogRes = await fetch(`${HIVE_URL}/api/backlog/dispatch`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cronSecret}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({}),
-      signal: AbortSignal.timeout(10000),
+    await qstashPublish("/api/backlog/dispatch", {
+      trigger: "cycle_complete_hive_first",
+    }, {
+      deduplicationId: `hive-first-${Date.now().toString(36)}`,
     }).catch(() => null);
 
-    if (backlogRes && backlogRes.ok) {
-      const backlogData = await backlogRes.json();
-      if (backlogData.data?.dispatched || backlogData.dispatched) {
-        return json({
-          chained: true,
-          type: "hive_backlog",
-          reason: "hive_first_priority",
-          item: backlogData.data?.item || backlogData.item,
-        });
-      }
-    }
-  }
-
-  // Step 3: Score companies and pick the next one
-  if (health.recommendation === "wait") {
-    // Claude is throttled but free workers can still run
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch((e: any) => { console.warn(`[cycle-complete] dispatch free workers on health wait failed: ${e?.message || e}`); return []; });
-    return json({ chained: false, reason: "health_gate_wait", blockers: health.blockers, free_workers_dispatched: freeWorkers });
+    return json({
+      chained: true,
+      type: "hive_backlog",
+      reason: "hive_first_priority",
+    });
   }
 
   const ghPat = await getSettingValue("github_token").catch(() => null);
   if (!ghPat) {
-    return json({ chained: false, reason: "no_github_token" });
+    await scheduleChainRetry("no_github_token", 10 * 60);
+    return json({ chained: false, reason: "no_github_token", chain_retry: true });
   }
 
-  // Dedup: check for recently dispatched cycle_start (covers the race window
-  // between dispatch and the CEO registering as 'running' in agent_actions)
+  // Dedup: check for recently dispatched cycle_start
   const [recentCycleDispatch] = await sql`
     SELECT id FROM agent_actions
     WHERE agent = 'dispatch' AND action_type = 'chain_cycle'
@@ -157,10 +167,11 @@ export async function POST(req: Request) {
     LIMIT 1
   `.catch((e: any) => { console.warn(`[cycle-complete] check recent cycle dispatch failed: ${e?.message || e}`); return []; });
   if (recentCycleDispatch) {
+    // Don't retry — something was just dispatched and will chain when done
     return json({ chained: false, reason: "recent_cycle_dispatched" });
   }
 
-  // Find companies needing cycles (same logic as Sentinel Check 13c)
+  // Step 3: Score companies and pick the next one
   const candidates = await sql`
     SELECT c.id, c.slug, c.status, c.github_repo,
       COALESCE(
@@ -180,7 +191,13 @@ export async function POST(req: Request) {
   `.catch((e: any) => { console.warn(`[cycle-complete] fetch candidate companies failed: ${e?.message || e}`); return []; });
 
   if (candidates.length === 0) {
-    return json({ chained: false, reason: "no_eligible_companies" });
+    // No active companies — fall back to backlog
+    await qstashPublish("/api/backlog/dispatch", {
+      trigger: "cycle_complete_no_companies",
+    }, {
+      deduplicationId: `no-companies-backlog-${Date.now().toString(36)}`,
+    }).catch(() => null);
+    return json({ chained: true, type: "hive_backlog", reason: "no_eligible_companies" });
   }
 
   // Skip the company that just completed (avoid re-dispatching immediately)
@@ -195,7 +212,7 @@ export async function POST(req: Request) {
   `.catch((e: any) => { console.warn(`[cycle-complete] check running cycles failed: ${e?.message || e}`); return []; });
   const runningIds = new Set(runningCycles.map((r) => r.company_id));
 
-  // Score each company (same formula as Sentinel)
+  // Score each company
   type ScoredCompany = { slug: string; id: string; pending_tasks: number; priority_score: number; github_repo: string };
   const scored: ScoredCompany[] = [];
   for (const c of eligible) {
@@ -204,7 +221,6 @@ export async function POST(req: Request) {
       0,
       (Date.now() - new Date(c.last_cycle).getTime()) / 86400000
     );
-    // Skip if cycle was less than 6h ago (minimum spacing)
     if (daysSinceLastCycle < 0.25) continue;
 
     const pendingTasks = Number(c.pending_tasks || 0);
@@ -230,30 +246,13 @@ export async function POST(req: Request) {
   scored.sort((a, b) => b.priority_score - a.priority_score);
 
   if (scored.length === 0) {
-    // No companies need cycles — try backlog instead
-    const backlogRes = await fetch(`${HIVE_URL}/api/backlog/dispatch`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cronSecret}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({}),
-      signal: AbortSignal.timeout(10000),
+    // No companies need cycles — dispatch backlog via QStash
+    await qstashPublish("/api/backlog/dispatch", {
+      trigger: "cycle_complete_no_scored",
+    }, {
+      deduplicationId: `no-scored-backlog-${Date.now().toString(36)}`,
     }).catch(() => null);
-
-    if (backlogRes && backlogRes.ok) {
-      const backlogData = await backlogRes.json();
-      if (backlogData.data?.dispatched || backlogData.dispatched) {
-        return json({
-          chained: true,
-          type: "hive_backlog",
-          reason: "no_companies_need_cycles",
-          item: backlogData.data?.item || backlogData.item,
-        });
-      }
-    }
-
-    return json({ chained: false, reason: "no_companies_need_cycles" });
+    return json({ chained: true, type: "hive_backlog", reason: "no_companies_need_cycles" });
   }
 
   const next = scored[0]!;
@@ -279,7 +278,7 @@ export async function POST(req: Request) {
   });
 
   if (res.ok || res.status === 204) {
-    // Log dispatch for dedup (so concurrent calls don't double-dispatch)
+    // Log dispatch for dedup
     await sql`
       INSERT INTO agent_actions (agent, action_type, status, description, company_id, started_at, finished_at)
       VALUES ('dispatch', 'chain_cycle', 'success',
@@ -287,7 +286,6 @@ export async function POST(req: Request) {
         ${next.id}, NOW(), NOW())
     `.catch((e: any) => { console.warn(`[cycle-complete] log chain dispatch ${company} -> ${next.slug} failed: ${e?.message || e}`); });
 
-    // Notify via Telegram (QStash guarantees delivery)
     await qstashPublish("/api/notify", {
       agent: "dispatch",
       action: "chain_cycle",
@@ -308,5 +306,7 @@ export async function POST(req: Request) {
     });
   }
 
-  return json({ chained: false, reason: "github_dispatch_failed", status: res.status });
+  // GitHub dispatch failed — retry in 5 min
+  await scheduleChainRetry("github_dispatch_failed", 5 * 60);
+  return json({ chained: false, reason: "github_dispatch_failed", status: res.status, chain_retry: true });
 }
