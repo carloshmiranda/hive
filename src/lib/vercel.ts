@@ -141,7 +141,8 @@ export async function removeGitLink(projectId: string): Promise<boolean> {
  */
 export async function findNeonIntegrationConfig(): Promise<{ id: string; slug: string } | null> {
   try {
-    const res = await vercel("/v1/integrations/configurations");
+    // The API requires view=account to list team-level integration configurations
+    const res = await vercel("/v1/integrations/configurations?view=account");
     const configs = Array.isArray(res) ? res : res.configurations || [];
     const neon = configs.find((c: any) =>
       c.slug === "neon" ||
