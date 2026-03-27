@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
@@ -10,6 +11,12 @@ export async function GET(req: Request) {
   const cycleId = searchParams.get("cycle_id");
   const status = searchParams.get("status");
   const limit = parseInt(searchParams.get("limit") || "50");
+
+  // Set Sentry tags for error tracking
+  setSentryTags({
+    company_id: companyId || undefined,
+    action_type: "fetch_actions"
+  });
 
   const sql = getDb();
 
@@ -55,6 +62,13 @@ export async function POST(req: Request) {
   if (!cycle_id || !company_id || !agent || !action_type) {
     return err("cycle_id, company_id, agent, and action_type required");
   }
+
+  // Set Sentry tags for error tracking
+  setSentryTags({
+    company_id: String(company_id),
+    agent: agent,
+    action_type: action_type
+  });
 
   // Enhanced detection for 0-turn workflow dispatch errors
   // These are GitHub Actions YAML/dispatch issues, not real agent execution failures

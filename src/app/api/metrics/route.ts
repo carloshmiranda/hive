@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
@@ -8,6 +9,12 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const companyId = searchParams.get("company_id");
   const days = parseInt(searchParams.get("days") || "30");
+
+  // Set Sentry tags for error tracking
+  setSentryTags({
+    company_id: companyId || undefined,
+    action_type: "fetch_metrics"
+  });
 
   const sql = getDb();
 
@@ -36,6 +43,12 @@ export async function POST(req: Request) {
   const body = await req.json();
   const { company_id, date, ...data } = body;
   if (!company_id) return err("company_id required");
+
+  // Set Sentry tags for error tracking
+  setSentryTags({
+    company_id: String(company_id),
+    action_type: "update_metrics"
+  });
 
   const sql = getDb();
   const [metric] = await sql`

@@ -1,9 +1,15 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET() {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
+
+  // Set Sentry tags for error tracking
+  setSentryTags({
+    action_type: "fetch_companies"
+  });
 
   const sql = getDb();
   const companies = await sql`
@@ -31,11 +37,23 @@ export async function POST(req: Request) {
 
   if (!name || !slug) return err("name and slug are required");
 
+  // Set Sentry tags for error tracking
+  setSentryTags({
+    action_type: "create_company"
+  });
+
   const sql = getDb();
   const [company] = await sql`
     INSERT INTO companies (name, slug, description, status)
     VALUES (${name}, ${slug}, ${description || null}, ${status || "idea"})
     RETURNING *
   `;
+
+  // Update tags with the new company_id
+  setSentryTags({
+    company_id: company.id,
+    action_type: "create_company"
+  });
+
   return json(company, 201);
 }

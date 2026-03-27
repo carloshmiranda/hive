@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/agents/log — log agent action via OIDC auth
 // Body: { company_slug, agent, action_type, status, description?, error? }
@@ -20,6 +21,12 @@ export async function POST(req: NextRequest) {
     return err("Missing required fields: agent, action_type, status", 400);
   }
 
+  // Set Sentry tags for error tracking
+  setSentryTags({
+    agent: agent,
+    action_type: action_type
+  });
+
   const sql = getDb();
 
   let companyId = null;
@@ -28,6 +35,15 @@ export async function POST(req: NextRequest) {
       SELECT id FROM companies WHERE slug = ${company_slug} LIMIT 1
     `.catch(() => []);
     companyId = company?.id || null;
+
+    // Update Sentry tags with company_id if available
+    if (companyId) {
+      setSentryTags({
+        company_id: companyId,
+        agent: agent,
+        action_type: action_type
+      });
+    }
   }
 
   // Merge trace_id into metadata for correlation across dispatch chains
