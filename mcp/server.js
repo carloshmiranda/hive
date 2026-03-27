@@ -599,6 +599,189 @@ server.registerTool(
   }
 );
 
+// ── Settings ────────────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_settings",
+  {
+    description: "Read or write Hive settings. Secrets are masked in output. Pass key+value to upsert, key-only to read one, or omit both to list all.",
+    inputSchema: {
+      key: z.string().optional().describe("Setting key to read or write"),
+      value: z.string().optional().describe("Value to set (upsert). Omit to read."),
+      is_secret: z.boolean().default(false).describe("Mark as secret (encrypted at rest, masked in reads)"),
+    },
+  },
+  async ({ key, value, is_secret }) => {
+    // Write mode
+    if (key && value !== undefined) {
+      await sql`
+        INSERT INTO settings (key, value, is_secret)
+        VALUES (${key}, ${value}, ${is_secret})
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, is_secret = EXCLUDED.is_secret, updated_at = NOW()
+      `;
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, key, written: true }) }] };
+    }
+    // Read one
+    if (key) {
+      const rows = await sql`SELECT key, value, is_secret, updated_at FROM settings WHERE key = ${key}`;
+      if (rows.length === 0) return { content: [{ type: "text", text: `Setting "${key}" not found` }] };
+      const row = rows[0];
+      if (row.is_secret) row.value = "***SECRET***";
+      return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
+    }
+    // List all
+    const rows = await sql`SELECT key, CASE WHEN is_secret THEN '***SECRET***' ELSE value END as value, is_secret, updated_at FROM settings ORDER BY key`;
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
+// ── Metrics ─────────────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_metrics",
+  {
+    description: "Query company metrics (revenue, MRR, page views, signups, churn, etc). Filter by company and/or date range.",
+    inputSchema: {
+      company_id: z.string().uuid().optional().describe("Filter by company UUID"),
+      days: z.number().default(30).describe("Look back N days (default 30)"),
+      metric: z.string().optional().describe("Filter to specific column (e.g. 'revenue', 'page_views', 'signups')"),
+    },
+  },
+  async ({ company_id, days, metric }) => {
+    let query, params;
+    if (company_id) {
+      query = `
+        SELECT m.*, c.name as company_name FROM metrics m
+        JOIN companies c ON c.id = m.company_id
+        WHERE m.company_id = $1 AND m.date >= CURRENT_DATE - $2
+        ORDER BY m.date DESC
+      `;
+      params = [company_id, days];
+    } else {
+      query = `
+        SELECT m.*, c.name as company_name FROM metrics m
+        JOIN companies c ON c.id = m.company_id
+        WHERE m.date >= CURRENT_DATE - $1
+        ORDER BY c.name, m.date DESC
+      `;
+      params = [days];
+    }
+    const rows = await sql.query(query, params);
+    // If filtering to a specific metric column, simplify output
+    if (metric && rows.length > 0 && metric in rows[0]) {
+      const simplified = rows.map(r => ({ company_name: r.company_name, date: r.date, [metric]: r[metric] }));
+      return { content: [{ type: "text", text: JSON.stringify(simplified, null, 2) }] };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
+// ── Dispatch Status ─────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_dispatch_status",
+  {
+    description: "Single-query dispatch health view: budget usage, queue state, recent failures, chain status. Essential for diagnosing why the loop is stalled.",
+    inputSchema: {},
+  },
+  async () => {
+    // Budget: turns used in last 5h window
+    const [budget] = await sql`
+      SELECT COUNT(*)::int as actions_5h,
+             COALESCE(SUM((output->>'turns_used')::int), 0)::int as turns_5h,
+             225 as budget_limit,
+             ROUND(COALESCE(SUM((output->>'turns_used')::int), 0)::numeric / 225 * 100, 1) as budget_pct
+      FROM agent_actions
+      WHERE agent = 'engineer' AND started_at > NOW() - INTERVAL '5 hours'
+    `;
+
+    // Queue state
+    const queueRows = await sql`
+      SELECT status, COUNT(*)::int as count FROM hive_backlog
+      WHERE status IN ('ready', 'dispatched', 'blocked', 'running')
+      GROUP BY status
+    `;
+    const queue = Object.fromEntries(queueRows.map(r => [r.status, r.count]));
+
+    // Recent failures (last 24h)
+    const failures = await sql`
+      SELECT b.id, b.title, b.priority, b.notes,
+             a.status as action_status, a.output->>'error_type' as error_type,
+             a.started_at
+      FROM agent_actions a
+      JOIN hive_backlog b ON b.id::text = a.output->>'backlog_id'
+      WHERE a.agent = 'engineer' AND a.status = 'failed'
+        AND a.started_at > NOW() - INTERVAL '24 hours'
+      ORDER BY a.started_at DESC LIMIT 10
+    `;
+
+    // Chain health
+    const [chain] = await sql`
+      SELECT
+        (SELECT MAX(dispatched_at) FROM hive_backlog WHERE dispatched_at IS NOT NULL) as last_dispatch,
+        (SELECT COUNT(*)::int FROM hive_backlog WHERE status = 'dispatched') as currently_dispatched,
+        (SELECT COUNT(*)::int FROM agent_actions WHERE agent = 'engineer' AND status = 'running') as running_engineers,
+        EXTRACT(EPOCH FROM (NOW() - (SELECT MAX(dispatched_at) FROM hive_backlog WHERE dispatched_at IS NOT NULL)))::int as seconds_since_dispatch
+    `;
+
+    const result = { budget, queue, recent_failures: failures, chain };
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+// ── Research Reports ────────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_research",
+  {
+    description: "Query research reports (market research, competitive analysis, lead lists, SEO keywords, etc).",
+    inputSchema: {
+      company_id: z.string().uuid().optional().describe("Filter by company UUID"),
+      report_type: z.string().optional().describe("Filter by type: market_research, competitive_analysis, lead_list, seo_keywords, industry_trends, technology_landscape"),
+      limit: z.number().default(10).describe("Max results"),
+    },
+  },
+  async ({ company_id, report_type, limit }) => {
+    let query, params;
+    if (company_id && report_type) {
+      query = `
+        SELECT r.*, c.name as company_name FROM research_reports r
+        JOIN companies c ON c.id = r.company_id
+        WHERE r.company_id = $1 AND r.report_type = $2
+        ORDER BY r.created_at DESC LIMIT $3
+      `;
+      params = [company_id, report_type, limit];
+    } else if (company_id) {
+      query = `
+        SELECT r.*, c.name as company_name FROM research_reports r
+        JOIN companies c ON c.id = r.company_id
+        WHERE r.company_id = $1
+        ORDER BY r.created_at DESC LIMIT $2
+      `;
+      params = [company_id, limit];
+    } else if (report_type) {
+      query = `
+        SELECT r.*, c.name as company_name FROM research_reports r
+        JOIN companies c ON c.id = r.company_id
+        WHERE r.report_type = $1
+        ORDER BY r.created_at DESC LIMIT $2
+      `;
+      params = [report_type, limit];
+    } else {
+      query = `
+        SELECT r.id, r.company_id, c.name as company_name, r.report_type, r.summary,
+               r.created_at, r.updated_at
+        FROM research_reports r
+        JOIN companies c ON c.id = r.company_id
+        ORDER BY r.created_at DESC LIMIT $1
+      `;
+      params = [limit];
+    }
+    const rows = await sql.query(query, params);
+    return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
 // Start server
 const transport = new StdioServerTransport();
 await server.connect(transport);

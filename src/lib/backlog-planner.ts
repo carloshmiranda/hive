@@ -717,13 +717,24 @@ export async function isCompanySpecific(
 
     const text = `${title} ${description}`.toLowerCase();
 
+    // Skip classification entirely if the text is clearly about Hive infrastructure
+    // (dispatch loops, sentinel, circuit breakers, dedup, agent failures, etc.)
+    const INFRA_CONTEXT = /\b(dispatch|sentinel|circuit.?breaker|dedup|loop|regression|infra_repair|healer|evolver|hive.?backlog|agent_actions|engineer failures|failure rate|backlog.?planner|backlog.?dispatch)\b/i;
+    if (INFRA_CONTEXT.test(text)) {
+      return null;
+    }
+
     // 2. Check if title or description mentions a company slug or name (case-insensitive)
+    // Use word boundaries to avoid false positives (e.g. "portfolio" matching "flolio")
     for (const company of companies) {
       const slug = company.slug.toLowerCase();
       const name = company.name.toLowerCase();
 
-      // Direct slug/name mentions
-      if (text.includes(slug) || text.includes(name)) {
+      // Word-boundary match — avoids substring false positives
+      const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const slugRegex = new RegExp(`\\b${esc(slug)}\\b`);
+      const nameRegex = new RegExp(`\\b${esc(name)}\\b`);
+      if (slugRegex.test(text) || nameRegex.test(text)) {
         return company.slug;
       }
     }

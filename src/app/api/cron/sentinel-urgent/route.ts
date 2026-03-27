@@ -120,6 +120,16 @@ export async function GET(request: Request) {
     `;
 
     for (const r of missingNeonDb) {
+      // Dedup: track infra_repair dispatches through the shared claims system
+      // Previously bypassed dispatchToActions (direct HTTP), causing 100+/24h loops
+      const repairKey = `infra_repair:${r.slug}`;
+      if (ctx.dispatchedThisRun.has(repairKey) || ctx.activeClaims.has(repairKey)) {
+        ctx.dedupSkips++;
+        console.log(`[sentinel-urgent] Dedup skip (infra_repair): ${repairKey}`);
+        continue;
+      }
+      ctx.dispatchedThisRun.add(repairKey);
+
       try {
         const repairRes = await fetch(`${ctx.baseUrl}/api/agents/repair-infra`, {
           method: "POST",

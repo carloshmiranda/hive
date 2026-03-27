@@ -108,6 +108,56 @@ async function executeSentinelDispatch(request: Request) {
 
   try {
     // ========================================================================
+    // QSTASH SCHEDULE HEALTH CHECK (self-healing)
+    // ========================================================================
+    // If Sentinel is running, QStash is working. But other schedules may have
+    // been lost (redeployment, QStash purge). Verify and recreate if needed.
+    // Only check every ~12h to avoid API spam (use a simple time-based gate).
+    try {
+      const [lastCheck] = await sql`
+        SELECT value FROM settings WHERE key = 'qstash_schedule_check_at'
+      `.catch(() => []);
+      const lastCheckTime = lastCheck?.value ? new Date(lastCheck.value).getTime() : 0;
+      const hoursSinceCheck = (Date.now() - lastCheckTime) / 3600000;
+
+      if (hoursSinceCheck > 12) {
+        const { getQStashClient } = await import("@/lib/qstash");
+        const qClient = getQStashClient();
+        const schedules = await qClient.schedules.list();
+        const scheduleUrls = new Set(schedules.map((s: any) => s.destination));
+
+        const EXPECTED = [
+          "/api/cron/sentinel-urgent",
+          "/api/cron/sentinel-dispatch",
+          "/api/cron/sentinel-janitor",
+          "/api/cron/metrics",
+          "/api/cron/digest",
+          "/api/cron/uptime-monitor",
+        ];
+        const missing = EXPECTED.filter(p => !scheduleUrls.has(`${baseUrl}${p}`));
+
+        if (missing.length > 0) {
+          console.warn(`[sentinel-dispatch] Missing QStash schedules: ${missing.join(", ")} — recreating`);
+          // Trigger schedule recreation via the setup endpoint
+          await fetch(`${baseUrl}/api/setup/qstash-schedules`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${cronSecret}` },
+            signal: AbortSignal.timeout(15000),
+          }).catch((e: any) => console.warn(`[sentinel-dispatch] QStash schedule recreation failed: ${e?.message}`));
+          dispatches.push({ type: "qstash_heal", detail: `Recreated missing: ${missing.join(", ")}` } as any);
+        }
+
+        // Update the check timestamp
+        await sql`
+          INSERT INTO settings (key, value, is_secret) VALUES ('qstash_schedule_check_at', ${new Date().toISOString()}, false)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        `.catch(() => {});
+      }
+    } catch (qErr) {
+      console.warn("[sentinel-dispatch] QStash health check failed (non-blocking):", qErr instanceof Error ? qErr.message : "unknown");
+    }
+
+    // ========================================================================
     // APPROVAL EXPIRY + ORPHANED IDEA CLEANUP
     // ========================================================================
 

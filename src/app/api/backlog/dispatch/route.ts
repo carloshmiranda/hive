@@ -203,23 +203,22 @@ export async function POST(req: Request) {
       }
 
       // After successful decomposition, dispatch the first sub-task immediately.
-      // Skip the normal selection flow — the sub-tasks are fresh, specced, and ready.
+      // Don't fall through to normal selection — call ourselves recursively so the
+      // fresh sub-tasks get picked up by the scoring/dispatch flow without delay.
       if (decomposed) {
-        console.log(`[backlog] Post-decompose: dispatching first sub-task immediately`);
+        console.log(`[backlog] Post-decompose: triggering immediate dispatch of first sub-task`);
         try {
-          const [firstSubTask] = await sql`
-            SELECT id, title, priority, spec FROM hive_backlog
-            WHERE source = 'auto_decompose' AND status = 'ready'
-            ORDER BY created_at DESC
-            LIMIT 1
-          `;
-          if (firstSubTask) {
-            // Mark as dispatched and fire — reuse the dispatch logic below
-            // by setting completed_id to null and letting the normal flow pick it up
-            console.log(`[backlog] First sub-task: "${firstSubTask.title}" (${firstSubTask.id})`);
-          }
+          // Trigger a new dispatch cycle via QStash (guaranteed delivery)
+          // so the fresh sub-tasks get dispatched without waiting for Sentinel.
+          await qstashPublish("/api/backlog/dispatch", {
+            trigger: "post_decompose",
+            parent_id: completed_id,
+          }, {
+            deduplicationId: `post-decompose-${completed_id}-${Date.now().toString(36)}`,
+          });
+          console.log(`[backlog] Post-decompose dispatch triggered for sub-tasks of ${completed_id}`);
         } catch (e) {
-          console.warn("[backlog] Post-decompose sub-task lookup failed:", e instanceof Error ? e.message : "unknown");
+          console.warn("[backlog] Post-decompose dispatch trigger failed:", e instanceof Error ? e.message : "unknown");
         }
       }
 
@@ -381,6 +380,119 @@ export async function POST(req: Request) {
   `.catch(() => []);
   if (recentDispatch) {
     return json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
+  }
+
+  // =========================================================================
+  // Blocked item recycler: process items stuck in 'blocked' that need decomposition.
+  // Without this, blocked items are a dead-end — no workflow ever picks them up.
+  // Runs once per dispatch cycle (max 2 items) to avoid starving normal dispatch.
+  // =========================================================================
+  try {
+    const blockedItems = await sql`
+      SELECT id, title, description, priority, category, notes, spec, source
+      FROM hive_backlog
+      WHERE status = 'blocked'
+      AND (
+        notes ILIKE '%[needs_decomposition]%'
+        OR notes ILIKE '%[auto-blocked]%'
+        OR (notes ILIKE '%max_turns failures%' AND source NOT IN ('auto_decompose', 'decomposed'))
+      )
+      AND NOT notes ILIKE '%[recycled]%'
+      AND created_at > NOW() - INTERVAL '7 days'
+      ORDER BY
+        CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+        created_at ASC
+      LIMIT 2
+    `.catch(() => []);
+
+    for (const item of blockedItems) {
+      const isSubTask = item.source === 'auto_decompose' || item.source === 'decomposed';
+      if (isSubTask) {
+        // Sub-tasks that failed: unblock for retry with fresh cooldown instead of decomposing further
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'ready', dispatched_at = NULL,
+              notes = COALESCE(notes, '') || ' [recycled] Sub-task unblocked for retry.'
+          WHERE id = ${item.id} AND status = 'blocked'
+        `.catch(() => {});
+        console.log(`[backlog] Recycled sub-task: "${item.title}" → ready for retry`);
+        continue;
+      }
+
+      // Parent items: trigger LLM decomposition
+      try {
+        const { generateSpec, decomposeTask } = await import("@/lib/backlog-planner");
+        let spec = item.spec;
+        if (!spec || !spec.approach) {
+          spec = await generateSpec(
+            { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
+            sql
+          );
+        }
+
+        if (spec && Array.isArray(spec.approach) && spec.approach.length >= 1) {
+          const subTasks = await decomposeTask(
+            { id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, notes: item.notes },
+            spec,
+            `recycled from blocked status — previous attempts failed`,
+            sql
+          );
+
+          if (subTasks.length >= 2) {
+            for (const sub of subTasks) {
+              await sql`
+                INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
+                VALUES (
+                  ${sub.title.slice(0, 200)}, ${sub.description.slice(0, 2000)},
+                  ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
+                  ${JSON.stringify({
+                    complexity: sub.complexity,
+                    estimated_turns: sub.estimated_turns,
+                    acceptance_criteria: sub.acceptance_criteria,
+                    affected_files: sub.affected_files,
+                    approach: [sub.description],
+                    risks: []
+                  })}
+                )
+              `.catch(() => {});
+            }
+            await sql`
+              UPDATE hive_backlog
+              SET notes = COALESCE(notes, '') || ${` [recycled] Decomposed into ${subTasks.length} sub-tasks.`}
+              WHERE id = ${item.id}
+            `.catch(() => {});
+            console.log(`[backlog] Recycled blocked item: "${item.title}" → ${subTasks.length} sub-tasks`);
+          } else {
+            // Decomposition produced <2 tasks — unblock for direct retry
+            await sql`
+              UPDATE hive_backlog
+              SET status = 'ready', dispatched_at = NULL,
+                  notes = COALESCE(notes, '') || ' [recycled] Decomposition produced too few sub-tasks — unblocked for direct retry.'
+              WHERE id = ${item.id} AND status = 'blocked'
+            `.catch(() => {});
+          }
+        } else {
+          // No spec possible — unblock for direct retry (P0s will bypass spec gate)
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'ready', dispatched_at = NULL,
+                notes = COALESCE(notes, '') || ' [recycled] No spec generated — unblocked for retry.'
+            WHERE id = ${item.id} AND status = 'blocked'
+          `.catch(() => {});
+        }
+      } catch (decompErr) {
+        // Mark as recycled even on failure to prevent retry loops
+        await sql`
+          UPDATE hive_backlog
+          SET notes = COALESCE(notes, '') || ' [recycled] Decomposition failed — needs manual review.'
+          WHERE id = ${item.id}
+        `.catch(() => {});
+        console.warn(`[backlog] Recycler decomposition failed for "${item.title}":`, decompErr instanceof Error ? decompErr.message : "unknown");
+      }
+    }
+  } catch (recyclerErr) {
+    console.warn('[backlog] Blocked item recycler failed:', recyclerErr instanceof Error ? recyclerErr.message : 'unknown');
+    // Non-blocking — continue with normal dispatch
   }
 
   // Flag problem statements as needing decomposition before dispatch

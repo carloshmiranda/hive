@@ -106,17 +106,27 @@ export async function getActiveClaims(
       )
     );
 
+    // Non-company values in workflow run-names that should map to _global
+    // e.g. "Evolver: evolve_trigger — all" → claimKey("evolve_trigger", "_global")
+    // Without this, "evolve_trigger:all" ≠ "evolve_trigger:_global" and dedup fails
+    const NON_COMPANY_VALUES = new Set([
+      "all", "systemic", "manual", "weekly", "daily", "portfolio",
+      "global", "hive", "sentinel", "unknown",
+    ]);
+    const normalizeCompany = (val: string): string | undefined =>
+      NON_COMPANY_VALUES.has(val.toLowerCase()) ? undefined : val;
+
     for (const res of [inProgressRes, queuedRes]) {
       if (!res.ok) continue;
       const data = await res.json();
       for (const run of data.workflow_runs || []) {
         const match = run.name?.match(/:\s*(\w+)\s*[—–-]\s*(\w+)/);
-        if (match) claims.add(claimKey(match[1], match[2]));
+        if (match) claims.add(claimKey(match[1], normalizeCompany(match[2])));
         if (run.event === "repository_dispatch" && run.display_title) {
           const dtMatch = run.display_title.match(
             /:\s*(\w+)\s*[—–-]\s*(\w+)/
           );
-          if (dtMatch) claims.add(claimKey(dtMatch[1], dtMatch[2]));
+          if (dtMatch) claims.add(claimKey(dtMatch[1], normalizeCompany(dtMatch[2])));
         }
       }
     }

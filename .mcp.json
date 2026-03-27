@@ -9,7 +9,7 @@
       }
     },
     "github": {
-      "type": "stdio", 
+      "type": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
