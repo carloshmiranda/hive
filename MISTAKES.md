@@ -22,6 +22,13 @@
 **Prevention:** When using regex for task classification: (1) always test against the full DB dataset, not just a few examples, (2) require action verbs before nouns to distinguish "about X" from "do X", (3) PostgreSQL `~*` regex may match differently than JS — always verify in both environments.
 **Affects:** hive
 
+### 2026-03-27 Decomposer gate relied on complexity labels, not turn budget
+**What happened:** 92% engineer failure rate (44/48 in 24h). Items with estimated_turns >35 dispatched without decomposition because the gate only checked `spec.complexity === "L"`. M-complexity items with 40+ estimated_turns sailed through. Decomposed sub-tasks were also allowed up to M/40 turns, exceeding the 35-turn budget. Specless items dispatched for 35 turns blindly.
+**Root cause:** Three compounding gaps: (1) Pre-dispatch decompose gate used complexity label (`"L"`) not actual estimated_turns — missed M-complexity items that exceed turn budget. (2) Sub-task clamp in backlog-planner allowed M complexity with up to 40 estimated_turns — sub-tasks exceeded the 35-turn budget they'd be dispatched with. (3) Specless items had no gate at all — dispatched for 35 turns with zero guidance.
+**Fix applied:** (1) Turn-budget gate: decompose if estimated_turns >28 (80% of 35), regardless of complexity label. (2) Sub-task clamp: forced S complexity, max 25 turns. (3) Specless blocking: non-P0 items without specs marked `blocked` with `[no_spec]` note. (4) Dispatch payload cap: first-attempt max_turns capped at 35.
+**Prevention:** Gates should always use the numeric value (estimated_turns) not categorical proxies (complexity labels). Labels are LLM-generated and unreliable. The numeric value is what actually determines success/failure.
+**Affects:** hive
+
 ### 2026-03-26 Turn estimates capped too low — every Engineer run hit max_turns
 **What happened:** 79 max_turns failures in 48h. Engineer consistently ran out of turns on tasks that should have been completable. Items retried with flat 2h cooldown, failing identically each time.
 **Root cause:** Three compounding issues: (1) Turn estimate prompt used S=10-15, M=20-25, L=30-35 — systematically 40-60% too low for real tasks that need repo exploration + implementation + build verification. (2) max_turns was only sent on 3rd+ attempt — first two dispatches used the workflow default (35) regardless of spec. (3) Cooldown was flat 2h for all retries — no escalation meant the same item failed every 2h indefinitely. (4) isMaxTurns detection was hardcoded at 30 turns — missed items with higher specs.

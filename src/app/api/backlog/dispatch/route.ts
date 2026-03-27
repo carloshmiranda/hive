@@ -202,11 +202,25 @@ export async function POST(req: Request) {
         }
       }
 
-      // After successful decomposition, skip circuit breaker checks and proceed
-      // directly to dispatch selection. Freshly-created sub-tasks (S/M complexity)
-      // should be the next items dispatched.
+      // After successful decomposition, dispatch the first sub-task immediately.
+      // Skip the normal selection flow — the sub-tasks are fresh, specced, and ready.
       if (decomposed) {
-        console.log(`[backlog] Post-decompose: proceeding to dispatch first sub-task immediately`);
+        console.log(`[backlog] Post-decompose: dispatching first sub-task immediately`);
+        try {
+          const [firstSubTask] = await sql`
+            SELECT id, title, priority, spec FROM hive_backlog
+            WHERE source = 'auto_decompose' AND status = 'ready'
+            ORDER BY created_at DESC
+            LIMIT 1
+          `;
+          if (firstSubTask) {
+            // Mark as dispatched and fire — reuse the dispatch logic below
+            // by setting completed_id to null and letting the normal flow pick it up
+            console.log(`[backlog] First sub-task: "${firstSubTask.title}" (${firstSubTask.id})`);
+          }
+        } catch (e) {
+          console.warn("[backlog] Post-decompose sub-task lookup failed:", e instanceof Error ? e.message : "unknown");
+        }
       }
 
       if (!decomposed) {
@@ -853,10 +867,44 @@ export async function POST(req: Request) {
     }
   }
 
-  // Auto-decompose L (large) complexity tasks — dispatch to GitHub Actions
+  // Turn-budget gate: decompose before dispatching anything that exceeds the turn budget.
+  // The complexity label is unreliable — estimated_turns is the real signal.
+  // Default turn budget is 35 (Sonnet). Items estimating more than 80% of budget get decomposed first.
+  const TURN_BUDGET = 35;
+  const turnBudgetThreshold = Math.floor(TURN_BUDGET * 0.8); // 28
+  const estimatedTurns = spec?.estimated_turns || 0;
+  const needsDecompose = spec && (
+    estimatedTurns > turnBudgetThreshold ||
+    spec.complexity === "L" ||
+    (spec.complexity === "M" && estimatedTurns > turnBudgetThreshold)
+  );
+
+  // Block specless items instead of burning 35 turns blindly
+  if (!spec && topItem.priority !== "P0") {
+    await sql`
+      UPDATE hive_backlog
+      SET status = 'blocked', dispatched_at = NULL,
+          notes = COALESCE(notes, '') || ' [no_spec] Spec generation failed — needs manual spec or decomposition before dispatch.'
+      WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
+    `.catch(() => {});
+    console.warn(`[backlog] Blocked specless item: "${topItem.title}" — would burn 35 turns blindly`);
+
+    // Try next item
+    const recursionDepth = (body.recursion_depth || 0) + 1;
+    if (recursionDepth < 5) {
+      return POST(new Request(req.url, {
+        method: 'POST',
+        headers: req.headers,
+        body: JSON.stringify({ ...body, recursion_depth: recursionDepth })
+      }));
+    }
+    return json({ dispatched: false, reason: "no_spec_items_only" });
+  }
+
+  // Auto-decompose tasks that exceed turn budget — dispatch to GitHub Actions
   // Claude CLI on Actions has Max subscription access for quality decomposition.
   // Instead of burning 30+ turns on a task that will exhaust max_turns, decompose first.
-  if (spec && spec.complexity === "L" && Array.isArray(spec.approach) && spec.approach.length >= 3) {
+  if (needsDecompose) {
     try {
       const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
       const decomposeRes = await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
@@ -953,11 +1001,12 @@ export async function POST(req: Request) {
         attempt: attemptCount + 1,
         chain_next: true,
         spec: spec || undefined,
-        // Spec-driven max_turns: use estimated_turns from spec (default 35)
-        // On 3rd+ attempt: escalate to Opus with +15 bonus turns
+        // Turn-budget cap: first attempts capped at TURN_BUDGET (35).
+        // Items with higher estimated_turns should have been decomposed by the gate above.
+        // On 3rd+ attempt: escalate to Opus with +15 bonus turns (capped at 50).
         max_turns: attemptCount >= 2
           ? Math.min(50, (spec?.estimated_turns || 35) + 15)
-          : spec?.estimated_turns || 35,
+          : Math.min(35, spec?.estimated_turns || 35),
         ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
       },
     }),

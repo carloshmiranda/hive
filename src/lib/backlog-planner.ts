@@ -445,8 +445,9 @@ Respond with ONLY valid JSON array (no markdown, no explanation):
   }
 ]
 
-Complexity: S = 1-3 files, simple logic (15-20 turns). M = 3-5 files, moderate logic (25-35 turns).
-Never output complexity "L" — if a sub-task would be L, break it further.`;
+CRITICAL SIZE CONSTRAINT: Each sub-task MUST be completable in ≤25 turns by a Claude Sonnet agent.
+Complexity: S = 1-3 files, simple logic (10-20 turns). NEVER output M or L — if a sub-task touches 4+ files or needs 20+ turns, split it further.
+A sub-task that modifies more than 3 files or adds more than 150 lines of code is TOO BIG.`;
 
   try {
     const response = await callLLM("decomposer", prompt, {
@@ -475,11 +476,10 @@ Never output complexity "L" — if a sub-task would be L, break it further.`;
       if (!st.acceptance_criteria.some(c => c.toLowerCase().includes("build"))) {
         st.acceptance_criteria.push("npx next build passes");
       }
-      // Clamp
-      st.complexity = st.complexity === "M" ? "M" : "S";
-      const subCaps: Record<string, [number, number]> = { S: [15, 25], M: [25, 40] };
-      const [subMin, subMax] = subCaps[st.complexity] || [15, 25];
-      st.estimated_turns = Math.max(subMin, Math.min(subMax, st.estimated_turns || 20));
+      // Clamp — sub-tasks MUST fit within Engineer's 35-turn budget (80% = 28 turns max)
+      // If decomposition produces M-complexity items, they'll just hit max_turns again
+      st.complexity = "S";
+      st.estimated_turns = Math.max(8, Math.min(25, st.estimated_turns || 15));
       valid.push(st);
     }
 
