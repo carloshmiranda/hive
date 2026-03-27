@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { pushFiles } from "@/lib/github";
 import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 
 /**
  * POST /api/agents/migrate-stats — deploy /api/stats endpoint and middleware to existing company repos.

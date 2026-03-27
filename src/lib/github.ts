@@ -1,7 +1,8 @@
 import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 
 async function gh(path: string, method = "GET", body?: any) {
-  const token = await getSettingValue("github_token");
+  const token = await getGitHubToken();
   if (!token) throw new Error("GitHub token not configured. Add it in Hive Settings.");
 
   const res = await fetch(`https://api.github.com${path}`, {

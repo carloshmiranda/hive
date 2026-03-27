@@ -1,5 +1,5 @@
 import { getDb, json } from "@/lib/db";
-import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 import { invalidateCompanyCache } from "@/lib/cache";
 import { qstashPublish } from "@/lib/qstash";
 
@@ -153,7 +153,7 @@ export async function POST(req: Request) {
     });
   }
 
-  const ghPat = await getSettingValue("github_token").catch(() => null);
+  const ghPat = await getGitHubToken().catch(() => null);
   if (!ghPat) {
     await scheduleChainRetry("no_github_token", 10 * 60);
     return json({ chained: false, reason: "no_github_token", chain_retry: true });

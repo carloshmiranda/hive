@@ -3,12 +3,14 @@ node_modules/
 .env
 .env.local
 *.log
+*.pem
 logs/
 .DS_Store
 .vercel
 hive-project.tar.gz
 .env*.local
 .claude/worktrees/
+.claude/.env
 docs/
 files.zip
 hive-claude-code-prompt.md

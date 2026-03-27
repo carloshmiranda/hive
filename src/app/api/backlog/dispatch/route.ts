@@ -1,5 +1,5 @@
 import { getDb, json, err } from "@/lib/db";
-import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch";
@@ -300,7 +300,7 @@ export async function POST(req: Request) {
   // Runs on both success and failure — merging existing PRs is independent of current task outcome
   if (completed_id) {
     try {
-      const ghToken = await getSettingValue("github_token");
+      const ghToken = await getGitHubToken();
       if (ghToken) {
         const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
         const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
@@ -977,7 +977,7 @@ export async function POST(req: Request) {
   }
 
   // Dispatch via GitHub Actions
-  const ghPat = await getSettingValue("github_token").catch(() => null);
+  const ghPat = await getGitHubToken().catch(() => null);
   if (!ghPat) {
     return json({ dispatched: false, reason: "no_github_token" });
   }
@@ -1259,7 +1259,8 @@ export async function POST(req: Request) {
     });
   }
 
-  console.error(`[backlog] GitHub dispatch failed: ${res.status} for "${topItem.title}" (${topItem.priority})`);
+  const errBody = await res.text().catch(() => "");
+  console.error(`[backlog] GitHub dispatch failed: ${res.status} for "${topItem.title}" (${topItem.priority}): ${errBody.slice(0, 500)}`);
   // Block the item that caused the 422 to prevent it from being picked again
   if (res.status === 422) {
     await sql`

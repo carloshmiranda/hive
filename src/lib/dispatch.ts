@@ -1,4 +1,4 @@
-import { getSettingValue } from "./settings";
+import { getGitHubToken } from "./github-app";
 
 interface FailedBacklogItem {
   id: string;
@@ -94,7 +94,7 @@ export function cleanupFailedItemsCache(): void {
 export async function dispatchEvent(eventType: string, payload: Record<string, any>) {
   try {
     // Try settings table first (works on Vercel), fall back to env var (works in GitHub Actions)
-    const ghPat = await getSettingValue("github_token") || process.env.GH_PAT;
+    const ghPat = await getGitHubToken() || process.env.GH_PAT;
     const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
     if (!ghPat) {
       console.warn(`dispatchEvent(${eventType}): no github_token in settings or GH_PAT env var`);

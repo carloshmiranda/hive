@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
-import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 import { capabilitiesSummary } from "@/lib/capabilities";
 import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
@@ -265,7 +265,7 @@ ${capabilitiesSummary(company.capabilities)}`;
     // 8. Ops escalation → dispatch fix to company repo (free Actions) with Hive fallback
     if (agentName === "ops" && output.includes("needs_engineer")) {
       try {
-        const ghPat = await getSettingValue("github_token") || process.env.GH_PAT;
+        const ghPat = await getGitHubToken() || process.env.GH_PAT;
         if (ghPat && company.github_repo) {
           // Try company repo's hive-fix.yml first (free on public repos)
           const fixRes = await fetch(

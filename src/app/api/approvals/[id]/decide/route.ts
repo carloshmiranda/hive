@@ -1,7 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { dispatchEvent } from "@/lib/dispatch";
-import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -124,7 +124,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         } | null;
 
         if (migCtx?.github_repo && migCtx?.gaps?.length) {
-          const ghPat = await getSettingValue("github_token") || process.env.GH_PAT;
+          const ghPat = await getGitHubToken() || process.env.GH_PAT;
           if (ghPat) {
             // Build migration task description for the Engineer
             const migrationTasks = migCtx.gaps.map(g => {

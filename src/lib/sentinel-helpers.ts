@@ -8,6 +8,7 @@
 
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
 
 // ---------------------------------------------------------------------------
@@ -53,7 +54,7 @@ export async function initSentinelContext(
   if (authErr) throw authErr;
 
   const sql = getDb();
-  const ghPat = await getSettingValue("github_token").catch(() => null);
+  const ghPat = await getGitHubToken().catch(() => null);
   const vercelToken = await getSettingValue("vercel_token").catch(() => null);
   const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
   const cronSecret = process.env.CRON_SECRET || "";

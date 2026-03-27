@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { getGitHubToken } from "@/lib/github-app";
 
 // The Hive orchestrator repo (not in companies table — special case)
 const HIVE_REPO = "carloshmiranda/hive";
@@ -78,7 +79,10 @@ export async function POST(req: NextRequest) {
     return err(`Unknown token type '${tokenType}'`, 400);
   }
 
-  const tokenValue = await getSettingValue(settingsKey);
+  // Use GitHub App token for github_pat, generic settings for everything else
+  const tokenValue = tokenType === "github_pat"
+    ? await getGitHubToken()
+    : await getSettingValue(settingsKey);
   if (!tokenValue) {
     return err(`Token type '${tokenType}' not configured in settings`, 500);
   }
