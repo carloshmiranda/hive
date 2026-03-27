@@ -12,9 +12,12 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const sql = getDb();
 
-  const vercelToken = await getSettingValue("vercel_token");
+  // Batch settings fetches to reduce Redis calls from 2 to 1 HTTP request
+  const [vercelToken, teamId] = await Promise.all([
+    getSettingValue("vercel_token"),
+    getSettingValue("vercel_team_id")
+  ]);
   if (!vercelToken) return err("Vercel token not configured", 500);
-  const teamId = await getSettingValue("vercel_team_id");
   const teamParam = teamId ? `?teamId=${teamId}` : "";
 
   // Get companies to enable analytics for

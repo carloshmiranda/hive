@@ -16,7 +16,11 @@ function getRedis(): Redis | null {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return null;
-  redis = new Redis({ url, token });
+  redis = new Redis({
+    url,
+    token,
+    enableAutoPipelining: true // Batch multiple Redis calls into single HTTP request
+  });
   return redis;
 }
 

@@ -37,8 +37,11 @@ export async function POST(req: NextRequest) {
   let vercelHasDbUrl = false;
   if (!company.neon_project_id && company.vercel_project_id) {
     try {
-      const vercelToken = await getSettingValue("vercel_token");
-      const teamId = await getSettingValue("vercel_team_id");
+      // Batch settings fetches to reduce Redis calls from 2 to 1 HTTP request
+      const [vercelToken, teamId] = await Promise.all([
+        getSettingValue("vercel_token"),
+        getSettingValue("vercel_team_id")
+      ]);
       const teamParam = teamId ? `&teamId=${teamId}` : "";
       const envRes = await fetch(
         `https://api.vercel.com/v9/projects/${company.vercel_project_id}/env?${teamParam}`,
@@ -154,8 +157,11 @@ export async function POST(req: NextRequest) {
   // ── Repair 2: Missing Vercel env var (DATABASE_URL) ──
   if (company.vercel_project_id && company.neon_project_id) {
     try {
-      const vercelToken = await getSettingValue("vercel_token");
-      const teamId = await getSettingValue("vercel_team_id");
+      // Batch settings fetches to reduce Redis calls from 2 to 1 HTTP request
+      const [vercelToken, teamId] = await Promise.all([
+        getSettingValue("vercel_token"),
+        getSettingValue("vercel_team_id")
+      ]);
       const teamParam = teamId ? `&teamId=${teamId}` : "";
       const envRes = await fetch(
         `https://api.vercel.com/v9/projects/${company.vercel_project_id}/env?${teamParam}`,

@@ -1,10 +1,14 @@
 import { getSettingValue } from "@/lib/settings";
 
 async function vercel(path: string, method = "GET", body?: any) {
-  const token = await getSettingValue("vercel_token");
+  // Batch fetch both settings to reduce Redis calls from 2 to 1 HTTP request
+  const [token, teamId] = await Promise.all([
+    getSettingValue("vercel_token"),
+    getSettingValue("vercel_team_id")
+  ]);
+
   if (!token) throw new Error("Vercel token not configured. Add it in Hive Settings.");
 
-  const teamId = await getSettingValue("vercel_team_id");
   const separator = path.includes("?") ? "&" : "?";
   const url = `https://api.vercel.com${path}${teamId ? `${separator}teamId=${teamId}` : ""}`;
 
@@ -25,6 +29,8 @@ async function vercel(path: string, method = "GET", body?: any) {
 }
 
 export async function createProject(slug: string, githubRepo: string) {
+  // Note: The vercel() function already batches vercel_token + vercel_team_id
+  // This additional call would benefit from batching if called together with vercel()
   const owner = await getSettingValue("github_owner");
   return vercel("/v10/projects", "POST", {
     name: slug,

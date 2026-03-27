@@ -76,8 +76,11 @@ export async function POST(req: NextRequest) {
 
     // Enable Web Analytics
     try {
-      const vercelToken = await getSettingValue("vercel_token");
-      const teamId = await getSettingValue("vercel_team_id");
+      // Batch settings fetches to reduce Redis calls from 2 to 1 HTTP request
+      const [vercelToken, teamId] = await Promise.all([
+        getSettingValue("vercel_token"),
+        getSettingValue("vercel_team_id")
+      ]);
       const teamParam = teamId ? `?teamId=${teamId}` : "";
       const analyticsRes = await fetch(`https://api.vercel.com/v1/web-analytics/projects${teamParam}`, {
         method: "POST",

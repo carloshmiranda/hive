@@ -23,6 +23,8 @@ async function gh(path: string, method = "GET", body?: any) {
 }
 
 export async function createRepo(slug: string, description: string) {
+  // Batch with token fetch if we know both are needed, but since gh() already fetched token,
+  // this would create redundant calls. Consider batching at call site instead.
   const owner = await getSettingValue("github_owner");
   if (!owner) throw new Error("GitHub owner not configured. Add it in Hive Settings.");
 
