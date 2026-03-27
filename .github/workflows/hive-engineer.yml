@@ -860,7 +860,7 @@ jobs:
             -d "{\"agent\":\"engineer\",\"action\":\"self_improvement\",\"company\":\"hive\",\"status\":\"${STATUS}\",\"summary\":\"${TASK}\"}" || true
 
       - name: Chain dispatch next work item
-        if: always() && steps.agent.outcome == 'success'
+        if: always()
         env:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
