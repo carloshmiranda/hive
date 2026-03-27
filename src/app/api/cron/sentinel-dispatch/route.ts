@@ -16,6 +16,7 @@
  *   - Company cycle dispatch
  */
 
+import * as Sentry from "@sentry/nextjs";
 import {
   initSentinelContext,
   dispatchToActions,
@@ -39,6 +40,36 @@ export async function GET(request: Request) {
   if (!auth.authorized) {
     return Response.json({ error: auth.error }, { status: 401 });
   }
+
+  // Sentry cron monitoring - monitors the most critical 4h schedule that drives the entire dispatch chain
+  const checkInId = Sentry.captureCheckIn({
+    monitorSlug: "sentinel-dispatch",
+    status: "in_progress",
+  });
+
+  try {
+    const result = await executeSentinelDispatch(request);
+
+    // Capture successful execution
+    Sentry.captureCheckIn({
+      checkInId,
+      monitorSlug: "sentinel-dispatch",
+      status: "ok",
+    });
+
+    return result;
+  } catch (error) {
+    // Capture failure
+    Sentry.captureCheckIn({
+      checkInId,
+      monitorSlug: "sentinel-dispatch",
+      status: "error",
+    });
+    throw error;
+  }
+}
+
+async function executeSentinelDispatch(request: Request) {
 
   let ctx: SentinelContext;
   try {
