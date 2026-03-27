@@ -51,10 +51,10 @@ jobs:
         with:
           allowed_bots: "hive-orchestrator[bot]"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          max_turns: 8
+          max_turns: 10
           timeout_minutes: 5
           prompt: |
-            You are decomposing a Hive backlog task that is too large for a single Engineer session (max 35 turns).
+            You are decomposing a Hive backlog task that is too large for a single Engineer session (max 50 turns).
 
             Read the backlog item from the database, then break it into 2-4 independent sub-tasks.
 

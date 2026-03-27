@@ -102,7 +102,7 @@ jobs:
         with:
           allowed_bots: "hive-orchestrator[bot]"
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-opus-4-20250514 --max-turns 40 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-opus-4-20250514 --max-turns 50 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the CEO agent of Hive, an autonomous venture orchestrator.
             GH_PAT is available as $GH_PAT env var — use it for all gh commands: `GH_TOKEN="$GH_PAT" gh ...`

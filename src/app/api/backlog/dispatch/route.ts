@@ -129,7 +129,7 @@ export async function POST(req: Request) {
       const turnsMatch = errorMsg.match(/\((\d+) turns\)/);
       const turnsUsed = turnsMatch ? parseInt(turnsMatch[1]) : 0;
       // Detect max_turns failures — use spec.estimated_turns as baseline (80% threshold)
-      const specTurns = item?.spec?.estimated_turns || 35;
+      const specTurns = item?.spec?.estimated_turns || 50;
       const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns") || turnsUsed >= Math.floor(specTurns * 0.8);
 
       // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
@@ -1027,8 +1027,8 @@ export async function POST(req: Request) {
 
   // Turn-budget gate: decompose before dispatching anything that exceeds the turn budget.
   // The complexity label is unreliable — estimated_turns is the real signal.
-  // Default turn budget is 35 (Sonnet). Items estimating more than 80% of budget get decomposed first.
-  const TURN_BUDGET = 35;
+  // Default turn budget is 50 (Sonnet). Items estimating more than 80% of budget get decomposed first.
+  const TURN_BUDGET = 50;
   const turnBudgetThreshold = Math.floor(TURN_BUDGET * 0.8); // 28
   const estimatedTurns = spec?.estimated_turns || 0;
   const needsDecompose = spec && (
@@ -1037,7 +1037,7 @@ export async function POST(req: Request) {
     (spec.complexity === "M" && estimatedTurns > turnBudgetThreshold)
   );
 
-  // Block specless items instead of burning 35 turns blindly
+  // Block specless items instead of burning 50 turns blindly
   if (!spec && topItem.priority !== "P0") {
     await sql`
       UPDATE hive_backlog
@@ -1045,7 +1045,7 @@ export async function POST(req: Request) {
           notes = COALESCE(notes, '') || ' [no_spec] Spec generation failed — needs manual spec or decomposition before dispatch.'
       WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
     `.catch(() => {});
-    console.warn(`[backlog] Blocked specless item: "${topItem.title}" — would burn 35 turns blindly`);
+    console.warn(`[backlog] Blocked specless item: "${topItem.title}" — would burn 50 turns blindly`);
 
     // Try next item
     const recursionDepth = (body.recursion_depth || 0) + 1;
@@ -1061,7 +1061,7 @@ export async function POST(req: Request) {
 
   // Auto-decompose tasks that exceed turn budget — dispatch to GitHub Actions
   // Claude CLI on Actions has Max subscription access for quality decomposition.
-  // Instead of burning 30+ turns on a task that will exhaust max_turns, decompose first.
+  // Instead of burning 40+ turns on a task that will exhaust max_turns, decompose first.
   if (needsDecompose) {
     try {
       const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
@@ -1193,12 +1193,12 @@ export async function POST(req: Request) {
         attempt: attemptCount + 1,
         chain_next: true,
         spec: spec || undefined,
-        // Turn-budget cap: first attempts capped at TURN_BUDGET (35).
+        // Turn-budget cap: first attempts capped at TURN_BUDGET (50).
         // Items with higher estimated_turns should have been decomposed by the gate above.
         // On 3rd+ attempt: escalate to Opus with +15 bonus turns (capped at 50).
         max_turns: attemptCount >= 2
-          ? Math.min(50, (spec?.estimated_turns || 35) + 15)
-          : Math.min(35, spec?.estimated_turns || 35),
+          ? Math.min(60, (spec?.estimated_turns || 50) + 15)
+          : Math.min(50, spec?.estimated_turns || 50),
         ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
       },
     }),

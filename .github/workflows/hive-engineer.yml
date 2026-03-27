@@ -194,7 +194,7 @@ jobs:
         with:
           allowed_bots: "hive-orchestrator[bot]"
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 30 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 50 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You provision infrastructure for new companies.
 
@@ -778,7 +778,7 @@ jobs:
           MODEL=$(echo "$PAYLOAD_JSON" | jq -r '.model // empty' 2>/dev/null)
           MAX_TURNS=$(echo "$PAYLOAD_JSON" | jq -r '.max_turns // empty' 2>/dev/null)
           echo "model=${MODEL:-claude-sonnet-4-20250514}" >> $GITHUB_OUTPUT
-          echo "max_turns=${MAX_TURNS:-35}" >> $GITHUB_OUTPUT
+          echo "max_turns=${MAX_TURNS:-50}" >> $GITHUB_OUTPUT
 
       - name: Run build agent (Hive-internal only)
         id: agent
@@ -897,7 +897,7 @@ jobs:
 
             # Explicit max_turns detection — if agent used most turns and failed, it's max_turns
             if [ -z "$ERROR_TYPE" ] || [ "$ERROR_TYPE" = "" ]; then
-              if [ "$TURNS" -ge 30 ] 2>/dev/null; then
+              if [ "$TURNS" -ge 45 ] 2>/dev/null; then
                 ERROR_TYPE="error_max_turns"
                 ERROR_DETAIL="${ERROR_DETAIL:-No error message in execution output}"
               fi
