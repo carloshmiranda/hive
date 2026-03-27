@@ -31,23 +31,44 @@ export async function POST(req: NextRequest) {
 
     // Step 0: Disconnect old store if requested
     if (disconnect_store_id) {
+      // First, find the store-project connection ID
+      let connectionId: string | null = null;
       try {
-        const res = await fetch(
-          `https://api.vercel.com/v1/storage/stores/${disconnect_store_id}/connections/${project_id}${teamParam}`,
-          {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
-          }
+        const listRes = await fetch(
+          `https://api.vercel.com/v1/storage/stores/${disconnect_store_id}${teamParam}`,
+          { headers: { Authorization: `Bearer ${token}` } }
         );
-        results.disconnect_status = res.status;
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          results.disconnect_error = body;
-        } else {
-          results.disconnect = "ok";
+        if (listRes.ok) {
+          const storeData = await listRes.json();
+          const meta = storeData.projectsMetadata || [];
+          const conn = meta.find((m: { projectId: string }) => m.projectId === project_id);
+          if (conn) connectionId = conn.id;
         }
-      } catch (e: unknown) {
-        results.disconnect_error = e instanceof Error ? e.message : String(e);
+      } catch { /* ignore */ }
+
+      // Try multiple disconnect URL patterns
+      const disconnectUrls = [
+        connectionId ? `/v1/storage/stores/${disconnect_store_id}/connections/${connectionId}` : null,
+        `/v1/storage/stores/${disconnect_store_id}/connections/${project_id}`,
+        `/v1/projects/${project_id}/store-connections/${disconnect_store_id}`,
+      ].filter(Boolean) as string[];
+
+      for (const path of disconnectUrls) {
+        try {
+          const res = await fetch(
+            `https://api.vercel.com${path}${teamParam}`,
+            { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+          );
+          results[`disconnect_${path.split("/").pop()}`] = res.status;
+          if (res.ok) {
+            results.disconnect = "ok";
+            break;
+          }
+          const body = await res.json().catch(() => ({}));
+          results[`disconnect_${path.split("/").pop()}_body`] = body;
+        } catch (e: unknown) {
+          results[`disconnect_error`] = e instanceof Error ? e.message : String(e);
+        }
       }
     }
 
