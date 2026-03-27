@@ -229,14 +229,23 @@ export async function provisionNeonStore(
 
   // Step 4: Connect store to the project (auto-injects DATABASE_URL env var)
   try {
-    await vercel(`/v1/storage/stores/${storeId}/connections`, "POST", {
+    // Primary: installations/{configId}/resources/{resourceId}/connections
+    await vercel(`/v1/integrations/installations/${neonConfig.id}/resources/${storeId}/connections`, "POST", {
       projectId,
-      environmentVariableSuffix: "",
     });
   } catch (e: any) {
-    // May already be connected or connection happens automatically
+    // Fallback: storage/stores/{storeId}/connections
     if (!e.message?.includes("already")) {
-      console.warn(`[vercel] Could not connect store ${storeId} to project ${projectId}: ${e.message}`);
+      try {
+        await vercel(`/v1/storage/stores/${storeId}/connections`, "POST", {
+          projectId,
+          environmentVariableSuffix: "",
+        });
+      } catch (e2: any) {
+        if (!e2.message?.includes("already")) {
+          console.warn(`[vercel] Could not connect store ${storeId} to project ${projectId}: ${e.message} / ${e2.message}`);
+        }
+      }
     }
   }
 
