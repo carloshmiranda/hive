@@ -28,6 +28,7 @@
  * 39  — Auto-decompose blocked backlog items
  * 42  — Evolver proposal completion tracking
  * 46  — Close decomposed parents when all sub-tasks done
+ * 48  — Database performance monitoring (pg_stat_statements + cache hit ratio)
  *      Self-improvement routing (approved proposals -> backlog)
  *      Telegram notification + BACKLOG.md regeneration
  */
@@ -1924,6 +1925,123 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check 48: Database Performance Monitoring
+    // -----------------------------------------------------------------------
+    let slowQueriesFound = 0;
+    let cacheHitRatioPct = 0;
+    let dbPerformanceIssues: string[] = [];
+
+    try {
+      // Enable required extensions
+      await sql`CREATE EXTENSION IF NOT EXISTS pg_stat_statements`.catch(() => {
+        console.warn("[sentinel-janitor] pg_stat_statements extension not available on this Neon instance");
+      });
+
+      await sql`CREATE EXTENSION IF NOT EXISTS neon`.catch(() => {
+        console.warn("[sentinel-janitor] neon extension not available on this Neon instance");
+      });
+
+      // Query slow queries from pg_stat_statements
+      try {
+        const slowQueries = await sql`
+          SELECT
+            SUBSTR(query, 1, 100) AS query_snippet,
+            calls,
+            ROUND(mean_exec_time, 2) AS mean_exec_time_ms,
+            ROUND(total_exec_time, 2) AS total_exec_time_ms
+          FROM pg_stat_statements
+          WHERE calls > 5  -- Only queries that ran more than 5 times
+          ORDER BY mean_exec_time DESC
+          LIMIT 20
+        `;
+
+        slowQueriesFound = slowQueries.length;
+
+        // Log top 5 slowest queries for monitoring
+        const topSlow = slowQueries.slice(0, 5);
+        if (topSlow.length > 0) {
+          console.log(`[sentinel-janitor] Top slow queries:`, topSlow.map(q =>
+            `${q.query_snippet}... (${q.mean_exec_time_ms}ms avg, ${q.calls} calls)`
+          ).join('; '));
+        }
+
+        // Flag queries with >1000ms average execution time
+        const criticalSlow = slowQueries.filter(q => Number(q.mean_exec_time_ms) > 1000);
+        if (criticalSlow.length > 0) {
+          dbPerformanceIssues.push(`${criticalSlow.length} queries with >1s avg execution time`);
+        }
+
+        // Flag queries with >10000 total execution time (high cumulative impact)
+        const highImpact = slowQueries.filter(q => Number(q.total_exec_time_ms) > 10000);
+        if (highImpact.length > 0) {
+          dbPerformanceIssues.push(`${highImpact.length} queries with high cumulative impact (>10s total)`);
+        }
+
+      } catch (statErr) {
+        console.warn("[sentinel-janitor] pg_stat_statements query failed:", statErr instanceof Error ? statErr.message : "unknown");
+      }
+
+      // Query cache hit ratio from neon extension
+      try {
+        const [cacheStats] = await sql`
+          SELECT
+            ROUND(
+              (blks_hit::numeric / NULLIF(blks_hit + blks_read, 0)) * 100,
+              2
+            ) AS cache_hit_ratio_pct
+          FROM neon_stat_file_cache
+        `;
+
+        if (cacheStats?.cache_hit_ratio_pct) {
+          cacheHitRatioPct = Number(cacheStats.cache_hit_ratio_pct);
+          console.log(`[sentinel-janitor] Cache hit ratio: ${cacheHitRatioPct}%`);
+
+          // Flag if cache hit ratio is below target (99%+)
+          if (cacheHitRatioPct < 99) {
+            dbPerformanceIssues.push(`Cache hit ratio below target: ${cacheHitRatioPct}% (target: 99%+)`);
+          }
+        }
+
+      } catch (cacheErr) {
+        console.warn("[sentinel-janitor] neon cache stats query failed:", cacheErr instanceof Error ? cacheErr.message : "unknown");
+      }
+
+      // Log performance summary
+      if (dbPerformanceIssues.length > 0 || slowQueriesFound > 10) {
+        const description = `DB Performance Check: ${slowQueriesFound} queries analyzed, cache hit ratio ${cacheHitRatioPct}%${
+          dbPerformanceIssues.length > 0 ? `, Issues: ${dbPerformanceIssues.join('; ')}` : ''
+        }`;
+
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at, output)
+          VALUES ('sentinel', 'db_performance_check', ${description}, 'success', NOW(), NOW(),
+            ${JSON.stringify({
+              slow_queries_count: slowQueriesFound,
+              cache_hit_ratio_pct: cacheHitRatioPct,
+              issues: dbPerformanceIssues
+            })}::jsonb)
+        `;
+
+        // Create escalation if there are critical performance issues
+        if (dbPerformanceIssues.length > 0) {
+          dispatches.push({
+            type: "ops_escalation",
+            target: "ops",
+            payload: {
+              source: "db_performance",
+              issues: dbPerformanceIssues,
+              slow_queries: slowQueriesFound,
+              cache_hit_ratio: cacheHitRatioPct
+            }
+          });
+        }
+      }
+
+    } catch (dbPerfErr: any) {
+      console.warn(`[sentinel-janitor] Database performance check failed: ${dbPerfErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Telegram notification
     // -----------------------------------------------------------------------
     try {
@@ -1931,7 +2049,8 @@ export async function GET(request: Request) {
       const interesting = dispatches.length > 0 ||
         selfImprovementProposals > 0 || agentRegressions > 0 ||
         proposalsAutoApproved > 0 || ventureBrainDirectives > 0 ||
-        duplicatesRejected > 0 || staleItemsDeprioritized > 0;
+        duplicatesRejected > 0 || staleItemsDeprioritized > 0 ||
+        dbPerformanceIssues.length > 0;
       if (interesting) {
         const parts: string[] = [];
         if (dispatches.length > 0) parts.push(`${dispatches.length} dispatches`);
@@ -1943,6 +2062,7 @@ export async function GET(request: Request) {
         if (errorPatternsLearned > 0) parts.push(`${errorPatternsLearned} error patterns learned`);
         if (duplicatesRejected > 0) parts.push(`${duplicatesRejected} duplicates rejected`);
         if (staleItemsDeprioritized > 0) parts.push(`${staleItemsDeprioritized} stale items deprioritized`);
+        if (dbPerformanceIssues.length > 0) parts.push(`${dbPerformanceIssues.length} DB performance issues`);
 
         await notifyHive({
           agent: "sentinel-janitor",
@@ -1995,6 +2115,9 @@ export async function GET(request: Request) {
       backlog_regenerated: backlogRegenerated,
       backlog_duplicates_rejected: duplicatesRejected,
       backlog_stale_deprioritized: staleItemsDeprioritized,
+      db_slow_queries_found: slowQueriesFound,
+      db_cache_hit_ratio_pct: cacheHitRatioPct,
+      db_performance_issues: dbPerformanceIssues.length,
     });
 
   } catch (error: unknown) {
