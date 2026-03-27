@@ -8,6 +8,97 @@ import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
 import { selectEntriesWithMMR } from "@/lib/mmr";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
+import { getSettingValue } from "@/lib/settings";
+
+// Fetch detailed Sentry error context for Engineer prompts
+async function fetchSentryErrorContext(sentryIssueId: string) {
+  try {
+    // Get Sentry organization slug and auth token from settings
+    const [orgSlug, authToken] = await Promise.all([
+      getSettingValue("sentry_org_slug"),
+      getSettingValue("sentry_auth_token")
+    ]);
+
+    if (!orgSlug || !authToken) {
+      console.warn("Sentry org slug or auth token not configured");
+      return null;
+    }
+
+    // Fetch the latest event with full details from Sentry API
+    const response = await fetch(
+      `https://sentry.io/api/0/organizations/${orgSlug}/issues/${sentryIssueId}/events/?full=true&limit=1`,
+      {
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.error(`Sentry API error: ${response.status} ${response.statusText}`);
+      return null;
+    }
+
+    const events = await response.json();
+    if (!events || events.length === 0) {
+      console.warn("No events found for Sentry issue:", sentryIssueId);
+      return null;
+    }
+
+    const event = events[0];
+    const exception = event.entries?.find((e: { type: string }) => e.type === 'exception')?.data;
+    const request = event.entries?.find((e: { type: string }) => e.type === 'request')?.data;
+    const breadcrumbs = event.entries?.find((e: { type: string }) => e.type === 'breadcrumbs')?.data?.values || [];
+
+    // Extract stack trace information
+    let stackTrace = null;
+    if (exception?.values && exception.values.length > 0) {
+      const exc = exception.values[exception.values.length - 1]; // Most recent exception
+      stackTrace = {
+        type: exc.type,
+        value: exc.value,
+        frames: exc.stacktrace?.frames?.slice(-10).map((frame: any) => ({
+          filename: frame.filename,
+          function: frame.function,
+          lineno: frame.lineno,
+          context_line: frame.context_line,
+          pre_context: frame.pre_context?.slice(-3), // Last 3 lines before
+          post_context: frame.post_context?.slice(0, 3) // Next 3 lines after
+        })) || []
+      };
+    }
+
+    // Get last 10 breadcrumbs for context
+    const recentBreadcrumbs = breadcrumbs.slice(-10).map((breadcrumb: any) => ({
+      timestamp: breadcrumb.timestamp,
+      message: breadcrumb.message,
+      category: breadcrumb.category,
+      level: breadcrumb.level,
+      data: breadcrumb.data
+    }));
+
+    return {
+      issue_id: sentryIssueId,
+      event_id: event.id,
+      exception: stackTrace,
+      request_url: request?.url,
+      request_method: request?.method,
+      user_agent: request?.headers?.['User-Agent'],
+      breadcrumbs: recentBreadcrumbs,
+      tags: event.tags || {},
+      level: event.level,
+      platform: event.platform,
+      timestamp: event.dateCreated,
+      release: event.release,
+      environment: event.environment
+    };
+
+  } catch (error) {
+    console.error('Error fetching Sentry context:', error);
+    return null;
+  }
+}
 
 // Domain mappings for agent-specific playbook filtering
 function getAgentDomains(agent: string): string[] | null {
@@ -116,7 +207,7 @@ export async function GET(req: NextRequest) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function buildContext(sql: any, company: any) {
-  const [cycle, reports, proposal, playbook, tasks, metrics] = await Promise.all([
+  const [cycle, reports, proposal, playbook, tasks, metrics, sentryBacklogItem] = await Promise.all([
     sql`
       SELECT id, cycle_number, ceo_plan FROM cycles
       WHERE company_id = ${company.id} AND status = 'running'
@@ -154,6 +245,15 @@ async function buildContext(sql: any, company: any) {
       FROM metrics WHERE company_id = ${company.id}
       ORDER BY date DESC LIMIT 14
     `.catch(() => []),
+    // Check for active Sentry-related backlog items for Hive self-improvement
+    company.slug === '_hive' ? sql`
+      SELECT id, title, spec
+      FROM hive_backlog
+      WHERE status IN ('dispatched', 'in_progress')
+        AND spec->>'sentry_issue_id' IS NOT NULL
+      ORDER BY dispatched_at DESC
+      LIMIT 1
+    `.catch(() => []) : Promise.resolve([]),
   ]);
 
   // Context optimization: use summaries by default, full content only when requested
@@ -183,6 +283,22 @@ async function buildContext(sql: any, company: any) {
     }
   }
 
+  // Fetch Sentry error context if working on a Sentry-related issue
+  let sentryErrorContext = null;
+  if (sentryBacklogItem && sentryBacklogItem.length > 0) {
+    const backlogItem = sentryBacklogItem[0];
+    const sentryIssueId = backlogItem.spec?.sentry_issue_id;
+
+    if (sentryIssueId) {
+      try {
+        sentryErrorContext = await fetchSentryErrorContext(sentryIssueId);
+      } catch (error) {
+        console.error('Failed to fetch Sentry error context:', error);
+        // Continue without Sentry context if API call fails
+      }
+    }
+  }
+
   return {
     description: company.description,
     business_type: businessType,
@@ -198,6 +314,7 @@ async function buildContext(sql: any, company: any) {
     ...(gatedTasks.length > 0 ? { phase_gated_tasks: gatedTasks } : {}),
     metrics: metrics.slice(0, 7),
     hive_capabilities: getCapabilitySummary(),
+    ...(sentryErrorContext ? { sentry_error_context: sentryErrorContext } : {}),
   };
 }
 

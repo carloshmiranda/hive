@@ -115,6 +115,45 @@ export async function POST(req: Request) {
           )
         `;
 
+        // Create a backlog item for code errors to enable Engineer dispatch with Sentry context
+        if (companyId && issue.level !== 'info' && issue.level !== 'warning') {
+          // Only create backlog items for actual errors (not warnings or info)
+          // Check if we already have a backlog item for this issue to avoid duplicates
+          const [existingBacklog] = await sql`
+            SELECT id FROM hive_backlog
+            WHERE title LIKE ${'Fix Sentry error: ' + title.slice(0, 50) + '%'}
+            AND status NOT IN ('done', 'rejected')
+            LIMIT 1
+          `;
+
+          if (!existingBacklog) {
+            await sql`
+              INSERT INTO hive_backlog (
+                priority, title, description, category, status, source, spec
+              )
+              VALUES (
+                'P1',
+                ${'Fix Sentry error: ' + title.slice(0, 100)},
+                ${`Sentry detected error in ${culprit}:\n\n${title}\n\nError occurred ${issue.count} times. First seen: ${issue.firstSeen}, Last seen: ${issue.lastSeen}.\n\nSentry URL: ${issue.permalink || `https://sentry.io/organizations/${body.data?.organization?.slug}/issues/${issueId}/`}`},
+                'bugfix',
+                'ready',
+                'sentry',
+                ${JSON.stringify({
+                  sentry_issue_id: String(issueId),
+                  error_title: title,
+                  culprit: culprit,
+                  level: issue.level,
+                  platform: issue.platform,
+                  environment: issue.metadata?.environment || tags.environment,
+                  first_seen: issue.firstSeen,
+                  last_seen: issue.lastSeen,
+                  count: issue.count
+                })}::jsonb
+              )
+            `;
+          }
+        }
+
       } else if (isMetricAlert) {
         const alert = body.data.metric_alert;
         const alertId = alert.id;
