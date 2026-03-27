@@ -5,6 +5,11 @@ import { getSettingValue } from "@/lib/settings";
 /**
  * POST /api/agents/connect-store — Replace a Neon store on a Vercel project.
  * Body: { store_id: string, project_id: string, disconnect_store_id?: string, integration_config_id?: string }
+ *
+ * GET /api/agents/connect-store?project_id=X&action=list_envs — List env vars (no mutations)
+ * GET /api/agents/connect-store?project_id=X&action=get_env&key=DATABASE_URL — Get decrypted env var value
+ * GET /api/agents/connect-store?project_id=X&action=disconnect_store&store_id=Y&config_id=Z — Remove store connection
+ *
  * Auth: CRON_SECRET
  *
  * Strategy: delete old Neon env vars first, then connect new store via installations API.
@@ -19,6 +24,105 @@ const NEON_ENV_KEYS = [
   "POSTGRES_PASSWORD", "POSTGRES_DATABASE", "POSTGRES_PRISMA_URL",
   "NEON_PROJECT_ID", "NEON_DATABASE_NAME", "NEON_BRANCH_ID",
 ];
+
+export async function GET(req: NextRequest) {
+  const authHeader = req.headers.get("authorization");
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+    return err("Unauthorized", 401);
+  }
+
+  const url = new URL(req.url);
+  const projectId = url.searchParams.get("project_id");
+  const action = url.searchParams.get("action") || "list_envs";
+  if (!projectId) return err("project_id required", 400);
+
+  const [token, teamId] = await Promise.all([
+    getSettingValue("vercel_token"),
+    getSettingValue("vercel_team_id"),
+  ]);
+  if (!token) return err("Vercel token not configured", 500);
+  const teamParam = teamId ? `?teamId=${teamId}` : "";
+
+  try {
+    if (action === "list_envs") {
+      const res = await fetch(
+        `https://api.vercel.com/v9/projects/${projectId}/env${teamParam}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json();
+      const envs = (data.envs || []).map((e: { id: string; key: string; target?: string[] }) => ({
+        id: e.id, key: e.key, target: e.target,
+      }));
+      return json({ ok: true, total: envs.length, envs });
+    }
+
+    if (action === "get_env") {
+      const key = url.searchParams.get("key");
+      if (!key) return err("key required", 400);
+      // List envs to find the ID
+      const listRes = await fetch(
+        `https://api.vercel.com/v9/projects/${projectId}/env${teamParam}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const listData = await listRes.json();
+      const env = (listData.envs || []).find((e: { key: string }) => e.key === key);
+      if (!env) return json({ ok: false, error: `${key} not found` });
+      // Fetch decrypted value
+      const detailRes = await fetch(
+        `https://api.vercel.com/v9/projects/${projectId}/env/${env.id}${teamParam}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const detail = await detailRes.json();
+      return json({ ok: true, key, value: detail.value || null });
+    }
+
+    if (action === "disconnect_store") {
+      const storeId = url.searchParams.get("store_id");
+      const configId = url.searchParams.get("config_id") || "icfg_6qDnLTXfjp7za9aJlJ7cYWRe";
+      if (!storeId) return err("store_id required", 400);
+
+      // List connections for this store
+      const listRes = await fetch(
+        `https://api.vercel.com/v1/integrations/installations/${configId}/resources/${storeId}/connections${teamParam}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const listData = await listRes.json();
+      const connections = Array.isArray(listData) ? listData : listData.connections || [];
+      const match = connections.find((c: { projectId?: string }) => c.projectId === projectId);
+
+      if (!match) {
+        // Try storage API
+        const storeRes = await fetch(
+          `https://api.vercel.com/v1/storage/stores/${storeId}/connections${teamParam}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const storeData = await storeRes.json();
+        const storeConns = Array.isArray(storeData) ? storeData : storeData.connections || [];
+        const storeMatch = storeConns.find((c: { projectId?: string }) => c.projectId === projectId);
+        if (storeMatch) {
+          const delRes = await fetch(
+            `https://api.vercel.com/v1/storage/stores/${storeId}/connections/${storeMatch.id}${teamParam}`,
+            { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+          );
+          return json({ ok: delRes.ok, method: "storage", status: delRes.status, connection_id: storeMatch.id });
+        }
+        return json({ ok: false, error: "No connection found", connections_checked: connections.length + storeConns.length });
+      }
+
+      // Delete via installations API
+      const delRes = await fetch(
+        `https://api.vercel.com/v1/integrations/installations/${configId}/resources/${storeId}/connections/${match.id}${teamParam}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+      );
+      return json({ ok: delRes.ok, method: "installations", status: delRes.status, connection_id: match.id });
+    }
+
+    return err(`Unknown action: ${action}`, 400);
+  } catch (e: unknown) {
+    return err(e instanceof Error ? e.message : String(e), 500);
+  }
+}
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
