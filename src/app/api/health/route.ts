@@ -3,9 +3,30 @@ import { requireAuth } from "@/lib/auth";
 import { decrypt } from "@/lib/crypto";
 import { cacheHealthCheck } from "@/lib/redis-cache";
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await requireAuth();
-  if (!session) return json({ status: "error", message: "Unauthorized" }, 401);
+  const url = new URL(request.url);
+  const isPublic = url.searchParams.has('public');
+
+  // For external uptime monitoring, return simple health status without auth
+  if (isPublic || !session) {
+    try {
+      const sql = getDb();
+      await sql`SELECT 1 as ok`;
+      return json({
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        service: "hive"
+      }, 200);
+    } catch (e: any) {
+      return json({
+        status: "unhealthy",
+        timestamp: new Date().toISOString(),
+        service: "hive",
+        error: "Database connection failed"
+      }, 503);
+    }
+  }
 
   const sql = getDb();
   const checks: Record<string, { status: string; detail?: string }> = {};
