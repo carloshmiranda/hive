@@ -1,9 +1,16 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
+
+  // Set Sentry tags for tracking
+  setSentryTags({
+    request: req,
+    custom_action_type: 'companies_list'
+  });
 
   const sql = getDb();
   const companies = await sql`
@@ -25,6 +32,12 @@ export async function GET() {
 export async function POST(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
+
+  // Set Sentry tags for tracking
+  setSentryTags({
+    request: req,
+    custom_action_type: 'companies_create'
+  });
 
   const body = await req.json();
   const { name, slug, description, status } = body;

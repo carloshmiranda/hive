@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { calculateHealthScore } from "@/lib/health-score";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -10,6 +11,12 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const sql = getDb();
   const [company] = await sql`SELECT * FROM companies WHERE id = ${id} OR slug = ${id}`;
   if (!company) return err("Company not found", 404);
+
+  // Set Sentry tags for tracking
+  setSentryTags({
+    company_id: company.id,
+    custom_action_type: 'company_get'
+  });
 
   const metrics = await sql`SELECT * FROM metrics WHERE company_id = ${company.id} ORDER BY date DESC LIMIT 30`;
   const infra = await sql`SELECT * FROM infra WHERE company_id = ${company.id} AND status = 'active'`;
@@ -26,6 +33,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (!session) return err("Unauthorized", 401);
 
   const { id } = await params;
+
+  // Set Sentry tags for tracking (use id as company identifier)
+  setSentryTags({
+    company_id: id,
+    request: req,
+    custom_action_type: 'company_update'
+  });
+
   const body = await req.json();
   const sql = getDb();
 

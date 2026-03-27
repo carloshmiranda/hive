@@ -28,6 +28,7 @@ import {
   type Dispatch,
 } from "@/lib/sentinel-helpers";
 import { getDb } from "@/lib/db";
+import { setSentryTags } from "@/lib/sentry-tags";
 import { getSettingValue } from "@/lib/settings";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
 
@@ -40,6 +41,12 @@ export async function GET(request: Request) {
   if (!auth.authorized) {
     return Response.json({ error: auth.error }, { status: 401 });
   }
+
+  // Set Sentry tags for tracking
+  setSentryTags({
+    request,
+    custom_action_type: 'cron_sentinel_dispatch'
+  });
 
   // Sentry cron monitoring - monitors the most critical 4h schedule that drives the entire dispatch chain
   const checkInId = Sentry.captureCheckIn({

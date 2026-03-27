@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { dispatchEvent } from "@/lib/dispatch";
 import { analyzePR, autoMergePR } from "@/lib/pr-risk-scoring";
 import { qstashPublish } from "@/lib/qstash";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Receives GitHub webhook events
 // Auth: HMAC-SHA256 signature verification via GITHUB_WEBHOOK_SECRET
@@ -30,6 +31,12 @@ export async function POST(req: Request) {
 
   const body = JSON.parse(rawBody);
   const sql = getDb();
+
+  // Set Sentry tags for tracking
+  setSentryTags({
+    request: req,
+    custom_action_type: `webhook_github_${event || 'unknown'}`
+  });
 
   switch (event) {
     case "push": {
