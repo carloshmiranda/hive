@@ -133,6 +133,103 @@ export async function removeGitLink(projectId: string): Promise<boolean> {
   }
 }
 
+// ── Vercel Marketplace: Neon Postgres provisioning ──
+
+/**
+ * Find the Neon integration configuration ID on this team.
+ * Required before creating a Neon store via the Marketplace API.
+ */
+export async function findNeonIntegrationConfig(): Promise<{ id: string; slug: string } | null> {
+  try {
+    const res = await vercel("/v1/integrations/configurations");
+    const configs = Array.isArray(res) ? res : res.configurations || [];
+    const neon = configs.find((c: any) =>
+      c.slug === "neon" ||
+      c.integration?.slug === "neon" ||
+      c.integrationSlug === "neon" ||
+      (c.slug || "").toLowerCase().includes("neon") ||
+      (c.integration?.name || "").toLowerCase().includes("neon")
+    );
+    if (!neon) return null;
+    return { id: neon.id, slug: neon.slug || neon.integration?.slug || "neon" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Provision a Neon Postgres database via Vercel Marketplace API.
+ * This creates a Neon store and auto-injects DATABASE_URL into the Vercel project.
+ * Works with Vercel-managed Neon — no separate Neon API key needed.
+ */
+export async function provisionNeonStore(
+  projectId: string,
+  name: string,
+): Promise<{ storeId: string; status: string } | null> {
+  // Step 1: Find Neon integration config
+  const neonConfig = await findNeonIntegrationConfig();
+  if (!neonConfig) {
+    throw new Error("Neon integration not found on Vercel team. Install it from vercel.com/marketplace/neon");
+  }
+
+  // Step 2: Create the store via Marketplace API
+  const store = await vercel("/v1/stores", "POST", {
+    name,
+    integrationConfigurationId: neonConfig.id,
+    integrationProductIdOrSlug: "neon",
+  });
+
+  const storeData = store.store || store;
+  const storeId = storeData.id || storeData.externalResourceId;
+
+  if (!storeId) {
+    throw new Error(`Neon store creation returned no ID: ${JSON.stringify(store).slice(0, 300)}`);
+  }
+
+  // Step 3: Connect store to the project (auto-injects env vars)
+  try {
+    await vercel(`/v1/stores/${storeId}/projects`, "POST", {
+      projectId,
+      environmentVariableSuffix: "",
+    });
+  } catch (e: any) {
+    // May already be connected or connection happens automatically
+    if (!e.message?.includes("already")) {
+      console.warn(`[vercel] Could not connect store ${storeId} to project ${projectId}: ${e.message}`);
+    }
+  }
+
+  return { storeId, status: storeData.status || "created" };
+}
+
+/**
+ * Check if a Vercel project has a specific env var set.
+ */
+export async function hasEnvVar(projectId: string, key: string): Promise<boolean> {
+  try {
+    const res = await vercel(`/v9/projects/${projectId}/env`);
+    return (res.envs || []).some((e: { key: string }) => e.key === key);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the value of a Vercel project env var (decrypted).
+ */
+export async function getEnvVar(projectId: string, key: string): Promise<string | null> {
+  try {
+    const res = await vercel(`/v9/projects/${projectId}/env`);
+    const env = (res.envs || []).find((e: { key: string }) => e.key === key);
+    if (!env) return null;
+    // Fetch decrypted value
+    const detail = await vercel(`/v9/projects/${projectId}/env/${env.id}`);
+    return detail.value || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function redeployProduction(projectId: string): Promise<{ id: string; url: string } | null> {
   // Get the latest deployment and redeploy it
   const dep = await getLatestDeployment(projectId);

@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { createProject as createNeonProject } from "@/lib/neon-api";
-import { createProject as createVercelProject, setEnvVars, addDomain } from "@/lib/vercel";
+import { createProject as createVercelProject, setEnvVars, addDomain, provisionNeonStore, hasEnvVar, getEnvVar } from "@/lib/vercel";
 import { getSettingValue } from "@/lib/settings";
 
 // POST /api/agents/provision — one-call infrastructure provisioning
@@ -23,42 +23,71 @@ export async function POST(req: NextRequest) {
   const sql = getDb();
   const results: Record<string, unknown> = { company_slug, company_id };
 
-  // ── Step 1: Create Neon database ──
+  // ── Step 1: Create Neon database (3-tier: Vercel Marketplace → Neon API → existing) ──
   let connectionUri: string | null = null;
-  try {
-    const neon = await createNeonProject(company_slug);
-    connectionUri = neon.connectionUri;
-    results.neon = {
-      project_id: neon.projectId,
-      host: neon.host,
-      created: true,
-    };
+  let neonProjectId: string | null = null;
 
-    await sql`
-      INSERT INTO infra (company_id, service, resource_id, config)
-      VALUES (${company_id}, 'neon', ${neon.projectId}, ${JSON.stringify({ host: neon.host })}::jsonb)
-      ON CONFLICT DO NOTHING
-    `;
-
-    // Run boilerplate schema
-    if (connectionUri) {
-      try {
-        const { neon: neonClient } = await import("@neondatabase/serverless");
-        const csql = neonClient(connectionUri);
-        await csql`CREATE TABLE IF NOT EXISTS customers (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, email TEXT UNIQUE NOT NULL, stripe_customer_id TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
-        await csql`CREATE TABLE IF NOT EXISTS waitlist (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, email TEXT UNIQUE NOT NULL, name TEXT, referral_code TEXT UNIQUE NOT NULL, referred_by TEXT, referral_count INTEGER NOT NULL DEFAULT 0, position INTEGER, source TEXT DEFAULT 'organic', utm_source TEXT, utm_medium TEXT, utm_campaign TEXT, status TEXT NOT NULL DEFAULT 'waiting', invited_at TIMESTAMPTZ, converted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
-        await csql`CREATE TABLE IF NOT EXISTS page_views (date DATE NOT NULL DEFAULT CURRENT_DATE, path TEXT NOT NULL DEFAULT '/', views INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (date, path))`;
-        await csql`CREATE TABLE IF NOT EXISTS pricing_clicks (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, date DATE NOT NULL DEFAULT CURRENT_DATE, tier TEXT NOT NULL, source_path TEXT NOT NULL DEFAULT '/pricing', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
-        await csql`CREATE TABLE IF NOT EXISTS affiliate_clicks (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, date DATE NOT NULL DEFAULT CURRENT_DATE, link_id TEXT NOT NULL, destination_url TEXT, source_path TEXT NOT NULL DEFAULT '/', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
-        await csql`CREATE TABLE IF NOT EXISTS email_sequences (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, sequence TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 1, subject TEXT NOT NULL, body_html TEXT NOT NULL, body_text TEXT, delay_hours INTEGER NOT NULL DEFAULT 0, variant TEXT DEFAULT 'a', is_active BOOLEAN DEFAULT true, send_count INTEGER DEFAULT 0, open_count INTEGER DEFAULT 0, click_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(sequence, step, variant))`;
-        await csql`CREATE TABLE IF NOT EXISTS email_log (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, recipient TEXT NOT NULL, sequence_id TEXT, subject TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'sent', resend_id TEXT, opened_at TIMESTAMPTZ, clicked_at TIMESTAMPTZ, bounced_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
-        (results.neon as Record<string, unknown>).schema_applied = true;
-      } catch (e: any) {
-        (results.neon as Record<string, unknown>).schema_error = e.message;
-      }
+  // Helper: run boilerplate schema on a connection URI
+  async function applySchema(uri: string): Promise<boolean> {
+    try {
+      const { neon: neonClient } = await import("@neondatabase/serverless");
+      const csql = neonClient(uri);
+      await csql`CREATE TABLE IF NOT EXISTS customers (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, email TEXT UNIQUE NOT NULL, stripe_customer_id TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+      await csql`CREATE TABLE IF NOT EXISTS waitlist (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, email TEXT UNIQUE NOT NULL, name TEXT, referral_code TEXT UNIQUE NOT NULL, referred_by TEXT, referral_count INTEGER NOT NULL DEFAULT 0, position INTEGER, source TEXT DEFAULT 'organic', utm_source TEXT, utm_medium TEXT, utm_campaign TEXT, status TEXT NOT NULL DEFAULT 'waiting', invited_at TIMESTAMPTZ, converted_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+      await csql`CREATE TABLE IF NOT EXISTS page_views (date DATE NOT NULL DEFAULT CURRENT_DATE, path TEXT NOT NULL DEFAULT '/', views INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (date, path))`;
+      await csql`CREATE TABLE IF NOT EXISTS pricing_clicks (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, date DATE NOT NULL DEFAULT CURRENT_DATE, tier TEXT NOT NULL, source_path TEXT NOT NULL DEFAULT '/pricing', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+      await csql`CREATE TABLE IF NOT EXISTS affiliate_clicks (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, date DATE NOT NULL DEFAULT CURRENT_DATE, link_id TEXT NOT NULL, destination_url TEXT, source_path TEXT NOT NULL DEFAULT '/', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+      await csql`CREATE TABLE IF NOT EXISTS email_sequences (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, sequence TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 1, subject TEXT NOT NULL, body_html TEXT NOT NULL, body_text TEXT, delay_hours INTEGER NOT NULL DEFAULT 0, variant TEXT DEFAULT 'a', is_active BOOLEAN DEFAULT true, send_count INTEGER DEFAULT 0, open_count INTEGER DEFAULT 0, click_count INTEGER DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(sequence, step, variant))`;
+      await csql`CREATE TABLE IF NOT EXISTS email_log (id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, recipient TEXT NOT NULL, sequence_id TEXT, subject TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'sent', resend_id TEXT, opened_at TIMESTAMPTZ, clicked_at TIMESTAMPTZ, bounced_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+      return true;
+    } catch {
+      return false;
     }
-  } catch (e: any) {
-    results.neon = { error: e.message, created: false };
+  }
+
+  // Tier 1: Try Vercel Marketplace (auto-provisions Neon + injects DATABASE_URL)
+  try {
+    const store = await provisionNeonStore(company_slug, `${company_slug}-db`);
+    if (store) {
+      neonProjectId = store.storeId;
+      results.neon = { store_id: store.storeId, method: "vercel_marketplace", created: true };
+
+      await sql`
+        INSERT INTO infra (company_id, service, resource_id, config)
+        VALUES (${company_id}, 'neon', ${store.storeId}, ${JSON.stringify({ method: "vercel_marketplace" })}::jsonb)
+        ON CONFLICT DO NOTHING
+      `;
+
+      // Marketplace auto-injects DATABASE_URL — wait briefly then fetch it
+      // Schema will be applied after Vercel project is created (Step 3)
+    }
+  } catch (marketplaceErr: any) {
+    console.warn(`[provision] Vercel Marketplace Neon failed: ${marketplaceErr.message}`);
+
+    // Tier 2: Fall back to direct Neon API
+    try {
+      const neon = await createNeonProject(company_slug);
+      connectionUri = neon.connectionUri;
+      neonProjectId = neon.projectId;
+      results.neon = {
+        project_id: neon.projectId,
+        host: neon.host,
+        method: "neon_api",
+        created: true,
+      };
+
+      await sql`
+        INSERT INTO infra (company_id, service, resource_id, config)
+        VALUES (${company_id}, 'neon', ${neon.projectId}, ${JSON.stringify({ host: neon.host })}::jsonb)
+        ON CONFLICT DO NOTHING
+      `;
+
+      // Apply schema immediately since we have the connection URI
+      const schemaOk = connectionUri ? await applySchema(connectionUri) : false;
+      (results.neon as Record<string, unknown>).schema_applied = schemaOk;
+    } catch (neonErr: any) {
+      results.neon = { error: neonErr.message, marketplace_error: marketplaceErr.message, created: false };
+    }
   }
 
   // ── Step 2: Create Vercel project + enable Web Analytics ──
@@ -115,8 +144,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Step 3: Set DATABASE_URL on Vercel project ──
+  // ── Step 3: Set DATABASE_URL on Vercel project + apply schema ──
   if (vercelProjectId && connectionUri) {
+    // Direct Neon API path — we have connectionUri, set it on Vercel
     try {
       await setEnvVars(vercelProjectId, [
         { key: "DATABASE_URL", value: connectionUri },
@@ -125,12 +155,26 @@ export async function POST(req: NextRequest) {
     } catch (e: any) {
       results.env_vars = { error: e.message };
     }
+  } else if (vercelProjectId && !connectionUri && (results.neon as Record<string, unknown>)?.method === "vercel_marketplace") {
+    // Marketplace path — DATABASE_URL was auto-injected, fetch it to apply schema
+    try {
+      // Wait for Vercel to propagate the env var from the store connection
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const dbUrl = await getEnvVar(vercelProjectId, "DATABASE_URL");
+      if (dbUrl) {
+        connectionUri = dbUrl;
+        const schemaOk = await applySchema(dbUrl);
+        results.env_vars = { DATABASE_URL: "auto_injected" };
+        (results.neon as Record<string, unknown>).schema_applied = schemaOk;
+      } else {
+        results.env_vars = { DATABASE_URL: "pending_marketplace_injection" };
+      }
+    } catch (e: any) {
+      results.env_vars = { error: e.message, note: "marketplace_env_fetch_failed" };
+    }
   }
 
   // ── Step 4: Update company record with Vercel + Neon details ──
-  // We always add {slug}.vercel.app as an alias (Step 2), so use that as the canonical URL.
-  // Also record neon_project_id directly on the companies table for easy access.
-  const neonProjectId = (results.neon as Record<string, unknown>)?.project_id as string | undefined;
   const companyDomain = `${company_slug}.vercel.app`;
   const actualVercelUrl = `https://${companyDomain}`;
 
