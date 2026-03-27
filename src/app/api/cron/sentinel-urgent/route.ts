@@ -24,6 +24,7 @@ import {
   dispatchToActions,
   dispatchToCompanyWorkflow,
   checkDeployDrift,
+  checkDeployHealth,
   isCircuitOpen,
   REPO,
   type SentinelContext,
@@ -567,6 +568,44 @@ export async function GET(request: Request) {
     }
 
     // =========================================================================
+    // Check 42: Deploy health — detect broken Vercel build pipeline
+    // If 3+ consecutive deploys are ERROR, the pipeline is broken (e.g. Git
+    // integration disconnected, build config invalid). Escalate immediately.
+    // =========================================================================
+    const deployHealth = await checkDeployHealth(ctx);
+    if (!deployHealth.healthy) {
+      console.error(
+        `[sentinel-urgent] DEPLOY PIPELINE BROKEN: ${deployHealth.consecutiveErrors} consecutive errors. Last READY: ${deployHealth.lastReadyAt || "unknown"}`
+      );
+      // Log to agent_actions for visibility
+      await ctx.sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+        VALUES ('sentinel', 'deploy_pipeline_broken',
+          ${`CRITICAL: ${deployHealth.consecutiveErrors} consecutive Vercel deploy errors. Last READY: ${deployHealth.lastReadyAt || "unknown"}. Latest commit: ${deployHealth.latestError || "unknown"}`},
+          'failed', NOW(), NOW())
+      `.catch(() => {});
+      // Telegram escalation
+      try {
+        const { notifyHive } = await import("@/lib/telegram");
+        await notifyHive({
+          agent: "sentinel-urgent",
+          action: "deploy_pipeline_broken",
+          status: "failed",
+          summary: `🚨 ${deployHealth.consecutiveErrors} consecutive Vercel deploy failures — pipeline is broken`,
+          details: `Last successful deploy: ${deployHealth.lastReadyAt || "unknown"}\nCheck Vercel dashboard for Git integration or build config issues.`,
+        });
+      } catch { /* Telegram not configured */ }
+      ctx.dispatches.push({
+        type: "escalation",
+        target: "deploy_pipeline_broken",
+        payload: {
+          consecutive_errors: deployHealth.consecutiveErrors,
+          last_ready: deployHealth.lastReadyAt,
+        },
+      });
+    }
+
+    // =========================================================================
     // Telegram notification if something interesting happened
     // =========================================================================
     try {
@@ -580,6 +619,7 @@ export async function GET(request: Request) {
         if (failedWithPlanWork.length > 0) parts.push(`${failedWithPlanWork.length} failed tasks retried`);
         if (rateLimited.length > 0) parts.push(`${rateLimited.length} rate-limited retries`);
         if (drift.drifted) parts.push("deploy drift detected");
+        if (!deployHealth.healthy) parts.push(`DEPLOY PIPELINE BROKEN (${deployHealth.consecutiveErrors} errors)`);
 
         await notifyHive({
           agent: "sentinel-urgent",
@@ -614,6 +654,8 @@ export async function GET(request: Request) {
       pr_reset: prReset,
       pr_verified: prVerified,
       deploy_drift: drift.drifted,
+      deploy_pipeline_healthy: deployHealth.healthy,
+      deploy_consecutive_errors: deployHealth.consecutiveErrors,
       company_health: "delegated",
     });
 

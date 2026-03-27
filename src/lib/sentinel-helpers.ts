@@ -329,6 +329,64 @@ export async function checkDeployDrift(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Deploy health — detect consecutive ERROR deployments (broken pipeline)
+// ---------------------------------------------------------------------------
+
+export async function checkDeployHealth(
+  ctx: SentinelContext
+): Promise<{
+  healthy: boolean;
+  consecutiveErrors: number;
+  lastReadyAt?: string;
+  latestError?: string;
+}> {
+  if (!ctx.vercelToken) return { healthy: true, consecutiveErrors: 0 };
+
+  try {
+    const res = await fetch(
+      "https://api.vercel.com/v6/deployments?projectId=prj_n9JaPbWmRv0SKoHgkdXYOEGQtjRv&teamId=team_Z4AsGtjfy6pAjCOtvJqzMT8d&target=production&limit=10",
+      {
+        headers: { Authorization: `Bearer ${ctx.vercelToken}` },
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+    if (!res.ok) return { healthy: true, consecutiveErrors: 0 };
+
+    const data = await res.json();
+    const deploys = data.deployments || [];
+
+    let consecutiveErrors = 0;
+    let lastReadyAt: string | undefined;
+
+    for (const d of deploys) {
+      if (d.state === "ERROR") {
+        consecutiveErrors++;
+      } else if (d.state === "READY") {
+        if (!lastReadyAt) lastReadyAt = new Date(d.created).toISOString();
+        break;
+      } else {
+        // BUILDING, QUEUED, CANCELED — stop counting
+        break;
+      }
+    }
+
+    // 3+ consecutive errors = pipeline is broken, escalate
+    if (consecutiveErrors >= 3) {
+      return {
+        healthy: false,
+        consecutiveErrors,
+        lastReadyAt,
+        latestError: deploys[0]?.meta?.githubCommitMessage?.slice(0, 100),
+      };
+    }
+
+    return { healthy: true, consecutiveErrors, lastReadyAt };
+  } catch {
+    return { healthy: true, consecutiveErrors: 0 };
+  }
+}
+
 export async function isCircuitOpen(
   sql: any,
   agent: string,

@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-27 Vercel deploys silently broke for ~24h after repo visibility change
+**What happened:** All Vercel deployments for Hive went ERROR with 0s build time and empty build logs. The deployed app kept serving the old READY version, so uptime monitoring saw no outage. ~20 commits accumulated without deploying.
+**Root cause:** The GitHub repo changed from private to public. Vercel's Git integration broke silently — it stopped being able to clone/build, but the `githubRepoVisibility: "public"` metadata showed the change. No build error was surfaced because the integration was disconnected, not the code broken.
+**Fix applied:** (1) Manual reconnection of Git integration in Vercel dashboard. (2) New `checkDeployHealth()` sentinel check (Check 42) that queries Vercel Deployments API for 3+ consecutive ERROR states and sends Telegram escalation + logs to agent_actions.
+**Prevention:** Monitor the *pipeline*, not just the *app*. Uptime checks (is the site responding?) are insufficient — they pass because Vercel keeps the last good deploy serving. Pipeline health (are new deploys succeeding?) is a separate signal. Sentinel now checks both.
+**Affects:** hive
+
+### 2026-03-27 MCP hive_settings tool corrupted encrypted secrets
+**What happened:** Using the MCP `hive_settings` tool to update `github_token` wrote the plaintext PAT directly to the database, bypassing the encryption pipeline in `/api/settings`. Subsequent `getSettingValue("github_token")` calls attempted to decrypt plaintext → returned null → GitHub API calls returned 422.
+**Root cause:** The MCP server's `hive_settings` tool wrote directly to the DB via SQL instead of routing through the `/api/settings` POST endpoint which handles encryption for SECRET_KEYS. The tool had no knowledge of the encryption requirement.
+**Fix applied:** MCP server updated to route settings writes through `/api/settings` API endpoint with CRON_SECRET auth, which handles encryption automatically. Token needs to be re-saved via the API to re-encrypt.
+**Prevention:** Never write to settings table via direct SQL — always go through `/api/settings` which handles encryption, cache invalidation, and validation. MCP tools must be API-first, not DB-first, for any table with business logic.
+**Affects:** hive
+
 ### 2026-03-26 CI-impossible regex false positives — keyword matching is fragile for task classification
 **What happened:** First regex iteration for CI-impossible task filter matched 18 ready items as false positives. Bare `dashboard` keyword caught "Add Neon Consumption API monitoring to dashboard" (a code task). Second iteration caught "Add custom Sentry tags to all API routes" because the description mentioned "in Sentry dashboard" as a benefit description, not a required action. PostgreSQL `~*` regex behaved differently from JavaScript `.test()` in some edge cases.
 **Root cause:** Keyword-based classification conflates "mentions a service" with "requires interacting with a service." A task description saying "enables filtering in Sentry dashboard" is describing where results appear, not where work happens. The regex needed to match action verbs ("go to", "open", "configure in") before service names, not just "in [service] dashboard".
