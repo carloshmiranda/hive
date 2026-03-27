@@ -14,6 +14,32 @@ import { getAgentDisplay, getActionDisplay } from "@/lib/agent-display";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
+// Clean up task titles that have been corrupted by mechanical decomposition
+// Strips cascading "Sub-task of:" prefixes, deduplicates repeated text, and truncates
+export function sanitizeTaskTitle(title: string, maxLen = 120): string {
+  let t = title;
+  // Strip "Sub-task of:" prefixes (can be nested from repeated decomposition)
+  t = t.replace(/^(?:Sub-task of:\s*)+/i, "");
+  // Strip leading acceptance criteria fragments that leaked into titles
+  t = t.replace(/^(?:npx next build passes\s*[-–—]?\s*)+/i, "");
+  t = t.replace(/^(?:Change is implemented correctly\s*[-–—]?\s*)+/i, "");
+  // Strip leading/trailing whitespace and dashes
+  t = t.replace(/^[\s\-–—:]+|[\s\-–—:]+$/g, "");
+  // If title is empty after cleanup, return a placeholder
+  if (!t || t.length < 5) return "(untitled task)";
+  // Truncate with ellipsis
+  if (t.length > maxLen) t = t.slice(0, maxLen - 1) + "…";
+  return t;
+}
+
+// Clean up notification summaries that may contain corrupted task titles
+function sanitizeNotificationSummary(summary: string): string {
+  // Clean up quoted titles within the summary (e.g., '"Sub-task of: foo" dispatched')
+  return summary.replace(/"([^"]{5,})"/g, (_match, title) => {
+    return `"${sanitizeTaskTitle(title, 80)}"`;
+  });
+}
+
 export async function sendTelegramMessage(
   botToken: string,
   chatId: string,
@@ -77,7 +103,7 @@ export function formatAgentNotification(event: NotificationEvent): string {
 
   // Action line — human-readable
   msg += `\n${actionLabel}`;
-  if (event.task_title) msg += `: ${event.task_title.slice(0, 100)}`;
+  if (event.task_title) msg += `: ${sanitizeTaskTitle(event.task_title, 100)}`;
 
   // Duration if available
   if (event.duration_s && event.duration_s > 0) {
@@ -86,8 +112,8 @@ export function formatAgentNotification(event: NotificationEvent): string {
     msg += `\n\u23F1 ${mins > 0 ? `${mins}m ` : ""}${secs}s`;
   }
 
-  // Summary
-  msg += `\n${event.summary}`;
+  // Summary — sanitize embedded titles
+  msg += `\n${sanitizeNotificationSummary(event.summary)}`;
 
   // PR info with clickable link
   if (event.pr_number && event.pr_url) {

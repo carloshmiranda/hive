@@ -212,14 +212,21 @@ export async function POST(req: Request) {
               .filter((p: string) => p.length > 10);
 
             if (parts.length >= 2) {
-              for (const part of parts.slice(0, 5)) {
+              const parentTitle = (item.title || "").replace(/^(?:Sub-task of:\s*)+/i, "").slice(0, 80);
+              for (let pi = 0; pi < Math.min(parts.length, 5); pi++) {
+                const part = parts[pi];
+                // Generate a clean title: "Parent title — part N" or first meaningful words of the part
+                const partPreview = part.replace(/^(?:Sub-task of:\s*)+/i, "").split("\n")[0].trim().slice(0, 100);
+                const subTitle = parentTitle
+                  ? `${parentTitle} (${pi + 1}/${Math.min(parts.length, 5)})`
+                  : partPreview.slice(0, 150);
                 await sql`
                   INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
                   VALUES (
-                    ${part.slice(0, 200)},
-                    ${`Sub-task of: ${item.title}\n\n${part}\n\nAcceptance criteria:\n- Change is implemented correctly\n- npx next build passes`.slice(0, 2000)},
+                    ${subTitle},
+                    ${`Part ${pi + 1} of: ${parentTitle}\n\n${part}\n\nAcceptance criteria:\n- Change is implemented correctly\n- npx next build passes`.slice(0, 2000)},
                     ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
-                    ${JSON.stringify({ complexity: "S", estimated_turns: 20, acceptance_criteria: [part.slice(0, 200), "npx next build passes"], affected_files: [], approach: [part], risks: [] })}
+                    ${JSON.stringify({ complexity: "S", estimated_turns: 20, acceptance_criteria: [partPreview.slice(0, 200), "npx next build passes"], affected_files: [], approach: [part], risks: [] })}
                   )
                 `.catch((e: any) => { console.warn(`[backlog] insert mechanical sub-item failed: ${e?.message || e}`); });
               }
