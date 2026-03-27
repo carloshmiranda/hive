@@ -796,6 +796,106 @@ server.registerTool(
   }
 );
 
+// ── Circuit Breaker Reset ─────────────────────────────────────────────
+
+server.registerTool(
+  "hive_circuit_reset",
+  {
+    description: "Reset circuit breakers by marking recent failed agent_actions as 'skipped'. Use when a root cause has been fixed and the circuit breaker is blocking dispatch. Without arguments, shows current breaker status.",
+    inputSchema: {
+      agent: z.string().optional().describe("Agent name (engineer, ops, growth, healer, ceo, etc). Omit to see status only."),
+      company_slug: z.string().optional().describe("Company slug. Omit for systemic (company_id IS NULL) failures."),
+      hours: z.number().default(48).describe("How many hours back to look (default 48)"),
+    },
+  },
+  async ({ agent, company_slug, hours }) => {
+    // If no agent specified, show circuit breaker status
+    if (!agent) {
+      const rows = await sql`
+        SELECT a.agent, c.slug as company, COUNT(*)::int as failures, MAX(a.started_at) as latest
+        FROM agent_actions a
+        LEFT JOIN companies c ON c.id = a.company_id
+        WHERE a.status = 'failed' AND a.started_at > NOW() - INTERVAL '48 hours'
+        GROUP BY a.agent, c.slug
+        HAVING COUNT(*) >= 3
+        ORDER BY COUNT(*) DESC
+      `;
+      if (rows.length === 0) {
+        return { content: [{ type: "text", text: "No open circuit breakers (no agent has 3+ failures in 48h)." }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ open_breakers: rows }, null, 2) }] };
+    }
+
+    // Use separate queries for company vs systemic to avoid fragment composition
+    let result;
+    if (company_slug) {
+      const [company] = await sql`SELECT id FROM companies WHERE slug = ${company_slug} LIMIT 1`;
+      if (!company) return { content: [{ type: "text", text: `Company '${company_slug}' not found.` }] };
+      result = await sql`
+        UPDATE agent_actions SET status = 'skipped'
+        WHERE agent = ${agent} AND status = 'failed'
+        AND company_id = ${company.id}
+        AND started_at > NOW() - make_interval(hours => ${hours})
+      `;
+    } else {
+      result = await sql`
+        UPDATE agent_actions SET status = 'skipped'
+        WHERE agent = ${agent} AND status = 'failed'
+        AND company_id IS NULL
+        AND started_at > NOW() - make_interval(hours => ${hours})
+      `;
+    }
+
+    const affected = result.count || 0;
+    return {
+      content: [{
+        type: "text",
+        text: `Reset ${affected} failed ${agent} actions${company_slug ? ` for ${company_slug}` : ' (systemic)'} in last ${hours}h → status = 'skipped'. Circuit breaker should now be clear.`,
+      }],
+    };
+  }
+);
+
+// ── Loop Kick (trigger sentinel dispatch) ────────────────────────────
+
+server.registerTool(
+  "hive_loop_kick",
+  {
+    description: "Trigger sentinel-dispatch to kick the autonomous loop. Use when the loop appears stalled (no recent dispatches). Equivalent to calling /api/cron/sentinel-dispatch.",
+    inputSchema: {
+      tier: z.enum(["dispatch", "urgent", "janitor"]).default("dispatch").describe("Which sentinel tier to trigger"),
+    },
+  },
+  async ({ tier }) => {
+    const endpoint = `/api/cron/sentinel-${tier}`;
+    const url = `${HIVE_URL}${endpoint}`;
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${CRON_SECRET}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(120000),
+      });
+      const data = await res.json().catch(() => res.text());
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: res.ok, tier, data }, null, 2),
+        }],
+      };
+    } catch (e) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: false, error: e.message, url }),
+        }],
+      };
+    }
+  }
+);
+
 // ── Trigger (call Hive API endpoints as Hive) ─────────────────────────
 
 server.registerTool(

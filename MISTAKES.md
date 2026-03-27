@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-27 vercel.json _comment property failed schema validation — 20+ ERROR deploys
+**What happened:** All Vercel deployments went ERROR with 0s build time and empty logs. The `_comment` property added to vercel.json for documentation failed Vercel's strict JSON schema validation. Every deploy was rejected before the build even started.
+**Root cause:** Vercel's vercel.json parser rejects unknown properties. `_comment` is not a valid field. Error message: "should NOT have additional property '_comment'". This was invisible because build logs showed nothing — the validation happens pre-build.
+**Fix applied:** Removed `_comment` from vercel.json. Also disabled preview builds (`"*": false` in `git.deploymentEnabled`) to prevent branch deploys wasting the 100/day limit.
+**Prevention:** Never add documentation comments to vercel.json — it's strict JSON with no comment syntax. Use git commit messages or CLAUDE.md to document vercel.json decisions. When deploys fail with 0s build time + empty logs, check vercel.json schema first.
+**Affects:** hive
+
+### 2026-03-27 QStash schedules lost during deploy outage — loop went silent
+**What happened:** After fixing the deploy outage, the dispatch loop didn't restart automatically. Manual trigger revealed 4 QStash schedules were missing (sentinel-urgent, sentinel-dispatch, sentinel-janitor, uptime-monitor).
+**Root cause:** QStash schedule recreation is triggered by sentinel runs. With deploys broken, no sentinel ran, and existing schedules may have expired or been cleaned up. The `qstash_heal` dispatch type in sentinel-dispatch auto-recreates missing schedules, but only when sentinel itself runs.
+**Fix applied:** Manual trigger of `/api/cron/sentinel-dispatch` which auto-detected and recreated all 4 missing schedules.
+**Prevention:** Add a QStash schedule health check that doesn't depend on QStash itself firing. Consider a GitHub Actions scheduled workflow (runs independently of Vercel) that checks QStash schedule count and alerts if below expected threshold.
+**Affects:** hive
+
 ### 2026-03-27 Vercel deploys silently broke for ~24h after repo visibility change
 **What happened:** All Vercel deployments for Hive went ERROR with 0s build time and empty build logs. The deployed app kept serving the old READY version, so uptime monitoring saw no outage. ~20 commits accumulated without deploying.
 **Root cause:** The GitHub repo changed from private to public. Vercel's Git integration broke silently — it stopped being able to clone/build, but the `githubRepoVisibility: "public"` metadata showed the change. No build error was surfaced because the integration was disconnected, not the code broken.
