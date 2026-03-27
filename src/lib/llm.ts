@@ -159,9 +159,9 @@ export const OPENROUTER_MODELS = {
 export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: number; verbosity: "low" | "medium" | "high" | "max" }> = {
   growth: {
     models: [
-      OPENROUTER_MODELS.hermes_405b,
-      OPENROUTER_MODELS.llama_70b,
-      OPENROUTER_MODELS.gemma_27b,
+      OPENROUTER_MODELS.hermes_405b + ":online",
+      OPENROUTER_MODELS.llama_70b + ":online",
+      OPENROUTER_MODELS.gemma_27b + ":online",
     ],
     minContext: 8192,  // Content generation needs decent context
     verbosity: "high", // Improve output quality
