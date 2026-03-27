@@ -1,10 +1,16 @@
 import { getDb, json } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { editTelegramMessage } from "@/lib/telegram";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/webhooks/telegram — handles Telegram Bot webhook callbacks
 // Set webhook: https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://hive-phi.vercel.app/api/webhooks/telegram
 export async function POST(req: Request) {
+  setSentryTags({
+    action_type: "webhook",
+    route: "/api/webhooks/telegram",
+  });
+
   const body = await req.json();
 
   // Handle callback queries (button presses)

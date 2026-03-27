@@ -1,8 +1,14 @@
 import { NextRequest } from "next/server";
 import { json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/debug-integrations",
+  });
+
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {

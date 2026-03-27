@@ -7,6 +7,7 @@ import { canSendOutreach } from "@/lib/resend";
 import { callLLMWithLogging } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -68,6 +69,13 @@ export async function POST(req: NextRequest) {
   const agentName = agent as WorkerAgent;
   const startTime = Date.now();
 
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    agent: agentName,
+    action_type: "agent_dispatch",
+    route: "/api/agents/dispatch"
+  });
+
   try {
     // 1. Load company
     const [company] = await sql`
@@ -75,6 +83,9 @@ export async function POST(req: NextRequest) {
       FROM companies WHERE slug = ${company_slug} AND status IN ('mvp', 'active')
     `;
     if (!company) return err(`Company ${company_slug} not found or not active`);
+
+    // Add company_id to Sentry tags now that we have it
+    setSentryTags({ company_id: company.id });
 
     // 2. Load context: latest CEO plan, metrics, research, playbook
     const [latestCycle] = await sql`

@@ -8,6 +8,7 @@ import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
 import { selectEntriesWithMMR } from "@/lib/mmr";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Domain mappings for agent-specific playbook filtering
 function getAgentDomains(agent: string): string[] | null {
@@ -28,6 +29,11 @@ function getAgentDomains(agent: string): string[] | null {
 
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/context",
+  });
+
   const result = await validateOIDC(req);
   if (result instanceof Response) return result;
 
@@ -49,6 +55,9 @@ export async function GET(req: NextRequest) {
   if (COMPANY_AGENTS.includes(agent) && !slug) {
     return err(`Agent type '${agent}' requires company_slug query param`, 400);
   }
+
+  // Add agent tag to Sentry
+  setSentryTags({ agent });
 
   const sql = getDb();
   const agentType = agent as AgentType;
@@ -78,6 +87,9 @@ export async function GET(req: NextRequest) {
   if (!company) {
     return json({});
   }
+
+  // Add company_id tag to Sentry
+  setSentryTags({ company_id: company.id });
 
   // Get the current running cycle ID for cache key
   const [currentCycle] = await sql`

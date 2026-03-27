@@ -20,6 +20,7 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { verifyCronAuth } from "@/lib/qstash";
+import { setSentryTags } from "@/lib/sentry-tags";
 import {
   dispatchToActions,
   dispatchToCompanyWorkflow,
@@ -35,6 +36,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(request: Request) {
+  setSentryTags({
+    action_type: "cron",
+    route: "/api/cron/sentinel-urgent",
+  });
+
   // Auth check — verifyCronAuth returns { authorized: boolean, ... }
   const auth = await verifyCronAuth(request);
   if (!auth.authorized) {

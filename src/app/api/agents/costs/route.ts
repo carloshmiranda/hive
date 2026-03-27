@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Cost per turn by model (USD)
 const COST_PER_TURN: Record<string, number> = {
@@ -35,6 +36,11 @@ function costPerTurn(model: string | null | undefined, agent: string): number {
 
 // GET /api/agents/costs — cost tracking summary
 export async function GET() {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/costs",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 

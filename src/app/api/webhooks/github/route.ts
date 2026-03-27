@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { dispatchEvent } from "@/lib/dispatch";
 import { analyzePR, autoMergePR } from "@/lib/pr-risk-scoring";
 import { qstashPublish } from "@/lib/qstash";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Receives GitHub webhook events
 // Auth: HMAC-SHA256 signature verification via GITHUB_WEBHOOK_SECRET
@@ -18,6 +19,11 @@ function verifyGitHubSignature(payload: string, signature: string | null, secret
 }
 
 export async function POST(req: Request) {
+  setSentryTags({
+    action_type: "webhook",
+    route: "/api/webhooks/github",
+  });
+
   const rawBody = await req.text();
   const event = req.headers.get("x-github-event");
   const signature = req.headers.get("x-hub-signature-256");

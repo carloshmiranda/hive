@@ -1,10 +1,16 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/agents/backlog — create a new backlog item (OIDC auth)
 // Body: { title, description, priority?, source?, theme?, company_id? }
 export async function POST(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/backlog",
+  });
+
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
 
@@ -18,6 +24,11 @@ export async function POST(req: NextRequest) {
   const { title, description, priority, source, theme, company_id } = body;
   if (!title || !description) {
     return err("title and description are required", 400);
+  }
+
+  // Add company_id tag to Sentry if present
+  if (company_id) {
+    setSentryTags({ company_id });
   }
 
   const sql = getDb();
@@ -52,6 +63,11 @@ export async function POST(req: NextRequest) {
 // PATCH /api/agents/backlog?id=<uuid> — update a backlog item (OIDC auth)
 // Body: { status?, notes? }
 export async function PATCH(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/backlog",
+  });
+
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
 

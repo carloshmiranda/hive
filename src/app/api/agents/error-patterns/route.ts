@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 const SIMILARITY_THRESHOLD = 0.6;
 
@@ -15,6 +16,11 @@ const SIMILARITY_THRESHOLD = 0.6;
  * Auth: OIDC (GitHub Actions) or Bearer CRON_SECRET (Sentinel/internal)
  */
 export async function POST(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/error-patterns",
+  });
+
   // Auth: try OIDC first, fall back to CRON_SECRET
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;

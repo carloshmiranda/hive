@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { updateMetrics } from "@/lib/convergent";
 import { verifyCronAuth } from "@/lib/qstash";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Vercel Cron: runs at 8am and 6pm (configure in vercel.json)
 // Collects page_views from each company's /api/stats endpoint
@@ -12,6 +13,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(req: Request) {
+  setSentryTags({
+    action_type: "cron",
+    route: "/api/cron/metrics",
+  });
+
   const auth = await verifyCronAuth(req);
   if (!auth.authorized) {
     return Response.json({ error: auth.error }, { status: 401 });

@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Sentry webhook endpoint
 // Auth: HMAC-SHA256 signature verification via SENTRY_CLIENT_SECRET
@@ -18,6 +19,11 @@ function verifySentrySignature(payload: string, signature: string | null, secret
 }
 
 export async function POST(req: Request) {
+  setSentryTags({
+    action_type: "webhook",
+    route: "/api/webhooks/sentry",
+  });
+
   const startTime = Date.now();
   const rawBody = await req.text();
   const signature = req.headers.get("sentry-hook-signature");

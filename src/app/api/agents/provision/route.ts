@@ -4,12 +4,18 @@ import { getDb, json, err } from "@/lib/db";
 import { createProject as createNeonProject } from "@/lib/neon-api";
 import { createProject as createVercelProject, setEnvVars, addDomain, provisionNeonStore, hasEnvVar, getEnvVar } from "@/lib/vercel";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/agents/provision — one-call infrastructure provisioning
 // Creates Neon DB + runs schema, creates Vercel project + enables Web Analytics,
 // sets DATABASE_URL env var on Vercel, records all infra in DB.
 // Called by the Engineer agent during new_company provisioning.
 export async function POST(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/provision",
+  });
+
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
 
@@ -19,6 +25,9 @@ export async function POST(req: NextRequest) {
   if (!company_slug || !company_id) {
     return err("Missing company_slug or company_id", 400);
   }
+
+  // Add company_id tag to Sentry
+  setSentryTags({ company_id });
 
   const sql = getDb();
   const results: Record<string, unknown> = { company_slug, company_id };

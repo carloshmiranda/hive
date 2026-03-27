@@ -17,6 +17,7 @@
  */
 
 import * as Sentry from "@sentry/nextjs";
+import { setSentryTags } from "@/lib/sentry-tags";
 import {
   initSentinelContext,
   dispatchToActions,
@@ -35,6 +36,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(request: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "cron",
+    route: "/api/cron/sentinel-dispatch",
+    agent: "sentinel"
+  });
+
   // Auth check — handle directly since initSentinelContext auth may not match verifyCronAuth's return shape
   const auth = await verifyCronAuth(request);
   if (!auth.authorized) {

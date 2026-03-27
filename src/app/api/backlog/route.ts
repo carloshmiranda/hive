@@ -1,9 +1,15 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // GET /api/backlog — list Hive self-improvement backlog items
 export async function GET(req: Request) {
+  setSentryTags({
+    action_type: "admin",
+    route: "/api/backlog",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 

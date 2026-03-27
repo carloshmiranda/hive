@@ -47,11 +47,17 @@ import {
   type SentinelContext,
   type Dispatch,
 } from "@/lib/sentinel-helpers";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(request: Request) {
+  setSentryTags({
+    action_type: "cron",
+    route: "/api/cron/sentinel-janitor",
+  });
+
   let ctx: SentinelContext;
   try {
     ctx = await initSentinelContext(request, "sentinel-janitor");

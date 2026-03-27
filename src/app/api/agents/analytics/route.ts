@@ -2,10 +2,16 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/agents/analytics — enable Vercel Web Analytics for a company
 // Can also be called for all companies at once with { "all": true }
 export async function POST(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/analytics",
+  });
+
   const result = await validateOIDC(req);
   if (result instanceof Response) return result;
 

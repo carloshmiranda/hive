@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/agents/extract — Phase 2 pattern extraction from imported/existing codebases
 // Reads a company's GitHub repo via API, identifies reusable patterns across domains,
@@ -84,6 +85,11 @@ interface GHFile {
 }
 
 export async function POST(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/extract",
+  });
+
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
 
@@ -93,6 +99,9 @@ export async function POST(req: NextRequest) {
   if (!company_slug || !company_id) {
     return err("Missing company_slug or company_id", 400);
   }
+
+  // Add company_id tag to Sentry
+  setSentryTags({ company_id });
 
   const sql = getDb();
   const token = await getSettingValue("github_token");
