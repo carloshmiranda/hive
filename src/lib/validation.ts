@@ -34,6 +34,7 @@ export interface ValidationResult {
   forbidden: string[];
   kill_signal: boolean;
   kill_reason: string | null;
+  kill_evaluation_triggers: string[];
   revenue_readiness_score: number;
   revenue_readiness_message: string | null;
 }
@@ -316,6 +317,70 @@ interface KillCheck {
   reason: string;
 }
 
+interface KillEvaluationTriggers {
+  triggers: string[];
+}
+
+// Check benchmark-based kill evaluation triggers (force CEO evaluation, not automatic kill)
+function checkKillEvaluationTriggers(type: BusinessType, metrics: MetricsRow[], companyCreatedAt: string, revenueReadinessScore: number): KillEvaluationTriggers {
+  const triggers: string[] = [];
+  const daysSinceCreation = Math.floor((Date.now() - new Date(companyCreatedAt).getTime()) / 86400000);
+  const totalViews = metrics.reduce((s, m) => s + m.page_views, 0);
+  const latest = metrics[0] || {} as MetricsRow;
+  const hasRevenue = (latest.revenue || 0) > 0 || (latest.mrr || 0) > 0;
+
+  // Skip all triggers if company has revenue
+  if (hasRevenue) return { triggers };
+
+  // 1. Zero organic traffic after 60 days of content = kill
+  if (daysSinceCreation > 60 && totalViews === 0) {
+    triggers.push(`ZERO ORGANIC TRAFFIC: ${daysSinceCreation} days with 0 page views — content not getting discovered`);
+  }
+
+  // 2. <10 waitlist signups after 90 days = kill (SaaS only)
+  if (type === 'saas' && daysSinceCreation > 90) {
+    const signups = latest.waitlist_total || 0;
+    if (signups < 10) {
+      triggers.push(`LOW WAITLIST CONVERSION: Only ${signups} signups after ${daysSinceCreation} days — insufficient market interest`);
+    }
+  }
+
+  // 4. WoW growth negative for 6+ consecutive weeks = kill evaluation
+  const negativeGrowthWeeks = countConsecutiveNegativeGrowthWeeks(metrics);
+  if (negativeGrowthWeeks >= 6) {
+    triggers.push(`SUSTAINED DECLINE: ${negativeGrowthWeeks} consecutive weeks of negative growth — systematic issue`);
+  }
+
+  // 5. Revenue readiness score <20 after 120 days = kill evaluation
+  if (daysSinceCreation > 120 && revenueReadinessScore < 20) {
+    triggers.push(`LOW MONETIZATION READINESS: Score ${revenueReadinessScore}/100 after ${daysSinceCreation} days — poor fundamentals`);
+  }
+
+  return { triggers };
+}
+
+// Count consecutive weeks of negative WoW growth
+function countConsecutiveNegativeGrowthWeeks(metrics: MetricsRow[]): number {
+  if (metrics.length < 14) return 0; // Need at least 2 weeks of data
+
+  const sorted = [...metrics].sort((a, b) => b.date.localeCompare(a.date));
+  let consecutiveWeeks = 0;
+
+  // Check each week for negative growth
+  for (let i = 0; i < sorted.length - 7; i += 7) {
+    const thisWeek = sorted.slice(i, i + 7).reduce((s, m) => s + m.page_views, 0);
+    const lastWeek = sorted.slice(i + 7, i + 14).reduce((s, m) => s + m.page_views, 0);
+
+    if (lastWeek > 0 && thisWeek < lastWeek) {
+      consecutiveWeeks++;
+    } else {
+      break; // Stop at first non-negative week
+    }
+  }
+
+  return consecutiveWeeks;
+}
+
 function checkKillSignals(type: BusinessType, metrics: MetricsRow[], companyCreatedAt: string): KillCheck {
   const daysSinceCreation = Math.floor((Date.now() - new Date(companyCreatedAt).getTime()) / 86400000);
   const totalViews = metrics.reduce((s, m) => s + m.page_views, 0);
@@ -357,6 +422,27 @@ function checkKillSignals(type: BusinessType, metrics: MetricsRow[], companyCrea
   }
 
   return { signal: false, reason: '' };
+}
+
+// ─── CEO Score Kill Evaluation (requires cycles data) ───
+
+export function checkCEOScoreKillTrigger(recentCycles: Array<{ cycle_number: number; score: string }>): string | null {
+  if (recentCycles.length < 3) return null;
+
+  // Check for 3 consecutive CEO scores <4/10
+  const lowScores = recentCycles
+    .sort((a, b) => b.cycle_number - a.cycle_number) // Most recent first
+    .slice(0, 3) // Get last 3 cycles
+    .map(c => {
+      const score = parseFloat(c.score);
+      return isNaN(score) ? 10 : score; // Default to 10 if parse fails
+    });
+
+  if (lowScores.length === 3 && lowScores.every(score => score < 4)) {
+    return `CEO PERFORMANCE CRISIS: 3 consecutive scores <4/10 (${lowScores.join(', ')}) — fundamental execution failure`;
+  }
+
+  return null;
 }
 
 // ─── Main function ───
@@ -404,6 +490,9 @@ export function computeValidationScore(
   // Revenue readiness score
   const revenueReadiness = computeRevenueReadinessScore(metrics);
 
+  // Kill evaluation triggers (benchmark-based)
+  const killEvaluationTriggers = checkKillEvaluationTriggers(type, metrics, companyCreatedAt, revenueReadiness.score);
+
   return {
     score,
     phase,
@@ -415,6 +504,7 @@ export function computeValidationScore(
     forbidden: rules.forbidden,
     kill_signal: kill.signal,
     kill_reason: kill.reason,
+    kill_evaluation_triggers: killEvaluationTriggers.triggers,
     revenue_readiness_score: revenueReadiness.score,
     revenue_readiness_message: revenueReadiness.message,
   };

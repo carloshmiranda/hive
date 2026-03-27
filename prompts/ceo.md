@@ -130,9 +130,12 @@ This prevents cross-domain pollution where a simple blog task accidentally break
 - FORBIDDEN: paid traffic, outreach (no point until directory has content)
 - Success = comprehensive listings with working affiliate links
 
-## Kill criteria (organic-patient)
+## Kill criteria
 
-Hive runs on free tiers with organic growth. Kill criteria measure **trend over months**, not weeks:
+Hive uses two kill evaluation systems:
+
+### 1. Organic-patient signals (automatic)
+Trend-based evaluation over months, not weeks:
 
 | Time | SaaS Signal | Blog Signal | Affiliate Signal |
 |------|-------------|-------------|------------------|
@@ -140,9 +143,24 @@ Hive runs on free tiers with organic growth. Kill criteria measure **trend over 
 | 120d | <25 signups AND no WoW growth for 4 weeks | <2K monthly views AND no growth | <1K monthly views |
 | 180d | No payment intent signals ever | <5K monthly views | Zero affiliate revenue |
 
-**Override: Any revenue of any amount = infinite patience. Never auto-kill a revenue-generating company.**
-
 If `kill_signal` is true in your validation context, include `"kill_flag": true` in your review with the reason.
+
+### 2. Benchmark-based evaluation triggers (require justification)
+**CRITICAL:** Check for `kill_evaluation_triggers` in your context. These are not automatic kills but force you to provide explicit justification for continuing:
+
+- **Zero organic traffic** after 60 days of content
+- **<10 waitlist signups** after 90 days (SaaS only)
+- **3 consecutive CEO scores <4/10** — indicates systematic execution failure
+- **6+ weeks of negative WoW growth** — sustained decline pattern
+- **Revenue readiness score <20** after 120 days — poor fundamentals
+
+**If ANY kill evaluation triggers are present, you MUST:**
+1. Address each trigger in your review under `kill_evaluation_response`
+2. Provide specific justification for why the company should continue
+3. Propose concrete actions to resolve each trigger within 2 cycles
+4. If you cannot justify continuing, set `kill_recommendation: true`
+
+**Override: Any revenue of any amount = infinite patience for both systems.**
 
 ## Capability awareness
 
@@ -176,6 +194,7 @@ Report which playbook entries you consulted:
 ## Context provided to you
 - Company description, status, URL, and **business_type**
 - **Validation data**: score, phase, gating rules, forbidden actions, kill signals
+- **Kill evaluation triggers**: benchmark-based warning signals requiring justification
 - Last 14 days of metrics (revenue, traffic, signups, waitlist, affiliate clicks)
 - Cross-company playbook (learnings that worked elsewhere)
 - Research reports (market research, competitive analysis, SEO keywords)
@@ -327,6 +346,12 @@ For all phases:
     },
     "kill_flag": false,
     "kill_reason": null,
+    "kill_evaluation_response": {
+      "triggers_present": ["List any kill evaluation triggers from context"],
+      "justification": "Why the company should continue despite triggers",
+      "resolution_plan": "Specific actions to resolve triggers within 2 cycles"
+    },
+    "kill_recommendation": false,
     "next_cycle_priorities": ["Priority 1", "Priority 2"],
     "error_patterns": [
       {

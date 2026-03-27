@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
-import { computeValidationScore, normalizeBusinessType } from "@/lib/validation";
+import { computeValidationScore, normalizeBusinessType, checkCEOScoreKillTrigger } from "@/lib/validation";
 import { getCapabilitySummary } from "@/lib/hive-capabilities";
 import { checkForbidden } from "@/lib/phase-gate";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
@@ -461,6 +461,18 @@ async function ceoContext(sql: any, company: any) {
   // Add portfolio context with current company highlighted
   const portfolioContext = await enrichPortfolioWithContext(sql, portfolioData, company.id);
 
+  // Check for CEO score kill evaluation trigger
+  const ceoScoreKillTrigger = checkCEOScoreKillTrigger(recentCycles.map((c: { cycle_number: number; score: string }) => ({
+    cycle_number: c.cycle_number,
+    score: c.score
+  })));
+
+  // Combine all kill evaluation triggers
+  const allKillEvaluationTriggers = [...validation.kill_evaluation_triggers];
+  if (ceoScoreKillTrigger) {
+    allKillEvaluationTriggers.push(ceoScoreKillTrigger);
+  }
+
   return {
     company: {
       name: company.name,
@@ -472,6 +484,7 @@ async function ceoContext(sql: any, company: any) {
       market: company.market || "global",
     },
     validation,
+    kill_evaluation_triggers: allKillEvaluationTriggers,
     cycle: cycle[0] ? {
       id: cycle[0].id,
       cycle_number: cycle[0].cycle_number,
