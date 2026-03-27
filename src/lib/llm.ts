@@ -113,6 +113,7 @@ export interface LLMOptions {
   temperature?: number;
   maxRetries?: number;
   timeout?: number;
+  verbosity?: "low" | "medium" | "high" | "max";
   responseFormat?: {
     type: "json_schema";
     json_schema: {
@@ -155,7 +156,7 @@ export const OPENROUTER_MODELS = {
 
 // Agent-specific curated primaries — quality picks go first.
 // Dynamic free models are appended after these (see buildModelChain).
-export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: number }> = {
+export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: number; verbosity: "low" | "medium" | "high" | "max" }> = {
   growth: {
     models: [
       OPENROUTER_MODELS.hermes_405b,
@@ -163,6 +164,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
       OPENROUTER_MODELS.gemma_27b,
     ],
     minContext: 8192,  // Content generation needs decent context
+    verbosity: "high", // Improve output quality
   },
   outreach: {
     models: [
@@ -171,6 +173,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
       OPENROUTER_MODELS.gemma_27b,
     ],
     minContext: 4096,  // Email drafting is short-context
+    verbosity: "medium", // Balanced prospect research
   },
   ops: {
     models: [
@@ -179,6 +182,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
       OPENROUTER_MODELS.gemma_27b,
     ],
     minContext: 4096,  // Health checks are simple
+    verbosity: "low",  // Reduce tokens, faster responses
   },
   planner: {
     models: [
@@ -187,6 +191,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
       OPENROUTER_MODELS.llama_70b,
     ],
     minContext: 16384, // Spec generation needs long context
+    verbosity: "low",  // Backlog-planner optimization
   },
   decomposer: {
     models: [
@@ -195,6 +200,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
       OPENROUTER_MODELS.qwen_coder,
     ],
     minContext: 16384, // Task decomposition needs full context
+    verbosity: "medium", // Balance detail vs token usage
   },
 };
 
@@ -364,6 +370,13 @@ async function callOpenRouter(
     },
   };
 
+  // Add verbosity config for OpenRouter (maps to output_config.effort for Anthropic models)
+  if (options.verbosity) {
+    requestBody.provider.output_config = {
+      effort: options.verbosity,
+    };
+  }
+
   // Add structured JSON response format if specified
   if (options.responseFormat) {
     requestBody.response_format = options.responseFormat;
@@ -408,6 +421,11 @@ export async function callLLM(
   const primaryModel = AGENT_PRIMARIES[agent]?.models[0] ?? fullChain[0];
 
   const { sql, ...llmOptions } = options;
+
+  // Apply default verbosity per agent type if not specified
+  if (!llmOptions.verbosity && AGENT_PRIMARIES[agent]) {
+    llmOptions.verbosity = AGENT_PRIMARIES[agent].verbosity;
+  }
 
   // Filter out models with open circuit breakers
   const availableModels = fullChain.filter(model => {
