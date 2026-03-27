@@ -5,6 +5,7 @@ import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch";
 import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
+import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -1096,6 +1097,40 @@ export async function POST(req: Request) {
   let taskDescription = topItem.description;
   if (previousErrors) {
     taskDescription += `\n\n⚠️ PREVIOUS ATTEMPTS FAILED (attempt ${attemptCount + 1}):\n${previousErrors}\n\nDo NOT repeat the same approach. Analyze why it failed and try a different strategy.`;
+  }
+
+  // Sanitize task input before GitHub dispatch
+  taskDescription = sanitizeTaskInput(taskDescription);
+
+  // Check for suspicious patterns and log if detected
+  const suspiciousCheck = hasSuspiciousPatterns(taskDescription);
+  if (suspiciousCheck.hasSuspicious) {
+    console.warn(`[backlog] Suspicious patterns detected in task "${topItem.title}": ${suspiciousCheck.patterns.join(', ')} (risk: ${suspiciousCheck.riskLevel})`);
+
+    // Log to agent_actions with flagged status
+    await sql`
+      INSERT INTO agent_actions (
+        company_id, agent, action_type, description, status, output,
+        started_at, finished_at
+      ) VALUES (
+        NULL, 'backlog_dispatch', 'security_check',
+        ${`Suspicious patterns detected in backlog item "${topItem.title}": ${suspiciousCheck.patterns.join(', ')}`},
+        'flagged', ${JSON.stringify({
+          backlog_id: topItem.id,
+          patterns: suspiciousCheck.patterns,
+          risk_level: suspiciousCheck.riskLevel,
+          title: topItem.title
+        })}::jsonb,
+        ${new Date().toISOString()}, ${new Date().toISOString()}
+      )
+    `.catch(e => console.error('[backlog] Failed to log suspicious pattern detection:', e));
+
+    // Add note to backlog item
+    await sql`
+      UPDATE hive_backlog
+      SET notes = COALESCE(notes || E'\n', '') || ${`[SECURITY] Suspicious patterns detected: ${suspiciousCheck.patterns.join(', ')} (risk: ${suspiciousCheck.riskLevel})`}
+      WHERE id = ${topItem.id}
+    `.catch(e => console.error('[backlog] Failed to update backlog item with security note:', e));
   }
 
   const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {

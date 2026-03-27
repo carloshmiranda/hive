@@ -6,6 +6,7 @@ import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
 import { callLLMWithLogging } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
+import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -39,7 +40,17 @@ export async function POST(req: NextRequest) {
     return err("Unauthorized", 401);
   }
 
-  const body = await req.json();
+  let body = await req.json();
+
+  // Validate and sanitize the request payload
+  const validation = validateDispatchPayload(body);
+  if (!validation.isValid) {
+    return err(validation.error || "Invalid payload", 400);
+  }
+
+  // Sanitize the entire body to prevent injection attacks
+  body = sanitizeJSON(body);
+
   const { company_slug, agent, trigger } = body as {
     company_slug: string;
     agent: string;
@@ -127,6 +138,36 @@ export async function POST(req: NextRequest) {
       .replace(/\{\{COMPANY_NAME\}\}/g, company.name)
       .replace(/\{\{COMPANY_SLUG\}\}/g, company.slug);
 
+    // Sanitize trigger input before adding to agent prompt
+    let sanitizedTrigger = trigger || "scheduled";
+    if (trigger) {
+      sanitizedTrigger = sanitizeTaskInput(trigger);
+
+      // Check for suspicious patterns in trigger
+      const suspiciousCheck = hasSuspiciousPatterns(trigger);
+      if (suspiciousCheck.hasSuspicious) {
+        console.warn(`[agents] Suspicious patterns detected in trigger for ${company.slug}/${agentName}: ${suspiciousCheck.patterns.join(', ')} (risk: ${suspiciousCheck.riskLevel})`);
+
+        // Log to agent_actions with flagged status
+        await sql`
+          INSERT INTO agent_actions (
+            company_id, agent, action_type, description, status, output,
+            started_at, finished_at
+          ) VALUES (
+            ${company.id}, ${agentName}, 'security_check',
+            ${`Suspicious patterns detected in trigger: ${suspiciousCheck.patterns.join(', ')}`},
+            'flagged', ${JSON.stringify({
+              company_slug: company.slug,
+              patterns: suspiciousCheck.patterns,
+              risk_level: suspiciousCheck.riskLevel,
+              original_trigger: trigger
+            })}::jsonb,
+            ${new Date().toISOString()}, ${new Date().toISOString()}
+          )
+        `.catch(e => console.error('[agents] Failed to log suspicious pattern detection:', e));
+      }
+    }
+
     const contextBlock = `
 COMPANY: ${company.name} (${company.slug}) — ${company.status}
 DESCRIPTION: ${company.description || "N/A"}
@@ -142,7 +183,7 @@ ${researchReports.map((r: any) => `[${r.report_type}] ${r.summary || "See conten
 PLAYBOOK (cross-company learnings):
 ${playbook.map((p: any) => `[${p.domain}] ${p.insight} (confidence: ${p.confidence})`).join("\n") || "No playbook entries yet"}
 
-TRIGGER: ${trigger || "scheduled"}
+TRIGGER: ${sanitizedTrigger}
 
 ${capabilitiesSummary(company.capabilities)}`;
 
