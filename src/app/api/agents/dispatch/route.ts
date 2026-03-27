@@ -7,6 +7,7 @@ import { canSendOutreach } from "@/lib/resend";
 import { callLLMWithLogging } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
+import { setSentryApiTags, extractRoutePath } from "@/lib/sentry-tags";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -63,6 +64,14 @@ export async function POST(req: NextRequest) {
   if (!WORKER_AGENTS.includes(agent as WorkerAgent)) {
     return err(`Agent must be one of: ${WORKER_AGENTS.join(", ")}. Brain agents run on GitHub Actions.`);
   }
+
+  // Set Sentry tags for error context and triage
+  setSentryApiTags({
+    route: extractRoutePath(req),
+    action_type: "agent_dispatch",
+    company_id: company_slug,
+    agent: agent,
+  });
 
   const sql = getDb();
   const agentName = agent as WorkerAgent;

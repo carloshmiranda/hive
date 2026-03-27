@@ -2,8 +2,15 @@ import { getDb, json } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { decrypt } from "@/lib/crypto";
 import { cacheHealthCheck } from "@/lib/redis-cache";
+import { setSentryApiTags, extractRoutePath } from "@/lib/sentry-tags";
 
 export async function GET(request: Request) {
+  // Set Sentry tags for error context and triage
+  setSentryApiTags({
+    route: extractRoutePath(request),
+    action_type: "health_check",
+  });
+
   const session = await requireAuth();
   const url = new URL(request.url);
   const isPublic = url.searchParams.has('public');

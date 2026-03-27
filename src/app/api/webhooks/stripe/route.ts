@@ -2,11 +2,18 @@ import Stripe from "stripe";
 import { headers } from "next/headers";
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryApiTags, extractRoutePath } from "@/lib/sentry-tags";
 
 // This webhook runs on Vercel — no Claude, no AI, pure deterministic logic.
 // It keeps Neon metrics fresh so the nightly loop has current data.
 
 export async function POST(req: Request) {
+  // Set Sentry tags for error context and triage
+  setSentryApiTags({
+    route: extractRoutePath(req),
+    action_type: "stripe_webhook",
+  });
+
   const body = await req.text();
   const headersList = await headers();
   const sig = headersList.get("stripe-signature");

@@ -1,7 +1,14 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryApiTags, extractRoutePath } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
+  // Set Sentry tags for error context and triage
+  setSentryApiTags({
+    route: extractRoutePath(req),
+    action_type: "cycles_list",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
@@ -18,6 +25,12 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  // Set Sentry tags for error context and triage
+  setSentryApiTags({
+    route: extractRoutePath(req),
+    action_type: "cycle_create",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
