@@ -1,12 +1,16 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { calculateHealthScore } from "@/lib/health-score";
+import { setSentryApiTags } from "@/lib/sentry-tags";
+import { NextRequest } from "next/server";
 
-export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const { id } = await params;
+  // Set Sentry tags with company context
+  await setSentryApiTags(request, { companyId: id, actionType: "get_company" });
   const sql = getDb();
   const [company] = await sql`SELECT * FROM companies WHERE id = ${id} OR slug = ${id}`;
   if (!company) return err("Company not found", 404);
@@ -21,12 +25,14 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   return json({ ...company, metrics, infra, recentActions, cycles, health });
 }
 
-export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const { id } = await params;
-  const body = await req.json();
+  // Set Sentry tags with company context
+  await setSentryApiTags(request, { companyId: id, actionType: "update_company" });
+  const body = await request.json();
   const sql = getDb();
 
   const fields: string[] = [];

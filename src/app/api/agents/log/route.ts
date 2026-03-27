@@ -1,10 +1,13 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
+import { setSentryApiTags } from "@/lib/sentry-tags";
 
 // POST /api/agents/log — log agent action via OIDC auth
 // Body: { company_slug, agent, action_type, status, description?, error? }
 export async function POST(req: NextRequest) {
+  // Set Sentry tags early for better error tracking
+  await setSentryApiTags(req);
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
 

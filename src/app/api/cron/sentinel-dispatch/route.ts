@@ -30,11 +30,15 @@ import {
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
+import { setSentryApiTags } from "@/lib/sentry-tags";
+import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
+  // Set Sentry tags for cron job tracking
+  await setSentryApiTags(request, { agent: "sentinel", actionType: "cron_sentinel_dispatch" });
   // Auth check — handle directly since initSentinelContext auth may not match verifyCronAuth's return shape
   const auth = await verifyCronAuth(request);
   if (!auth.authorized) {
