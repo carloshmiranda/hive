@@ -6,6 +6,7 @@ import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch
 import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
+import { setHiveTags } from "@/lib/sentry-tags";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -61,6 +62,14 @@ export async function POST(req: Request) {
   const sql = getDb();
   const body = await req.json().catch(() => ({}));
   let { completed_id, completed_status, pr_number, branch, changed_files } = body;
+
+  // Set Sentry tags for error filtering and attribution
+  setHiveTags({
+    company_id: "_hive",
+    agent: "backlog",
+    action_type: "backlog_dispatch",
+    trigger: body.trigger || "manual"
+  });
 
   // PR tracking: only trust pr_number explicitly provided by the Engineer callback.
   // Previously auto-extracted from recent open PRs, but this caused wrong PR attribution

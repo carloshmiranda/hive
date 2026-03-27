@@ -30,6 +30,7 @@ import {
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
+import { setHiveTags } from "@/lib/sentry-tags";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -40,6 +41,14 @@ export async function GET(request: Request) {
   if (!auth.authorized) {
     return Response.json({ error: auth.error }, { status: 401 });
   }
+
+  // Set Sentry tags for error filtering and attribution
+  setHiveTags({
+    company_id: "_hive",
+    agent: "sentinel",
+    action_type: "cron_dispatch",
+    trigger: "schedule"
+  });
 
   // Sentry cron monitoring - monitors the most critical 4h schedule that drives the entire dispatch chain
   const checkInId = Sentry.captureCheckIn({

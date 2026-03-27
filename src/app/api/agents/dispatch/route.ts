@@ -7,6 +7,7 @@ import { canSendOutreach } from "@/lib/resend";
 import { callLLMWithLogging } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
+import { setHiveTags } from "@/lib/sentry-tags";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -41,6 +42,14 @@ export async function POST(req: NextRequest) {
   }
 
   let body = await req.json();
+
+  // Set Sentry tags for error filtering and attribution
+  setHiveTags({
+    company_id: body.company_slug || body.company,
+    agent: body.agent,
+    action_type: "agent_dispatch",
+    trigger: body.trigger
+  });
 
   // Validate and sanitize the request payload
   const validation = validateDispatchPayload(body);
