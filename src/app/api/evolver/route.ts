@@ -129,6 +129,36 @@ export async function PATCH(req: Request) {
       await sql`UPDATE evolver_proposals SET status = 'implemented', implemented_at = NOW() WHERE id = ${id}`;
 
     } else if (fixType === "setup_action") {
+      // Create hive_backlog item for Engineer dispatch
+      const backlogDescription = `${proposal.diagnosis}\n\nProposed fix: ${proposal.proposed_fix?.change || 'See proposal for details'}`;
+
+      const [backlogItem] = await sql`
+        INSERT INTO hive_backlog (title, description, priority, category, status, source, notes, spec)
+        VALUES (
+          ${proposal.title},
+          ${backlogDescription},
+          'P2',
+          'feature',
+          'ready',
+          'evolver',
+          ${`Evolver proposal ${proposal.id}`},
+          ${JSON.stringify({
+            evolver_proposal_id: proposal.id,
+            affected_files: proposal.proposed_fix?.affected_files || [],
+            acceptance_criteria: proposal.proposed_fix?.acceptance_criteria || [],
+            approach: proposal.proposed_fix?.change || ''
+          })}::jsonb
+        )
+        RETURNING id
+      `;
+
+      // Link the proposal to the backlog item for tracking
+      await sql`
+        UPDATE evolver_proposals
+        SET notes = COALESCE(notes, '') || ${` | Backlog item created: ${backlogItem.id}`}
+        WHERE id = ${id}
+      `;
+
       // Create a manual action todo so it surfaces in the dashboard
       const affectedCompanies = proposal.affected_companies || [];
       const firstCompany = affectedCompanies[0];
@@ -140,19 +170,41 @@ export async function PATCH(req: Request) {
       await sql`
         INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at, company_id)
         VALUES ('evolver', 'setup_action', ${`Evolver proposal approved: ${proposal.title}`}, 'pending_manual',
-          ${JSON.stringify({ proposal_id: proposal.id, proposed_fix: proposal.proposed_fix, diagnosis: proposal.diagnosis })}::jsonb,
+          ${JSON.stringify({ proposal_id: proposal.id, proposed_fix: proposal.proposed_fix, diagnosis: proposal.diagnosis, backlog_id: backlogItem.id })}::jsonb,
           NOW(), NOW(), ${companyId})
       `;
-      // Also dispatch to CEO so it can incorporate in next cycle plan
-      await dispatchEvent("ceo_review", {
-        source: "evolver",
-        proposal_id: proposal.id,
-        proposal_type: fixType,
-        title: proposal.title,
-        change: proposal.proposed_fix?.change,
-      });
 
     } else if (fixType === "knowledge_gap") {
+      // Create hive_backlog item for CEO to extract knowledge into playbook
+      const backlogDescription = `${proposal.diagnosis}\n\nKnowledge gap to address: ${proposal.proposed_fix?.change || 'See proposal for details'}`;
+
+      const [backlogItem] = await sql`
+        INSERT INTO hive_backlog (title, description, priority, category, status, source, notes, spec)
+        VALUES (
+          ${`Extract knowledge: ${proposal.title}`},
+          ${backlogDescription},
+          'P2',
+          'research',
+          'ready',
+          'evolver',
+          ${`Evolver proposal ${proposal.id}`},
+          ${JSON.stringify({
+            evolver_proposal_id: proposal.id,
+            knowledge_domain: proposal.proposed_fix?.domain || '',
+            acceptance_criteria: proposal.proposed_fix?.acceptance_criteria || [],
+            approach: proposal.proposed_fix?.change || ''
+          })}::jsonb
+        )
+        RETURNING id
+      `;
+
+      // Link the proposal to the backlog item for tracking
+      await sql`
+        UPDATE evolver_proposals
+        SET notes = COALESCE(notes, '') || ${` | Backlog item created: ${backlogItem.id}`}
+        WHERE id = ${id}
+      `;
+
       // Dispatch to CEO to extract knowledge into playbook
       await dispatchEvent("ceo_review", {
         source: "evolver",
@@ -160,9 +212,40 @@ export async function PATCH(req: Request) {
         proposal_type: fixType,
         title: proposal.title,
         change: proposal.proposed_fix?.change,
+        backlog_id: backlogItem.id
       });
 
     } else if (fixType === "code_fix") {
+      // Create hive_backlog item for Engineer dispatch
+      const backlogDescription = `${proposal.diagnosis}\n\nCode fix needed: ${proposal.proposed_fix?.change || 'See proposal for details'}`;
+
+      const [backlogItem] = await sql`
+        INSERT INTO hive_backlog (title, description, priority, category, status, source, notes, spec)
+        VALUES (
+          ${proposal.title},
+          ${backlogDescription},
+          'P2',
+          'bugfix',
+          'ready',
+          'evolver',
+          ${`Evolver proposal ${proposal.id}`},
+          ${JSON.stringify({
+            evolver_proposal_id: proposal.id,
+            affected_files: proposal.proposed_fix?.affected_files || [],
+            acceptance_criteria: proposal.proposed_fix?.acceptance_criteria || [],
+            approach: proposal.proposed_fix?.change || ''
+          })}::jsonb
+        )
+        RETURNING id
+      `;
+
+      // Link the proposal to the backlog item for tracking
+      await sql`
+        UPDATE evolver_proposals
+        SET notes = COALESCE(notes, '') || ${` | Backlog item created: ${backlogItem.id}`}
+        WHERE id = ${id}
+      `;
+
       // Dispatch to Engineer to implement the fix
       const affectedCompanies = proposal.affected_companies || [];
       const firstCompany = affectedCompanies[0];
@@ -173,6 +256,7 @@ export async function PATCH(req: Request) {
         change: proposal.proposed_fix?.change,
         target: proposal.proposed_fix?.target,
         company: firstCompany || "",
+        backlog_id: backlogItem.id
       });
     }
   }
@@ -218,6 +302,37 @@ export async function POST(req: Request) {
     const fixType = proposal.proposed_fix?.type;
 
     if (fixType === "setup_action") {
+      // Create hive_backlog item for Engineer dispatch
+      const backlogDescription = `${proposal.diagnosis}\n\nProposed fix: ${proposal.proposed_fix?.change || 'See proposal for details'}`;
+
+      const [backlogItem] = await sql`
+        INSERT INTO hive_backlog (title, description, priority, category, status, source, notes, spec)
+        VALUES (
+          ${proposal.title},
+          ${backlogDescription},
+          'P2',
+          'feature',
+          'ready',
+          'evolver',
+          ${`Auto-approved evolver proposal ${proposal.id}`},
+          ${JSON.stringify({
+            evolver_proposal_id: proposal.id,
+            affected_files: proposal.proposed_fix?.affected_files || [],
+            acceptance_criteria: proposal.proposed_fix?.acceptance_criteria || [],
+            approach: proposal.proposed_fix?.change || '',
+            auto_approved: true
+          })}::jsonb
+        )
+        RETURNING id
+      `;
+
+      // Link the proposal to the backlog item for tracking
+      await sql`
+        UPDATE evolver_proposals
+        SET notes = COALESCE(notes, '') || ${` | Auto-approved backlog item created: ${backlogItem.id}`}
+        WHERE id = ${proposal.id}
+      `;
+
       const affectedCompanies = proposal.affected_companies || [];
       const firstCompany = affectedCompanies[0];
       let companyId = null;
@@ -228,8 +343,72 @@ export async function POST(req: Request) {
       await sql`
         INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at, company_id)
         VALUES ('evolver', 'setup_action', ${`Auto-approved evolver proposal: ${proposal.title}`}, 'pending_manual',
-          ${JSON.stringify({ proposal_id: proposal.id, proposed_fix: proposal.proposed_fix, auto_approved: true })}::jsonb,
+          ${JSON.stringify({ proposal_id: proposal.id, proposed_fix: proposal.proposed_fix, auto_approved: true, backlog_id: backlogItem.id })}::jsonb,
           NOW(), NOW(), ${companyId})
+      `;
+
+    } else if (fixType === "knowledge_gap") {
+      // Create hive_backlog item for CEO to extract knowledge into playbook
+      const backlogDescription = `${proposal.diagnosis}\n\nKnowledge gap to address: ${proposal.proposed_fix?.change || 'See proposal for details'}`;
+
+      const [backlogItem] = await sql`
+        INSERT INTO hive_backlog (title, description, priority, category, status, source, notes, spec)
+        VALUES (
+          ${`Extract knowledge: ${proposal.title}`},
+          ${backlogDescription},
+          'P2',
+          'research',
+          'ready',
+          'evolver',
+          ${`Auto-approved evolver proposal ${proposal.id}`},
+          ${JSON.stringify({
+            evolver_proposal_id: proposal.id,
+            knowledge_domain: proposal.proposed_fix?.domain || '',
+            acceptance_criteria: proposal.proposed_fix?.acceptance_criteria || [],
+            approach: proposal.proposed_fix?.change || '',
+            auto_approved: true
+          })}::jsonb
+        )
+        RETURNING id
+      `;
+
+      // Link the proposal to the backlog item for tracking
+      await sql`
+        UPDATE evolver_proposals
+        SET notes = COALESCE(notes, '') || ${` | Auto-approved backlog item created: ${backlogItem.id}`}
+        WHERE id = ${proposal.id}
+      `;
+
+    } else if (fixType === "code_fix") {
+      // Create hive_backlog item for Engineer dispatch
+      const backlogDescription = `${proposal.diagnosis}\n\nCode fix needed: ${proposal.proposed_fix?.change || 'See proposal for details'}`;
+
+      const [backlogItem] = await sql`
+        INSERT INTO hive_backlog (title, description, priority, category, status, source, notes, spec)
+        VALUES (
+          ${proposal.title},
+          ${backlogDescription},
+          'P2',
+          'bugfix',
+          'ready',
+          'evolver',
+          ${`Auto-approved evolver proposal ${proposal.id}`},
+          ${JSON.stringify({
+            evolver_proposal_id: proposal.id,
+            affected_files: proposal.proposed_fix?.affected_files || [],
+            acceptance_criteria: proposal.proposed_fix?.acceptance_criteria || [],
+            approach: proposal.proposed_fix?.change || '',
+            auto_approved: true
+          })}::jsonb
+        )
+        RETURNING id
+      `;
+
+      // Link the proposal to the backlog item for tracking
+      await sql`
+        UPDATE evolver_proposals
+        SET notes = COALESCE(notes, '') || ${` | Auto-approved backlog item created: ${backlogItem.id}`}
+        WHERE id = ${proposal.id}
       `;
     }
 
