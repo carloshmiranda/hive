@@ -1,11 +1,13 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTagsFromRequest } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const { searchParams } = new URL(req.url);
+  await setSentryTagsFromRequest(req);
   const companyId = searchParams.get("company_id");
   const cycleId = searchParams.get("cycle_id");
   const status = searchParams.get("status");
@@ -50,6 +52,7 @@ export async function POST(req: Request) {
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
+  await setSentryTagsFromRequest(req, body);
   const { cycle_id, company_id, agent, action_type, description, status, input, output, error, reflection, retry_count, tokens_used } = body;
 
   if (!cycle_id || !company_id || !agent || !action_type) {

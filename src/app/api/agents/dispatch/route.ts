@@ -7,6 +7,7 @@ import { canSendOutreach } from "@/lib/resend";
 import { callLLMWithLogging } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
+import { setSentryTagsFromRequest } from "@/lib/sentry-tags";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -50,6 +51,9 @@ export async function POST(req: NextRequest) {
 
   // Sanitize the entire body to prevent injection attacks
   body = sanitizeJSON(body);
+
+  // Set Sentry tags for better error tracking
+  await setSentryTagsFromRequest(req, body);
 
   const { company_slug, agent, trigger } = body as {
     company_slug: string;

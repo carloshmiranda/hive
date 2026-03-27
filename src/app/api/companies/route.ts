@@ -1,9 +1,17 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET() {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
+
+  // Set Sentry tags for company queries
+  setSentryTags({
+    route: "companies",
+    action_type: "query",
+    method: "GET",
+  });
 
   const sql = getDb();
   const companies = await sql`

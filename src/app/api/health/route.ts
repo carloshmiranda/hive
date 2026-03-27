@@ -2,11 +2,19 @@ import { getDb, json } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { decrypt } from "@/lib/crypto";
 import { cacheHealthCheck } from "@/lib/redis-cache";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(request: Request) {
   const session = await requireAuth();
   const url = new URL(request.url);
   const isPublic = url.searchParams.has('public');
+
+  // Set Sentry tags for health monitoring
+  setSentryTags({
+    route: "health",
+    action_type: "health_check",
+    method: request.method,
+  });
 
   // For external uptime monitoring, return simple health status without auth
   if (isPublic || !session) {
