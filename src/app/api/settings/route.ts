@@ -85,8 +85,13 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const session = await requireAuth();
-  if (!session) return err("Unauthorized", 401);
+  // Allow both session auth (dashboard) and CRON_SECRET auth (MCP/internal)
+  const authHeader = req.headers.get("authorization");
+  const isCronAuth = authHeader === `Bearer ${process.env.CRON_SECRET}`;
+  if (!isCronAuth) {
+    const session = await requireAuth();
+    if (!session) return err("Unauthorized", 401);
+  }
 
   await ensureTable();
   const body = await req.json();

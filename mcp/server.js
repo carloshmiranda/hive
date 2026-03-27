@@ -6,19 +6,24 @@ import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
-// Load DATABASE_URL from .env.local if not set
-if (!process.env.DATABASE_URL) {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  try {
-    const envFile = readFileSync(resolve(__dirname, "../.env.local"), "utf-8");
-    for (const line of envFile.split("\n")) {
-      if (line.startsWith("DATABASE_URL=")) {
-        process.env.DATABASE_URL = line.slice("DATABASE_URL=".length).replace(/^"|"$/g, "");
-        break;
+// Load env vars from .env.local if not set
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ENV_KEYS = ["DATABASE_URL", "CRON_SECRET", "NEXT_PUBLIC_URL"];
+for (const envKey of ENV_KEYS) {
+  if (!process.env[envKey]) {
+    try {
+      const envFile = readFileSync(resolve(__dirname, "../.env.local"), "utf-8");
+      for (const line of envFile.split("\n")) {
+        if (line.startsWith(`${envKey}=`)) {
+          process.env[envKey] = line.slice(`${envKey}=`.length).replace(/^"|"$/g, "").replace(/^'|'$/g, "");
+        }
       }
-    }
-  } catch { /* env file not found — DATABASE_URL must be set externally */ }
+    } catch { /* env file not found — must be set externally */ }
+  }
 }
+
+const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+const CRON_SECRET = process.env.CRON_SECRET || "";
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -619,6 +624,16 @@ server.registerTool(
         VALUES (${key}, ${value}, ${is_secret})
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, is_secret = EXCLUDED.is_secret, updated_at = NOW()
       `;
+      // Invalidate Redis cache so the deployed app picks up the new value immediately.
+      // The /api/settings endpoint does this automatically, but MCP writes bypass it.
+      try {
+        await fetch(`${HIVE_URL}/api/settings`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${CRON_SECRET}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ key, value, is_secret }),
+          signal: AbortSignal.timeout(10000),
+        });
+      } catch { /* Cache invalidation failed — TTL will expire in 10min */ }
       return { content: [{ type: "text", text: JSON.stringify({ ok: true, key, written: true }) }] };
     }
     // Read one
@@ -779,6 +794,53 @@ server.registerTool(
     }
     const rows = await sql.query(query, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
+// ── Trigger (call Hive API endpoints as Hive) ─────────────────────────
+
+server.registerTool(
+  "hive_trigger",
+  {
+    description: "Trigger Hive API endpoints as if you were the system. Supports sentinel dispatch, backlog dispatch, company health, and any other internal endpoint. Authenticates with CRON_SECRET.",
+    inputSchema: {
+      endpoint: z.string().describe("API path, e.g. '/api/cron/sentinel-dispatch', '/api/backlog/dispatch', '/api/cron/sentinel-urgent'"),
+      method: z.enum(["GET", "POST"]).default("GET").describe("HTTP method"),
+      body: z.record(z.any()).optional().describe("JSON body for POST requests"),
+    },
+  },
+  async ({ endpoint, method, body }) => {
+    const url = `${HIVE_URL}${endpoint}`;
+    try {
+      const options = {
+        method,
+        headers: {
+          Authorization: `Bearer ${CRON_SECRET}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(120000),
+      };
+      if (method === "POST" && body) {
+        options.body = JSON.stringify(body);
+      }
+      const res = await fetch(url, options);
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = text; }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: res.ok, status: res.status, data }, null, 2),
+        }],
+      };
+    } catch (e) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ ok: false, error: e.message, url }),
+        }],
+      };
+    }
   }
 );
 
