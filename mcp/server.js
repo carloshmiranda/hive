@@ -617,24 +617,23 @@ server.registerTool(
     },
   },
   async ({ key, value, is_secret }) => {
-    // Write mode
+    // Write mode — ALWAYS route through /api/settings to ensure proper encryption
     if (key && value !== undefined) {
-      await sql`
-        INSERT INTO settings (key, value, is_secret)
-        VALUES (${key}, ${value}, ${is_secret})
-        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, is_secret = EXCLUDED.is_secret, updated_at = NOW()
-      `;
-      // Invalidate Redis cache so the deployed app picks up the new value immediately.
-      // The /api/settings endpoint does this automatically, but MCP writes bypass it.
       try {
-        await fetch(`${HIVE_URL}/api/settings`, {
+        const res = await fetch(`${HIVE_URL}/api/settings`, {
           method: "POST",
           headers: { Authorization: `Bearer ${CRON_SECRET}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ key, value, is_secret }),
-          signal: AbortSignal.timeout(10000),
+          body: JSON.stringify({ key, value }),
+          signal: AbortSignal.timeout(15000),
         });
-      } catch { /* Cache invalidation failed — TTL will expire in 10min */ }
-      return { content: [{ type: "text", text: JSON.stringify({ ok: true, key, written: true }) }] };
+        if (!res.ok) {
+          const body = await res.text();
+          return { content: [{ type: "text", text: JSON.stringify({ ok: false, key, error: `API returned ${res.status}: ${body}` }) }] };
+        }
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, key, written: true, via: "api" }) }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: JSON.stringify({ ok: false, key, error: `API call failed: ${e.message}. Write aborted — secrets must go through /api/settings for encryption.` }) }] };
+      }
     }
     // Read one
     if (key) {

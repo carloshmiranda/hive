@@ -3,6 +3,5 @@
     "deploymentEnabled": {
       "main": true
     }
-  },
-  "_comment": "Cron schedules are intentionally omitted. QStash (ADR-031 Phase 3) is the primary scheduler. Vercel Hobby plan only supports daily crons, but we need hourly/sub-daily schedules. Manual fallback: .github/workflows/hive-crons.yml"
+  }
 }
