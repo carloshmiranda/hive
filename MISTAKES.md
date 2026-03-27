@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-27 Vercel Marketplace /v1/stores endpoint doesn't exist (404)
+**What happened:** `provisionNeonStore()` called `POST /v1/stores` and `POST /v1/stores/{id}/projects` — both return 404. Neon DB provisioning for CiberPME (and all future companies) was broken.
+**Root cause:** The Vercel Marketplace API for creating integration stores uses `/v1/storage/stores/integration/direct` (primary) or `/v1/integrations/store` (fallback), not `/v1/stores`. The store-to-project connection uses `/v1/storage/stores/{id}/connections`, not `/v1/stores/{id}/projects`. These endpoints were guessed during initial implementation without API documentation.
+**Fix applied:** Rewrote `provisionNeonStore()` with correct endpoints: (1) Added `discoverNeonProductSlug()` to auto-discover the Neon product slug via `/v1/integrations/configurations/{id}/products`, (2) Primary store creation via `/v1/storage/stores/integration/direct` with fallback to `/v1/integrations/store`, (3) Store-to-project connection via `/v1/storage/stores/{id}/connections`.
+**Prevention:** Always verify Vercel API endpoints against actual API responses (use debug endpoints or curl). The Vercel Marketplace API is poorly documented — test endpoints before committing.
+**Affects:** hive
+
+### 2026-03-27 estimated_turns capping bug — Math.min instead of Math.max
+**What happened:** Dispatch was sending `max_turns: 21` to Engineer instead of `max_turns: 50`. Tasks with `estimated_turns: 21` in their spec were being capped to 21 turns even though the budget allowed 50.
+**Root cause:** `Math.min(TURN_BUDGET, spec?.estimated_turns || TURN_BUDGET)` caps at the *lower* of budget and estimate. Should use `Math.max` to give at least the budget floor, or at least the estimate — whichever is larger. This was combined with TURN_BUDGET being only 35, too low for most tasks.
+**Fix applied:** Changed `Math.min` → `Math.max` and raised TURN_BUDGET from 35 → 50. Also raised max-turns across all 7 agent workflows (CEO 40→50, Scout 35→40, Engineer 35→50, Healer 35→45, Evolver 20→25, Decompose 8→10).
+**Prevention:** Budget floors should always use Math.max, not Math.min. The intent is "give at least X turns" — min achieves the opposite.
+**Affects:** hive
+
 ### 2026-03-27 Mechanical decomposition creates cascading garbage titles
 **What happened:** Telegram notifications showed nonsensical text like "Sub-task of: npx next build passes... Sub-task of: npx next build passes..." Backlog had 30+ items with titles like "npx next build passes" or "Change is implemented correctly" — these are acceptance criteria fragments, not task descriptions.
 **Root cause:** When LLM decomposition fails, `backlog/dispatch/route.ts` falls back to mechanical splitting. The fallback used raw text fragments as titles (`part.slice(0, 200)`) and put the parent title in the description as "Sub-task of: {parent}". When these sub-tasks also failed and got re-decomposed, the garbage cascaded — each level prepended "Sub-task of:" to the already-corrupted title. The acceptance criteria text ("npx next build passes", "Change is implemented correctly") split on "and" boundaries became standalone titles.
