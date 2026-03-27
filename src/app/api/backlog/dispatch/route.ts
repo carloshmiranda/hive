@@ -1193,12 +1193,13 @@ export async function POST(req: Request) {
         attempt: attemptCount + 1,
         chain_next: true,
         spec: spec || undefined,
-        // Turn-budget cap: first attempts capped at TURN_BUDGET (50).
-        // Items with higher estimated_turns should have been decomposed by the gate above.
-        // On 3rd+ attempt: escalate to Opus with +15 bonus turns (capped at 50).
+        // Turn budget: always give at least TURN_BUDGET (50) turns.
+        // Estimates below budget are unreliable — tasks routinely need more turns than estimated
+        // due to context loading, git operations, and unexpected complexity.
+        // On 3rd+ attempt: escalate to Opus with 60-turn budget.
         max_turns: attemptCount >= 2
-          ? Math.min(60, (spec?.estimated_turns || 50) + 15)
-          : Math.min(50, spec?.estimated_turns || 50),
+          ? 60
+          : Math.max(50, spec?.estimated_turns || 50),
         ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
       },
     }),
