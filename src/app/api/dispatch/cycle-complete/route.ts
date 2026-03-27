@@ -86,6 +86,7 @@ export async function POST(req: Request) {
   const sql = getDb();
   const body = await req.json().catch(() => ({}));
   const { agent, company, status, action_type } = body;
+  const callbackStatus = status === "failed" ? "failed" : "success";
 
   // Log the completion (skip for chain retries)
   if (agent && company && agent !== "chain_retry") {
@@ -96,12 +97,23 @@ export async function POST(req: Request) {
     if (companyRecord) {
       await sql`
         INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at, company_id)
-        VALUES (${agent}, ${action_type || "cycle_callback"}, 'success',
+        VALUES (${agent}, ${action_type || "cycle_callback"}, ${callbackStatus},
           ${`Chain callback: ${agent} completed ${status || "unknown"} for ${company}`},
           NOW(), NOW(), ${companyRecord.id})
       `.catch((e: any) => { console.warn(`[cycle-complete] log chain callback for ${company} failed: ${e?.message || e}`); });
 
       await invalidateCompanyCache(companyRecord.id);
+    }
+
+    // If the agent failed, notify about the failure but still chain to next work
+    if (callbackStatus === "failed") {
+      await qstashPublish("/api/notify", {
+        agent: agent,
+        action: "agent_failed",
+        company: company,
+        status: "failed",
+        summary: `Agent ${agent} failed for ${company}. Chaining to next work item.`,
+      }, { retries: 2 }).catch((e: any) => { console.warn(`[cycle-complete] notify failure ${agent}:${company} failed: ${e?.message || e}`); });
     }
   }
 
