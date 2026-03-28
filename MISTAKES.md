@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-28 Schema-map drift causes cascading CI failures across all PRs
+**What happened:** All 4 open PRs failed CI with SQL linter errors. The linter validated against a stale schema-map that was missing columns added by recent migrations (parent_id, decomposition_context, github_issue_number, etc.). Every PR branch inherited these false failures from main.
+**Root cause:** Schema-map generation (`scripts/generate-schema-map.ts`) must be run after every schema.sql change, but this wasn't enforced. CI runs the linter against the checked-in schema-map, not the live database.
+**Fix:** Regenerated schema-map, added missing columns and enum values to schema.sql. The CI check (`npx tsx scripts/lint-sql.ts`) already exists but needs the schema-map to be current.
+**Prevention:** Always run `npx tsx scripts/generate-schema-map.ts` after editing schema.sql. Consider adding a CI step that auto-regenerates and fails if there's a diff.
+
+### 2026-03-28 SQL linter doesn't understand lateral join aliases or PostgreSQL escape strings
+**What happened:** SQL linter flagged `elem` (from `jsonb_array_elements(...) elem`) and `E` (from `E'\n'`) as unknown column references, causing false CI failures.
+**Root cause:** The linter parsed bare words in SQL as column references but didn't account for (1) lateral join aliases after set-returning function calls, or (2) PostgreSQL's `E'...'` escape string syntax.
+**Fix:** Added `extractLateralAliases()` function with balanced-parenthesis parsing for function calls, and `E'...'` string removal in query preprocessing. Both are edge cases that only appeared as the codebase grew more complex SQL.
+**Prevention:** When adding new SQL patterns, run the full linter (`npx tsx scripts/lint-sql.ts`) against all files before committing.
+
+---
+
 ### 2026-03-28 Spec generation failure halts entire dispatch chain
 **What happened:** Dispatch chain stopped after Engineer completed a task. The next dispatch attempt picked a specless item, `generateSpec()` returned null (OpenRouter outage), and the route returned `{ dispatched: false, reason: "spec_generation_failed" }` immediately — killing the chain.
 **Root cause:** Spec generation had two `return json(...)` paths (null result + catch) that returned immediately instead of trying other candidate items. One bad item blocked all dispatch.
