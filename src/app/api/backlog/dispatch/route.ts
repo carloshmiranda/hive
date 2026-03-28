@@ -219,6 +219,15 @@ export async function POST(req: Request) {
           WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
         `.catch((e: any) => { console.warn(`[backlog] mark item ${completed_id} done failed: ${e?.message || e}`); });
         syncIssueForBacklog(sql, completed_id, "done");
+        // Chain dispatch: continue processing backlog even without a PR.
+        // Without this, the chain stalls when Engineer completes via direct commit.
+        await qstashPublish("/api/backlog/dispatch", {
+          trigger: "done_chain",
+          completed_id,
+        }, {
+          deduplicationId: `done-chain-${completed_id}`,
+          delay: 10,
+        }).catch((e: any) => { console.warn(`[backlog] chain dispatch after done failed: ${e?.message || e}`); });
       }
 
       // Store completion report in the agent_actions record for handoff visibility
