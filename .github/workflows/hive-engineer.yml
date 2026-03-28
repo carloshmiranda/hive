@@ -702,7 +702,7 @@ jobs:
         with:
           tokens: "claude:claude_token:true github_pat:gh_pat:true"
 
-      - name: Resolve model (escalation on retry)
+      - name: Resolve model and turn budget
         id: model
         env:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
@@ -710,8 +710,21 @@ jobs:
           # Model escalation: payload may override model/max_turns for retries
           MODEL=$(echo "$PAYLOAD_JSON" | jq -r '.meta.model // .model // empty' 2>/dev/null)
           MAX_TURNS=$(echo "$PAYLOAD_JSON" | jq -r '.max_turns // empty' 2>/dev/null)
+
+          # Dynamic max_turns from spec.complexity when no explicit override
+          if [ -z "$MAX_TURNS" ]; then
+            COMPLEXITY=$(echo "$PAYLOAD_JSON" | jq -r '.spec.complexity // empty' 2>/dev/null)
+            case "$COMPLEXITY" in
+              S)  MAX_TURNS=20 ;;
+              M)  MAX_TURNS=35 ;;
+              L)  MAX_TURNS=50 ;;
+              XL) MAX_TURNS=60 ;;
+              *)  MAX_TURNS=50 ;;
+            esac
+          fi
+
           echo "model=${MODEL:-claude-sonnet-4-20250514}" >> $GITHUB_OUTPUT
-          echo "max_turns=${MAX_TURNS:-50}" >> $GITHUB_OUTPUT
+          echo "max_turns=${MAX_TURNS}" >> $GITHUB_OUTPUT
 
       - name: Run build agent (Hive-internal only)
         id: agent
@@ -833,14 +846,16 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
           BACKLOG_ID=$(echo "${PAYLOAD_JSON}" | jq -r '.backlog_id // empty' 2>/dev/null || echo "")
-          STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
+          AGENT_OUTCOME="${{ steps.agent.outcome }}"
           HIVE_URL="https://hive-phi.vercel.app"
           COMPANY=$(echo "${PAYLOAD_JSON}" | jq -r '.company // empty' 2>/dev/null || echo "")
+          CONFIGURED_MAX_TURNS="${{ steps.model.outputs.max_turns }}"
 
           # Extract error subtype and message for decompose logic + chain propagation
           ERROR_TYPE=""
           ERROR_DETAIL=""
-          if [ "$STATUS" = "failed" ]; then
+          TURNS="0"
+          if [ "$AGENT_OUTCOME" != "success" ]; then
             EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
             if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
               EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
@@ -860,9 +875,10 @@ jobs:
               echo "  Error type: $ERROR_TYPE (no exec file at $EXEC_FILE)"
             fi
 
-            # Explicit max_turns detection — if agent used most turns and failed, it's max_turns
+            # Explicit max_turns detection — use 90% of configured max_turns as threshold
+            TURN_THRESHOLD=$(( ${CONFIGURED_MAX_TURNS:-50} * 90 / 100 ))
             if [ -z "$ERROR_TYPE" ] || [ "$ERROR_TYPE" = "" ]; then
-              if [ "$TURNS" -ge 45 ] 2>/dev/null; then
+              if [ "$TURNS" -ge "$TURN_THRESHOLD" ] 2>/dev/null; then
                 ERROR_TYPE="error_max_turns"
                 ERROR_DETAIL="${ERROR_DETAIL:-No error message in execution output}"
               fi
@@ -892,11 +908,21 @@ jobs:
             fi
           fi
 
+          # Determine final STATUS — reclassify max_turns with partial progress as "partial"
+          if [ "$AGENT_OUTCOME" = "success" ]; then
+            STATUS="success"
+          elif [ "$PROGRESS_CLASS" = "partial_progress" ] && echo "$ERROR_TYPE" | grep -q "max_turns"; then
+            STATUS="partial"
+            echo "  Reclassified: max_turns + partial_progress → status=partial (not failed)"
+          else
+            STATUS="failed"
+          fi
+
           # Extract PR info from agent output for backlog tracking
           PR_NUMBER=""
           PR_BRANCH=""
           PR_FILES=""
-          if [ "$STATUS" = "success" ]; then
+          if [ "$STATUS" = "success" ] || [ "$STATUS" = "partial" ]; then
             EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
             if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
               EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
@@ -911,6 +937,22 @@ jobs:
               fi
               PR_BRANCH=$(echo "$RESULT_TEXT" | grep -oP '"branch"\s*:\s*"\K[^"]+' | head -1 || echo "")
               echo "  Extracted PR info: number=$PR_NUMBER branch=$PR_BRANCH"
+            fi
+          fi
+
+          # For partial exits: commit any uncommitted work and push the branch
+          if [ "$STATUS" = "partial" ]; then
+            if [ -n "$(git diff --stat HEAD 2>/dev/null)" ] || [ -n "$(git diff --cached --stat HEAD 2>/dev/null)" ]; then
+              git add -A 2>/dev/null || true
+              git commit -m "wip: partial progress — max_turns reached, work preserved for continuation" 2>/dev/null || true
+              LAST_COMMIT=$(git log --oneline -1 HEAD 2>/dev/null | head -c 120 || echo "")
+              echo "  Committed uncommitted partial work"
+            fi
+            CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+            if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ]; then
+              git push -u origin "$CURRENT_BRANCH" 2>/dev/null || true
+              PR_BRANCH="$CURRENT_BRANCH"
+              echo "  Pushed partial work to $CURRENT_BRANCH"
             fi
           fi
 
@@ -932,6 +974,9 @@ jobs:
             if [ -n "$LAST_COMMIT" ]; then
               SAFE_COMMIT=$(echo "$LAST_COMMIT" | sed 's/"/\\"/g')
               CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"last_commit\":\"${SAFE_COMMIT}\""
+            fi
+            if [ "${TURNS:-0}" -gt 0 ] 2>/dev/null; then
+              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"turns_used\":${TURNS},\"max_turns\":${CONFIGURED_MAX_TURNS:-50}"
             fi
             CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD}}"
 

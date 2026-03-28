@@ -92,7 +92,8 @@ export async function POST(req: Request) {
     // Close the corresponding agent_actions record so the engineer_busy gate unblocks.
     // Without this, the action stays 'running' forever (zombie) and blocks all future dispatches.
     if (completed_status !== "in_progress") {
-      const actionStatus = completed_status === "success" ? "success" : "failed";
+      // "partial" = max_turns reached but progress was made — treat as success for agent_actions
+      const actionStatus = (completed_status === "success" || completed_status === "partial") ? "success" : "failed";
       const errorDetail = body.error || null;
       await sql`
         UPDATE agent_actions
@@ -202,7 +203,74 @@ export async function POST(req: Request) {
         `.catch((e: any) => { console.warn(`[backlog] store PR tracking for ${completed_id} failed: ${e?.message || e}`); });
       }
 
-    } else {
+    } else if (completed_status === "partial") {
+      // Partial: max_turns reached but commits exist on branch — continue, don't penalize
+      const turnsUsed = body.turns_used || 0;
+      const maxTurns = body.max_turns || 50;
+      const lastCommit = body.last_commit || "";
+      const branchName = body.branch || "";
+      const continuationTurns = Math.min(Math.ceil(maxTurns * 1.5), 75);
+
+      console.log(`[backlog] Partial completion for "${completed_id}" — ${turnsUsed}/${maxTurns} turns, continuing with ${continuationTurns}. Last commit: ${lastCommit}`);
+
+      // Mark as in_progress (not failed) — this is a continuation, not a retry
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'dispatched', dispatched_at = NOW(),
+            notes = COALESCE(notes, '') || ${` [partial] Graceful exit at ${turnsUsed}/${maxTurns} turns — progress preserved${branchName ? ` on ${branchName}` : ''}. Last: ${lastCommit.slice(0, 80)}. Continuing with ${continuationTurns} turns.`}
+        WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+      `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as partial failed: ${e?.message || e}`); });
+
+      // Dispatch continuation with more turns
+      const [item] = await sql`
+        SELECT id, title, description, priority, category, spec, github_issue_number FROM hive_backlog WHERE id = ${completed_id}
+      `.catch(() => []);
+
+      if (item) {
+        try {
+          const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
+          if (ghPat) {
+            const contRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+              method: "POST",
+              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+              body: JSON.stringify({
+                event_type: "feature_request",
+                client_payload: {
+                  task: item.description || item.title,
+                  company: "_hive",
+                  backlog_id: item.id,
+                  github_issue: item.github_issue_number || undefined,
+                  priority: item.priority,
+                  chain_next: true,
+                  spec: item.spec || undefined,
+                  max_turns: continuationTurns,
+                  meta: {
+                    title: item.title,
+                    model: "claude-sonnet-4-20250514",
+                    github_issue: item.github_issue_number || undefined,
+                    priority_score: 14,
+                    continuation: true,
+                    previous_branch: branchName,
+                    previous_turns: turnsUsed,
+                  },
+                },
+              }),
+              signal: AbortSignal.timeout(10000),
+            });
+
+            if (contRes.ok || contRes.status === 204) {
+              console.log(`[backlog] Continuation dispatched for "${item.title}" with ${continuationTurns} turns`);
+            }
+          }
+        } catch (e) {
+          console.warn("[backlog] Partial continuation dispatch failed:", e instanceof Error ? e.message : "unknown");
+        }
+      }
+
+      // Don't fall through to normal dispatch — continuation takes the slot
+      return json({ dispatched: true, status: "continued_partial", item_id: completed_id, continuation_turns: continuationTurns });
+
+    } else if (completed_status !== "in_progress" && completed_status !== "success") {
       // Failed: learn from it. Track attempts, decompose if too big.
       const [item] = await sql`
         SELECT id, title, description, notes, priority, category, spec FROM hive_backlog WHERE id = ${completed_id}
