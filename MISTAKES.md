@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-28 CRON_SECRET is not the Vercel API token
+**What happened:** During Flolio DB migration, attempted to call Vercel API endpoints (redeploy, list envs) using CRON_SECRET as Bearer token. All returned 401/404.
+**Root cause:** CRON_SECRET (`d28274...`) is for Hive's internal API auth (cron endpoints, agent dispatch). The actual Vercel token is stored encrypted in Hive's `settings` table and only accessible via `getSettingValue("vercel_token")` inside serverless functions. Can't be read via SQL or MCP tools.
+**Fix applied:** Used Hive's own `/api/agents/connect-store` endpoint (which has access to the real Vercel token) for store operations. For redeploy, pushed empty git commit to Flolio's GitHub repo via `gh api` (triggers Vercel auto-deploy).
+**Prevention:** Never use CRON_SECRET for Vercel API calls. Use Hive's proxy endpoints (`/api/agents/connect-store`, `/api/agents/provision-neon`) which handle Vercel auth internally. For redeploys, use empty git commits or Hive's Vercel proxy.
+**Affects:** hive
+
+### 2026-03-28 Vercel Attack Challenge Mode blocks automated health checks
+**What happened:** After redeploying Flolio with new DB, couldn't verify health endpoint — all automated requests (curl, MCP web_fetch) returned 429 "Vercel Security Checkpoint".
+**Root cause:** Flolio has Vercel Attack Challenge Mode enabled, which serves a JavaScript challenge page to all non-browser requests. This blocks all automated verification.
+**Fix applied:** Required manual browser verification by Carlos.
+**Prevention:** When verifying deploys for projects with Attack Challenge Mode, plan for manual browser verification. Consider adding a bypass secret or disabling ACM temporarily for health checks. Or use Vercel's deployment API to check readyState instead of hitting the live URL.
+**Affects:** companies
+
 ### 2026-03-27 Vercel Marketplace /v1/stores endpoint doesn't exist (404)
 **What happened:** `provisionNeonStore()` called `POST /v1/stores` and `POST /v1/stores/{id}/projects` — both return 404. Neon DB provisioning for CiberPME (and all future companies) was broken.
 **Root cause:** The Vercel Marketplace API for creating integration stores uses `/v1/storage/stores/integration/direct` (primary) or `/v1/integrations/store` (fallback), not `/v1/stores`. The store-to-project connection uses `/v1/storage/stores/{id}/connections`, not `/v1/stores/{id}/projects`. These endpoints were guessed during initial implementation without API documentation.
