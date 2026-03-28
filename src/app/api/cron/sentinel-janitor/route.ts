@@ -1767,44 +1767,59 @@ export async function GET(request: Request) {
     // Check 46: Close decomposed parents when all sub-tasks are done
     // -----------------------------------------------------------------------
     try {
-      // Find blocked items that were decomposed into sub-tasks
+      // Find blocked parents that have child sub-tasks (via parent_id FK or legacy notes pattern)
       const decomposedParents = await sql`
-        SELECT id, title, notes, github_issue_number FROM hive_backlog
-        WHERE status = 'blocked'
-        AND notes LIKE '%[decomposed]%'
+        SELECT DISTINCT p.id, p.title, p.notes, p.github_issue_number
+        FROM hive_backlog p
+        WHERE p.status = 'blocked'
+        AND (
+          EXISTS (SELECT 1 FROM hive_backlog c WHERE c.parent_id = p.id)
+          OR p.notes LIKE '%[decomposed]%'
+          OR p.notes LIKE '%[auto-decomposed]%'
+        )
       `;
 
       let parentsClosed = 0;
       for (const parent of decomposedParents) {
-        // Extract sub-task IDs from notes (format: "sub-task: abc123de (title)")
-        const subTaskIds = (parent.notes || "").match(/[0-9a-f]{8}(?=-[0-9a-f]{4})/g) || [];
-        if (subTaskIds.length === 0) continue;
-
-        // Check if ALL referenced sub-tasks are done (or rejected)
+        // Use parent_id FK for child lookup (preferred), fall back to legacy regex
         const [result] = await sql`
           SELECT
             COUNT(*) FILTER (WHERE status IN ('done', 'rejected')) as completed,
             COUNT(*) as total
           FROM hive_backlog
-          WHERE id::text LIKE ANY(${subTaskIds.map((id: string) => id + '%')})
+          WHERE parent_id = ${parent.id}
         `;
 
-        if (result && result.total > 0 && result.completed === result.total) {
-          await sql`
-            UPDATE hive_backlog
-            SET status = 'done', completed_at = NOW(),
-                notes = COALESCE(notes, '') || ' [parent-closed] All sub-tasks completed.'
-            WHERE id = ${parent.id} AND status = 'blocked'
+        // If no children found via FK, try legacy UUID extraction from notes
+        if (!result || result.total === 0) {
+          const subTaskIds = (parent.notes || "").match(/[0-9a-f]{8}(?=-[0-9a-f]{4})/g) || [];
+          if (subTaskIds.length === 0) continue;
+          const [legacyResult] = await sql`
+            SELECT
+              COUNT(*) FILTER (WHERE status IN ('done', 'rejected')) as completed,
+              COUNT(*) as total
+            FROM hive_backlog
+            WHERE id::text LIKE ANY(${subTaskIds.map((id: string) => id + '%')})
           `;
-          parentsClosed++;
-          // Sync GitHub Issue (fire-and-forget)
-          if (parent.github_issue_number) {
-            import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
-              syncBacklogStatus(parent.github_issue_number, "done")
-            ).catch(() => {});
-          }
-          console.log(`[sentinel-janitor] Check 46: Closed decomposed parent "${parent.title}"`);
+          if (!legacyResult || legacyResult.total === 0 || legacyResult.completed !== legacyResult.total) continue;
+        } else if (result.completed !== result.total) {
+          continue;
         }
+
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'done', completed_at = NOW(),
+              notes = COALESCE(notes, '') || ' [parent-closed] All sub-tasks completed.'
+          WHERE id = ${parent.id} AND status = 'blocked'
+        `;
+        parentsClosed++;
+        // Sync GitHub Issue (fire-and-forget)
+        if (parent.github_issue_number) {
+          import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+            syncBacklogStatus(parent.github_issue_number, "done")
+          ).catch(() => {});
+        }
+        console.log(`[sentinel-janitor] Check 46: Closed decomposed parent "${parent.title}"`);
       }
       if (parentsClosed > 0) {
         await sql`
@@ -1837,6 +1852,7 @@ export async function GET(request: Request) {
           AND notes NOT LIKE '%[auto-decomposed]%'
           AND notes NOT LIKE '%[janitor-recovered]%'
           AND notes NOT LIKE '%needs approval%'
+          AND NOT EXISTS (SELECT 1 FROM hive_backlog c WHERE c.parent_id = hive_backlog.id)
         RETURNING id, title, github_issue_number
       `;
       blockedRecovered = recoverableBlocked.length;

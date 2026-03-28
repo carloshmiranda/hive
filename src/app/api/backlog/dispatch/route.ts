@@ -102,6 +102,39 @@ export async function POST(req: Request) {
     }
 
     if (completed_status === "success") {
+      // Update parent's decomposition_context when a sub-task completes (ADR-031 Phase 2)
+      const [completedItem] = await sql`
+        SELECT parent_id, title, description FROM hive_backlog WHERE id = ${completed_id}
+      `.catch(() => []);
+      if (completedItem?.parent_id) {
+        // Update sub_tasks status + summary in parent's decomposition_context
+        await sql`
+          UPDATE hive_backlog
+          SET decomposition_context = jsonb_set(
+            COALESCE(decomposition_context, '{}'::jsonb),
+            '{sub_tasks}',
+            (
+              SELECT COALESCE(jsonb_agg(
+                CASE
+                  WHEN elem->>'title' = ${completedItem.title}
+                  THEN elem || jsonb_build_object('status', 'done', 'summary', ${`Completed${pr_number ? ` (PR #${pr_number})` : ''}`})
+                  ELSE elem
+                END
+              ), '[]'::jsonb)
+              FROM jsonb_array_elements(COALESCE(decomposition_context->'sub_tasks', '[]'::jsonb)) elem
+            )
+          )
+          WHERE id = ${completedItem.parent_id}
+        `.catch((e: any) => { console.warn(`[backlog] update parent decomposition_context failed: ${e?.message || e}`); });
+
+        // Also propagate to sibling sub-tasks so they see latest state
+        await sql`
+          UPDATE hive_backlog
+          SET decomposition_context = (SELECT decomposition_context FROM hive_backlog WHERE id = ${completedItem.parent_id})
+          WHERE parent_id = ${completedItem.parent_id} AND id != ${completed_id} AND status IN ('ready', 'approved', 'planning')
+        `.catch(() => {});
+      }
+
       // Engineer "success" means work completed. If PR was created, track it.
       // pr_open requires pr_number — without it, mark as done (prevents phantom pr_open).
       if (pr_number) {
@@ -186,8 +219,10 @@ export async function POST(req: Request) {
                 client_payload: {
                   source: "backlog_continuation",
                   company: "_hive",
+                  title: `[cont] ${item.title}`,
                   task: `CONTINUATION — pick up where the previous session left off.\n\nOriginal task: ${item.title}\n${item.description}\n\n⚠️ Previous session made progress but ran out of turns.\nLast commit: ${lastCommit}\n\nInstructions:\n1. Check the current branch state: git log --oneline origin/main..HEAD\n2. Review what was done and what remains\n3. Continue from the existing work — do NOT restart from scratch\n4. Focus on completing remaining acceptance criteria`,
                   backlog_id: item.id,
+                  github_issue: item.github_issue_number || undefined,
                   priority: item.priority,
                   chain_next: true,
                   spec: item.spec || undefined,
@@ -255,9 +290,19 @@ export async function POST(req: Request) {
 
             if (subTasks.length >= 2) {
               const depthNote = `[decompose-depth:${parentDepth + 1}]`;
+
+              // Build decomposition context document (ADR-031 Phase 2)
+              const { createDecompositionContext } = await import("@/lib/github-issues");
+              const decompCtx = createDecompositionContext(
+                { title: item.title, description: item.description, notes: item.notes, spec: item.spec },
+                subTasks.map((s, i) => ({ id: `pending-${i}`, title: s.title }))
+              );
+
+              // Insert sub-tasks with parent_id and shared decomposition_context
+              const insertedSubTasks: Array<{ id: string; title: string }> = [];
               for (const sub of subTasks) {
-                await sql`
-                  INSERT INTO hive_backlog (title, description, priority, category, status, source, spec, notes)
+                const [inserted] = await sql`
+                  INSERT INTO hive_backlog (title, description, priority, category, status, source, spec, notes, parent_id, decomposition_context)
                   VALUES (
                     ${sub.title.slice(0, 200)}, ${sub.description.slice(0, 2000)},
                     ${item.priority}, ${item.category || "feature"}, 'ready', 'auto_decompose',
@@ -269,20 +314,46 @@ export async function POST(req: Request) {
                       approach: [sub.description],
                       risks: []
                     })},
-                    ${depthNote}
+                    ${depthNote},
+                    ${completed_id},
+                    ${JSON.stringify(decompCtx)}
                   )
-                `.catch((e: any) => { console.warn(`[backlog] insert decomposed sub-item failed: ${e?.message || e}`); });
+                  RETURNING id, title
+                `.catch((e: any) => { console.warn(`[backlog] insert decomposed sub-item failed: ${e?.message || e}`); return []; });
+                if (inserted) insertedSubTasks.push({ id: inserted.id, title: inserted.title });
               }
 
-              // Mark the parent as blocked
+              // Store decomposition context on parent too
               await sql`
                 UPDATE hive_backlog
                 SET status = 'blocked', dispatched_at = NULL,
+                    decomposition_context = ${JSON.stringify(decompCtx)},
                     notes = COALESCE(notes, '') || ${` [attempt ${attempt}] [auto-decomposed] LLM split into ${subTasks.length} independent sub-tasks.`}
                 WHERE id = ${completed_id}
               `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as auto-decomposed failed: ${e?.message || e}`); });
+
+              // Link GitHub sub-issues (fire-and-forget)
+              if (item.github_issue_number && insertedSubTasks.length > 0) {
+                import("@/lib/github-issues").then(async ({ createBacklogIssue, linkSubIssue, getIssueInternalId }) => {
+                  const HIVE_REPO = "carloshmiranda/hive";
+                  for (const sub of insertedSubTasks) {
+                    // Create GitHub Issue for sub-task
+                    const subItem = await sql`SELECT id, title, description, priority, category, theme FROM hive_backlog WHERE id = ${sub.id}`.catch(() => []);
+                    if (!subItem[0]) continue;
+                    const si = subItem[0];
+                    const issueResult = await createBacklogIssue({ id: si.id, title: si.title, description: si.description || "", priority: si.priority || "P2", category: si.category || "feature", theme: si.theme });
+                    if (issueResult) {
+                      // Store issue number on sub-task
+                      await sql`UPDATE hive_backlog SET github_issue_number = ${issueResult.number} WHERE id = ${sub.id}`.catch(() => {});
+                      // Link as sub-issue to parent
+                      await linkSubIssue(HIVE_REPO, item.github_issue_number, issueResult.id);
+                    }
+                  }
+                }).catch(() => {});
+              }
+
               decomposed = true;
-              console.log(`[backlog] LLM-decomposed "${item.title}" → ${subTasks.length} sub-tasks: ${subTasks.map(s => s.title).join(", ")}`);
+              console.log(`[backlog] LLM-decomposed "${item.title}" → ${insertedSubTasks.length} sub-tasks: ${subTasks.map(s => s.title).join(", ")}`);
             }
           }
 
@@ -352,11 +423,15 @@ export async function POST(req: Request) {
           action: continued ? "continuation" : decomposed ? "auto_decomposed" : "repeated_failure",
           company: "hive",
           status: continued ? "continued" : decomposed ? "decomposed" : "failed",
-          summary: continued
-            ? `"${item?.title || completed_id}" hit max_turns with partial progress — continuing with more turns.`
-            : decomposed
-            ? `"${item?.title || completed_id}" hit max_turns — auto-decomposed into smaller tasks. Dispatching first sub-task.`
-            : `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
+          summary: (() => {
+            const issueRef = item?.github_issue_number ? ` #${item.github_issue_number}` : "";
+            const name = `"${item?.title || completed_id}"${issueRef}`;
+            return continued
+              ? `${name} hit max_turns with partial progress — continuing with more turns.`
+              : decomposed
+              ? `${name} hit max_turns — auto-decomposed into smaller tasks. Dispatching first sub-task.`
+              : `${name} has failed ${attempt} times. Still retrying but may need a different approach.`;
+          })(),
         }, { retries: 2 }).catch(() => {});
       }
     }
@@ -725,7 +800,7 @@ export async function POST(req: Request) {
     }
   }
   if (costRiskItems.length > 0) {
-    const titles = costRiskItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
+    const titles = costRiskItems.map((i) => `• [${i.priority}] ${i.title}${i.github_issue_number ? ` #${i.github_issue_number}` : ""}`).join("\n");
     await qstashPublish("/api/notify", {
       agent: "backlog",
       action: "cost_risk_blocked",
@@ -760,7 +835,7 @@ export async function POST(req: Request) {
 
   // Notify about manual items that were blocked
   if (manualItems.length > 0) {
-    const titles = manualItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
+    const titles = manualItems.map((i) => `• [${i.priority}] ${i.title}${i.github_issue_number ? ` #${i.github_issue_number}` : ""}`).join("\n");
     await qstashPublish("/api/notify", {
       agent: "backlog",
       action: "manual_blocked",
@@ -797,7 +872,7 @@ export async function POST(req: Request) {
     }
   }
   if (ciImpossibleItems.length > 0) {
-    const titles = ciImpossibleItems.map((i: any) => `• [${i.priority}] ${i.title}`).join("\n");
+    const titles = ciImpossibleItems.map((i: any) => `• [${i.priority}] ${i.title}${i.github_issue_number ? ` #${i.github_issue_number}` : ""}`).join("\n");
     await qstashPublish("/api/notify", {
       agent: "backlog",
       action: "ci_impossible_blocked",
@@ -863,7 +938,7 @@ export async function POST(req: Request) {
 
   // Notify about items that need decomposition
   if (decompositionItems.length > 0) {
-    const titles = decompositionItems.map((i) => `• [${i.priority}] ${i.title}`).join("\n");
+    const titles = decompositionItems.map((i) => `• [${i.priority}] ${i.title}${i.github_issue_number ? ` #${i.github_issue_number}` : ""}`).join("\n");
     await qstashPublish("/api/notify", {
       agent: "backlog",
       action: "decomposition_needed",
@@ -1244,6 +1319,15 @@ export async function POST(req: Request) {
     taskDescription += `\n\n⚠️ PREVIOUS ATTEMPTS FAILED (attempt ${attemptCount + 1}):\n${previousErrors}\n\nDo NOT repeat the same approach. Analyze why it failed and try a different strategy.`;
   }
 
+  // Inject decomposition context for sub-tasks (ADR-031 Phase 2)
+  if (topItem.parent_id && topItem.decomposition_context) {
+    try {
+      const { formatDecompositionContextForPrompt } = await import("@/lib/github-issues");
+      const ctxBlock = formatDecompositionContextForPrompt(topItem.decomposition_context as any, topItem.title);
+      taskDescription += `\n\n${ctxBlock}`;
+    } catch {}
+  }
+
   // Sanitize task input before GitHub dispatch
   taskDescription = sanitizeTaskInput(taskDescription);
 
@@ -1287,7 +1371,9 @@ export async function POST(req: Request) {
         source: "backlog_chain",
         company: "_hive",
         task: taskDescription,
+        title: topItem.title,
         backlog_id: topItem.id,
+        github_issue: topItem.github_issue_number || undefined,
         priority: topItem.priority,
         priority_score: topItem.priority_score,
         attempt: attemptCount + 1,
@@ -1339,12 +1425,13 @@ export async function POST(req: Request) {
     console.log(`[backlog] ${dispatchType} dispatch: "${topItem.title}" (${topItem.priority}, score: ${topItem.priority_score})${attemptCount > 0 ? ` attempt ${attemptCount + 1}` : ""}`);
 
     // Notify via Telegram (QStash guarantees delivery)
+    const issueRef = topItem.github_issue_number ? ` #${topItem.github_issue_number}` : "";
     await qstashPublish("/api/notify", {
       agent: "backlog",
       action: "dispatch",
       company: "_hive",
       status: "started",
-      summary: `[${topItem.priority}] "${topItem.title}" dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
+      summary: `[${topItem.priority}] "${topItem.title}"${issueRef} dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
     }, { retries: 2 }).catch(() => {});
 
     return json({

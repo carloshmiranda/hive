@@ -425,6 +425,8 @@ CREATE TABLE hive_backlog (
   dispatch_id   TEXT,              -- agent_action id when dispatched
   pr_number     INTEGER,           -- PR created for risky changes
   pr_url        TEXT,
+  parent_id     TEXT REFERENCES hive_backlog(id),  -- parent task (for decomposed sub-tasks)
+  decomposition_context JSONB,     -- shared context doc for decomposed hierarchies
   github_issue_number INTEGER,     -- linked GitHub Issue in carloshmiranda/hive
   github_issue_url    TEXT,
   theme         TEXT,              -- links to ROADMAP.md milestone (e.g. 'dispatch_chain', 'self_improving')
@@ -436,6 +438,7 @@ CREATE TABLE hive_backlog (
 );
 CREATE INDEX idx_hive_backlog_status ON hive_backlog(status);
 CREATE INDEX idx_hive_backlog_priority ON hive_backlog(priority);
+CREATE INDEX idx_hive_backlog_parent_id ON hive_backlog(parent_id) WHERE parent_id IS NOT NULL;
 
 -- Routing weights: dynamic model routing based on task success rates
 -- Tracks success/failure rates per (task_type, model) to auto-promote failing models

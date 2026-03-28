@@ -71,10 +71,11 @@ jobs:
                - SPECIFIC FILES: list exact files each sub-task modifies
                - CONCRETE ACCEPTANCE CRITERIA: not "implement X" but "function Y returns correct results"
                - NO BUNDLING: "implement X, Y, and Z" is 3 sub-tasks, not 1
-            5. Insert each sub-task into hive_backlog via SQL:
-               INSERT INTO hive_backlog (title, description, priority, category, status, source, spec)
-               VALUES ('title', 'Parent: original_title\n\ndescription', priority, category, 'ready', 'decomposed',
-                 '{"acceptance_criteria": [...], "affected_files": [...], "approach": [...], "complexity": "S or M", "estimated_turns": 15}'::jsonb)
+            5. Insert each sub-task into hive_backlog via SQL (note parent_id for context linking):
+               INSERT INTO hive_backlog (title, description, priority, category, status, source, spec, parent_id)
+               VALUES ('title', 'description', priority, category, 'ready', 'decomposed',
+                 '{"acceptance_criteria": [...], "affected_files": [...], "approach": [...], "complexity": "S or M", "estimated_turns": 15}'::jsonb,
+                 '${{ steps.payload.outputs.backlog_id }}')
             6. Update the parent item:
                UPDATE hive_backlog SET status = 'done', notes = COALESCE(notes,'') || ' [decomposed] Split into N sub-tasks by Claude on Actions.'
                WHERE id = ${{ steps.payload.outputs.backlog_id }}

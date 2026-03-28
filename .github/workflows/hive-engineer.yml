@@ -1,5 +1,5 @@
 name: Hive Engineer
-run-name: "Engineer: ${{ github.event.action || github.event_name }} — ${{ github.event.client_payload.company || github.event.inputs.company || 'task' }}"
+run-name: "Engineer: ${{ github.event.action || github.event_name }} — ${{ github.event.client_payload.title || github.event.inputs.task || github.event.client_payload.company || 'task' }}${{ github.event.client_payload.github_issue && format(' (#{0})', github.event.client_payload.github_issue) || github.event.client_payload.pr_number && format(' (PR #{0})', github.event.client_payload.pr_number) || '' }}"
 
 on:
   repository_dispatch:

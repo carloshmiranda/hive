@@ -524,3 +524,15 @@ Move ~12 checks to event-driven (no cron):
 - GitHub Projects: more overhead, Hive already has its own priority system
 - Linear/Jira: external dependency, cost, overkill for current scale
 **Consequences:** Every backlog item and company task gets a linked GitHub Issue. Engineers see work in their repo's Issues tab. PRs auto-close Issues via `Fixes #N`. Sentinel CHECK 12d polls for merged PRs and auto-completes linked tasks. Labels encode priority (`priority:p0-p3`), type (`type:feature/bug`), and phase (`phase:ready/dispatched/done`). Migration 010 adds `github_issue_number` and `github_issue_url` columns to both tables.
+
+### ADR-039: Context-preserving decomposition with GitHub Sub-Issues
+**Date:** 2026-03-28
+**Status:** accepted
+**Context:** When Hive auto-decomposes large backlog items into 2-4 sub-tasks, each sub-task dispatches to an independent Engineer session that has no awareness of the parent goal, sibling progress, or files already modified by other sub-tasks. This caused: (1) sub-tasks duplicating work already done by siblings, (2) conflicting changes to shared files, (3) loss of parent context (failure history, constraints, approach decisions), (4) no structured parent-child relationship in DB (relied on regex-matching UUIDs in notes text).
+**Decision:** Three-layer context preservation: (1) **DB FK**: `parent_id` column on `hive_backlog` referencing the parent item, replacing fragile regex-based UUID extraction. (2) **Decomposition Context Document**: shared JSONB blob (`decomposition_context` column) containing goal, constraints, decisions, file_manifest, sub_tasks array with status/summary, and failure_history — propagated from parent to all children. When a sub-task completes, its parent's context doc is updated and propagated to remaining siblings. (3) **GitHub Sub-Issues**: sub-tasks create GitHub Issues linked to the parent Issue via GitHub's Sub-Issues API (`POST /repos/{owner}/{repo}/issues/{parent}/sub_issues`), providing visual hierarchy in the Issues tab.
+**Alternatives considered:**
+- Shared branch strategy: all sub-tasks work on one branch — creates merge conflicts between concurrent Engineer sessions
+- External context store (Redis/file): adds infrastructure; JSONB in the same row is simpler and atomic
+- GitHub Issue body as context carrier: Issues are fire-and-forget; DB is the operational source of truth
+- Task comments thread: too unstructured for machine consumption
+**Consequences:** Engineer sessions receive decomposition context in their prompt (completed siblings, pending siblings, file manifest, failure history). Sub-tasks can't accidentally redo completed work. Sentinel Check 46 uses `parent_id` FK for child lookup (with legacy regex fallback). Check 50 excludes parent items from auto-recovery. Migration 011 adds `parent_id` (TEXT FK) and `decomposition_context` (JSONB) columns. Context propagation is eventually consistent — updated on sub-task completion, not real-time.

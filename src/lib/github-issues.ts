@@ -20,7 +20,23 @@ const HIVE_REPO = "carloshmiranda/hive";
 
 interface IssueResult {
   number: number;
+  id: number; // internal ID needed for sub-issues API
   url: string;
+}
+
+interface DecompositionContext {
+  goal: string;
+  constraints: string[];
+  decisions: string[];
+  file_manifest: Record<string, string>; // filepath -> "Modified by sub-task N"
+  sub_tasks: Array<{
+    id: string;
+    github_issue?: number;
+    status: string;
+    title: string;
+    summary: string | null;
+  }>;
+  failure_history: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +100,7 @@ async function createIssue(
     }
 
     const data = await res.json();
-    return { number: data.number, url: data.html_url };
+    return { number: data.number, id: data.id, url: data.html_url };
   } catch (e: any) {
     console.warn(
       `[github-issues] Error creating issue in ${repo}: ${e?.message || e}`
@@ -377,6 +393,177 @@ export async function getRecentlyMergedPRs(
   } catch {
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Public: Link sub-issue to parent (GitHub Sub-Issues API, GA)
+// ---------------------------------------------------------------------------
+
+export async function linkSubIssue(
+  repo: string,
+  parentIssueNumber: number,
+  childIssueInternalId: number
+): Promise<boolean> {
+  const token = await getGitHubToken().catch(() => null);
+  if (!token) return false;
+
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/issues/${parentIssueNumber}/sub_issues`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sub_issue_id: childIssueInternalId }),
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+
+    if (!res.ok) {
+      console.warn(
+        `[github-issues] Failed to link sub-issue to ${repo}#${parentIssueNumber}: ${res.status}`
+      );
+      return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.warn(
+      `[github-issues] Error linking sub-issue: ${e?.message || e}`
+    );
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public: Get internal issue ID from issue number (needed for sub-issues API)
+// ---------------------------------------------------------------------------
+
+export async function getIssueInternalId(
+  repo: string,
+  issueNumber: number
+): Promise<number | null> {
+  const token = await getGitHubToken().catch(() => null);
+  if (!token) return null;
+
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/issues/${issueNumber}`,
+      {
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+        },
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.id;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public: Create decomposition context document
+// ---------------------------------------------------------------------------
+
+export function createDecompositionContext(
+  parent: { title: string; description: string; notes?: string | null; spec?: any },
+  subTasks: Array<{ id: string; title: string; github_issue?: number }>
+): DecompositionContext {
+  // Extract failure history from parent notes
+  const failureHistory: string[] = [];
+  const attemptMatches = (parent.notes || "").matchAll(/\[attempt (\d+)\]([^\[]*)/g);
+  for (const m of attemptMatches) {
+    failureHistory.push(`Attempt ${m[1]}:${m[2].trim()}`);
+  }
+
+  return {
+    goal: parent.description || parent.title,
+    constraints: parent.spec?.risks || [],
+    decisions: parent.spec?.approach || [],
+    file_manifest: {},
+    sub_tasks: subTasks.map((st) => ({
+      id: st.id,
+      github_issue: st.github_issue,
+      status: "ready",
+      title: st.title,
+      summary: null,
+    })),
+    failure_history: failureHistory,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Public: Format decomposition context for Engineer prompt injection
+// ---------------------------------------------------------------------------
+
+export function formatDecompositionContextForPrompt(
+  ctx: DecompositionContext,
+  currentSubTaskTitle: string
+): string {
+  const lines: string[] = [
+    "## Decomposition Context (from parent task)",
+    "",
+    `**Overall Goal:** ${ctx.goal}`,
+    "",
+  ];
+
+  if (ctx.failure_history.length > 0) {
+    lines.push("**Previous Attempts (learn from these):**");
+    for (const f of ctx.failure_history) lines.push(`- ${f}`);
+    lines.push("");
+  }
+
+  if (ctx.constraints.length > 0) {
+    lines.push("**Constraints:**");
+    for (const c of ctx.constraints) lines.push(`- ${c}`);
+    lines.push("");
+  }
+
+  if (ctx.decisions.length > 0) {
+    lines.push("**Approach decisions already made:**");
+    for (const d of ctx.decisions) lines.push(`- ${d}`);
+    lines.push("");
+  }
+
+  const completedSiblings = ctx.sub_tasks.filter(
+    (st) => st.status === "done" && st.title !== currentSubTaskTitle
+  );
+  if (completedSiblings.length > 0) {
+    lines.push("**Completed sibling tasks (already done — don't redo):**");
+    for (const s of completedSiblings) {
+      lines.push(`- ${s.title}${s.summary ? `: ${s.summary}` : ""}`);
+    }
+    lines.push("");
+  }
+
+  const fileEntries = Object.entries(ctx.file_manifest);
+  if (fileEntries.length > 0) {
+    lines.push("**Files already modified by other sub-tasks:**");
+    for (const [file, note] of fileEntries) {
+      lines.push(`- \`${file}\` — ${note}`);
+    }
+    lines.push("");
+  }
+
+  const pendingSiblings = ctx.sub_tasks.filter(
+    (st) =>
+      st.status !== "done" &&
+      st.status !== "rejected" &&
+      st.title !== currentSubTaskTitle
+  );
+  if (pendingSiblings.length > 0) {
+    lines.push("**Other pending sub-tasks (don't do their work):**");
+    for (const s of pendingSiblings) lines.push(`- ${s.title}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------

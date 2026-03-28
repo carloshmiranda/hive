@@ -12,6 +12,9 @@ export interface BacklogItem {
   created_at: string;
   notes?: string;         // attempt tracking, dispatch notes
   spec?: Record<string, any>;  // planning phase output (acceptance criteria, affected files, approach)
+  parent_id?: string | null;  // parent task ID (for decomposed sub-tasks)
+  decomposition_context?: Record<string, any> | null;  // shared context doc
+  github_issue_number?: number | null;
 }
 
 export interface BacklogSignals {
