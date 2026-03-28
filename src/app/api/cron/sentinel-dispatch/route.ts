@@ -369,6 +369,93 @@ async function executeSentinelDispatch(request: Request) {
     `;
 
     // ========================================================================
+    // CHECK 12c: Stale company tasks (approved but not worked on)
+    // P0 stale after 24h, P1 after 3 days, P2 after 7 days
+    // ========================================================================
+
+    const staleTasks = await sql`
+      SELECT c.slug, c.id as company_id, c.github_repo,
+        ct.id as task_id, ct.title, ct.priority, ct.category,
+        ct.created_at,
+        EXTRACT(EPOCH FROM (NOW() - ct.created_at)) / 3600 as hours_old
+      FROM company_tasks ct
+      JOIN companies c ON c.id = ct.company_id
+      WHERE ct.status IN ('approved', 'proposed')
+      AND c.status IN ('mvp', 'active')
+      AND (
+        (ct.priority = 0 AND ct.created_at < NOW() - INTERVAL '24 hours')
+        OR (ct.priority = 1 AND ct.created_at < NOW() - INTERVAL '3 days')
+        OR (ct.priority = 2 AND ct.created_at < NOW() - INTERVAL '7 days')
+      )
+      ORDER BY ct.priority ASC, ct.created_at ASC
+      LIMIT 10
+    `;
+    if (staleTasks.length > 0) {
+      console.log(`[sentinel-dispatch] Stale tasks detected: ${staleTasks.length} tasks past SLA threshold`);
+    }
+
+    // ========================================================================
+    // CHECK 12d: Company PR tracking — auto-complete tasks when PRs merge
+    // Polls company repos for recently merged PRs with "Fixes #N" references
+    // ========================================================================
+
+    const companiesWithRepos = await ctx.sql`
+      SELECT c.id, c.slug, c.github_repo FROM companies c
+      WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
+    `.catch(() => []);
+
+    for (const company of companiesWithRepos) {
+      try {
+        const { getRecentlyMergedPRs, extractFixesReferences } = await import("@/lib/github-issues");
+        const mergedPRs = await getRecentlyMergedPRs(company.github_repo, 2);
+        for (const pr of mergedPRs) {
+          const fixedIssues = extractFixesReferences(pr.title + " " + pr.body);
+          if (fixedIssues.length === 0) continue;
+
+          // Find company_tasks linked to these issue numbers and mark done
+          for (const issueNum of fixedIssues) {
+            await ctx.sql`
+              UPDATE company_tasks
+              SET status = 'done', pr_number = ${pr.number},
+                  pr_url = ${"https://github.com/" + company.github_repo + "/pull/" + pr.number},
+                  updated_at = NOW()
+              WHERE company_id = ${company.id}
+              AND github_issue_number = ${issueNum}
+              AND status != 'done'
+            `.catch(() => {});
+            // Sync company GitHub Issue (fire-and-forget)
+            import("@/lib/github-issues").then(({ syncCompanyTaskStatus }) =>
+              syncCompanyTaskStatus(company.github_repo, issueNum, "done")
+            ).catch(() => {});
+          }
+        }
+
+        // Also check Hive repo PRs for backlog items
+        if (company.github_repo === "carloshmiranda/hive") {
+          for (const pr of mergedPRs) {
+            const fixedIssues = extractFixesReferences(pr.title + " " + pr.body);
+            for (const issueNum of fixedIssues) {
+              await ctx.sql`
+                UPDATE hive_backlog
+                SET status = 'done', pr_number = ${pr.number},
+                    pr_url = ${"https://github.com/carloshmiranda/hive/pull/" + pr.number},
+                    completed_at = NOW()
+                WHERE github_issue_number = ${issueNum}
+                AND status NOT IN ('done', 'rejected')
+              `.catch(() => {});
+              // Sync backlog GitHub Issue (fire-and-forget)
+              import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+                syncBacklogStatus(issueNum, "done")
+              ).catch(() => {});
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[sentinel-dispatch] PR tracking for ${company.slug} failed: ${e?.message || e}`);
+      }
+    }
+
+    // ========================================================================
     // CHECK 13: Companies needing new cycle — ranked by priority score
     // ========================================================================
 

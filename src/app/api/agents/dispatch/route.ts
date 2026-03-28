@@ -276,6 +276,36 @@ ${capabilitiesSummary(company.capabilities)}`;
       await processOutreachResults(sql, company, output);
     }
 
+    // 7b. Track worker output as company_tasks (best-effort JSON parsing)
+    try {
+      const jsonMatch = output.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        const taskEntries: { title: string; description: string }[] = [];
+
+        if (agentName === "growth" && Array.isArray(parsed.content_created)) {
+          for (const c of parsed.content_created.slice(0, 5)) {
+            taskEntries.push({ title: `[Growth] ${typeof c === "string" ? c : c.title || c.type || "Content piece"}`, description: typeof c === "string" ? c : JSON.stringify(c) });
+          }
+        } else if (agentName === "outreach" && Array.isArray(parsed.emails_drafted)) {
+          for (const e of parsed.emails_drafted.slice(0, 5)) {
+            taskEntries.push({ title: `[Outreach] ${typeof e === "string" ? e : e.subject || e.to || "Email draft"}`, description: typeof e === "string" ? e : JSON.stringify(e) });
+          }
+        } else if (agentName === "ops" && Array.isArray(parsed.issues_found)) {
+          for (const i of parsed.issues_found.slice(0, 5)) {
+            taskEntries.push({ title: `[Ops] ${typeof i === "string" ? i : i.title || i.issue || "Issue detected"}`, description: typeof i === "string" ? i : JSON.stringify(i) });
+          }
+        }
+
+        for (const te of taskEntries) {
+          await sql`
+            INSERT INTO company_tasks (company_id, cycle_id, title, description, status, source)
+            VALUES (${company.id}, ${latestCycle?.id || null}, ${te.title.slice(0, 200)}, ${te.description.slice(0, 2000)}, 'done', ${agentName})
+          `.catch(() => {});
+        }
+      }
+    } catch { /* best-effort — don't fail dispatch on parse errors */ }
+
     // 8. Ops escalation → dispatch fix to company repo (free Actions) with Hive fallback
     if (agentName === "ops" && output.includes("needs_engineer")) {
       try {

@@ -57,6 +57,25 @@ export async function POST(req: NextRequest) {
     RETURNING *
   `;
 
+  // Fire-and-forget GitHub Issue creation
+  import("@/lib/github-issues")
+    .then(({ createBacklogIssue }) =>
+      createBacklogIssue({
+        id: item.id,
+        title: item.title,
+        description: item.description || item.title,
+        priority: item.priority || "P2",
+        category: item.category || "feature",
+        theme: item.theme || null,
+      })
+    )
+    .then((issue) => {
+      if (issue) {
+        sql`UPDATE hive_backlog SET github_issue_number = ${issue.number}, github_issue_url = ${issue.url} WHERE id = ${item.id}`.catch(() => {});
+      }
+    })
+    .catch(() => {});
+
   return json(item, 201);
 }
 
@@ -90,9 +109,9 @@ export async function PATCH(req: NextRequest) {
 
   const sql = getDb();
 
-  // Verify item exists
+  // Verify item exists + get github_issue_number for sync
   const [existing] = await sql`
-    SELECT id FROM hive_backlog WHERE id = ${id} LIMIT 1
+    SELECT id, github_issue_number FROM hive_backlog WHERE id = ${id} LIMIT 1
   `;
   if (!existing) {
     return err("Backlog item not found", 404);
@@ -125,6 +144,13 @@ export async function PATCH(req: NextRequest) {
       WHERE id = ${id}
       RETURNING *
     `;
+  }
+
+  // Sync status change to GitHub Issue
+  if (status && existing.github_issue_number) {
+    import("@/lib/github-issues")
+      .then(({ syncBacklogStatus }) => syncBacklogStatus(existing.github_issue_number, status))
+      .catch(() => {});
   }
 
   return json(updated);

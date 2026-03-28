@@ -34,5 +34,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   `;
 
   if (!task) return err("Task not found", 404);
+
+  // Sync GitHub Issue status (fire-and-forget)
+  if (status && task.github_issue_number) {
+    sql`SELECT github_repo FROM companies WHERE id = ${task.company_id}`.then(([company]) => {
+      if (!company?.github_repo) return;
+      return import("@/lib/github-issues").then(({ syncCompanyTaskStatus }) =>
+        syncCompanyTaskStatus(company.github_repo, task.github_issue_number, status)
+      );
+    }).catch(() => {});
+  }
+
   return json(task);
 }

@@ -100,6 +100,21 @@ export async function POST(req: Request) {
       RETURNING *
     `;
     results.push(task);
+
+    // Create GitHub Issue in company repo (fire-and-forget)
+    import("@/lib/github-issues")
+      .then(async ({ createCompanyTaskIssue }) => {
+        const [company] = await sql`SELECT slug, github_repo FROM companies WHERE id = ${company_id}`;
+        if (!company?.github_repo) return;
+        const issue = await createCompanyTaskIssue(company.github_repo, {
+          id: task.id, title, description, priority: priority ?? 2,
+          category, source: source || "ceo", acceptance,
+        }, company.slug);
+        if (issue) {
+          await sql`UPDATE company_tasks SET github_issue_number = ${issue.number}, github_issue_url = ${issue.url} WHERE id = ${task.id}`.catch(() => {});
+        }
+      })
+      .catch(() => {});
   }
 
   // If some tasks were rejected by phase gate, include that info

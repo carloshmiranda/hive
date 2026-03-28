@@ -27,6 +27,19 @@ const CRON_SECRET = process.env.CRON_SECRET || "";
 
 const sql = neon(process.env.DATABASE_URL);
 
+// GitHub Issue creation helper (fire-and-forget for backlog/task items)
+async function createGitHubIssueForBacklog(item) {
+  try {
+    const rows = await sql(`SELECT value FROM settings WHERE key = 'github_app_installation_id' LIMIT 1`);
+    // Use the Hive API to create issue (it handles token fetching)
+    await fetch(`${HIVE_URL}/api/backlog/sync-issue`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${CRON_SECRET}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ backlog_id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, theme: item.theme }),
+    }).catch(() => {});
+  } catch { /* non-critical */ }
+}
+
 const server = new McpServer({
   name: "hive",
   version: "1.0.0",
@@ -108,9 +121,11 @@ server.registerTool(
       return { content: [{ type: "text", text: `Duplicate: "${existing.title}" (${existing.status}, id: ${existing.id})` }] };
     }
     const [item] = await sql.query(
-      `INSERT INTO hive_backlog (priority, title, description, category, source, theme) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, priority, title, status, theme`,
+      `INSERT INTO hive_backlog (priority, title, description, category, source, theme) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, priority, title, status, theme, description, category`,
       [priority, title, description, category, source, theme || null]
     );
+    // Fire-and-forget: create GitHub Issue for visibility
+    createGitHubIssueForBacklog({ ...item, theme }).catch(() => {});
     return { content: [{ type: "text", text: JSON.stringify(item, null, 2) }] };
   }
 );
@@ -393,22 +408,25 @@ server.registerTool(
 server.registerTool(
   "hive_tasks",
   {
-    description: "Query company tasks (company_tasks table). View pending work for companies.",
+    description: "Query company tasks (company_tasks table). View pending work for companies. Includes cycle, PR, and GitHub Issue data.",
     inputSchema: {
       company_slug: z.string().optional().describe("Filter by company slug"),
       status: z.enum(["proposed", "approved", "in_progress", "done", "dismissed", "all"]).default("all").describe("Filter by status"),
+      cycle_id: z.string().optional().describe("Filter by cycle ID"),
       limit: z.number().default(50).describe("Max rows"),
     },
   },
-  async ({ company_slug, status, limit }) => {
+  async ({ company_slug, status, cycle_id, limit }) => {
     const params = [];
     const conditions = [];
     if (company_slug) { params.push(company_slug); conditions.push(`c.slug = $${params.length}`); }
     if (status && status !== "all") { params.push(status); conditions.push(`t.status = $${params.length}`); }
+    if (cycle_id) { params.push(cycle_id); conditions.push(`t.cycle_id = $${params.length}`); }
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     params.push(limit);
     const rows = await sql.query(`
-      SELECT t.id, c.slug as company, t.category, t.title, t.status, t.priority, t.source,
+      SELECT t.id, c.slug as company, t.category, t.title, t.description, t.status, t.priority, t.source,
+             t.cycle_id, t.pr_number, t.pr_url, t.github_issue_number, t.github_issue_url,
              t.created_at, t.updated_at
       FROM company_tasks t
       JOIN companies c ON c.id = t.company_id
@@ -417,6 +435,38 @@ server.registerTool(
       LIMIT $${params.length}
     `, params);
     return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+  }
+);
+
+// ── Company Tasks: Update ────────────────────────────────────────────────
+
+server.registerTool(
+  "hive_tasks_update",
+  {
+    description: "Update a company task's status, priority, or link a PR. Use for marking work done, dismissed, or in-progress.",
+    inputSchema: {
+      id: z.string().describe("Task ID"),
+      status: z.enum(["proposed", "approved", "in_progress", "done", "dismissed"]).optional().describe("New status"),
+      priority: z.number().min(0).max(3).optional().describe("New priority (0-3)"),
+      pr_number: z.number().optional().describe("PR number that implements this task"),
+      pr_url: z.string().optional().describe("PR URL"),
+    },
+  },
+  async ({ id, status, priority, pr_number, pr_url }) => {
+    const sets = [];
+    const params = [id];
+    if (status) { params.push(status); sets.push(`status = $${params.length}`); }
+    if (priority !== undefined) { params.push(priority); sets.push(`priority = $${params.length}`); }
+    if (pr_number) { params.push(pr_number); sets.push(`pr_number = $${params.length}`); }
+    if (pr_url) { params.push(pr_url); sets.push(`pr_url = $${params.length}`); }
+    if (sets.length === 0) return { content: [{ type: "text", text: "No fields to update" }] };
+    sets.push("updated_at = NOW()");
+    const [updated] = await sql.query(
+      `UPDATE company_tasks SET ${sets.join(", ")} WHERE id = $1 RETURNING id, title, status, priority, pr_number`,
+      params
+    );
+    if (!updated) return { content: [{ type: "text", text: `Task ${id} not found` }] };
+    return { content: [{ type: "text", text: JSON.stringify(updated, null, 2) }] };
   }
 );
 

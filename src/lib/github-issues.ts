@@ -1,0 +1,395 @@
+/**
+ * GitHub Issues integration for work tracking (ADR-031 Phase 2).
+ *
+ * Creates and manages GitHub Issues as the canonical human-facing work tracker.
+ * - Hive backlog items → Issues in carloshmiranda/hive
+ * - Company tasks → Issues in the company's own repo
+ *
+ * DB retains operational metadata (dispatch_id, timing, metrics).
+ * GitHub Issues are the visibility layer for Carlos and agents.
+ */
+
+import { getGitHubToken } from "@/lib/github-app";
+import { getSettingValue } from "@/lib/settings";
+
+const HIVE_REPO = "carloshmiranda/hive";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface IssueResult {
+  number: number;
+  url: string;
+}
+
+// ---------------------------------------------------------------------------
+// Label mappings
+// ---------------------------------------------------------------------------
+
+function backlogLabels(item: {
+  priority: string;
+  category: string;
+  theme?: string | null;
+}): string[] {
+  const labels: string[] = ["hive-backlog"];
+  if (item.priority) labels.push(`priority:${item.priority.toLowerCase()}`);
+  if (item.category) labels.push(`type:${item.category}`);
+  if (item.theme) labels.push(`theme:${item.theme}`);
+  return labels;
+}
+
+function companyTaskLabels(task: {
+  priority: number;
+  category: string;
+  source: string;
+}): string[] {
+  const labels: string[] = ["company-task"];
+  labels.push(`priority:p${task.priority}`);
+  if (task.category) labels.push(`type:${task.category}`);
+  if (task.source) labels.push(`source:${task.source}`);
+  return labels;
+}
+
+// ---------------------------------------------------------------------------
+// Core: Create Issue
+// ---------------------------------------------------------------------------
+
+async function createIssue(
+  repo: string,
+  title: string,
+  body: string,
+  labels: string[]
+): Promise<IssueResult | null> {
+  const token = await getGitHubToken().catch(() => null);
+  if (!token) return null;
+
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+      method: "POST",
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title, body, labels }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) {
+      console.warn(
+        `[github-issues] Failed to create issue in ${repo}: ${res.status}`
+      );
+      return null;
+    }
+
+    const data = await res.json();
+    return { number: data.number, url: data.html_url };
+  } catch (e: any) {
+    console.warn(
+      `[github-issues] Error creating issue in ${repo}: ${e?.message || e}`
+    );
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Core: Update Issue labels (for status transitions)
+// ---------------------------------------------------------------------------
+
+async function updateIssueLabels(
+  repo: string,
+  issueNumber: number,
+  addLabels: string[],
+  removeLabels: string[]
+): Promise<void> {
+  const token = await getGitHubToken().catch(() => null);
+  if (!token) return;
+
+  try {
+    // Remove old phase labels
+    for (const label of removeLabels) {
+      await fetch(
+        `https://api.github.com/repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `token ${token}`,
+            Accept: "application/vnd.github+json",
+          },
+          signal: AbortSignal.timeout(5000),
+        }
+      ).catch(() => {});
+    }
+
+    // Add new labels
+    if (addLabels.length > 0) {
+      await fetch(
+        `https://api.github.com/repos/${repo}/issues/${issueNumber}/labels`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `token ${token}`,
+            Accept: "application/vnd.github+json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ labels: addLabels }),
+          signal: AbortSignal.timeout(5000),
+        }
+      ).catch(() => {});
+    }
+  } catch (e: any) {
+    console.warn(
+      `[github-issues] Error updating labels on ${repo}#${issueNumber}: ${e?.message || e}`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Core: Close Issue
+// ---------------------------------------------------------------------------
+
+async function closeIssue(
+  repo: string,
+  issueNumber: number,
+  comment?: string
+): Promise<void> {
+  const token = await getGitHubToken().catch(() => null);
+  if (!token) return;
+
+  try {
+    if (comment) {
+      await fetch(
+        `https://api.github.com/repos/${repo}/issues/${issueNumber}/comments`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `token ${token}`,
+            Accept: "application/vnd.github+json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ body: comment }),
+          signal: AbortSignal.timeout(5000),
+        }
+      ).catch(() => {});
+    }
+
+    await fetch(
+      `https://api.github.com/repos/${repo}/issues/${issueNumber}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ state: "closed" }),
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+  } catch (e: any) {
+    console.warn(
+      `[github-issues] Error closing ${repo}#${issueNumber}: ${e?.message || e}`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public: Create Issue for Hive backlog item
+// ---------------------------------------------------------------------------
+
+export async function createBacklogIssue(item: {
+  id: string;
+  title: string;
+  description: string;
+  priority: string;
+  category: string;
+  theme?: string | null;
+}): Promise<IssueResult | null> {
+  const body = [
+    `## ${item.title}`,
+    ``,
+    item.description,
+    ``,
+    `---`,
+    `**Priority:** ${item.priority} | **Category:** ${item.category}${item.theme ? ` | **Theme:** ${item.theme}` : ""}`,
+    `**Backlog ID:** \`${item.id}\``,
+    ``,
+    `*Auto-created by Hive work tracker*`,
+  ].join("\n");
+
+  const labels = backlogLabels(item);
+  return createIssue(HIVE_REPO, `[${item.priority}] ${item.title}`, body, labels);
+}
+
+// ---------------------------------------------------------------------------
+// Public: Create Issue for company task (in company repo)
+// ---------------------------------------------------------------------------
+
+export async function createCompanyTaskIssue(
+  githubRepo: string,
+  task: {
+    id: string;
+    title: string;
+    description: string;
+    priority: number;
+    category: string;
+    source: string;
+    acceptance?: string | null;
+  },
+  companySlug: string
+): Promise<IssueResult | null> {
+  const body = [
+    `## ${task.title}`,
+    ``,
+    task.description,
+    ``,
+    task.acceptance ? `### Acceptance Criteria\n${task.acceptance}\n` : "",
+    `---`,
+    `**Priority:** P${task.priority} | **Category:** ${task.category} | **Source:** ${task.source}`,
+    `**Task ID:** \`${task.id}\``,
+    ``,
+    `*Auto-created by Hive CEO for ${companySlug}*`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const labels = companyTaskLabels(task);
+  return createIssue(
+    githubRepo,
+    `[P${task.priority}] ${task.title}`,
+    body,
+    labels
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Public: Sync backlog status → GitHub Issue labels
+// ---------------------------------------------------------------------------
+
+const PHASE_LABELS = [
+  "phase:ready",
+  "phase:dispatched",
+  "phase:in-progress",
+  "phase:pr-open",
+  "phase:done",
+  "phase:blocked",
+];
+
+export async function syncBacklogStatus(
+  issueNumber: number,
+  newStatus: string
+): Promise<void> {
+  const phaseLabel = `phase:${newStatus.replace("_", "-")}`;
+  if (!PHASE_LABELS.includes(phaseLabel)) return;
+
+  // If done, close the issue
+  if (newStatus === "done") {
+    await closeIssue(HIVE_REPO, issueNumber, "Completed and merged.");
+    return;
+  }
+
+  // Otherwise update labels
+  const removeLabels = PHASE_LABELS.filter((l) => l !== phaseLabel);
+  await updateIssueLabels(HIVE_REPO, issueNumber, [phaseLabel], removeLabels);
+}
+
+// ---------------------------------------------------------------------------
+// Public: Sync company task status → GitHub Issue labels
+// ---------------------------------------------------------------------------
+
+export async function syncCompanyTaskStatus(
+  githubRepo: string,
+  issueNumber: number,
+  newStatus: string
+): Promise<void> {
+  if (newStatus === "done") {
+    await closeIssue(githubRepo, issueNumber, "Task completed.");
+    return;
+  }
+
+  if (newStatus === "dismissed") {
+    await closeIssue(githubRepo, issueNumber, "Task dismissed — no longer needed.");
+    return;
+  }
+
+  const phaseLabel = `phase:${newStatus.replace("_", "-")}`;
+  const allPhases = [
+    "phase:proposed",
+    "phase:approved",
+    "phase:in-progress",
+    "phase:done",
+  ];
+  const removeLabels = allPhases.filter((l) => l !== phaseLabel);
+  await updateIssueLabels(githubRepo, issueNumber, [phaseLabel], removeLabels);
+}
+
+// ---------------------------------------------------------------------------
+// Public: List recently merged PRs in a repo (for Sentinel polling)
+// ---------------------------------------------------------------------------
+
+export async function getRecentlyMergedPRs(
+  repo: string,
+  sinceDays: number = 1
+): Promise<
+  Array<{
+    number: number;
+    title: string;
+    body: string;
+    merged_at: string;
+    head_ref: string;
+  }>
+> {
+  const token = await getGitHubToken().catch(() => null);
+  if (!token) return [];
+
+  try {
+    const since = new Date(
+      Date.now() - sinceDays * 86400000
+    ).toISOString();
+
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=30`,
+      {
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+        },
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+
+    if (!res.ok) return [];
+    const pulls = await res.json();
+
+    return pulls
+      .filter(
+        (pr: any) =>
+          pr.merged_at && new Date(pr.merged_at) > new Date(since)
+      )
+      .map((pr: any) => ({
+        number: pr.number,
+        title: pr.title,
+        body: pr.body || "",
+        merged_at: pr.merged_at,
+        head_ref: pr.head?.ref || "",
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public: Extract "Fixes #N" references from PR body
+// ---------------------------------------------------------------------------
+
+export function extractFixesReferences(text: string): number[] {
+  const pattern =
+    /(?:fix(?:es)?|close[sd]?|resolve[sd]?)\s+#(\d+)/gi;
+  const matches: number[] = [];
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    matches.push(parseInt(match[1], 10));
+  }
+  return [...new Set(matches)];
+}

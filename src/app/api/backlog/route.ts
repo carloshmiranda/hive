@@ -93,6 +93,27 @@ export async function POST(req: Request) {
     RETURNING *
   `;
 
+  // Create GitHub Issue for visibility (fire-and-forget)
+  import("@/lib/github-issues")
+    .then(({ createBacklogIssue }) =>
+      createBacklogIssue({
+        id: item.id,
+        title,
+        description,
+        priority: priority || "P2",
+        category: category || "feature",
+        theme: theme || null,
+      })
+    )
+    .then((issue) => {
+      if (issue) {
+        sql`UPDATE hive_backlog SET github_issue_number = ${issue.number}, github_issue_url = ${issue.url} WHERE id = ${item.id}`.catch(() => {});
+      }
+    })
+    .catch((e: any) => {
+      console.warn(`[backlog] GitHub issue creation failed: ${e?.message || e}`);
+    });
+
   return json(item, 201);
 }
 

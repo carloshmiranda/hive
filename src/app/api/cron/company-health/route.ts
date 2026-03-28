@@ -340,11 +340,20 @@ export async function GET(req: Request) {
             const result = await mergeHivePR("carloshmiranda", "hive", pr.number, ghPat!, "squash");
             if (result.success) {
               merged++;
-              await sql`
+              const mergedItems = await sql`
                 UPDATE hive_backlog SET status = 'done', completed_at = NOW(),
                   notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged by company-health check 38.`}
                 WHERE status = 'pr_open' AND pr_number = ${pr.number}
-              `.catch((e: any) => { console.warn(`[company-health] update backlog for merged PR #${pr.number} failed: ${e?.message || e}`); });
+                RETURNING github_issue_number
+              `.catch((e: any) => { console.warn(`[company-health] update backlog for merged PR #${pr.number} failed: ${e?.message || e}`); return []; });
+              // Sync GitHub Issues (fire-and-forget)
+              for (const mi of mergedItems) {
+                if (mi.github_issue_number) {
+                  import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+                    syncBacklogStatus(mi.github_issue_number, "done")
+                  ).catch(() => {});
+                }
+              }
 
               try {
                 await fetch(`${baseUrl}/api/notify`, {
@@ -808,11 +817,20 @@ export async function GET(req: Request) {
                 const branchRef = pr.head?.ref || "";
                 const taskIdMatch = branchRef.match(/^hive\/cycle-\d+-(.+)$/);
                 if (taskIdMatch?.[1]) {
-                  await sql`
+                  const updatedTasks = await sql`
                     UPDATE company_tasks SET status = 'done', updated_at = NOW()
                     WHERE id = ${taskIdMatch[1]} AND company_id = ${pc.id}
                     AND status IN ('proposed', 'in_progress')
-                  `.catch((e: any) => { console.warn(`[company-health] update task ${taskIdMatch[1]} for merged PR #${pr.number} failed: ${e?.message || e}`); });
+                    RETURNING github_issue_number
+                  `.catch((e: any) => { console.warn(`[company-health] update task ${taskIdMatch[1]} for merged PR #${pr.number} failed: ${e?.message || e}`); return []; });
+                  // Sync company GitHub Issue (fire-and-forget)
+                  for (const ut of updatedTasks) {
+                    if (ut.github_issue_number) {
+                      import("@/lib/github-issues").then(({ syncCompanyTaskStatus }) =>
+                        syncCompanyTaskStatus(pc.github_repo, ut.github_issue_number, "done")
+                      ).catch(() => {});
+                    }
+                  }
                 }
 
                 // Telegram notification for auto-merge

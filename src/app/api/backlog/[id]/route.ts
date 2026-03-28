@@ -40,6 +40,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   `;
 
   if (!item) return err("Backlog item not found", 404);
+
+  // Sync GitHub Issue status (fire-and-forget)
+  if (status && item.github_issue_number) {
+    import("@/lib/github-issues")
+      .then(({ syncBacklogStatus }) => syncBacklogStatus(item.github_issue_number, status))
+      .catch(() => {});
+  }
+
   return json(item);
 }
 

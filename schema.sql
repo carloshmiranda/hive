@@ -370,6 +370,10 @@ CREATE TABLE IF NOT EXISTS company_tasks (
   prerequisites TEXT[] DEFAULT '{}',                   -- task IDs or descriptions that must complete first
   acceptance    TEXT,                                   -- how to verify this is done
   cycle_id      TEXT REFERENCES cycles(id),             -- which cycle completed this task
+  github_issue_number INTEGER,                           -- linked GitHub Issue in company repo
+  github_issue_url    TEXT,
+  pr_number     INTEGER,                                 -- PR that implements this task
+  pr_url        TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -421,6 +425,8 @@ CREATE TABLE hive_backlog (
   dispatch_id   TEXT,              -- agent_action id when dispatched
   pr_number     INTEGER,           -- PR created for risky changes
   pr_url        TEXT,
+  github_issue_number INTEGER,     -- linked GitHub Issue in carloshmiranda/hive
+  github_issue_url    TEXT,
   theme         TEXT,              -- links to ROADMAP.md milestone (e.g. 'dispatch_chain', 'self_improving')
   spec          JSONB,             -- planning phase output (acceptance criteria, affected files, approach)
   notes         TEXT,              -- resolution notes, blockers, etc.

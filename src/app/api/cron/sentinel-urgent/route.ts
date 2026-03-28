@@ -475,11 +475,19 @@ export async function GET(request: Request) {
         SET status = 'ready', dispatched_at = NULL,
             notes = COALESCE(notes, '') || ' [orphan-reset] No pr_number — phantom pr_open, reset to ready.'
         WHERE status = 'pr_open' AND pr_number IS NULL
-        RETURNING id, title
+        RETURNING id, title, github_issue_number
       `;
       phantomPrCount = phantomPrItems.length;
       if (phantomPrItems.length > 0) {
         console.log(`[sentinel-urgent] Check 40: Reset ${phantomPrItems.length} phantom pr_open items: ${phantomPrItems.map((i: any) => i.title.slice(0, 50)).join(", ")}`);
+        // Sync GitHub Issues (fire-and-forget)
+        for (const pi of phantomPrItems) {
+          if (pi.github_issue_number) {
+            import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+              syncBacklogStatus(pi.github_issue_number, "ready")
+            ).catch(() => {});
+          }
+        }
         await ctx.sql`
           INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
           VALUES ('sentinel', 'phantom_pr_cleanup',
@@ -501,7 +509,7 @@ export async function GET(request: Request) {
     let prVerified = 0;
     try {
       const prOpenItems = await ctx.sql`
-        SELECT id, title, pr_number, pr_url
+        SELECT id, title, pr_number, pr_url, github_issue_number
         FROM hive_backlog
         WHERE status = 'pr_open' AND pr_number IS NOT NULL
         LIMIT 10
@@ -532,6 +540,12 @@ export async function GET(request: Request) {
                     notes = COALESCE(notes, '') || ${` [check-41] PR #${item.pr_number} merged, marking done.`}
                 WHERE id = ${item.id}
               `;
+              // Sync GitHub Issue (fire-and-forget)
+              if (item.github_issue_number) {
+                import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+                  syncBacklogStatus(item.github_issue_number, "done")
+                ).catch(() => {});
+              }
               prMerged++;
             } else if (pr.state === "closed") {
               await ctx.sql`
@@ -561,6 +575,57 @@ export async function GET(request: Request) {
       }
     } catch (check41Err: any) {
       console.warn(`[sentinel-urgent] Check 41 failed: ${check41Err.message}`);
+    }
+
+    // =========================================================================
+    // Check 42b: Stale task detection
+    // Backlog items stuck in dispatched/in_progress for too long without progress.
+    // dispatched > 6h → flag. in_progress > 24h → flag. Both get notes + log.
+    // =========================================================================
+    let staleDispatched = 0;
+    let staleInProgress = 0;
+    try {
+      // Dispatched items stuck > 6 hours
+      const stuckDispatched = await ctx.sql`
+        UPDATE hive_backlog
+        SET notes = COALESCE(notes, '') || ' [stale] Stuck in dispatched > 6h, reset to ready.',
+            status = 'ready', dispatched_at = NULL
+        WHERE status = 'dispatched'
+        AND dispatched_at < NOW() - INTERVAL '6 hours'
+        RETURNING id, title, github_issue_number
+      `;
+      staleDispatched = stuckDispatched.length;
+      for (const item of stuckDispatched) {
+        if (item.github_issue_number) {
+          import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+            syncBacklogStatus(item.github_issue_number, "ready")
+          ).catch(() => {});
+        }
+      }
+
+      // In-progress items stuck > 24 hours (flag but don't reset — agent may still be working)
+      const stuckInProgress = await ctx.sql`
+        UPDATE hive_backlog
+        SET notes = COALESCE(notes, '') || ' [stale] In progress > 24h without PR.'
+        WHERE status = 'in_progress'
+        AND updated_at < NOW() - INTERVAL '24 hours'
+        AND pr_number IS NULL
+        AND notes NOT LIKE '%[stale]%'
+        RETURNING id, title
+      `;
+      staleInProgress = stuckInProgress.length;
+
+      if (staleDispatched > 0 || staleInProgress > 0) {
+        console.log(`[sentinel-urgent] Check 42b: Stale tasks — ${staleDispatched} dispatched→ready, ${staleInProgress} in_progress flagged`);
+        await ctx.sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'stale_task_detection',
+            ${`Check 42b: ${staleDispatched} dispatched→ready (>6h), ${staleInProgress} in_progress flagged (>24h)`},
+            'success', NOW(), NOW())
+        `.catch(() => {});
+      }
+    } catch (check42bErr: any) {
+      console.warn(`[sentinel-urgent] Check 42b failed: ${check42bErr?.message}`);
     }
 
     // =========================================================================

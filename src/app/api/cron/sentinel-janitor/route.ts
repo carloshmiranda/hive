@@ -1769,7 +1769,7 @@ export async function GET(request: Request) {
     try {
       // Find blocked items that were decomposed into sub-tasks
       const decomposedParents = await sql`
-        SELECT id, title, notes FROM hive_backlog
+        SELECT id, title, notes, github_issue_number FROM hive_backlog
         WHERE status = 'blocked'
         AND notes LIKE '%[decomposed]%'
       `;
@@ -1797,6 +1797,12 @@ export async function GET(request: Request) {
             WHERE id = ${parent.id} AND status = 'blocked'
           `;
           parentsClosed++;
+          // Sync GitHub Issue (fire-and-forget)
+          if (parent.github_issue_number) {
+            import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+              syncBacklogStatus(parent.github_issue_number, "done")
+            ).catch(() => {});
+          }
           console.log(`[sentinel-janitor] Check 46: Closed decomposed parent "${parent.title}"`);
         }
       }
@@ -1810,6 +1816,42 @@ export async function GET(request: Request) {
       }
     } catch (check46Err: any) {
       console.warn(`[sentinel-janitor] Check 46 failed: ${check46Err.message}`);
+    }
+
+    // -----------------------------------------------------------------------
+    // Check 50: Blocked item recovery — unblock transient failures after 48h
+    // -----------------------------------------------------------------------
+    let blockedRecovered = 0;
+    try {
+      // Recover items blocked >48h from transient failures (not permanently blocked)
+      const recoverableBlocked = await sql`
+        UPDATE hive_backlog
+        SET status = 'ready', dispatched_at = NULL,
+            notes = COALESCE(notes, '') || ' [janitor-recovered] Unblocked after 48h cooldown.'
+        WHERE status = 'blocked'
+          AND updated_at < NOW() - INTERVAL '48 hours'
+          AND notes NOT LIKE '%[ci_impossible]%'
+          AND notes NOT LIKE '%Cost-risk%'
+          AND notes NOT LIKE '%Requires manual action%'
+          AND notes NOT LIKE '%[decomposed]%'
+          AND notes NOT LIKE '%[auto-decomposed]%'
+          AND notes NOT LIKE '%[janitor-recovered]%'
+          AND notes NOT LIKE '%needs approval%'
+        RETURNING id, title, github_issue_number
+      `;
+      blockedRecovered = recoverableBlocked.length;
+      for (const item of recoverableBlocked) {
+        if (item.github_issue_number) {
+          import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+            syncBacklogStatus(item.github_issue_number, "ready")
+          ).catch(() => {});
+        }
+      }
+      if (blockedRecovered > 0) {
+        console.log(`[sentinel-janitor] Check 50: Recovered ${blockedRecovered} blocked items after 48h cooldown`);
+      }
+    } catch (check50Err: any) {
+      console.warn(`[sentinel-janitor] Check 50 failed: ${check50Err.message}`);
     }
 
     // -----------------------------------------------------------------------
@@ -2081,6 +2123,54 @@ export async function GET(request: Request) {
     } catch { /* Telegram not configured — silently skip */ }
 
     // -----------------------------------------------------------------------
+    // Check 49: Auto-sync backlog items to GitHub Issues
+    // Items without github_issue_number get Issues created (batch of 5 per run)
+    // -----------------------------------------------------------------------
+    let issuesSynced = 0;
+    try {
+      const unlinked = await sql`
+        SELECT id, title, priority, category, theme, notes
+        FROM hive_backlog
+        WHERE github_issue_number IS NULL
+        AND status NOT IN ('done', 'rejected')
+        ORDER BY
+          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+          created_at ASC
+        LIMIT 5
+      `;
+      if (unlinked.length > 0) {
+        const { createBacklogIssue } = await import("@/lib/github-issues");
+        for (const item of unlinked) {
+          try {
+            const issue = await createBacklogIssue({
+              id: item.id,
+              title: item.title,
+              description: item.notes || item.title,
+              priority: item.priority || "P2",
+              category: item.category || "feature",
+              theme: item.theme || null,
+            });
+            if (issue) {
+              await sql`
+                UPDATE hive_backlog
+                SET github_issue_number = ${issue.number}, github_issue_url = ${issue.url}
+                WHERE id = ${item.id}
+              `;
+              issuesSynced++;
+            }
+          } catch { /* per-item non-blocking */ }
+          // Rate limit: 1s between API calls
+          if (issuesSynced < unlinked.length) await new Promise(r => setTimeout(r, 1000));
+        }
+        if (issuesSynced > 0) {
+          console.log(`[sentinel-janitor] Check 49: Synced ${issuesSynced}/${unlinked.length} backlog items to GitHub Issues`);
+        }
+      }
+    } catch (check49Err: any) {
+      console.warn(`[sentinel-janitor] Check 49 failed: ${check49Err?.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Regenerate BACKLOG.md from database
     // -----------------------------------------------------------------------
     let backlogRegenerated = false;
@@ -2118,6 +2208,8 @@ export async function GET(request: Request) {
       agent_escalations: agentEscalations,
       self_improvement_proposals: selfImprovementProposals,
       error_patterns_learned: errorPatternsLearned,
+      github_issues_synced: issuesSynced,
+      blocked_items_recovered: blockedRecovered,
       backlog_regenerated: backlogRegenerated,
       backlog_duplicates_rejected: duplicatesRejected,
       backlog_stale_deprioritized: staleItemsDeprioritized,

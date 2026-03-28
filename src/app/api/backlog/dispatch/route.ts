@@ -10,6 +10,18 @@ import { setSentryTags } from "@/lib/sentry-tags";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
+// Fire-and-forget GitHub Issue sync for backlog status transitions
+function syncIssueForBacklog(sql: ReturnType<typeof getDb>, itemId: string, newStatus: string) {
+  sql`SELECT github_issue_number FROM hive_backlog WHERE id = ${itemId}`
+    .then(([row]) => {
+      if (!row?.github_issue_number) return;
+      return import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+        syncBacklogStatus(row.github_issue_number, newStatus)
+      );
+    })
+    .catch(() => {});
+}
+
 // Dispatch free-tier workers when Claude budget is blocked
 async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof getDb>) {
   const workers: { company: string; agent: string }[] = [];
@@ -77,6 +89,18 @@ export async function POST(req: Request) {
 
   // If a completed item was passed, update its status
   if (completed_id && completed_status) {
+    // Agent acknowledges work started — transition to in_progress
+    if (completed_status === "in_progress") {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'in_progress',
+            notes = COALESCE(notes, '') || ${` [in_progress] Agent started working at ${new Date().toISOString().slice(0, 19)}`}
+        WHERE id = ${completed_id} AND status = 'dispatched'
+      `.catch((e: any) => { console.warn(`[backlog] mark item ${completed_id} in_progress failed: ${e?.message || e}`); });
+      syncIssueForBacklog(sql, completed_id, "in_progress");
+      // Don't return — let the dispatch chain continue (this is just a status update)
+    }
+
     if (completed_status === "success") {
       // Engineer "success" means work completed. If PR was created, track it.
       // pr_open requires pr_number — without it, mark as done (prevents phantom pr_open).
@@ -91,6 +115,7 @@ export async function POST(req: Request) {
               notes = COALESCE(notes, '') || ${prInfo}
           WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
         `.catch((e: any) => { console.warn(`[backlog] update item ${completed_id} to pr_open failed: ${e?.message || e}`); });
+        syncIssueForBacklog(sql, completed_id, "pr_open");
       } else {
         // No PR number — Engineer completed via direct commit or the PR info was lost.
         // Mark as done to prevent phantom pr_open items.
@@ -100,6 +125,7 @@ export async function POST(req: Request) {
               notes = COALESCE(notes, '') || ' Completed via chain dispatch (no PR created — direct commit or PR info missing).'
           WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
         `.catch((e: any) => { console.warn(`[backlog] mark item ${completed_id} done failed: ${e?.message || e}`); });
+        syncIssueForBacklog(sql, completed_id, "done");
       }
 
       // Store PR tracking data in the agent_actions record
@@ -356,12 +382,16 @@ export async function POST(req: Request) {
               if (analysis.decision === "auto_merge") {
                 const result = await autoMergePR("carloshmiranda", "hive", pr.number, ghToken, "squash");
                 if (result.success) {
-                  await sql`
+                  const mergedItems = await sql`
                     UPDATE hive_backlog SET status = 'done', completed_at = NOW(),
                       notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged on callback.`}
                     WHERE status = 'pr_open'
                       AND pr_number = ${pr.number}
-                  `.catch(() => {});
+                    RETURNING id
+                  `.catch(() => []);
+                  for (const merged of mergedItems || []) {
+                    syncIssueForBacklog(sql, merged.id, "done");
+                  }
                   console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
                 }
               }
@@ -1277,10 +1307,20 @@ export async function POST(req: Request) {
   });
 
   if (res.ok || res.status === 204) {
-    // Mark as dispatched with race condition protection
+    // Log the dispatch as an agent_action and capture its ID for tracing
+    const [dispatchAction] = await sql`
+      INSERT INTO agent_actions (agent, action_type, status, description, started_at)
+      VALUES ('engineer', 'feature_request', 'running',
+        ${`Backlog dispatch: "${topItem.title}" (${topItem.priority})`},
+        NOW())
+      RETURNING id
+    `.catch(() => [{ id: null }]);
+
+    // Mark as dispatched with race condition protection + link dispatch_id
     const updateResult = await sql`
       UPDATE hive_backlog
-      SET status = 'dispatched', dispatched_at = NOW()
+      SET status = 'dispatched', dispatched_at = NOW(),
+          dispatch_id = ${dispatchAction?.id || null}
       WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
       RETURNING id
     `.catch(() => []);
@@ -1292,6 +1332,7 @@ export async function POST(req: Request) {
 
     // Reset cooldown for successfully dispatched item
     resetBacklogItemCooldown(topItem.id);
+    syncIssueForBacklog(sql, topItem.id, "dispatched");
 
     // Log successful dispatch
     const dispatchType = isChainDispatch ? "chain" : "manual";
@@ -1323,6 +1364,7 @@ export async function POST(req: Request) {
           notes = COALESCE(notes, '') || ${` [dispatch_failed] GitHub API returned ${res.status} — needs investigation.`}
       WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
     `.catch(() => {});
+    syncIssueForBacklog(sql, topItem.id, "blocked");
   }
   await scheduleChainRetry("github_dispatch_failed", 5);
   return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
