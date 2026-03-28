@@ -11,6 +11,47 @@ import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
+// Review and auto-merge all open hive/ PRs.
+// Extracted as a helper so it can run on both completion callbacks AND fresh dispatches.
+// This ensures existing PRs get merged even when the chain restarts from sentinel/manual kicks.
+async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>) {
+  try {
+    const ghToken = await getGitHubToken();
+    if (!ghToken) return;
+    const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
+    const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
+      headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!prListRes.ok) return;
+    const openPRs = await prListRes.json();
+    const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
+    for (const pr of hivePRs) {
+      try {
+        const analysis = await analyzePR("carloshmiranda", "hive", pr.number, ghToken);
+        if (analysis.decision === "auto_merge") {
+          const result = await autoMergePR("carloshmiranda", "hive", pr.number, ghToken, "squash");
+          if (result.success) {
+            const mergedItems = await sql`
+              UPDATE hive_backlog SET status = 'done', completed_at = NOW(),
+                notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged during dispatch.`}
+              WHERE status = 'pr_open'
+                AND pr_number = ${pr.number}
+              RETURNING id
+            `.catch(() => []);
+            for (const merged of mergedItems || []) {
+              syncIssueForBacklog(sql, merged.id, "done");
+            }
+            console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
+          }
+        }
+      } catch { /* individual PR analysis — non-blocking */ }
+    }
+  } catch (prErr) {
+    console.warn("[backlog] PR review failed:", prErr instanceof Error ? prErr.message : "unknown");
+  }
+}
+
 // Fire-and-forget GitHub Issue sync for backlog status transitions
 function syncIssueForBacklog(sql: ReturnType<typeof getDb>, itemId: string, newStatus: string) {
   sql`SELECT github_issue_number FROM hive_backlog WHERE id = ${itemId}`
@@ -518,46 +559,9 @@ export async function POST(req: Request) {
     }
   }
 
-  // Event-driven PR review: review and auto-merge all open hive/ PRs on every callback
-  // Runs on both success and failure — merging existing PRs is independent of current task outcome
+  // Event-driven PR review on completion callbacks
   if (completed_id) {
-    try {
-      const ghToken = await getGitHubToken();
-      if (ghToken) {
-        const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
-        const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
-          headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
-          signal: AbortSignal.timeout(10000),
-        });
-        if (prListRes.ok) {
-          const openPRs = await prListRes.json();
-          const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
-          for (const pr of hivePRs) {
-            try {
-              const analysis = await analyzePR("carloshmiranda", "hive", pr.number, ghToken);
-              if (analysis.decision === "auto_merge") {
-                const result = await autoMergePR("carloshmiranda", "hive", pr.number, ghToken, "squash");
-                if (result.success) {
-                  const mergedItems = await sql`
-                    UPDATE hive_backlog SET status = 'done', completed_at = NOW(),
-                      notes = COALESCE(notes, '') || ${` [auto-merged] PR #${pr.number} merged on callback.`}
-                    WHERE status = 'pr_open'
-                      AND pr_number = ${pr.number}
-                    RETURNING id
-                  `.catch(() => []);
-                  for (const merged of mergedItems || []) {
-                    syncIssueForBacklog(sql, merged.id, "done");
-                  }
-                  console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
-                }
-              }
-            } catch { /* individual PR analysis — non-blocking */ }
-          }
-        }
-      }
-    } catch (prErr) {
-      console.warn("[backlog] Event-driven PR review failed:", prErr instanceof Error ? prErr.message : "unknown");
-    }
+    await reviewAndMergeOpenPRs(sql);
   }
 
   // Helper: schedule a chain retry via QStash when dispatch is temporarily blocked.
@@ -658,6 +662,13 @@ export async function POST(req: Request) {
     WHERE status = 'dispatched'
     AND dispatched_at < NOW() - INTERVAL '30 minutes'
   `.catch(() => {});
+
+  // PR review on fresh dispatches (sentinel kicks, manual triggers, chain retries).
+  // Merges existing open PRs before selecting new work — prevents PR pile-up and
+  // ensures the chain processes existing PRs even when no completion callback fires.
+  if (!completed_id) {
+    await reviewAndMergeOpenPRs(sql);
+  }
 
   // Check for recently dispatched backlog items (covers the race window
   // between dispatch and the Engineer registering as 'running' in agent_actions)
