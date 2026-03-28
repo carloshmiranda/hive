@@ -60,13 +60,13 @@ CREATE TABLE agent_actions (
   agent         TEXT NOT NULL CHECK (agent IN (
                   'ceo', 'scout', 'engineer', 'ops', 'growth', 'outreach', 'evolver',
                   'healer', 'orchestrator', 'sentinel', 'auto_merge', 'dispatch',
-                  'webhook', 'system', 'admin'
+                  'backlog_dispatch', 'webhook', 'system', 'admin'
                 )),
   action_type   TEXT NOT NULL,   -- e.g. 'deploy_code', 'send_email', 'write_post'
   description   TEXT,
   status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
                   'pending', 'running', 'success', 'failed', 'skipped', 'escalated',
-                  'pending_manual', 'completed'
+                  'pending_manual', 'completed', 'flagged'
                 )),
   input         JSONB,           -- what was fed to the agent
   output        JSONB,           -- what it produced
@@ -422,6 +422,7 @@ CREATE TABLE hive_backlog (
                   'rejected'       -- Carlos rejected
                 )),
   source        TEXT DEFAULT 'brainstorm', -- brainstorm, sentinel, evolver, carlos
+  company_id    TEXT REFERENCES companies(id), -- optional: company-scoped backlog items
   dispatch_id   TEXT,              -- agent_action id when dispatched
   pr_number     INTEGER,           -- PR created for risky changes
   pr_url        TEXT,
@@ -433,6 +434,7 @@ CREATE TABLE hive_backlog (
   spec          JSONB,             -- planning phase output (acceptance criteria, affected files, approach)
   notes         TEXT,              -- resolution notes, blockers, etc.
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ DEFAULT now(),
   dispatched_at TIMESTAMPTZ,
   completed_at  TIMESTAMPTZ
 );
