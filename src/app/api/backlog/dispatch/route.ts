@@ -8,6 +8,7 @@ import { qstashPublish } from "@/lib/qstash";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
+import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -44,12 +45,123 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>) {
             }
             console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
           }
+        } else {
+          // PR escalated — classify why and attempt auto-fix for automatable issues
+          await handleEscalatedPR(sql, pr, analysis, ghToken);
         }
       } catch { /* individual PR analysis — non-blocking */ }
     }
   } catch (prErr) {
     console.warn("[backlog] PR review failed:", prErr instanceof Error ? prErr.message : "unknown");
   }
+}
+
+// Handle PRs that failed risk analysis — auto-fix CI/conflict issues, escalate true safety concerns.
+// Mirrors the Check 39 pattern from company-health but runs inline during dispatch.
+async function handleEscalatedPR(
+  sql: ReturnType<typeof getDb>,
+  pr: any,
+  analysis: PRAnalysis,
+  ghToken: string,
+) {
+  const { hardGateIssues, costImpact, costFactors } = analysis;
+
+  // Classify: is this fixable (CI failure, merge conflicts) or a true safety/cost concern?
+  const hasCIFailure = hardGateIssues.some(i => i.includes("CI checks"));
+  const hasConflicts = hardGateIssues.some(i => i.includes("merge conflicts"));
+  const hasSecrets = hardGateIssues.some(i => i.includes("secrets"));
+  const hasDestructiveSQL = hardGateIssues.some(i => i.includes("Destructive DB"));
+  const hasHugeDiff = hardGateIssues.some(i => i.includes("Large diff"));
+
+  const isFixable = (hasCIFailure || hasConflicts) && !hasSecrets && !hasDestructiveSQL && !hasHugeDiff && !costImpact;
+
+  if (!isFixable) {
+    // True safety/cost concern — create approval gate
+    const reasons = [...hardGateIssues, ...(costFactors || [])].join("; ");
+    await sql`
+      INSERT INTO approvals (gate_type, title, context, status)
+      VALUES ('pr_review',
+        ${`PR #${pr.number} needs review: ${pr.title}`},
+        ${JSON.stringify({ pr_number: pr.number, branch: pr.head?.ref, reasons, risk_score: analysis.riskScore })}::jsonb,
+        'pending')
+      ON CONFLICT DO NOTHING
+    `.catch(() => {});
+    console.log(`[backlog] PR #${pr.number} escalated for review: ${reasons.slice(0, 150)}`);
+    return;
+  }
+
+  // Fixable — rate-limit: skip if we already attempted a fix in the last 2 hours
+  const [recentFix] = await sql`
+    SELECT id FROM agent_actions
+    WHERE agent = 'engineer' AND action_type = 'ci_fix'
+    AND description LIKE ${`%PR #${pr.number}%`}
+    AND started_at > NOW() - INTERVAL '2 hours'
+    LIMIT 1
+  `.catch(() => []);
+  if (recentFix) return;
+
+  // Step 1: Try updating the branch (merges main into PR branch).
+  // Resolves "behind main" CI failures and simple merge conflicts.
+  // GitHub re-runs CI automatically after a branch update.
+  try {
+    const updateRes = await fetch(
+      `https://api.github.com/repos/carloshmiranda/hive/pulls/${pr.number}/update-branch`,
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+        body: JSON.stringify({ expected_head_sha: pr.head.sha }),
+      }
+    );
+    if (updateRes.ok || updateRes.status === 202) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
+        VALUES ('engineer', 'ci_fix', 'success',
+          ${`Branch update for PR #${pr.number}: ${pr.title} — merged main, CI will re-run`},
+          NOW(), NOW())
+      `.catch(() => {});
+      console.log(`[backlog] Updated branch for PR #${pr.number} — CI will re-run`);
+      return; // Branch update may fix it — wait for next cycle to re-evaluate
+    }
+  } catch { /* fall through to Engineer dispatch */ }
+
+  // Step 2: Branch update failed — dispatch Engineer to fix the PR
+  const [runningEng] = await sql`
+    SELECT id FROM agent_actions
+    WHERE agent = 'engineer' AND status = 'running'
+    AND company_id IS NULL
+    AND started_at > NOW() - INTERVAL '1 hour'
+    LIMIT 1
+  `.catch(() => []);
+  if (runningEng) return; // Engineer busy — will retry next dispatch cycle
+
+  const ciErrorSummary = hardGateIssues.join("; ");
+  const [backlogItem] = await sql`
+    SELECT id, title FROM hive_backlog
+    WHERE pr_number = ${pr.number} AND status = 'pr_open'
+    LIMIT 1
+  `.catch(() => []);
+
+  await qstashPublish("/api/dispatch/chain-dispatch", {
+    event_type: "ci_fix",
+    source: "dispatch_pr_review",
+    company: "",
+    pr_number: pr.number,
+    branch: pr.head.ref,
+    ci_errors: ciErrorSummary,
+    backlog_id: backlogItem?.id || "",
+    task: `Fix CI failures on PR #${pr.number}: ${pr.title}`,
+  }, {
+    retries: 2,
+    deduplicationId: `ci-fix-dispatch-${pr.number}-${Date.now().toString(36)}`,
+  });
+
+  await sql`
+    INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
+    VALUES ('engineer', 'ci_fix', 'running',
+      ${`CI fix dispatched for PR #${pr.number}: ${pr.title}. Issues: ${ciErrorSummary.slice(0, 200)}`},
+      NOW(), NOW())
+  `.catch(() => {});
+  console.log(`[backlog] Dispatched Engineer to fix PR #${pr.number}: ${ciErrorSummary.slice(0, 100)}`);
 }
 
 // Fire-and-forget GitHub Issue sync for backlog status transitions
