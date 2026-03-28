@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 /**
  * POST /api/admin/scout-reset
@@ -9,6 +10,12 @@ import { requireAuth } from "@/lib/auth";
  * Use when Scout proposals are completely blocking company execution.
  */
 export async function POST(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "admin_scout_reset",
+    route: "/api/admin/scout-reset"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 

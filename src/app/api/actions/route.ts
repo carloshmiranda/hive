@@ -1,12 +1,20 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
-  const session = await requireAuth();
-  if (!session) return err("Unauthorized", 401);
-
   const { searchParams } = new URL(req.url);
   const companyId = searchParams.get("company_id");
+
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "agent_actions_list",
+    route: "/api/actions",
+    company_id: companyId || undefined
+  });
+
+  const session = await requireAuth();
+  if (!session) return err("Unauthorized", 401);
   const cycleId = searchParams.get("cycle_id");
   const status = searchParams.get("status");
   const limit = parseInt(searchParams.get("limit") || "50");
@@ -50,6 +58,14 @@ export async function POST(req: Request) {
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
+
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "agent_actions_create",
+    route: "/api/actions",
+    company_id: body.company_id,
+    agent: body.agent
+  });
   const { cycle_id, company_id, agent, action_type, description, status, input, output, error, reflection, retry_count, tokens_used } = body;
 
   if (!cycle_id || !company_id || !agent || !action_type) {
