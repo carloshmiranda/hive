@@ -374,6 +374,7 @@ CREATE TABLE IF NOT EXISTS company_tasks (
   github_issue_url    TEXT,
   pr_number     INTEGER,                                 -- PR that implements this task
   pr_url        TEXT,
+  spec          JSONB,                                    -- structured spec: {acceptance_criteria, files_allowed, files_forbidden, approach, complexity, estimated_turns, specialist}
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );

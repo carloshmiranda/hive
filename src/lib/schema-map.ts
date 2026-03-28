@@ -1343,6 +1343,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "nullable": true,
         "hasDefault": false
       },
+      "spec": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
       "created_at": {
         "type": "TIMESTAMPTZ",
         "nullable": false,

@@ -697,6 +697,127 @@ The response will be automatically parsed as structured JSON.`;
   }
 }
 
+export interface CompanyTaskSpec {
+  acceptance_criteria: string[];
+  files_allowed: string[];
+  files_forbidden: string[];
+  approach: string[];
+  complexity: "S" | "M";
+  estimated_turns: number;
+  specialist?: string;
+}
+
+/**
+ * Generate a structured spec for a company task that lacks one.
+ * Uses the same LLM planning approach as generateSpec() for Hive backlog items,
+ * but tailored for company repos (uses company file tree, not Hive file tree).
+ */
+export async function generateCompanyTaskSpec(
+  task: { id: string; title: string; description: string; acceptance?: string },
+  company: { slug: string; github_repo?: string; description?: string },
+): Promise<CompanyTaskSpec | null> {
+  // Build file context from company repo if available
+  let fileContext = "No file tree available — infer from task description.";
+  if (company.github_repo) {
+    const ghToken = await getSettingValue("github_token");
+    if (ghToken) {
+      try {
+        const res = await fetch(
+          `https://api.github.com/repos/${company.github_repo}/git/trees/main?recursive=1`,
+          {
+            headers: {
+              Authorization: `Bearer ${ghToken}`,
+              Accept: "application/vnd.github.v3+json",
+            },
+            signal: AbortSignal.timeout(8000),
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const files = (data.tree || [])
+            .filter((f: { type: string; path: string }) =>
+              f.type === "blob" &&
+              (f.path.startsWith("src/") || f.path.endsWith(".md") || f.path === "package.json")
+            )
+            .map((f: { path: string }) => f.path)
+            .slice(0, 100);
+          if (files.length > 0) {
+            fileContext = files.join("\n");
+          }
+        }
+      } catch { /* use fallback */ }
+    }
+  }
+
+  const prompt = `You are a technical planner for a Next.js TypeScript company called "${company.slug}".
+Given an engineering task from the CEO, produce a bounded implementation spec for an Engineer agent.
+
+TASK: ${task.title}
+DESCRIPTION: ${task.description}
+${task.acceptance ? `ACCEPTANCE CRITERIA (from CEO): ${task.acceptance}` : ""}
+COMPANY: ${company.slug} — ${company.description || "N/A"}
+
+FILES IN CODEBASE:
+${fileContext}
+
+Produce a JSON spec with:
+1. acceptance_criteria: 3-5 concrete, testable conditions (include "Build passes without errors")
+2. files_allowed: glob patterns the Engineer CAN modify (e.g., ["src/app/blog/**"])
+3. files_forbidden: glob patterns the Engineer must NOT touch (e.g., ["middleware.ts", "src/lib/auth*"])
+4. approach: 2-4 specific steps describing what to change
+5. complexity: "S" (1-3 files, 10-20 turns) or "M" (3-6 files, 20-30 turns). Never "L".
+6. estimated_turns: 10-30
+7. specialist: frontend|backend|database|devops|security|content
+
+Respond with ONLY valid JSON (no markdown):
+{
+  "acceptance_criteria": ["..."],
+  "files_allowed": ["..."],
+  "files_forbidden": ["..."],
+  "approach": ["..."],
+  "complexity": "S",
+  "estimated_turns": 15,
+  "specialist": "backend"
+}`;
+
+  try {
+    const response = await callLLM("planner", prompt, {
+      maxTokens: 1500,
+      temperature: 0.3,
+      timeout: 20000,
+    });
+
+    let jsonStr = response.content.trim();
+    const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) jsonStr = codeBlockMatch[1].trim();
+
+    const spec = JSON.parse(jsonStr) as CompanyTaskSpec;
+
+    // Validate required fields
+    if (!Array.isArray(spec.acceptance_criteria) || !Array.isArray(spec.files_allowed)) {
+      return null;
+    }
+
+    // Ensure build check
+    if (!spec.acceptance_criteria.some(c => c.toLowerCase().includes("build"))) {
+      spec.acceptance_criteria.push("Build passes without errors");
+    }
+
+    // Clamp complexity to S or M
+    if (spec.complexity !== "S" && spec.complexity !== "M") {
+      spec.complexity = "M";
+    }
+
+    // Clamp turns
+    spec.estimated_turns = Math.max(10, Math.min(30, spec.estimated_turns || 15));
+
+    return spec;
+  } catch (error) {
+    console.warn("[backlog-planner] Company task spec generation failed:", error instanceof Error ? error.message : "unknown");
+    return null;
+  }
+}
+
 /**
  * Detect if a backlog item is about a specific company rather than Hive itself.
  * Returns the company slug if detected, null if it's a Hive-level item.
