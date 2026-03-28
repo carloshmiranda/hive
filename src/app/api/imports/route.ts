@@ -1,9 +1,16 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // GET: list all imports
 export async function GET() {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "imports_list",
+    route: "/api/imports"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
@@ -19,6 +26,12 @@ export async function GET() {
 // POST: start importing a project
 // Body: { source_type, source_url, name, slug, description }
 export async function POST(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "import_create",
+    route: "/api/imports"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
@@ -48,6 +61,9 @@ export async function POST(req: Request) {
       RETURNING *
     `;
   }
+
+  // Add company_id to Sentry tags now that we have it
+  setSentryTags({ company_id: company.id });
 
   // 2. Create the import record (clear any stale previous imports for this company)
   await sql`DELETE FROM imports WHERE company_id = ${company.id} AND onboard_status = 'pending'`;
