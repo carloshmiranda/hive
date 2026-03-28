@@ -674,9 +674,9 @@ The response will be automatically parsed as structured JSON.`;
       spec.acceptance_criteria.push("npx next build passes without errors");
     }
 
-    // Clamp estimated_turns based on complexity
-    // S tasks: 15-25 turns, M tasks: 25-40 turns, L tasks: 35-50 turns
-    const turnCaps: Record<string, [number, number]> = { S: [15, 25], M: [25, 40], L: [35, 50] };
+    // Clamp estimated_turns based on complexity (conservative — continuation extends dynamically)
+    // S tasks: 10-20 turns, M tasks: 20-35 turns, L tasks: 30-45 turns
+    const turnCaps: Record<string, [number, number]> = { S: [10, 20], M: [20, 35], L: [30, 45] };
     const [minTurns, maxTurns] = turnCaps[spec.complexity] || [15, 35];
     spec.estimated_turns = Math.max(
       minTurns,

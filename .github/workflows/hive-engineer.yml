@@ -844,6 +844,19 @@ jobs:
             - Read files before editing them
             - Keep changes focused — one improvement per PR
 
+            ## Turn Budget Management
+            You have a limited turn budget. Work efficiently and protect your progress:
+            - Focus on completing a WORKING SUBSET over perfection. A partial implementation
+              that builds and passes tests is more valuable than an ambitious one that does not.
+            - If you have made changes to files, commit checkpoints periodically:
+              `git add <files> && git commit -m "wip: checkpoint — <what is done so far>"`
+            - When nearing your budget limit, STOP expanding scope. Instead:
+              1. Commit all current changes
+              2. Push the branch: `git push -u origin HEAD`
+              3. Write a brief summary of what is done and what remains in the PR or commit message
+            - If the spec has acceptance_criteria, tackle them in priority order. Each completed
+              criterion is progress that survives even if you run out of turns.
+
       - name: Notify via Telegram
         if: always()
         env:
@@ -912,6 +925,21 @@ jobs:
             fi
           fi
 
+          # Outcome classification for max_turns failures — detect partial progress
+          PROGRESS_CLASS="no_progress"
+          LAST_COMMIT=""
+          if echo "$ERROR_TYPE" | grep -q "max_turns"; then
+            COMMIT_COUNT=$(git log --oneline origin/main..HEAD 2>/dev/null | wc -l | tr -d ' ')
+            UNCOMMITTED=$(git diff --stat HEAD 2>/dev/null | tail -1)
+            LAST_COMMIT=$(git log --oneline -1 HEAD 2>/dev/null | head -c 120 || echo "")
+            if [ "${COMMIT_COUNT:-0}" -gt 0 ] || [ -n "$UNCOMMITTED" ]; then
+              PROGRESS_CLASS="partial_progress"
+              echo "  Progress detected: $COMMIT_COUNT commits, uncommitted: ${UNCOMMITTED:-none}"
+            else
+              echo "  No progress detected — no commits or file changes"
+            fi
+          fi
+
           # Extract PR info from agent output for backlog tracking
           PR_NUMBER=""
           PR_BRANCH=""
@@ -945,6 +973,13 @@ jobs:
             fi
             if [ -n "$PR_BRANCH" ]; then
               CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"branch\":\"${PR_BRANCH}\""
+            fi
+            if [ "$PROGRESS_CLASS" != "no_progress" ] && [ -n "$PROGRESS_CLASS" ]; then
+              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"progress_class\":\"${PROGRESS_CLASS}\""
+            fi
+            if [ -n "$LAST_COMMIT" ]; then
+              SAFE_COMMIT=$(echo "$LAST_COMMIT" | sed 's/"/\\"/g')
+              CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD},\"last_commit\":\"${SAFE_COMMIT}\""
             fi
             CALLBACK_PAYLOAD="${CALLBACK_PAYLOAD}}"
 

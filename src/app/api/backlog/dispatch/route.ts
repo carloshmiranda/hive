@@ -132,10 +132,58 @@ export async function POST(req: Request) {
       const specTurns = item?.spec?.estimated_turns || 50;
       const isMaxTurns = errorMsg.includes("max_turns") || errorMsg.includes("error_max_turns") || turnsUsed >= Math.floor(specTurns * 0.8);
 
-      // Track this item as failed for cooldown purposes (unless it will be auto-blocked)
+      // Continuation dispatch: if max_turns + partial progress + not already continued,
+      // give the agent another shot with 1.5x turns instead of decomposing.
+      const progressClass = body.progress_class || "";
+      const lastCommit = body.last_commit || "";
+      const alreadyContinued = (item?.notes || "").includes("[continued]");
+      let continued = false;
+      if (isMaxTurns && item && progressClass === "partial_progress" && !alreadyContinued) {
+        try {
+          const continuationTurns = Math.min(Math.ceil(turnsUsed * 1.5), 75);
+          console.log(`[backlog] Continuation dispatch for "${item.title}" — partial progress detected (${turnsUsed} turns used, granting ${continuationTurns}). Last commit: ${lastCommit}`);
+
+          const ghPat = process.env.GH_PAT;
+          if (ghPat) {
+            const contRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+              method: "POST",
+              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+              body: JSON.stringify({
+                event_type: "feature_request",
+                client_payload: {
+                  source: "backlog_continuation",
+                  company: "_hive",
+                  task: `CONTINUATION — pick up where the previous session left off.\n\nOriginal task: ${item.title}\n${item.description}\n\n⚠️ Previous session made progress but ran out of turns.\nLast commit: ${lastCommit}\n\nInstructions:\n1. Check the current branch state: git log --oneline origin/main..HEAD\n2. Review what was done and what remains\n3. Continue from the existing work — do NOT restart from scratch\n4. Focus on completing remaining acceptance criteria`,
+                  backlog_id: item.id,
+                  priority: item.priority,
+                  chain_next: true,
+                  spec: item.spec || undefined,
+                  max_turns: continuationTurns,
+                },
+              }),
+              signal: AbortSignal.timeout(10000),
+            });
+
+            if (contRes.ok || contRes.status === 204) {
+              await sql`
+                UPDATE hive_backlog
+                SET status = 'dispatched', dispatched_at = NOW(),
+                    notes = COALESCE(notes, '') || ${` [continued] Continuation dispatch after partial progress (${turnsUsed} turns → ${continuationTurns} turns). Last: ${lastCommit.slice(0, 80)}`}
+                WHERE id = ${completed_id}
+              `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as continued failed: ${e?.message || e}`); });
+              continued = true;
+              console.log(`[backlog] Continuation dispatched for "${item.title}" with ${continuationTurns} turns`);
+            }
+          }
+        } catch (e) {
+          console.warn("[backlog] Continuation dispatch failed:", e instanceof Error ? e.message : "unknown");
+        }
+      }
+
+      // Track this item as failed for cooldown purposes (unless continued or will be auto-blocked)
       // max_turns = immediate decompose (1 attempt) — retrying same item with same turn budget fails identically
       const maxAttempts = isMaxTurns ? 1 : 3;
-      if (item && attempt < maxAttempts) {
+      if (item && attempt < maxAttempts && !continued) {
         trackFailedBacklogItem(item.id, attempt);
       }
 
@@ -146,10 +194,10 @@ export async function POST(req: Request) {
       const parentDepth = depthMatch ? parseInt(depthMatch[1]) : 0;
       const atMaxDepth = parentDepth >= MAX_DECOMPOSE_DEPTH;
       let decomposed = false;
-      if (isMaxTurns && item && atMaxDepth) {
+      if (isMaxTurns && item && atMaxDepth && !continued) {
         console.log(`[backlog] Skipping decomposition for "${item.title}" — at max depth ${parentDepth}. Blocking instead.`);
       }
-      if (isMaxTurns && item && !atMaxDepth) {
+      if (isMaxTurns && item && !atMaxDepth && !continued) {
         try {
           const { generateSpec, decomposeTask } = await import("@/lib/backlog-planner");
           let spec = item.spec;
@@ -241,7 +289,7 @@ export async function POST(req: Request) {
         }
       }
 
-      if (!decomposed) {
+      if (!decomposed && !continued) {
         // Auto-block: 1 attempt for max_turns errors (decompose immediately), 3 for others
         const blockThreshold = isMaxTurns ? 1 : 3;
         if (attempt >= blockThreshold) {
@@ -264,14 +312,16 @@ export async function POST(req: Request) {
         }
       }
 
-      // Notify on decomposition or repeated failures
-      if (decomposed || attempt >= 3) {
+      // Notify on continuation, decomposition or repeated failures
+      if (continued || decomposed || attempt >= 3) {
         await qstashPublish("/api/notify", {
           agent: "backlog",
-          action: decomposed ? "auto_decomposed" : "repeated_failure",
+          action: continued ? "continuation" : decomposed ? "auto_decomposed" : "repeated_failure",
           company: "hive",
-          status: decomposed ? "decomposed" : "failed",
-          summary: decomposed
+          status: continued ? "continued" : decomposed ? "decomposed" : "failed",
+          summary: continued
+            ? `"${item?.title || completed_id}" hit max_turns with partial progress — continuing with more turns.`
+            : decomposed
             ? `"${item?.title || completed_id}" hit max_turns — auto-decomposed into smaller tasks. Dispatching first sub-task.`
             : `"${item?.title || completed_id}" has failed ${attempt} times. Still retrying but may need a different approach.`,
         }, { retries: 2 }).catch(() => {});
