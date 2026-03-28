@@ -8,6 +8,7 @@ on:
       - feature_request
       - ops_escalation
       - deploy_drift
+      - ci_fix
 
   workflow_dispatch:
     inputs:
@@ -104,34 +105,9 @@ jobs:
 
       - name: Get tokens via OIDC
         id: auth
-        run: |
-          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
-            | jq -r '.value')
-
-          fetch_token() {
-            local TYPE="$1" OUTPUT_KEY="$2" CRITICAL="${3:-false}"
-            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
-              -H "Authorization: Bearer $OIDC_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"token_type\":\"$TYPE\"}")
-            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
-            if [ -n "$VALUE" ]; then
-              echo "::add-mask::$VALUE"
-              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
-            else
-              if [ "$CRITICAL" = "true" ]; then
-                echo "FATAL: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
-                exit 1
-              else
-                echo "WARNING: Failed to get $TYPE token (non-critical, continuing)"
-              fi
-            fi
-          }
-
-          fetch_token "claude" "claude_token" "true"
-          fetch_token "github_pat" "gh_pat" "true"
-          fetch_token "vercel_token" "vercel_token" "true"
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "claude:claude_token:true github_pat:gh_pat:true vercel_token:vercel_token:true"
 
       - name: Pre-flight — set company_type from approval context
         id: preflight
@@ -502,29 +478,9 @@ jobs:
     steps:
       - name: Get tokens via OIDC
         id: auth
-        run: |
-          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
-            | jq -r '.value')
-
-          fetch_token() {
-            local TYPE="$1" OUTPUT_KEY="$2"
-            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
-              -H "Authorization: Bearer $OIDC_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"token_type\":\"$TYPE\"}")
-            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
-            if [ -n "$VALUE" ]; then
-              echo "::add-mask::$VALUE"
-              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
-            else
-              echo "WARNING: Failed to get $TYPE token"
-            fi
-          }
-
-          fetch_token "github_pat" "gh_pat"
-          fetch_token "vercel_token" "vercel_token"
-          fetch_token "neon_api_key" "neon_key"
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "github_pat:gh_pat vercel_token:vercel_token neon_api_key:neon_key"
 
       - name: Teardown infrastructure
         env:
@@ -724,6 +680,7 @@ jobs:
         needs.context.outputs.trigger == 'feature_request' ||
         needs.context.outputs.trigger == 'ops_escalation' ||
         needs.context.outputs.trigger == 'deploy_drift' ||
+        needs.context.outputs.trigger == 'ci_fix' ||
         startsWith(needs.context.outputs.trigger, 'issue:') ||
         needs.context.outputs.trigger == 'manual'
       )
@@ -741,33 +698,9 @@ jobs:
 
       - name: Get tokens via OIDC
         id: auth
-        run: |
-          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
-            | jq -r '.value')
-
-          fetch_token() {
-            local TYPE="$1" OUTPUT_KEY="$2" CRITICAL="${3:-false}"
-            RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
-              -H "Authorization: Bearer $OIDC_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"token_type\":\"$TYPE\"}")
-            VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
-            if [ -n "$VALUE" ]; then
-              echo "::add-mask::$VALUE"
-              echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
-            else
-              if [ "$CRITICAL" = "true" ]; then
-                echo "FATAL: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
-                exit 1
-              else
-                echo "WARNING: Failed to get $TYPE token (non-critical, continuing)"
-              fi
-            fi
-          }
-
-          fetch_token "claude" "claude_token" "true"
-          fetch_token "github_pat" "gh_pat" "true"
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "claude:claude_token:true github_pat:gh_pat:true"
 
       - name: Resolve model (escalation on retry)
         id: model
@@ -829,6 +762,25 @@ jobs:
               Push to main directly. These are low-risk improvements.
             - RISKY changes (schema, workflows, auth, middleware, crypto, core orchestration):
               Create a PR on a branch. Carlos will review via Telegram.
+
+            ## CI fix workflow (TRIGGER = ci_fix)
+
+            A PR has failing CI. Your job: fix the build errors and push to the SAME branch.
+
+            1. Parse PAYLOAD for: branch, pr_number, ci_errors, task
+            2. Checkout the existing branch:
+               `git fetch origin && git checkout <branch>`
+            3. Read CLAUDE.md and MISTAKES.md for context
+            4. Read the ci_errors from PAYLOAD — these are the actual CI failure messages
+            5. Fix ALL the errors. Common CI failures:
+               - `npx next build` type/import errors → fix the TypeScript
+               - `lint-sql` failures → fix schema.sql syntax
+               - `schema-map:check` failures → run `npx tsx scripts/generate-schema-map.ts` after schema changes
+            6. Run `npx next build` locally to verify the fix
+            7. Commit with: `fix: resolve CI failures on PR #<pr_number>`
+            8. Push to the same branch: `git push origin HEAD`
+               Do NOT create a new PR — one already exists for this branch.
+            9. Log success to agent_actions via the Hive API
 
             ## Regular Hive-internal work
 

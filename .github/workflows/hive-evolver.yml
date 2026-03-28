@@ -37,30 +37,9 @@ jobs:
 
       - name: Get tokens via OIDC
         id: auth
-        run: |
-          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
-            | jq -r '.value')
-
-          RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
-            -H "Authorization: Bearer $OIDC_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"token_type":"claude"}')
-          CLAUDE_TOKEN=$(echo "$RESPONSE" | jq -r '.data.token // empty')
-          if [ -z "$CLAUDE_TOKEN" ]; then
-            echo "Failed to get Claude token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
-            exit 1
-          fi
-          echo "::add-mask::$CLAUDE_TOKEN"
-          echo "claude_token=$CLAUDE_TOKEN" >> $GITHUB_OUTPUT
-
-          CRON_RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
-            -H "Authorization: Bearer $OIDC_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"token_type":"cron_secret"}')
-          CRON_SECRET=$(echo "$CRON_RESPONSE" | jq -r '.data.token // empty')
-          echo "::add-mask::$CRON_SECRET"
-          echo "cron_secret=$CRON_SECRET" >> $GITHUB_OUTPUT
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "claude:claude_token:true cron_secret:cron_secret"
 
       - name: Run Evolver agent
         id: agent

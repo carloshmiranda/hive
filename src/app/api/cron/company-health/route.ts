@@ -1,15 +1,16 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
-import { verifyCronAuth } from "@/lib/qstash";
+import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // Extracted from Sentinel: HTTP-heavy company health checks that were causing timeouts.
 // Sentinel fires this as non-blocking fetch. Each check logs results to agent_actions.
-// Checks: 31 (stats endpoints), 32 (language), 33 (stale records), 36 (tests), 38 (Hive PR merge), 30 (broken deploys),
-//         43 (dispatch verification), 44 (stale cycle safety net), 45 (company PR auto-merge with risk scoring)
+// Checks: 31 (stats endpoints), 32 (language), 33 (stale records), 36 (tests), 38 (Hive PR merge),
+//         39 (CI fix loop), 30 (broken deploys), 43 (dispatch verification), 44 (stale cycle safety net),
+//         45 (company PR auto-merge with risk scoring)
 
 export async function GET(req: Request) {
   const auth = await verifyCronAuth(req);
@@ -388,6 +389,153 @@ export async function GET(req: Request) {
     }
   } catch (e: any) {
     console.warn("[company-health] Check 38 failed:", e.message);
+  }
+
+  // --- Check 39: CI failure auto-fix loop ---
+  // When a Hive PR has failing CI, fetch the error logs and re-dispatch the Engineer
+  // to fix the issue on the same branch. This closes the loop so PRs don't sit with
+  // failing CI waiting for human intervention.
+  // Rate limit: 1 fix attempt per PR per 2 hours (tracked via agent_actions).
+  if (ghPat) try {
+    const prListRes39 = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
+      headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+    });
+    if (prListRes39.ok) {
+      const openPRs39 = await prListRes39.json();
+      const hivePRs39 = openPRs39.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
+      let ciFixDispatched = 0;
+
+      for (const pr of hivePRs39) {
+        try {
+          // Check CI status for this PR
+          const checksRes = await fetch(`https://api.github.com/repos/carloshmiranda/hive/commits/${pr.head.sha}/check-runs`, {
+            headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          });
+          if (!checksRes.ok) continue;
+          const checksData = await checksRes.json();
+          const failedChecks = (checksData.check_runs || []).filter(
+            (c: any) => c.conclusion === "failure" || c.conclusion === "cancelled"
+          );
+          if (failedChecks.length === 0) continue; // CI not failing — skip
+
+          // Rate limit: check if we already dispatched a ci_fix for this PR recently
+          const [recentFix] = await sql`
+            SELECT id FROM agent_actions
+            WHERE agent = 'engineer' AND action_type = 'ci_fix'
+            AND description LIKE ${`%PR #${pr.number}%`}
+            AND started_at > NOW() - INTERVAL '2 hours'
+            LIMIT 1
+          `.catch(() => []);
+          if (recentFix) continue; // Already attempted recently
+
+          // Also check: is an Engineer already running? Don't pile up.
+          const [runningEng] = await sql`
+            SELECT id FROM agent_actions
+            WHERE agent = 'engineer' AND status = 'running'
+            AND company_id IS NULL
+            AND started_at > NOW() - INTERVAL '1 hour'
+            LIMIT 1
+          `.catch(() => []);
+          if (runningEng) continue; // Engineer busy — will retry next health check
+
+          // Fetch CI failure logs from the failed check runs
+          const errorLines: string[] = [];
+          for (const check of failedChecks.slice(0, 3)) {
+            // Get the annotations (error messages) from the check run
+            const annotationsRes = await fetch(`https://api.github.com/repos/carloshmiranda/hive/check-runs/${check.id}/annotations`, {
+              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+            }).catch(() => null);
+            if (annotationsRes?.ok) {
+              const annotations = await annotationsRes.json();
+              for (const a of annotations.slice(0, 10)) {
+                errorLines.push(`${a.path || ""}:${a.start_line || ""} ${a.annotation_level}: ${a.message}`);
+              }
+            }
+
+            // Also try to get the output summary (contains build errors)
+            if (check.output?.summary) {
+              errorLines.push(check.output.summary.slice(0, 500));
+            }
+            if (check.output?.text) {
+              errorLines.push(check.output.text.slice(0, 500));
+            }
+          }
+
+          // If no annotations, try fetching the workflow run logs
+          if (errorLines.length === 0) {
+            // Find the workflow run for this check suite
+            const runsRes = await fetch(
+              `https://api.github.com/repos/carloshmiranda/hive/actions/runs?head_sha=${pr.head.sha}&status=failure&per_page=3`,
+              { headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" } }
+            ).catch(() => null);
+            if (runsRes?.ok) {
+              const runsData = await runsRes.json();
+              for (const run of (runsData.workflow_runs || []).slice(0, 2)) {
+                // Get failed jobs
+                const jobsRes = await fetch(`${run.jobs_url}?filter=latest&per_page=10`, {
+                  headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+                }).catch(() => null);
+                if (jobsRes?.ok) {
+                  const jobsData = await jobsRes.json();
+                  const failedJobs = (jobsData.jobs || []).filter((j: any) => j.conclusion === "failure");
+                  for (const job of failedJobs.slice(0, 2)) {
+                    const failedSteps = (job.steps || []).filter((s: any) => s.conclusion === "failure");
+                    for (const step of failedSteps) {
+                      errorLines.push(`Step "${step.name}" failed in job "${job.name}"`);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          const ciErrorContext = errorLines.length > 0
+            ? errorLines.join("\n").slice(0, 2000)
+            : `CI checks failed: ${failedChecks.map((c: any) => c.name).join(", ")}`;
+
+          // Find the backlog item for this PR (if any)
+          const [backlogItem] = await sql`
+            SELECT id, title FROM hive_backlog
+            WHERE pr_number = ${pr.number} AND status = 'pr_open'
+            LIMIT 1
+          `.catch(() => []);
+
+          // Dispatch Engineer to fix CI on this branch
+          await qstashPublish("/api/dispatch/chain-dispatch", {
+            event_type: "ci_fix",
+            source: "company_health_check_39",
+            company: "",
+            pr_number: pr.number,
+            branch: pr.head.ref,
+            ci_errors: ciErrorContext,
+            backlog_id: backlogItem?.id || "",
+            task: `Fix CI failures on PR #${pr.number}: ${pr.title}`,
+          }, {
+            retries: 2,
+            deduplicationId: `ci-fix-${pr.number}-${Date.now().toString(36)}`,
+          });
+
+          // Log the dispatch
+          await sql`
+            INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
+            VALUES ('engineer', 'ci_fix', 'running',
+              ${`CI fix dispatched for PR #${pr.number}: ${pr.title}. Errors: ${ciErrorContext.slice(0, 200)}`},
+              NOW(), NOW())
+          `.catch((e: any) => { console.warn(`[company-health] log CI fix dispatch for PR #${pr.number} failed: ${e?.message || e}`); });
+
+          ciFixDispatched++;
+          break; // Only dispatch one CI fix per health check cycle
+        } catch (prErr: any) {
+          console.warn(`[company-health] Check 39 PR #${pr.number} failed: ${prErr.message}`);
+        }
+      }
+
+      if (ciFixDispatched > 0) {
+        results.ci_fix_dispatched = ciFixDispatched;
+      }
+    }
+  } catch (e: any) {
+    console.warn("[company-health] Check 39 failed:", e.message);
   }
 
   // --- Check 30: Broken deploys + infra repair ---

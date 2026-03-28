@@ -1,0 +1,64 @@
+name: Get Hive Tokens via OIDC
+description: Fetches tokens from Hive API using GitHub Actions OIDC
+
+inputs:
+  tokens:
+    description: 'Space-separated token specs: "type:output_key:critical" (critical defaults to false)'
+    required: true
+
+outputs:
+  claude_token:
+    description: Claude OAuth token
+    value: ${{ steps.fetch.outputs.claude_token }}
+  gh_pat:
+    description: GitHub PAT
+    value: ${{ steps.fetch.outputs.gh_pat }}
+  cron_secret:
+    description: Cron secret
+    value: ${{ steps.fetch.outputs.cron_secret }}
+  vercel_token:
+    description: Vercel token
+    value: ${{ steps.fetch.outputs.vercel_token }}
+  neon_key:
+    description: Neon API key
+    value: ${{ steps.fetch.outputs.neon_key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch tokens via OIDC
+      id: fetch
+      shell: bash
+      run: |
+        OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+          | jq -r '.value')
+
+        fetch_token() {
+          local TYPE="$1" OUTPUT_KEY="$2" CRITICAL="${3:-false}"
+          RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"token_type\":\"$TYPE\"}")
+          VALUE=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+          if [ -n "$VALUE" ]; then
+            echo "::add-mask::$VALUE"
+            echo "${OUTPUT_KEY}=$VALUE" >> $GITHUB_OUTPUT
+          else
+            if [ "$CRITICAL" = "true" ]; then
+              echo "FATAL: Failed to get $TYPE token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+              exit 1
+            else
+              echo "WARNING: Failed to get $TYPE token (non-critical, continuing)"
+            fi
+          fi
+        }
+
+        # Parse token specs: "type:output_key:critical type:output_key ..."
+        for SPEC in ${{ inputs.tokens }}; do
+          TYPE=$(echo "$SPEC" | cut -d: -f1)
+          OUTPUT_KEY=$(echo "$SPEC" | cut -d: -f2)
+          CRITICAL=$(echo "$SPEC" | cut -d: -f3 -s)
+          [ -z "$CRITICAL" ] && CRITICAL="false"
+          fetch_token "$TYPE" "$OUTPUT_KEY" "$CRITICAL"
+        done

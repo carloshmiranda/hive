@@ -1,0 +1,98 @@
+name: Log Agent Failure
+description: Parses execution output, logs failure to Neon DB, sends Telegram notification
+
+inputs:
+  agent:
+    description: Agent name (scout, ceo, engineer, healer)
+    required: true
+  trigger:
+    description: The action_type / trigger that caused this run
+    required: true
+  execution_file:
+    description: Path to claude execution output JSON
+    required: false
+    default: ''
+  cron_secret:
+    description: Cron secret for notify API
+    required: false
+    default: ''
+  company:
+    description: Company slug (if applicable)
+    required: false
+    default: ''
+  context_payload:
+    description: JSON payload for extracting company (fallback)
+    required: false
+    default: '{}'
+
+runs:
+  using: composite
+  steps:
+    - name: Log failure
+      shell: bash
+      env:
+        DATABASE_URL: ${{ env.DATABASE_URL }}
+        CRON_SECRET: ${{ inputs.cron_secret }}
+      run: |
+        npm install --no-save postgres 2>/dev/null
+
+        EXEC_FILE="${{ inputs.execution_file }}"
+        if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+          EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+        fi
+
+        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+        if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
+          SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+          TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+          COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+          ERROR_MSG=$(jq -r '
+            (.[-1].error // null) as $e1 |
+            (.[-1].result // null) as $e2 |
+            ([.[] | select(.type == "system" or .type == "error")] | last | .error // .result // null) as $e3 |
+            ($e1 // $e2 // $e3 // "No error detail") | tostring | .[0:300]
+          ' "$EXEC_FILE" 2>/dev/null || echo "Failed to parse execution file")
+        else
+          SUBTYPE="workflow_crash"
+          TURNS="0"
+          COST="0"
+          ERROR_MSG="No execution output — ${{ inputs.agent }} agent never started. Run: ${RUN_URL}"
+        fi
+
+        ERROR_FULL="error_${SUBTYPE}: ${ERROR_MSG} (${TURNS} turns) ${RUN_URL}"
+        export ERROR_FULL
+
+        # 0-turn = ghost run (workflow issue, not real agent failure)
+        LOG_STATUS="failed"
+        if [ "$TURNS" = "0" ]; then LOG_STATUS="skipped"; fi
+
+        node -e "
+        const postgres = require('postgres');
+        const sql = postgres(process.env.DATABASE_URL);
+        async function log() {
+          await sql\`
+            INSERT INTO agent_actions (agent, action_type, status, error, output, started_at, finished_at)
+            VALUES ('${{ inputs.agent }}', '${{ inputs.trigger }}', '${LOG_STATUS}',
+              \${process.env.ERROR_FULL},
+              \${JSON.stringify({subtype: '${SUBTYPE}', turns: parseInt('${TURNS}'), cost: parseFloat('${COST}'), run_url: '${RUN_URL}'})}::jsonb,
+              NOW() - INTERVAL '${TURNS} minutes', NOW())
+          \`;
+          await sql.end();
+        }
+        log().catch(e => console.error('DB log failed:', e.message));
+        "
+        echo "Logged ${{ inputs.agent }} failure: $SUBTYPE ($TURNS turns) — ${ERROR_MSG:0:100}"
+
+        # Send enriched Telegram notification for failures (skip ghost runs)
+        if [ "$LOG_STATUS" = "failed" ]; then
+          COMPANY="${{ inputs.company }}"
+          if [ -z "$COMPANY" ]; then
+            COMPANY=$(echo '${{ inputs.context_payload }}' | jq -r '.company // ""' 2>/dev/null || echo "")
+          fi
+          ESCAPED_ERR=$(echo "$ERROR_MSG" | sed 's/"/\\"/g' | head -c 200)
+          curl -s -X POST "https://hive-phi.vercel.app/api/notify" \
+            -H "Authorization: Bearer ${CRON_SECRET:-}" \
+            -H "Content-Type: application/json" \
+            -d "{\"agent\":\"${{ inputs.agent }}\",\"action\":\"${{ inputs.trigger }}\",\"company\":\"$COMPANY\",\"status\":\"failed\",\"summary\":\"${SUBTYPE} after ${TURNS} turns (\$${COST})\",\"error\":\"$ESCAPED_ERR\",\"run_url\":\"$RUN_URL\",\"duration_s\":$((TURNS * 60))}" || true
+        fi
