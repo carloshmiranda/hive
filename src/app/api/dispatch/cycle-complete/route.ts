@@ -267,58 +267,72 @@ export async function POST(req: Request) {
     return json({ chained: true, type: "hive_backlog", reason: "no_companies_need_cycles" });
   }
 
-  const next = scored[0]!;
+  // Determine how many companies to dispatch based on budget
+  const claudePct = health.budget?.claude_pct ?? 0;
+  const maxSlots = claudePct > 90 ? 0 : claudePct > 70 ? 1 : 2;
+  const runningBrains = health.system?.running_brains ?? 0;
+  const availableSlots = Math.max(0, Math.min(maxSlots, 3 - runningBrains));
+  const toDispatch = scored.slice(0, Math.max(1, availableSlots));
 
-  // Dispatch cycle_start for the top company
-  const res = await fetch(`https://api.github.com/repos/${REPO}/dispatches`, {
-    method: "POST",
-    headers: {
-      Authorization: `token ${ghPat}`,
-      Accept: "application/vnd.github.v3+json",
-    },
-    body: JSON.stringify({
-      event_type: "cycle_start",
-      client_payload: {
-        source: "chain_dispatch",
-        company: next.slug,
-        company_id: next.id,
-        priority_score: next.priority_score,
-        chain_next: true,
+  const dispatched: { slug: string; priority_score: number; pending_tasks: number }[] = [];
+
+  for (const next of toDispatch) {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `token ${ghPat}`,
+        Accept: "application/vnd.github.v3+json",
       },
-    }),
-    signal: AbortSignal.timeout(10000),
-  });
+      body: JSON.stringify({
+        event_type: "cycle_start",
+        client_payload: {
+          source: "chain_dispatch",
+          company: next.slug,
+          company_id: next.id,
+          priority_score: next.priority_score,
+          chain_next: true,
+        },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
 
-  if (res.ok || res.status === 204) {
-    // Log dispatch for dedup
-    await sql`
-      INSERT INTO agent_actions (agent, action_type, status, description, company_id, started_at, finished_at)
-      VALUES ('dispatch', 'chain_cycle', 'success',
-        ${`Chain dispatch: ${company || "unknown"} → ${next.slug} (score ${next.priority_score})`},
-        ${next.id}, NOW(), NOW())
-    `.catch((e: any) => { console.warn(`[cycle-complete] log chain dispatch ${company} -> ${next.slug} failed: ${e?.message || e}`); });
+    if (res.ok || res.status === 204) {
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, status, description, company_id, started_at, finished_at)
+        VALUES ('dispatch', 'chain_cycle', 'success',
+          ${`Chain dispatch: ${company || "unknown"} → ${next.slug} (score ${next.priority_score})`},
+          ${next.id}, NOW(), NOW())
+      `.catch((e: any) => { console.warn(`[cycle-complete] log chain dispatch ${company} -> ${next.slug} failed: ${e?.message || e}`); });
 
+      dispatched.push({
+        slug: next.slug,
+        priority_score: next.priority_score,
+        pending_tasks: next.pending_tasks,
+      });
+    }
+  }
+
+  if (dispatched.length > 0) {
+    const summary = dispatched.map(d => `${d.slug} (${d.priority_score})`).join(", ");
     await qstashPublish("/api/notify", {
       agent: "dispatch",
       action: "chain_cycle",
-      company: next.slug,
+      company: dispatched[0]!.slug,
       status: "dispatched",
-      summary: `Chained: ${company} done → dispatching ${next.slug} (score: ${next.priority_score})`,
-    }, { retries: 2 }).catch((e: any) => { console.warn(`[cycle-complete] notify chain dispatch ${next.slug} failed: ${e?.message || e}`); });
+      summary: `Chained: ${company} done → dispatching ${dispatched.length} companies: ${summary}`,
+    }, { retries: 2 }).catch((e: any) => { console.warn(`[cycle-complete] notify chain dispatch failed: ${e?.message || e}`); });
 
     return json({
       chained: true,
       type: "company_cycle",
       completed: { agent, company, status },
-      next: {
-        company: next.slug,
-        priority_score: next.priority_score,
-        pending_tasks: next.pending_tasks,
-      },
+      dispatched_count: dispatched.length,
+      available_slots: availableSlots,
+      next: dispatched,
     });
   }
 
-  // GitHub dispatch failed — retry in 5 min
+  // All GitHub dispatches failed — retry in 5 min
   await scheduleChainRetry("github_dispatch_failed", 5 * 60);
-  return json({ chained: false, reason: "github_dispatch_failed", status: res.status, chain_retry: true });
+  return json({ chained: false, reason: "github_dispatch_failed", chain_retry: true });
 }
