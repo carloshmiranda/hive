@@ -1013,16 +1013,17 @@ async function executeSentinelDispatch(request: Request) {
         }).catch(() => null);
 
         if (backlogRes?.ok) {
-          const backlogData = await backlogRes.json().catch(() => ({}));
-          if (backlogData?.data?.dispatched) {
+          const backlogRaw = await backlogRes.json().catch(() => ({}));
+          const backlogData = backlogRaw?.data ?? backlogRaw;
+          if (backlogData?.dispatched) {
             dispatches.push({
               type: "brain",
               target: "hive_backlog_item",
               payload: {
-                backlog_id: backlogData.data.item?.id,
-                title: backlogData.data.item?.title,
-                priority: backlogData.data.item?.priority,
-                priority_score: backlogData.data.item?.priority_score,
+                backlog_id: backlogData.item?.id,
+                title: backlogData.item?.title,
+                priority: backlogData.item?.priority,
+                priority_score: backlogData.item?.priority_score,
               },
             });
             backlogDispatched++;
