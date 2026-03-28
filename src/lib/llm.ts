@@ -265,7 +265,7 @@ async function fetchFreeModels(): Promise<FreeModelEntry[]> {
  * Build the full model chain for an agent:
  * 1. Curated primaries (quality — agent-specific ordering)
  * 2. Dynamic free models (resilience — everything else, sorted by context_length)
- * 3. Meta-routers (ultimate fallback — openrouter/auto, openrouter/free)
+ * 3. Meta-router (ultimate fallback — openrouter/free only)
  *
  * Deduplicates so curated models aren't listed twice.
  * Filters dynamic pool by agent's minContext requirement.
@@ -283,11 +283,10 @@ async function buildModelChain(agent: string): Promise<string[]> {
     .filter((m) => !primarySet.has(m.id) && m.contextLength >= config.minContext)
     .map((m) => m.id);
 
-  // Combine: primaries first, then dynamic pool, then meta-routers
+  // Combine: primaries first, then dynamic pool, then meta-router
   return [
     ...primaries,
     ...extras,
-    OPENROUTER_MODELS.auto,
     OPENROUTER_MODELS.free,
   ];
 }
