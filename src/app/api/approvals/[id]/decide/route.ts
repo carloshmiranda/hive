@@ -2,8 +2,15 @@ import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { dispatchEvent } from "@/lib/dispatch";
 import { getGitHubToken } from "@/lib/github-app";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "approval_decision",
+    route: "/api/approvals/[id]/decide"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 

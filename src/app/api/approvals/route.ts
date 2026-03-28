@@ -1,7 +1,14 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "approval_list",
+    route: "/api/approvals"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 

@@ -6,6 +6,7 @@ import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch
 import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -49,6 +50,12 @@ async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof ge
 //            Manual trigger from dashboard
 // Auth: CRON_SECRET or OIDC
 export async function POST(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "backlog_dispatch",
+    route: "/api/backlog/dispatch"
+  });
+
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
 
