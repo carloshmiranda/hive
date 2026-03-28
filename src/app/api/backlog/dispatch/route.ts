@@ -1065,35 +1065,43 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "no_scorable_items" });
   }
 
-  // Pick the first dispatchable item (skip specless non-P0 items, blocking them as we go)
+  // Pick the first dispatchable item — allow ONE specless item through for spec generation,
+  // but skip items that already failed spec generation twice ([manual_spec_needed])
   let topItem: any = null;
   for (const candidate of scoredItems) {
     const candidateSpec = candidate.spec;
     const hasSpec = candidateSpec && candidateSpec.acceptance_criteria;
+    const notes = candidate.notes || "";
 
-    if (!hasSpec && candidate.priority !== "P0") {
-      // Block specless item and continue to next
-      const alreadyFailedSpec = (candidate.notes || "").includes("[no_spec]");
-      if (alreadyFailedSpec) {
-        await sql`
-          UPDATE hive_backlog
-          SET status = 'blocked', dispatched_at = NULL,
-              notes = COALESCE(notes, '') || ' [manual_spec_needed] Spec generation failed twice — requires manual spec or rewrite before dispatch.'
-          WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
-        `.catch(() => {});
-        console.warn(`[backlog] Permanently blocked specless item: "${candidate.title}" — spec failed twice`);
-      } else {
-        await sql`
-          UPDATE hive_backlog
-          SET status = 'blocked', dispatched_at = NULL,
-              notes = COALESCE(notes, '') || ' [no_spec] Spec generation failed — needs manual spec or decomposition before dispatch.'
-          WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
-        `.catch(() => {});
-        console.warn(`[backlog] Blocked specless item: "${candidate.title}" — skipping to next`);
-      }
+    // Permanently blocked — skip and ensure blocked status
+    if (notes.includes("[manual_spec_needed]")) {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', dispatched_at = NULL
+        WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
+      `.catch(() => {});
       continue;
     }
 
+    // Items with spec or P0 — always dispatchable
+    if (hasSpec || candidate.priority === "P0") {
+      topItem = candidate;
+      break;
+    }
+
+    // Specless item that already failed once — block permanently
+    if (notes.includes("[no_spec]")) {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', dispatched_at = NULL,
+            notes = COALESCE(notes, '') || ' [manual_spec_needed] Spec generation failed twice — requires manual spec or rewrite before dispatch.'
+        WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
+      `.catch(() => {});
+      console.warn(`[backlog] Permanently blocked specless item: "${candidate.title}" — spec failed twice`);
+      continue;
+    }
+
+    // Specless item, first attempt — allow through for spec generation (planning phase below)
     topItem = candidate;
     break;
   }
@@ -1217,11 +1225,26 @@ export async function POST(req: Request) {
         `.catch(() => {});
         console.log(`[backlog] Spec generated for "${topItem.title}" — complexity: ${spec.complexity}, turns: ${spec.estimated_turns}`);
       } else {
-        console.log(`[backlog] Spec generation failed for "${topItem.title}" — dispatching without spec`);
+        // Mark with [no_spec] so next attempt permanently blocks it
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'ready', dispatched_at = NULL,
+              notes = COALESCE(notes, '') || ' [no_spec] Spec generation returned null — will be blocked on next dispatch attempt.'
+          WHERE id = ${topItem.id}
+        `.catch(() => {});
+        console.warn(`[backlog] Spec generation failed for "${topItem.title}" — tagged [no_spec], returning to ready`);
+        return json({ dispatched: false, reason: "spec_generation_failed", item: topItem.title });
       }
     } catch (e) {
-      console.warn(`[backlog] Planning phase error:`, e instanceof Error ? e.message : "unknown");
-      // Non-blocking — dispatch proceeds without spec
+      // Mark with [no_spec] on error too
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'ready', dispatched_at = NULL,
+            notes = COALESCE(notes, '') || ' [no_spec] Spec generation error — will be blocked on next dispatch attempt.'
+        WHERE id = ${topItem.id}
+      `.catch(() => {});
+      console.warn(`[backlog] Planning phase error for "${topItem.title}":`, e instanceof Error ? e.message : "unknown");
+      return json({ dispatched: false, reason: "spec_generation_error", item: topItem.title, error: e instanceof Error ? e.message : "unknown" });
     }
   }
 
