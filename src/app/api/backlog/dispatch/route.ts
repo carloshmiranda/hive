@@ -1158,8 +1158,9 @@ export async function POST(req: Request) {
     }
   }
 
-  // Dispatch via GitHub Actions
-  const ghPat = await getGitHubToken().catch(() => null);
+  // Dispatch via GitHub Actions — prefer GH_PAT env var for repository_dispatch
+  // (GitHub App installation tokens may lack contents:write permission needed for dispatches)
+  const ghPat = process.env.GH_PAT || await getGitHubToken().catch(() => null);
   if (!ghPat) {
     return json({ dispatched: false, reason: "no_github_token" });
   }
