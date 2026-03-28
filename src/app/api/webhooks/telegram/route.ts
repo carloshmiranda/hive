@@ -58,7 +58,7 @@ export async function POST(req: Request) {
             if (company) {
               await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
                 method: "POST",
-                headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+                headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
                 body: JSON.stringify({ event_type: "new_company", client_payload: { company: company.slug } }),
                 signal: AbortSignal.timeout(10000),
               });
@@ -90,7 +90,7 @@ export async function POST(req: Request) {
       if (action === "merge") {
         const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`, {
           method: "PUT",
-          headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
           body: JSON.stringify({ merge_method: "squash" }),
           signal: AbortSignal.timeout(10000),
         });
@@ -103,7 +103,7 @@ export async function POST(req: Request) {
       } else {
         const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
           method: "PATCH",
-          headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
           body: JSON.stringify({ state: "closed" }),
           signal: AbortSignal.timeout(10000),
         });

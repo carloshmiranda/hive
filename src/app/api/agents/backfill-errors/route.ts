@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       const runsRes = await fetch(
         `https://api.github.com/repos/${repo}/actions/runs?per_page=20&status=failure`,
         {
-          headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
           signal: AbortSignal.timeout(10000),
         }
       );

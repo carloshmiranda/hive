@@ -149,7 +149,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             await fetch(`https://api.github.com/repos/${migCtx.github_repo}/actions/workflows/hive-build.yml/dispatches`, {
               method: "POST",
               headers: {
-                Authorization: `token ${ghPat}`,
+                Authorization: `Bearer ${ghPat}`,
                 Accept: "application/vnd.github.v3+json",
                 "Content-Type": "application/json",
               },

@@ -204,7 +204,7 @@ export async function POST(req: Request) {
       await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
         method: "POST",
         headers: {
-          Authorization: `token ${ghPat}`,
+          Authorization: `Bearer ${ghPat}`,
           Accept: "application/vnd.github.v3+json",
           "Content-Type": "application/json",
         },

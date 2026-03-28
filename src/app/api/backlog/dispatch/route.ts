@@ -213,7 +213,7 @@ export async function POST(req: Request) {
           if (ghPat) {
             const contRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
               method: "POST",
-              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+              headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
               body: JSON.stringify({
                 event_type: "feature_request",
                 client_payload: {
@@ -445,7 +445,7 @@ export async function POST(req: Request) {
       if (ghToken) {
         const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
         const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
-          headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+          headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
           signal: AbortSignal.timeout(10000),
         });
         if (prListRes.ok) {
@@ -1177,10 +1177,15 @@ export async function POST(req: Request) {
 
   // Dispatch via GitHub Actions — use GitHub App installation token
   // GH_PAT fallback removed: gho_ OAuth tokens expire silently, causing 422s
-  const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
+  const ghPat = await getGitHubToken().catch((e) => {
+    console.error(`[backlog] getGitHubToken failed: ${e instanceof Error ? e.message : e}`);
+    return null;
+  }) || process.env.GH_PAT;
   if (!ghPat) {
     return json({ dispatched: false, reason: "no_github_token" });
   }
+  const tokenPrefix = ghPat.substring(0, 4);
+  console.log(`[backlog] Using GitHub token: ${tokenPrefix}... (length: ${ghPat.length})`);
 
   // Check for previous failed attempts — inject error context so Engineer learns
   const attemptMatch = (topItem.notes || "").match(/\[attempt \d+\]/g);
@@ -1277,7 +1282,7 @@ export async function POST(req: Request) {
       const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
       const decomposeRes = await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
         method: "POST",
-        headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+        headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
         body: JSON.stringify({
           event_type: "decompose_task",
           client_payload: {
@@ -1397,33 +1402,36 @@ export async function POST(req: Request) {
     `.catch(e => console.error('[backlog] Failed to update backlog item with security note:', e));
   }
 
+  const dispatchPayload = {
+    event_type: "feature_request",
+    client_payload: {
+      source: "backlog_chain",
+      company: "_hive",
+      task: taskDescription,
+      title: topItem.title,
+      backlog_id: topItem.id,
+      github_issue: topItem.github_issue_number || undefined,
+      priority: topItem.priority,
+      priority_score: topItem.priority_score,
+      attempt: attemptCount + 1,
+      chain_next: true,
+      spec: spec || undefined,
+      // Turn budget: always give at least TURN_BUDGET (50) turns.
+      // Estimates below budget are unreliable — tasks routinely need more turns than estimated
+      // due to context loading, git operations, and unexpected complexity.
+      // On 3rd+ attempt: escalate to Opus with 60-turn budget.
+      max_turns: attemptCount >= 2
+        ? 60
+        : Math.max(50, spec?.estimated_turns || 50),
+      ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
+    },
+  };
+  const payloadStr = JSON.stringify(dispatchPayload);
+  console.log(`[backlog] Dispatch payload size: ${payloadStr.length} bytes`);
   const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
     method: "POST",
-    headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
-    body: JSON.stringify({
-      event_type: "feature_request",
-      client_payload: {
-        source: "backlog_chain",
-        company: "_hive",
-        task: taskDescription,
-        title: topItem.title,
-        backlog_id: topItem.id,
-        github_issue: topItem.github_issue_number || undefined,
-        priority: topItem.priority,
-        priority_score: topItem.priority_score,
-        attempt: attemptCount + 1,
-        chain_next: true,
-        spec: spec || undefined,
-        // Turn budget: always give at least TURN_BUDGET (50) turns.
-        // Estimates below budget are unreliable — tasks routinely need more turns than estimated
-        // due to context loading, git operations, and unexpected complexity.
-        // On 3rd+ attempt: escalate to Opus with 60-turn budget.
-        max_turns: attemptCount >= 2
-          ? 60
-          : Math.max(50, spec?.estimated_turns || 50),
-        ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
-      },
-    }),
+    headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+    body: payloadStr,
     signal: AbortSignal.timeout(10000),
   });
 
@@ -1477,7 +1485,7 @@ export async function POST(req: Request) {
   }
 
   const errBody = await res.text().catch(() => "");
-  console.error(`[backlog] GitHub dispatch failed: ${res.status} for "${topItem.title}" (${topItem.priority}): ${errBody.slice(0, 500)}`);
+  console.error(`[backlog] GitHub dispatch FAILED: status=${res.status} token=${tokenPrefix}...(${ghPat.length}) item="${topItem.title}" body=${errBody}`);
   // Block the item that caused the 422 to prevent it from being picked again
   if (res.status === 422) {
     await sql`

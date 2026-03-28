@@ -200,7 +200,7 @@ export async function PATCH(req: Request) {
   // Dispatch to GitHub Actions with full context matching auto-dispatch
   const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
     method: "POST",
-    headers: { Authorization: `token ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+    headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
     body: JSON.stringify({
       event_type: "feature_request",
       client_payload: {

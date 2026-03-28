@@ -212,7 +212,7 @@ export async function GET(req: Request) {
 
       try {
         const testsRes = await fetch(`https://api.github.com/repos/${repo}/contents/tests`, {
-          headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
           signal: AbortSignal.timeout(5000),
         });
         if (testsRes.ok) { hasTestDir = true; hasTestFiles = true; }
@@ -220,7 +220,7 @@ export async function GET(req: Request) {
 
       try {
         const playwrightRes = await fetch(`https://api.github.com/repos/${repo}/contents/playwright.config.ts`, {
-          headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
           signal: AbortSignal.timeout(5000),
         });
         if (playwrightRes.ok) { hasPlaywrightConfig = true; hasTestFiles = true; }
@@ -229,7 +229,7 @@ export async function GET(req: Request) {
       if (!hasTestFiles) {
         try {
           const srcTestsRes = await fetch(`https://api.github.com/repos/${repo}/contents/src/__tests__`, {
-            headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+            headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
             signal: AbortSignal.timeout(5000),
           });
           if (srcTestsRes.ok) { hasTestFiles = true; }
@@ -241,7 +241,7 @@ export async function GET(req: Request) {
           const runsRes = await fetch(
             `https://api.github.com/repos/${repo}/actions/workflows/post-deploy.yml/runs?per_page=1&status=completed`,
             {
-              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+              headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
               signal: AbortSignal.timeout(5000),
             }
           );
@@ -324,7 +324,7 @@ export async function GET(req: Request) {
   // --- Check 38: Review and auto-merge open Hive PRs ---
   if (ghPat) try {
     const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
-      headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+      headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
     });
     if (prListRes.ok) {
       const openPRs = await prListRes.json();
@@ -407,7 +407,7 @@ export async function GET(req: Request) {
   // Rate limit: 1 fix attempt per PR per 2 hours (tracked via agent_actions).
   if (ghPat) try {
     const prListRes39 = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
-      headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+      headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
     });
     if (prListRes39.ok) {
       const openPRs39 = await prListRes39.json();
@@ -418,7 +418,7 @@ export async function GET(req: Request) {
         try {
           // Check CI status for this PR
           const checksRes = await fetch(`https://api.github.com/repos/carloshmiranda/hive/commits/${pr.head.sha}/check-runs`, {
-            headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+            headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
           });
           if (!checksRes.ok) continue;
           const checksData = await checksRes.json();
@@ -452,7 +452,7 @@ export async function GET(req: Request) {
           for (const check of failedChecks.slice(0, 3)) {
             // Get the annotations (error messages) from the check run
             const annotationsRes = await fetch(`https://api.github.com/repos/carloshmiranda/hive/check-runs/${check.id}/annotations`, {
-              headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+              headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
             }).catch(() => null);
             if (annotationsRes?.ok) {
               const annotations = await annotationsRes.json();
@@ -475,14 +475,14 @@ export async function GET(req: Request) {
             // Find the workflow run for this check suite
             const runsRes = await fetch(
               `https://api.github.com/repos/carloshmiranda/hive/actions/runs?head_sha=${pr.head.sha}&status=failure&per_page=3`,
-              { headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" } }
+              { headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" } }
             ).catch(() => null);
             if (runsRes?.ok) {
               const runsData = await runsRes.json();
               for (const run of (runsData.workflow_runs || []).slice(0, 2)) {
                 // Get failed jobs
                 const jobsRes = await fetch(`${run.jobs_url}?filter=latest&per_page=10`, {
-                  headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+                  headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
                 }).catch(() => null);
                 if (jobsRes?.ok) {
                   const jobsData = await jobsRes.json();
@@ -608,7 +608,7 @@ export async function GET(req: Request) {
         await fetch(`https://api.github.com/repos/${co.github_repo}/actions/workflows/hive-fix.yml/dispatches`, {
           method: "POST",
           headers: {
-            Authorization: `token ${ghPat}`,
+            Authorization: `Bearer ${ghPat}`,
             Accept: "application/vnd.github.v3+json",
             "Content-Type": "application/json",
           },
@@ -671,7 +671,7 @@ export async function GET(req: Request) {
             const runsRes = await fetch(
               `https://api.github.com/repos/carloshmiranda/hive/actions/workflows/${workflowFile}/runs?per_page=3&created=>=${new Date(d.started_at as string).toISOString().split('T')[0]}`,
               {
-                headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+                headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
                 signal: AbortSignal.timeout(5000),
               }
             );
@@ -741,7 +741,7 @@ export async function GET(req: Request) {
           await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
             method: "POST",
             headers: {
-              Authorization: `token ${ghPat}`,
+              Authorization: `Bearer ${ghPat}`,
               Accept: "application/vnd.github.v3+json",
               "Content-Type": "application/json",
             },
@@ -782,7 +782,7 @@ export async function GET(req: Request) {
         const prListRes = await fetch(
           `https://api.github.com/repos/${pc.github_repo}/pulls?state=open&per_page=10`,
           {
-            headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+            headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
             signal: AbortSignal.timeout(5000),
           }
         );
@@ -854,7 +854,7 @@ export async function GET(req: Request) {
                 await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
                   method: "POST",
                   headers: {
-                    Authorization: `token ${ghPat}`,
+                    Authorization: `Bearer ${ghPat}`,
                     Accept: "application/vnd.github.v3+json",
                     "Content-Type": "application/json",
                   },
@@ -882,7 +882,7 @@ export async function GET(req: Request) {
               await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
                 method: "POST",
                 headers: {
-                  Authorization: `token ${ghPat}`,
+                  Authorization: `Bearer ${ghPat}`,
                   Accept: "application/vnd.github.v3+json",
                   "Content-Type": "application/json",
                 },
@@ -920,7 +920,7 @@ export async function GET(req: Request) {
             await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
               method: "POST",
               headers: {
-                Authorization: `token ${ghPat}`,
+                Authorization: `Bearer ${ghPat}`,
                 Accept: "application/vnd.github.v3+json",
                 "Content-Type": "application/json",
               },

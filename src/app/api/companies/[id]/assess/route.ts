@@ -133,7 +133,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (company.github_repo && ghPat) {
     try {
       const repoPath = company.github_repo;
-      const headers = { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" };
+      const headers = { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" };
 
       const fileChecks = [
         { path: "src/app/api/webhooks/resend/route.ts", key: "resend_webhook" },

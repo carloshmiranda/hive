@@ -33,7 +33,7 @@ async function getFileTree(): Promise<string[]> {
       "https://api.github.com/repos/carloshmiranda/hive/git/trees/main?recursive=1",
       {
         headers: {
-          Authorization: `token ${ghToken}`,
+          Authorization: `Bearer ${ghToken}`,
           Accept: "application/vnd.github.v3+json",
         },
         signal: AbortSignal.timeout(8000),

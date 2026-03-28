@@ -98,7 +98,7 @@ export async function getActiveClaims(
           `https://api.github.com/repos/${REPO}/actions/runs?status=${status}&per_page=50`,
           {
             headers: {
-              Authorization: `token ${ghPat}`,
+              Authorization: `Bearer ${ghPat}`,
               Accept: "application/vnd.github.v3+json",
             },
             signal: AbortSignal.timeout(8000),

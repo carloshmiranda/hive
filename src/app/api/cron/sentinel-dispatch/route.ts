@@ -842,7 +842,7 @@ async function executeSentinelDispatch(request: Request) {
         try {
           const runsRes = await fetch(
             `https://api.github.com/repos/${r.github_repo}/actions/runs?per_page=5&status=failure`,
-            { headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github.v3+json" }, signal: AbortSignal.timeout(10000) }
+            { headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" }, signal: AbortSignal.timeout(10000) }
           );
           if (runsRes.ok) {
             const runs = await runsRes.json();

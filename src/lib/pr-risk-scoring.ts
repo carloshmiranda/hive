@@ -36,7 +36,7 @@ export async function analyzePR(
   // Get PR details from GitHub API
   const prResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, {
     headers: {
-      'Authorization': `token ${ghToken}`,
+      'Authorization': `Bearer ${ghToken}`,
       'Accept': 'application/vnd.github.v3+json'
     }
   });
@@ -50,7 +50,7 @@ export async function analyzePR(
   // Get PR diff
   const diffResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}.diff`, {
     headers: {
-      'Authorization': `token ${ghToken}`,
+      'Authorization': `Bearer ${ghToken}`,
       'Accept': 'application/vnd.github.v3.diff'
     }
   });
@@ -60,7 +60,7 @@ export async function analyzePR(
   // Get CI status
   const checksResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits/${pr.head.sha}/check-runs`, {
     headers: {
-      'Authorization': `token ${ghToken}`,
+      'Authorization': `Bearer ${ghToken}`,
       'Accept': 'application/vnd.github.v3+json'
     }
   });
@@ -202,7 +202,7 @@ export async function analyzePR(
 async function getChangedFiles(owner: string, repo: string, prNumber: number, ghToken: string): Promise<string[]> {
   const filesResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files`, {
     headers: {
-      'Authorization': `token ${ghToken}`,
+      'Authorization': `Bearer ${ghToken}`,
       'Accept': 'application/vnd.github.v3+json'
     }
   });
@@ -325,7 +325,7 @@ export async function autoMergePR(
     const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/merge`, {
       method: 'PUT',
       headers: {
-        'Authorization': `token ${ghToken}`,
+        'Authorization': `Bearer ${ghToken}`,
         'Accept': 'application/vnd.github.v3+json',
         'Content-Type': 'application/json'
       },

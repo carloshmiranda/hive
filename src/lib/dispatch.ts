@@ -103,7 +103,7 @@ export async function dispatchEvent(eventType: string, payload: Record<string, a
     const res = await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
       method: "POST",
       headers: {
-        Authorization: `token ${ghPat}`,
+        Authorization: `Bearer ${ghPat}`,
         Accept: "application/vnd.github.v3+json",
         "Content-Type": "application/json",
       },
