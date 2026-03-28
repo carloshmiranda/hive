@@ -298,6 +298,7 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
           "sentinel",
           "auto_merge",
           "dispatch",
+          "backlog_dispatch",
           "webhook",
           "system",
           "admin"
@@ -313,7 +314,8 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
           "skipped",
           "escalated",
           "pending_manual",
-          "completed"
+          "completed",
+          "flagged"
         ]
       }
     ]
@@ -1321,6 +1323,26 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "nullable": true,
         "hasDefault": false
       },
+      "github_issue_number": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "github_issue_url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "pr_number": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "pr_url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
       "created_at": {
         "type": "TIMESTAMPTZ",
         "nullable": false,
@@ -1462,6 +1484,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "nullable": true,
         "hasDefault": true
       },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
       "dispatch_id": {
         "type": "TEXT",
         "nullable": true,
@@ -1473,6 +1500,26 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "hasDefault": false
       },
       "pr_url": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "parent_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "decomposition_context": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "github_issue_number": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "github_issue_url": {
         "type": "TEXT",
         "nullable": true,
         "hasDefault": false
@@ -1495,6 +1542,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       "created_at": {
         "type": "TIMESTAMPTZ",
         "nullable": false,
+        "hasDefault": true
+      },
+      "updated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
         "hasDefault": true
       },
       "dispatched_at": {

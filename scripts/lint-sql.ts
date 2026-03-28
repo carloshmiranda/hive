@@ -18,6 +18,10 @@ const SRC_DIRS = ["src/app/api/", "src/lib/"];
 const SQL_FUNCTIONS = new Set([
   "count", "sum", "avg", "min", "max", "coalesce", "now", "greatest", "least",
   "row_to_json", "json_agg", "json_build_object", "jsonb_build_object",
+  "jsonb_array_elements", "jsonb_each", "jsonb_each_text", "jsonb_object_keys",
+  "json_array_elements", "json_each", "json_each_text",
+  "jsonb_set", "jsonb_insert", "jsonb_strip_nulls", "jsonb_typeof",
+  "jsonb_agg", "jsonb_build_array", "jsonb_path_query",
   "array_agg", "string_agg", "bool_or", "bool_and",
   "current_date", "current_timestamp", "current_time",
   "upper", "lower", "trim", "length", "substring", "replace", "concat",
@@ -277,9 +281,44 @@ function extractColumnAliases(query: string): Set<string> {
   return aliases;
 }
 
+function extractLateralAliases(query: string): Set<string> {
+  // Extract aliases from set-returning functions: jsonb_array_elements(...) alias, generate_series(...) alias
+  // These can have nested parens like jsonb_array_elements(COALESCE(x, '[]'::jsonb)) elem
+  const aliases = new Set<string>();
+  const funcNames = [
+    "jsonb_array_elements", "json_array_elements", "jsonb_each", "json_each",
+    "jsonb_each_text", "json_each_text", "jsonb_object_keys",
+    "generate_series", "unnest", "regexp_matches",
+  ];
+  for (const fn of funcNames) {
+    const fnIdx = query.toLowerCase().indexOf(fn);
+    if (fnIdx === -1) continue;
+    // Find the opening paren after the function name
+    let pos = fnIdx + fn.length;
+    while (pos < query.length && query[pos] === " ") pos++;
+    if (query[pos] !== "(") continue;
+    // Skip balanced parens
+    let depth = 1;
+    pos++;
+    while (pos < query.length && depth > 0) {
+      if (query[pos] === "(") depth++;
+      if (query[pos] === ")") depth--;
+      pos++;
+    }
+    // Now pos is right after the closing paren — skip whitespace, capture alias
+    while (pos < query.length && /\s/.test(query[pos])) pos++;
+    const aliasMatch = query.slice(pos).match(/^(\w+)\b/);
+    if (aliasMatch && !SQL_KEYWORDS.has(aliasMatch[1].toLowerCase()) && !SQL_FUNCTIONS.has(aliasMatch[1].toLowerCase())) {
+      aliases.add(aliasMatch[1].toLowerCase());
+    }
+  }
+  return aliases;
+}
+
 function extractColumnReferences(query: string, aliasMap: Map<string, string>): Array<{ table: string; column: string }> {
   const refs: Array<{ table: string; column: string }> = [];
   const seen = new Set<string>(); // deduplicate
+  const lateralAliases = extractLateralAliases(query);
 
   // Extract alias.column patterns (e.g., c.slug, m.mrr, aa.status)
   const qualifiedPattern = /\b(\w+)\.(\w+)\b/g;
@@ -304,6 +343,9 @@ function extractColumnReferences(query: string, aliasMap: Map<string, string>): 
     // Skip * wildcard
     if (column === "*") continue;
 
+    // Skip lateral aliases (e.g., jsonb_array_elements(...) elem → elem->>'key')
+    if (lateralAliases.has(prefix)) continue;
+
     const table = aliasMap.get(prefix)!;
     // Skip CTE references
     if (table === "__cte__") continue;
@@ -324,9 +366,10 @@ function extractColumnReferences(query: string, aliasMap: Map<string, string>): 
       Object.values(SCHEMA_MAP).flatMap((t) => Object.keys(t.columns))
     );
 
-    // Remove interpolations, string literals, and comments for cleaner parsing
+    // Remove interpolations, string literals (including E'...' escape strings), and comments
     const cleaned = query
       .replace(/__INTERPOLATION__/g, " ")
+      .replace(/E'[^']*'/g, " ")   // PostgreSQL escape strings: E'\n', E'\t', etc.
       .replace(/'[^']*'/g, " ")
       .replace(/--[^\n]*/g, " ");
 
@@ -356,6 +399,9 @@ function extractColumnReferences(query: string, aliasMap: Map<string, string>): 
 
       // Skip column aliases (e.g., COUNT(*) AS cnt — don't validate cnt)
       if (columnAliases.has(token)) continue;
+
+      // Skip lateral aliases (e.g., jsonb_array_elements() elem)
+      if (lateralAliases.has(token)) continue;
 
       // Skip tokens that are aliases in our alias map
       if (aliasMap.has(token) && token !== tableName) continue;

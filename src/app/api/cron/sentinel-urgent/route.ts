@@ -608,7 +608,7 @@ export async function GET(request: Request) {
         UPDATE hive_backlog
         SET notes = COALESCE(notes, '') || ' [stale] In progress > 24h without PR.'
         WHERE status = 'in_progress'
-        AND updated_at < NOW() - INTERVAL '24 hours'
+        AND dispatched_at < NOW() - INTERVAL '24 hours'
         AND pr_number IS NULL
         AND notes NOT LIKE '%[stale]%'
         RETURNING id, title
