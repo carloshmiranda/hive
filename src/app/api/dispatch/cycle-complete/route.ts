@@ -60,7 +60,7 @@ async function scheduleChainRetry(reason: string, delaySeconds: number) {
       action_type: "chain_retry",
       retry_reason: reason,
     }, {
-      deduplicationId: `cycle-chain-retry-${reason}-${Date.now().toString(36)}`,
+      deduplicationId: `cycle-chain-retry-${reason}-${Math.floor(Date.now() / 3600000)}`,
       delay: delaySeconds,
     });
     console.log(`[cycle-complete] Chain retry scheduled in ${Math.round(delaySeconds / 60)}m (reason: ${reason})`);
