@@ -9,6 +9,7 @@ import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { cachedPlaybook } from "@/lib/redis-cache";
+import { compressResearchForAgent } from "@/app/api/agents/playbook/route";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -29,6 +30,54 @@ function truncateJson(content: unknown, maxChars: number): string {
   const str = typeof content === "string" ? content : JSON.stringify(content);
   if (str.length <= maxChars) return str;
   return str.slice(0, maxChars) + `... [truncated, ${str.length - maxChars} chars omitted]`;
+}
+
+// Deduplicate playbook entries across agents in the same cycle
+async function getDeduplicatedPlaybook(
+  sql: any,
+  company: any,
+  agentName: string,
+  cycleId?: string
+): Promise<any[]> {
+  // Get all playbook entries
+  const allPlaybook = await sql`
+    SELECT domain, insight, confidence FROM playbook
+    WHERE superseded_by IS NULL AND confidence >= 0.6
+      AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+    ORDER BY confidence DESC LIMIT 20
+  `.catch(() => []);
+
+  if (!cycleId) {
+    // No cycle context, return full playbook (up to 10 entries)
+    return allPlaybook.slice(0, 10);
+  }
+
+  // Get playbook entries already sent to other agents in this cycle
+  const usedEntries = await sql`
+    SELECT DISTINCT jsonb_array_elements_text(
+      (output->'context'->'playbook_entries')::jsonb
+    ) as insight
+    FROM agent_actions
+    WHERE company_id = ${company.id}
+      AND agent != ${agentName}
+      AND description LIKE '%cycle%' || ${cycleId} || '%'
+      AND output ? 'context'
+      AND status = 'success'
+      AND started_at >= (
+        SELECT started_at FROM cycles
+        WHERE id = ${cycleId} LIMIT 1
+      )
+  `.catch(() => []);
+
+  const usedInsights = new Set(usedEntries.map((e: any) => e.insight));
+
+  // Filter out entries already sent to other agents in this cycle
+  const deduplicatedPlaybook = allPlaybook.filter(
+    (entry: any) => !usedInsights.has(entry.insight)
+  );
+
+  // Return top 10 unique entries for this agent
+  return deduplicatedPlaybook.slice(0, 10);
 }
 
 // Max duration: Gemini calls take 10-30s, 60s is Hobby-tier safe
@@ -128,19 +177,15 @@ export async function POST(req: NextRequest) {
       ORDER BY date DESC LIMIT 20
     `;
 
-    const researchReports = await sql`
-      SELECT report_type, summary, content FROM research_reports 
-      WHERE company_id = ${company.id} LIMIT 5
+    const rawResearchReports = await sql`
+      SELECT report_type, summary, content FROM research_reports
+      WHERE company_id = ${company.id} LIMIT 10
     `;
 
-    const playbook = await cachedPlaybook(null, () =>
-      sql`
-        SELECT domain, insight, confidence FROM playbook
-        WHERE superseded_by IS NULL AND confidence >= 0.6
-          AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
-        ORDER BY confidence DESC LIMIT 10
-      `
-    );
+    // Compress research summaries to reduce context size by ~20%
+    const researchReports = compressResearchForAgent(rawResearchReports, agentName);
+
+    const playbook = await getDeduplicatedPlaybook(sql, company, agentName, latestCycle?.id);
 
     // 3. Build the agent prompt with full context
     const [dbPrompt] = await sql`
@@ -257,8 +302,15 @@ ${capabilitiesSummary(company.capabilities)}`;
     });
     const output = response.content;
 
-    // 6. Log the result to agent_actions with provider metadata
+    // 6. Log the result to agent_actions with provider metadata and context tracking
     const duration = Math.round((Date.now() - startTime) / 1000);
+    const contextMetadata = {
+      playbook_entries: playbook.map((p: any) => p.insight),
+      research_types: researchReports.map((r: any) => r.report_type),
+      compressed_research: true,
+      deduplication_applied: !!latestCycle?.id,
+    };
+
     await sql`
       INSERT INTO agent_actions (
         company_id, cycle_id, agent, action_type, description,
@@ -266,7 +318,12 @@ ${capabilitiesSummary(company.capabilities)}`;
       ) VALUES (
         ${company.id}, ${latestCycle?.id || null}, ${agentName}, 'execute_task',
         ${`[serverless] ${agentName} for ${company.slug} (${trigger || "scheduled"}, ${logData.duration_s}s, ${logData.provider}/${logData.model}, routed: ${logData.routing_reason})`},
-        'success', ${JSON.stringify({ output: output.slice(0, 5000), ...logData, trigger })}::jsonb,
+        'success', ${JSON.stringify({
+          output: output.slice(0, 5000),
+          context: contextMetadata,
+          ...logData,
+          trigger
+        })}::jsonb,
         ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
       )
     `;
