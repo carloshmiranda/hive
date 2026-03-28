@@ -278,14 +278,20 @@ export async function POST(req: Request) {
               })
             ).catch(() => {});
 
-            // Immediately dispatch CEO to review the PR (don't wait for sentinel cycle)
-            dispatchEvent("ceo_review", {
+            // Immediately dispatch CEO to review the PR via QStash (guaranteed delivery + retries)
+            // Previously fire-and-forget via dispatchEvent — now QStash-backed so PR reviews
+            // don't silently fail and wait 4h for Sentinel to catch them
+            qstashPublish("/api/dispatch/chain-dispatch", {
+              event_type: "ceo_review",
               source: "webhook_pr_escalated",
               company: companySlug,
               pr_number: prNumber,
               pr_url: pr.html_url,
               risk_score: analysis.riskScore,
-            }).catch(() => {});
+            }, {
+              retries: 3,
+              deduplicationId: `ceo-pr-review-${prNumber}-${Date.now().toString(36)}`,
+            }).catch((e: unknown) => { console.warn(`[webhook] QStash CEO PR review dispatch failed for PR #${prNumber}: ${e instanceof Error ? e.message : e}`); });
           }
 
         } catch (error) {

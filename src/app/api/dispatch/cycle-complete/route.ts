@@ -322,6 +322,16 @@ export async function POST(req: Request) {
       summary: `Chained: ${company} done → dispatching ${dispatched.length} companies: ${summary}`,
     }, { retries: 2 }).catch((e: any) => { console.warn(`[cycle-complete] notify chain dispatch failed: ${e?.message || e}`); });
 
+    // Schedule chain watchdog: if no callback arrives within 30 min, re-kick
+    await qstashPublish("/api/dispatch/chain-watchdog", {
+      dispatched_slugs: dispatched.map(d => d.slug),
+      dispatched_at: new Date().toISOString(),
+    }, {
+      delay: 30 * 60, // 30 minutes
+      deduplicationId: `chain-watchdog-${Date.now().toString(36)}`,
+      retries: 2,
+    }).catch((e: any) => { console.warn(`[cycle-complete] schedule chain watchdog failed: ${e?.message || e}`); });
+
     return json({
       chained: true,
       type: "company_cycle",
