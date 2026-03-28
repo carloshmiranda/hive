@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { json, err } from "@/lib/db";
+import { setSentryTags } from "@/lib/sentry-tags";
 import {
   BUSINESS_TYPES,
   normalizeType,
@@ -23,6 +24,13 @@ import {
  * and commit it to business-types.ts.
  */
 export async function POST(req: NextRequest) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "research_business_type",
+    route: "/api/agents/research-type",
+    agent: "engineer"
+  });
+
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
 

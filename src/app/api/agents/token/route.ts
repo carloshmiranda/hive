@@ -3,6 +3,7 @@ import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { getGitHubToken } from "@/lib/github-app";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // The Hive orchestrator repo (not in companies table — special case)
 const HIVE_REPO = "carloshmiranda/hive";
@@ -23,6 +24,13 @@ const ALLOWED_WORKFLOWS = [
 ];
 
 export async function POST(req: NextRequest) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "agent_token_request",
+    route: "/api/agents/token",
+    agent: "workflow"
+  });
+
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
 
