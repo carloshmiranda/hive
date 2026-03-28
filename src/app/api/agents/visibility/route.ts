@@ -2,11 +2,18 @@ import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { getGSCPerformance, getTopKeywords, getStrikingDistanceKeywords, getLowCTRPages } from "@/lib/gsc";
 import { checkLLMCitations } from "@/lib/llm-tracker";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Hobby-safe: GSC call ~5s, LLM checks ~25s (10 keywords × 2s each + overhead)
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "visibility_tracking",
+    route: "/api/agents/visibility"
+  });
+
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
@@ -23,6 +30,9 @@ export async function POST(req: NextRequest) {
     WHERE slug = ${company_slug} AND status IN ('mvp', 'active')
   `;
   if (!company) return err("Company not found");
+
+  // Add company_id to Sentry tags now that we have it
+  setSentryTags({ company_id: company.id });
 
   const today = new Date().toISOString().split("T")[0];
   const results: Record<string, any> = { gsc: null, llm: null };
