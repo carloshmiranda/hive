@@ -1,4 +1,6 @@
 import { getSettingValue } from "./settings";
+import { openrouter } from "@openrouter/ai-sdk-provider";
+import { generateObject, generateText as aiGenerateText } from "ai";
 
 // Unified LLM calling interface for worker agents
 // All calls route through OpenRouter with per-model fallback chains.
@@ -406,6 +408,105 @@ async function callOpenRouter(
   return { content: text.trim(), model: actualModel };
 }
 
+// AI SDK-based structured output wrapper using OpenRouter provider
+// Coexists with existing callOpenRouter() — used only where structured output
+// or system/user message split is needed. Preserves circuit breaker logic.
+export interface StructuredLLMOptions extends LLMOptions {
+  systemMessage?: string;  // Enables system/user message split
+  schema?: any;           // Zod schema for structured output
+}
+
+export interface StructuredLLMResponse extends LLMResponse {
+  structured?: any;       // Parsed structured data when schema provided
+}
+
+async function callLLMStructured(
+  prompt: string | { system?: string; user: string },
+  models: string[],
+  options: StructuredLLMOptions = {}
+): Promise<{ content: string; model: string; structured?: any }> {
+  const apiKey = await getSettingValue("openrouter_api_key");
+  if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
+
+  // Prepare messages
+  let messages: Array<{ role: "system" | "user"; content: string }>;
+  if (typeof prompt === "string") {
+    messages = options.systemMessage
+      ? [
+          { role: "system", content: options.systemMessage },
+          { role: "user", content: prompt }
+        ]
+      : [{ role: "user", content: prompt }];
+  } else {
+    messages = [];
+    if (prompt.system) {
+      messages.push({ role: "system", content: prompt.system });
+    }
+    messages.push({ role: "user", content: prompt.user });
+  }
+
+  // Filter models by circuit breaker availability
+  const availableModels = models.filter(model => {
+    const circuitKey = `openrouter:${model}`;
+    return isProviderAvailable(circuitKey);
+  });
+
+  if (availableModels.length === 0) {
+    throw new Error("All models circuit-broken");
+  }
+
+  // Common options for AI SDK calls
+  const commonOptions = {
+    messages,
+    maxTokens: options.maxTokens || 8192,
+    temperature: options.temperature || 0.7,
+    apiKey,
+  };
+
+  // Try models sequentially with circuit breaker tracking
+  for (const model of availableModels) {
+    const circuitKey = `openrouter:${model}`;
+
+    try {
+      if (options.schema) {
+        // Structured output using generateObject
+        const result = await generateObject({
+          model: openrouter(model),
+          schema: options.schema,
+          ...commonOptions,
+        });
+
+        recordProviderSuccess(circuitKey);
+        return {
+          content: JSON.stringify(result.object, null, 2),
+          model,
+          structured: result.object
+        };
+      } else {
+        // Regular text generation using generateText
+        const result = await aiGenerateText({
+          model: openrouter(model),
+          ...commonOptions,
+        });
+
+        recordProviderSuccess(circuitKey);
+        return { content: result.text, model };
+      }
+    } catch (error: any) {
+      recordProviderFailure(circuitKey);
+      console.warn(`[llm] Model ${model} failed: ${error.message}`);
+
+      // If this was the last model, throw the error
+      if (model === availableModels[availableModels.length - 1]) {
+        throw error;
+      }
+      // Otherwise continue to next model
+    }
+  }
+
+  throw new Error("All available models failed");
+}
+
 // Main unified LLM calling interface
 // Uses OpenRouter's native `models` array for server-side fallback.
 // One API request covers all fallback models — saves rate limit budget.
@@ -466,6 +567,50 @@ export async function callLLM(
   }
 }
 
+// Structured LLM interface using AI SDK with OpenRouter provider
+// Supports system/user message split and structured output via Zod schemas.
+// Coexists with existing callLLM() — use for structured output or message control.
+export async function callLLMStructuredResponse(
+  agent: string,
+  prompt: string | { system?: string; user: string },
+  options: StructuredLLMOptions & { sql?: any } = {}
+): Promise<StructuredLLMResponse> {
+  // Build full model chain using existing routing logic
+  const fullChain = await buildModelChain(agent);
+  const primaryModel = AGENT_PRIMARIES[agent]?.models[0] ?? fullChain[0];
+
+  const { sql, ...llmOptions } = options;
+
+  // Apply default verbosity per agent type if not specified
+  if (!llmOptions.verbosity && AGENT_PRIMARIES[agent]) {
+    llmOptions.verbosity = AGENT_PRIMARIES[agent].verbosity;
+  }
+
+  try {
+    // Use AI SDK-based structured calling
+    const result = await callLLMStructured(prompt, fullChain, llmOptions);
+
+    return {
+      content: result.content,
+      provider: "openrouter",
+      model: result.model,
+      usage: { cost_usd: 0 },
+      routing_reason: result.model === primaryModel
+        ? `primary:${result.model}`
+        : `fallback:${result.model} (ai-sdk)`,
+      structured: result.structured,
+    };
+  } catch (error: any) {
+    // Record failure for primary models only
+    const primaries = AGENT_PRIMARIES[agent]?.models ?? [];
+    for (const model of primaries) {
+      recordProviderFailure(`openrouter:${model}`);
+    }
+
+    throw new Error(`AI SDK OpenRouter models failed for agent ${agent}. Last error: ${error.message}`);
+  }
+}
+
 // Convenience wrapper for simple text generation
 export async function generateText(
   agent: string,
@@ -474,6 +619,17 @@ export async function generateText(
 ): Promise<string> {
   const response = await callLLM(agent, prompt, options);
   return response.content;
+}
+
+// Convenience wrapper for structured output generation with Zod schema
+export async function generateStructured<T>(
+  agent: string,
+  prompt: string | { system?: string; user: string },
+  schema: any,
+  options?: StructuredLLMOptions & { sql?: any }
+): Promise<T> {
+  const response = await callLLMStructuredResponse(agent, prompt, { ...options, schema });
+  return response.structured as T;
 }
 
 // Convenience wrapper that includes provider metadata in logs
