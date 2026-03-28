@@ -28,11 +28,11 @@
 **Prevention:** Dispatch debugging requires checking the full pipeline: DB state → SQL query → candidate selection → spec generation → GitHub dispatch. Each layer can independently block flow. Add monitoring: if 0 dispatches for 6+ hours with ready items, alert.
 **Affects:** hive
 
-### 2026-03-28 GH_PAT OAuth token expires silently — dispatch 422
-**What happened:** GitHub `repository_dispatch` calls returned 422. The `GH_PAT` env var in Vercel contained a `gho_` (OAuth) token that expired after ~9 days.
-**Root cause:** OAuth tokens (`gho_`) are short-lived. The previous fix (blocker #3) switched from GitHub App installation tokens to GH_PAT, but stored an OAuth token instead of a classic PAT. OAuth tokens expire; classic PATs (`ghp_`) can be set to never expire.
-**Fix applied:** Item unblocked in DB. Awaiting new `ghp_` classic PAT with `repo` scope.
-**Prevention:** Always use classic PATs (`ghp_`) for env vars, never OAuth tokens (`gho_`). Set 90-day or no expiration. Add a sentinel check: if dispatch returns 422, test token validity with `GET /user` before blocking the item.
+### 2026-03-28 GitHub repository_dispatch has a 10-property limit on client_payload
+**What happened:** GitHub `repository_dispatch` calls returned 422 with `"No more than 10 properties are allowed; 12 were supplied."` All backlog dispatches to Engineer were blocked.
+**Root cause:** The `client_payload` object had 12+ top-level properties (`source`, `company`, `task`, `title`, `backlog_id`, `github_issue`, `priority`, `priority_score`, `attempt`, `chain_next`, `spec`, `max_turns`, plus conditional `model`). GitHub enforces a hard limit of 10 top-level properties. Previous debugging sessions incorrectly blamed auth tokens (GH_PAT vs GitHub App) — the token was always working, but the 422 error message wasn't visible until we added debug output to the API response.
+**Fix applied:** Consolidated secondary fields (`title`, `priority_score`, `attempt`, `github_issue`, `model`) into a nested `meta` sub-object. Reduced top-level properties from 12+ to 8. Updated hive-engineer.yml to read from `meta.*` with fallbacks to old paths for backward compatibility.
+**Prevention:** (1) Always check the actual error body from GitHub API responses, not just the status code. (2) Keep `client_payload` lean — use nested objects for metadata. (3) When debugging API failures, add the response body to error output immediately, don't guess at causes.
 **Affects:** hive
 
 ### 2026-03-28 allowed_bots regression — company repos blocked for 5+ cycles

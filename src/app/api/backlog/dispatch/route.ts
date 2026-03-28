@@ -89,6 +89,24 @@ export async function POST(req: Request) {
 
   // If a completed item was passed, update its status
   if (completed_id && completed_status) {
+    // Close the corresponding agent_actions record so the engineer_busy gate unblocks.
+    // Without this, the action stays 'running' forever (zombie) and blocks all future dispatches.
+    if (completed_status !== "in_progress") {
+      const actionStatus = completed_status === "success" ? "success" : "failed";
+      const errorDetail = body.error || null;
+      await sql`
+        UPDATE agent_actions
+        SET status = ${actionStatus},
+            finished_at = COALESCE(finished_at, NOW()),
+            error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
+        WHERE agent = 'engineer'
+          AND status = 'running'
+          AND company_id IS NULL
+          AND description ILIKE ${'%' + completed_id + '%'}
+          AND started_at > NOW() - INTERVAL '2 hours'
+      `.catch((e: any) => { console.warn(`[backlog] close agent_action for ${completed_id} failed: ${e?.message || e}`); });
+    }
+
     // Agent acknowledges work started — transition to in_progress
     if (completed_status === "in_progress") {
       await sql`
