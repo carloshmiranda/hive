@@ -739,8 +739,8 @@ export async function POST(req: Request) {
       AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
            OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
       ORDER BY
-        CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
         CASE WHEN spec IS NOT NULL AND spec->>'approach' IS NOT NULL THEN 0 ELSE 1 END,
+        CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
         created_at ASC
       LIMIT 10
     `;
