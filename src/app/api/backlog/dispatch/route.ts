@@ -1065,9 +1065,12 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "no_scorable_items" });
   }
 
-  // Pick the first dispatchable item — allow ONE specless item through for spec generation,
-  // but skip items that already failed spec generation twice ([manual_spec_needed])
+  // Two-pass selection: specced items first (ready to dispatch immediately),
+  // then specless items (need LLM spec generation which may fail).
+  // This prevents OpenRouter outages from blocking the entire queue.
   let topItem: any = null;
+  let speclessCandidate: any = null;
+
   for (const candidate of scoredItems) {
     const candidateSpec = candidate.spec;
     const hasSpec = candidateSpec && candidateSpec.acceptance_criteria;
@@ -1083,12 +1086,6 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // Items with spec or P0 — always dispatchable
-    if (hasSpec || candidate.priority === "P0") {
-      topItem = candidate;
-      break;
-    }
-
     // Specless item that already failed once — block permanently
     if (notes.includes("[no_spec]")) {
       await sql`
@@ -1101,9 +1098,21 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // Specless item, first attempt — allow through for spec generation (planning phase below)
-    topItem = candidate;
-    break;
+    // Items with spec or P0 — immediately dispatchable, take the first one
+    if (hasSpec || candidate.priority === "P0") {
+      topItem = candidate;
+      break;
+    }
+
+    // Specless item, first attempt — remember it but keep looking for specced items
+    if (!speclessCandidate) {
+      speclessCandidate = candidate;
+    }
+  }
+
+  // Fall back to specless candidate only if no specced items found
+  if (!topItem && speclessCandidate) {
+    topItem = speclessCandidate;
   }
 
   if (!topItem) {
