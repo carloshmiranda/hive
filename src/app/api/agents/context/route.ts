@@ -6,7 +6,8 @@ import { getCapabilitySummary } from "@/lib/hive-capabilities";
 import { checkForbidden } from "@/lib/phase-gate";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
-import { selectEntriesWithMMR } from "@/lib/mmr";
+import { selectEntriesWithMMR, type PlaybookEntry } from "@/lib/mmr";
+import { cachedPlaybook, cachedCompanyList } from "@/lib/redis-cache";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
 import { setSentryTags } from "@/lib/sentry-tags";
 
@@ -145,13 +146,15 @@ async function buildContext(sql: any, company: any) {
       WHERE company_id = ${company.id} AND gate_type = 'new_company'
       ORDER BY created_at DESC LIMIT 1
     `.catch(() => []),
-    sql`
-      SELECT domain, insight FROM playbook
-      WHERE confidence >= 0.6
-        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
-        AND domain = ANY(${['engineering', 'infrastructure', 'payments', 'auth', 'deployment']})
-      ORDER BY confidence DESC LIMIT 5
-    `.catch(() => []),
+    cachedPlaybook('engineering', () =>
+      sql`
+        SELECT domain, insight FROM playbook
+        WHERE confidence >= 0.6
+          AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+          AND domain = ANY(${['engineering', 'infrastructure', 'payments', 'auth', 'deployment']})
+        ORDER BY confidence DESC LIMIT 5
+      `.catch(() => [])
+    ),
     sql`
       SELECT id, title, description, priority, acceptance, status
       FROM company_tasks
@@ -205,7 +208,7 @@ async function buildContext(sql: any, company: any) {
     cycle: cycle[0] ? { id: cycle[0].id, cycle_number: cycle[0].cycle_number, ceo_plan: cycle[0].ceo_plan } : null,
     research,
     proposal: proposal[0]?.context?.proposal || null,
-    playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
+    playbook: (playbook as any[]).map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     engineering_tasks: filteredTasks,
     ...(gatedTasks.length > 0 ? { phase_gated_tasks: gatedTasks } : {}),
     metrics: metrics.slice(0, 7),
@@ -233,13 +236,15 @@ async function growthContext(sql: any, company: any) {
         AND date >= CURRENT_DATE - INTERVAL '7 days'
       ORDER BY date DESC LIMIT 14
     `.catch(() => []),
-    sql`
-      SELECT domain, insight FROM playbook
-      WHERE confidence >= 0.6
-        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
-        AND domain = ANY(${['growth', 'seo', 'email_marketing', 'content', 'social']})
-      ORDER BY confidence DESC LIMIT 10
-    `.catch(() => []),
+    cachedPlaybook('growth', () =>
+      sql`
+        SELECT domain, insight FROM playbook
+        WHERE confidence >= 0.6
+          AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+          AND domain = ANY(${['growth', 'seo', 'email_marketing', 'content', 'social']})
+        ORDER BY confidence DESC LIMIT 10
+      `.catch(() => [])
+    ),
     sql`
       SELECT proposed_fix FROM evolver_proposals
       WHERE status = 'approved'
@@ -305,7 +310,7 @@ async function growthContext(sql: any, company: any) {
       date: m.date, mrr: m.mrr, customers: m.customers,
       page_views: m.page_views, signups: m.signups, waitlist: m.waitlist_total,
     })),
-    playbook: playbook.map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
+    playbook: (playbook as any[]).map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     evolver_proposals: proposals.map((p: { proposed_fix: string }) => p.proposed_fix),
     growth_tasks: filteredGrowthTasks,
     ...(gatedGrowthTasks.length > 0 ? { phase_gated_tasks: gatedGrowthTasks } : {}),
@@ -413,13 +418,15 @@ async function ceoContext(sql: any, company: any) {
         AND report_type IN ('market_research','competitive_analysis','seo_keywords','product_spec')
       ORDER BY updated_at DESC
     `.catch(() => []),
-    sql`
-      SELECT domain, insight, confidence FROM playbook
-      WHERE (content_language IS NULL OR content_language = ${company.content_language || 'en'})
-        AND superseded_by IS NULL
-        AND confidence >= 0.3
-      ORDER BY confidence DESC
-    `.catch(() => []),
+    cachedPlaybook(null, () =>
+      sql`
+        SELECT domain, insight, confidence FROM playbook
+        WHERE (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+          AND superseded_by IS NULL
+          AND confidence >= 0.3
+        ORDER BY confidence DESC
+      `.catch(() => [])
+    ),
     sql`
       SELECT id, title, status, priority FROM company_tasks
       WHERE company_id = ${company.id} AND category = 'engineering'
@@ -464,7 +471,7 @@ async function ceoContext(sql: any, company: any) {
   const validation = computeValidationScore(businessType, metrics, company.created_at);
 
   // Apply MMR to select diverse, relevant playbook entries
-  const selectedPlaybook = selectEntriesWithMMR(allPlaybookEntries, 10, 0.7);
+  const selectedPlaybook = selectEntriesWithMMR(allPlaybookEntries as PlaybookEntry[], 10, 0.7);
 
   // Calculate WoW growth rates
   const growthRates = calculateWoWGrowthRates(metrics);
@@ -523,10 +530,13 @@ async function ceoContext(sql: any, company: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function scoutContext(sql: any) {
   const [companies, killed, rejected, pendingCount, playbook] = await Promise.all([
-    sql`
-      SELECT name, slug, description, status, company_type, market, content_language
-      FROM companies ORDER BY created_at DESC
-    `.catch(() => []),
+    cachedCompanyList(() =>
+      sql`
+        SELECT name, slug, description, status, company_type, market, content_language
+        FROM companies ORDER BY created_at DESC
+      `.catch(() => []),
+      "all"
+    ),
     sql`
       SELECT name, description, kill_reason FROM companies
       WHERE status = 'killed' AND killed_at > NOW() - INTERVAL '90 days'
@@ -540,15 +550,17 @@ async function scoutContext(sql: any) {
       SELECT COUNT(*)::int as count FROM approvals
       WHERE gate_type = 'new_company' AND status = 'pending'
     `.catch(() => [{ count: 0 }]),
-    sql`
-      SELECT domain, insight, confidence FROM playbook
-      WHERE superseded_by IS NULL AND confidence >= 0.5
-      ORDER BY confidence DESC LIMIT 20
-    `.catch(() => []),
+    cachedPlaybook(null, () =>
+      sql`
+        SELECT domain, insight, confidence FROM playbook
+        WHERE superseded_by IS NULL AND confidence >= 0.5
+        ORDER BY confidence DESC LIMIT 20
+      `.catch(() => [])
+    ),
   ]);
 
-  const active = companies.filter((c: { status: string }) => ['mvp', 'active'].includes(c.status));
-  const pipeline = companies.filter((c: { status: string }) => ['idea', 'approved', 'provisioning'].includes(c.status));
+  const active = (companies as any[]).filter((c: { status: string }) => ['mvp', 'active'].includes(c.status));
+  const pipeline = (companies as any[]).filter((c: { status: string }) => ['idea', 'approved', 'provisioning'].includes(c.status));
 
   return {
     portfolio: {
@@ -564,7 +576,7 @@ async function scoutContext(sql: any) {
     rejected_proposals: rejected.map((r: { title: string; decision_note: string }) => ({
       title: r.title, reason: r.decision_note,
     })),
-    playbook: playbook.map((p: { domain: string; insight: string; confidence: number }) =>
+    playbook: (playbook as any[]).map((p: { domain: string; insight: string; confidence: number }) =>
       `${p.domain} (${p.confidence}): ${p.insight}`
     ),
     markets_covered: [...new Set(active.map((c: { market: string }) => c.market).filter(Boolean))],
@@ -647,13 +659,16 @@ async function evolverContext(sql: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getPortfolioSummary(sql: any) {
   const [companies, allMetrics, cycleActivity] = await Promise.all([
-    // Get all active companies
-    sql`
-      SELECT id, name, slug, description, company_type, market, created_at
-      FROM companies
-      WHERE status IN ('mvp', 'active')
-      ORDER BY created_at ASC
-    `.catch(() => []),
+    // Get all active companies (cached — invalidated on company create/update)
+    cachedCompanyList(() =>
+      sql`
+        SELECT id, name, slug, description, company_type, market, created_at
+        FROM companies
+        WHERE status IN ('mvp', 'active')
+        ORDER BY created_at ASC
+      `.catch(() => []),
+      "active"
+    ),
     // Get latest metrics for all active companies
     sql`
       SELECT DISTINCT ON (company_id)

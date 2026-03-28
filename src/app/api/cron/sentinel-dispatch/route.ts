@@ -30,6 +30,7 @@ import {
 } from "@/lib/sentinel-helpers";
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { invalidateCompanyList } from "@/lib/redis-cache";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
 
 export const dynamic = "force-dynamic";
@@ -201,6 +202,7 @@ async function executeSentinelDispatch(request: Request) {
       RETURNING id, slug
     `;
     if (cleanedCompanies.length > 0) {
+      await invalidateCompanyList();
       console.log(`[sentinel-dispatch] Cleaned ${cleanedCompanies.length} orphaned idea companies: ${cleanedCompanies.map((c: any) => c.slug).join(", ")}`);
     }
 

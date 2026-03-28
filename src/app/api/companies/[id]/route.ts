@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { calculateHealthScore } from "@/lib/health-score";
+import { invalidateCompanyList } from "@/lib/redis-cache";
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth();
@@ -58,5 +59,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     RETURNING *
   `;
   if (!company) return err("Company not found", 404);
+  await invalidateCompanyList();
   return json(company);
 }

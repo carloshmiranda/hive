@@ -8,6 +8,7 @@ import { callLLMWithLogging } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { cachedPlaybook } from "@/lib/redis-cache";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -132,12 +133,14 @@ export async function POST(req: NextRequest) {
       WHERE company_id = ${company.id} LIMIT 5
     `;
 
-    const playbook = await sql`
-      SELECT domain, insight, confidence FROM playbook
-      WHERE superseded_by IS NULL AND confidence >= 0.6
-        AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
-      ORDER BY confidence DESC LIMIT 10
-    `;
+    const playbook = await cachedPlaybook(null, () =>
+      sql`
+        SELECT domain, insight, confidence FROM playbook
+        WHERE superseded_by IS NULL AND confidence >= 0.6
+          AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+        ORDER BY confidence DESC LIMIT 10
+      `
+    );
 
     // 3. Build the agent prompt with full context
     const [dbPrompt] = await sql`

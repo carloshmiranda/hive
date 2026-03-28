@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { invalidateCompanyList } from "@/lib/redis-cache";
 
 export async function GET() {
   setSentryTags({
@@ -48,5 +49,6 @@ export async function POST(req: Request) {
     VALUES (${name}, ${slug}, ${description || null}, ${status || "idea"})
     RETURNING *
   `;
+  await invalidateCompanyList();
   return json(company, 201);
 }

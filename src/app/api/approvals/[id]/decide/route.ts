@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth";
 import { dispatchEvent } from "@/lib/dispatch";
 import { getGitHubToken } from "@/lib/github-app";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { invalidateCompanyList } from "@/lib/redis-cache";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   // Set Sentry tags for error triage and filtering
@@ -46,6 +47,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         // Move company from 'idea' to 'approved' — but don't downgrade imports already at 'mvp'
         if (approval.company_id) {
           await sql`UPDATE companies SET status = 'approved', updated_at = now() WHERE id = ${approval.company_id} AND status = 'idea'`;
+          await invalidateCompanyList();
         }
         // Dispatch directly to Engineer for provisioning (skip CEO middleman)
         const [newComp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
@@ -185,6 +187,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         if (approval.company_id) {
           const [comp] = await sql`SELECT slug FROM companies WHERE id = ${approval.company_id}`;
           await sql`UPDATE companies SET status = 'active', updated_at = NOW() WHERE id = ${approval.company_id} AND status = 'mvp'`;
+          await invalidateCompanyList();
           await sql`
             INSERT INTO approvals (company_id, gate_type, title, description, context)
             VALUES (

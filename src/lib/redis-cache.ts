@@ -154,19 +154,20 @@ export async function invalidatePlaybook(): Promise<void> {
 // --- Company list cache ---
 
 const COMPANIES_TTL = 300; // 5 minutes
-const COMPANIES_KEY = "co:list";
+const COMPANIES_PREFIX = "co:";
 
-export async function cachedCompanyList<T>(fetcher: () => Promise<T>): Promise<T> {
-  const cached = await cacheGet<T>(COMPANIES_KEY);
+export async function cachedCompanyList<T>(fetcher: () => Promise<T>, variant: string = "list"): Promise<T> {
+  const cacheKey = COMPANIES_PREFIX + variant;
+  const cached = await cacheGet<T>(cacheKey);
   if (cached !== null && cached !== undefined) return cached;
 
   const value = await fetcher();
-  await cacheSet(COMPANIES_KEY, value, COMPANIES_TTL);
+  await cacheSet(cacheKey, value, COMPANIES_TTL);
   return value;
 }
 
 export async function invalidateCompanyList(): Promise<void> {
-  await cacheDel(COMPANIES_KEY);
+  await cacheInvalidatePattern(COMPANIES_PREFIX + "*");
 }
 
 /**

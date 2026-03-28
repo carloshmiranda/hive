@@ -60,7 +60,7 @@ async function scheduleChainRetry(reason: string, delaySeconds: number) {
       action_type: "chain_retry",
       retry_reason: reason,
     }, {
-      deduplicationId: `cycle-chain-retry-${reason}-${Math.floor(Date.now() / 3600000)}`,
+      deduplicationId: `cycle-chain-retry-${reason}-${new Date().toISOString().slice(0, 13)}`,
       delay: delaySeconds,
     });
     console.log(`[cycle-complete] Chain retry scheduled in ${Math.round(delaySeconds / 60)}m (reason: ${reason})`);
@@ -155,7 +155,7 @@ export async function POST(req: Request) {
     await qstashPublish("/api/backlog/dispatch", {
       trigger: "cycle_complete_hive_first",
     }, {
-      deduplicationId: `hive-first-${Date.now().toString(36)}`,
+      deduplicationId: `hive-first-${new Date().toISOString().slice(0, 13)}`,
     }).catch(() => null);
 
     return json({
@@ -207,7 +207,7 @@ export async function POST(req: Request) {
     await qstashPublish("/api/backlog/dispatch", {
       trigger: "cycle_complete_no_companies",
     }, {
-      deduplicationId: `no-companies-backlog-${Date.now().toString(36)}`,
+      deduplicationId: `no-companies-backlog-${new Date().toISOString().slice(0, 13)}`,
     }).catch(() => null);
     return json({ chained: true, type: "hive_backlog", reason: "no_eligible_companies" });
   }
@@ -262,7 +262,7 @@ export async function POST(req: Request) {
     await qstashPublish("/api/backlog/dispatch", {
       trigger: "cycle_complete_no_scored",
     }, {
-      deduplicationId: `no-scored-backlog-${Date.now().toString(36)}`,
+      deduplicationId: `no-scored-backlog-${new Date().toISOString().slice(0, 13)}`,
     }).catch(() => null);
     return json({ chained: true, type: "hive_backlog", reason: "no_companies_need_cycles" });
   }
@@ -328,7 +328,7 @@ export async function POST(req: Request) {
       dispatched_at: new Date().toISOString(),
     }, {
       delay: 30 * 60, // 30 minutes
-      deduplicationId: `chain-watchdog-${Date.now().toString(36)}`,
+      deduplicationId: `chain-watchdog-${new Date().toISOString().slice(0, 13)}`,
       retries: 2,
     }).catch((e: any) => { console.warn(`[cycle-complete] schedule chain watchdog failed: ${e?.message || e}`); });
 

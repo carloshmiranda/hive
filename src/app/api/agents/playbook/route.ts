@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
+import { invalidatePlaybook } from "@/lib/redis-cache";
 
 // POST /api/agents/playbook — write playbook entry via OIDC auth
 // Body: { domain, insight, evidence?, confidence? }
@@ -41,5 +42,6 @@ export async function POST(req: NextRequest) {
     RETURNING id, domain, insight, confidence, content_language
   `;
 
+  await invalidatePlaybook();
   return json(entry, 201);
 }

@@ -150,7 +150,6 @@ export const OPENROUTER_MODELS = {
   phi4: "microsoft/phi-4:free",
 
   // Meta-routers (ultimate fallbacks — always appended last)
-  auto: "openrouter/auto",
   free: "openrouter/free",
 } as const;
 
@@ -265,7 +264,7 @@ async function fetchFreeModels(): Promise<FreeModelEntry[]> {
  * Build the full model chain for an agent:
  * 1. Curated primaries (quality — agent-specific ordering)
  * 2. Dynamic free models (resilience — everything else, sorted by context_length)
- * 3. Meta-router (ultimate fallback — openrouter/free only)
+ * 3. Meta-router fallback (openrouter/free)
  *
  * Deduplicates so curated models aren't listed twice.
  * Filters dynamic pool by agent's minContext requirement.

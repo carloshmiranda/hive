@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { dispatchEvent } from "@/lib/dispatch";
+import { invalidatePlaybook } from "@/lib/redis-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -141,6 +142,11 @@ export async function POST(req: Request) {
     }
   }
 
+  // Invalidate playbook cache after any new entries or confidence changes
+  if (results.playbook_entries_created > 0) {
+    await invalidatePlaybook();
+  }
+
   // --- 2 & 3. Confidence boost/decay based on cycle score ---
   // Find which playbook entries were available during this cycle's planning
   // (entries that existed before the cycle started and had confidence >= 0.6)
@@ -191,6 +197,11 @@ export async function POST(req: Request) {
         // Scores 4-7: neutral, no confidence change
       }
     }
+  }
+
+  // Invalidate playbook cache after confidence changes
+  if (results.confidence_boosts > 0 || results.confidence_decays > 0) {
+    await invalidatePlaybook();
   }
 
   // --- 4. Extract and learn error patterns from CEO review ---
