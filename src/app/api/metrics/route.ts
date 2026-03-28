@@ -1,13 +1,25 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "metrics_get",
+    route: "/api/metrics"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const { searchParams } = new URL(req.url);
   const companyId = searchParams.get("company_id");
   const days = parseInt(searchParams.get("days") || "30");
+
+  // Add company_id to Sentry tags if available
+  if (companyId) {
+    setSentryTags({ company_id: companyId });
+  }
 
   const sql = getDb();
 
@@ -30,12 +42,21 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "metrics_create",
+    route: "/api/metrics"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
   const { company_id, date, ...data } = body;
   if (!company_id) return err("company_id required");
+
+  // Add company_id to Sentry tags
+  setSentryTags({ company_id });
 
   const sql = getDb();
   const [metric] = await sql`

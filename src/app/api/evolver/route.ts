@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { dispatchEvent } from "@/lib/dispatch";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Batch reject proposals based on criteria
 async function batchRejectProposals(criteria: any, notes?: string) {
@@ -43,6 +44,13 @@ async function batchRejectProposals(criteria: any, notes?: string) {
 // GET /api/evolver          → list proposals (default: pending)
 // GET /api/evolver?status=all → all proposals
 export async function GET(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    agent: "evolver",
+    action_type: "proposals_list",
+    route: "/api/evolver"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
@@ -76,6 +84,13 @@ export async function GET(req: Request) {
 
 // PATCH /api/evolver — approve/reject/defer a proposal or batch reject
 export async function PATCH(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    agent: "evolver",
+    action_type: "proposal_decision",
+    route: "/api/evolver"
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
@@ -266,6 +281,13 @@ export async function PATCH(req: Request) {
 
 // POST /api/evolver/auto-approve — auto-approve proposals after 48h
 export async function POST(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    agent: "evolver",
+    action_type: "auto_approve",
+    route: "/api/evolver"
+  });
+
   // This endpoint should only be called by system/cron, not by users
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
