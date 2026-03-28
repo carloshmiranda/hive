@@ -2,6 +2,7 @@ import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { encrypt, decryptAndMigrate, DecryptionError } from "@/lib/crypto";
 import { invalidateSetting } from "@/lib/redis-cache";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Settings are stored in a simple key-value pattern in Neon.
 // We create the table on first access if it doesn't exist.
@@ -41,6 +42,11 @@ const VALID_KEYS = [
 ];
 
 export async function GET() {
+  setSentryTags({
+    action_type: "admin",
+    route: "/api/settings",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
@@ -85,6 +91,11 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  setSentryTags({
+    action_type: "admin",
+    route: "/api/settings",
+  });
+
   // Allow both session auth (dashboard) and CRON_SECRET auth (MCP/internal)
   const authHeader = req.headers.get("authorization");
   const isCronAuth = authHeader === `Bearer ${process.env.CRON_SECRET}`;

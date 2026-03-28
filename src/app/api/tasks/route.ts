@@ -1,8 +1,14 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { validateTaskAgainstPhase } from "@/lib/phase-gate";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(req: Request) {
+  setSentryTags({
+    action_type: "admin",
+    route: "/api/tasks",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
@@ -40,6 +46,11 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  setSentryTags({
+    action_type: "admin",
+    route: "/api/tasks",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
