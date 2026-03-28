@@ -437,6 +437,35 @@ export async function GET(req: Request) {
           `.catch(() => []);
           if (recentFix) continue; // Already attempted recently
 
+          // Try updating the branch first — many CI failures are just "behind main".
+          // GitHub re-runs CI automatically after branch update, so if that was the
+          // only issue, the PR will pass CI on next check and get auto-merged.
+          try {
+            const updateBranchRes = await fetch(
+              `https://api.github.com/repos/carloshmiranda/hive/pulls/${pr.number}/update-branch`,
+              {
+                method: "PUT",
+                headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+                body: JSON.stringify({ expected_head_sha: pr.head.sha }),
+              }
+            );
+            if (updateBranchRes.ok || updateBranchRes.status === 202) {
+              console.log(`[company-health] Check 39: Updated branch for PR #${pr.number} — CI will re-run`);
+              await sql`
+                INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
+                VALUES ('engineer', 'ci_fix', 'success',
+                  ${`Branch update for PR #${pr.number}: ${pr.title} — merged main into branch, CI will re-run`},
+                  NOW(), NOW())
+              `.catch(() => {});
+              continue; // Skip dispatching Engineer — branch update may fix CI
+            }
+            // If update fails (merge conflict, etc.), fall through to Engineer dispatch
+            const updateErr = await updateBranchRes.text().catch(() => "");
+            console.log(`[company-health] Check 39: Branch update failed for PR #${pr.number} (${updateBranchRes.status}): ${updateErr.slice(0, 200)}`);
+          } catch (updateErr: any) {
+            console.log(`[company-health] Check 39: Branch update error for PR #${pr.number}: ${updateErr.message}`);
+          }
+
           // Also check: is an Engineer already running? Don't pile up.
           const [runningEng] = await sql`
             SELECT id FROM agent_actions

@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-03-28 Spec generation failure halts entire dispatch chain
+**What happened:** Dispatch chain stopped after Engineer completed a task. The next dispatch attempt picked a specless item, `generateSpec()` returned null (OpenRouter outage), and the route returned `{ dispatched: false, reason: "spec_generation_failed" }` immediately — killing the chain.
+**Root cause:** Spec generation had two `return json(...)` paths (null result + catch) that returned immediately instead of trying other candidate items. One bad item blocked all dispatch.
+**Fix applied:** Changed from single-item selection to ordered candidate list (specced items first, then specless). Spec generation now loops through up to 3 candidates — if one fails, marks it `[no_spec]` and tries the next. Chain only stops if ALL candidates fail.
+**Prevention:** Any dispatch pipeline step that can fail for item-specific reasons must try the next candidate, not halt the chain. "One bad item should never block the queue" — applies to spec generation, company-specific checks, and any future pre-dispatch gates.
+**Affects:** hive
+
+### 2026-03-28 Zombie agent_actions — dispatch callback never closed running records
+**What happened:** Engineer workflows completed successfully on GitHub Actions, but the dispatch chain stopped because subsequent dispatches got `engineer_busy` — the agent_actions record stayed `running` forever.
+**Root cause:** `/api/backlog/dispatch/route.ts` callback handling updated `hive_backlog` item status but NEVER updated the corresponding `agent_actions` row. No code path in the entire API marked agent_actions as success/failed from callbacks. The `engineer_busy` gate (checking for `running` engineer actions) then blocked all future dispatches permanently.
+**Fix applied:** Added agent_actions completion SQL in the callback section of the dispatch route, before the engineer_busy gate runs on the next dispatch attempt. Matches by agent + description ILIKE + 2-hour window.
+**Prevention:** Every callback that marks work as "done" must close ALL related state — not just the primary table. Grep for `status = 'running'` to find any other gates that might suffer the same pattern. The `hive_sql_mutate` MCP tool also can't update `agent_actions` (returns 0 affected rows) — investigate RLS.
+**Affects:** hive
+
 ### 2026-03-28 Dispatch loop locked — 6 compounding blockers
 **What happened:** Backlog dispatch stopped flowing entirely. No items dispatched for 24+ hours despite 55 ready items and 0% budget used.
 **Root cause:** Six independent issues compounded into a total lock:

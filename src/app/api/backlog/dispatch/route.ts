@@ -91,21 +91,42 @@ export async function POST(req: Request) {
   if (completed_id && completed_status) {
     // Close the corresponding agent_actions record so the engineer_busy gate unblocks.
     // Without this, the action stays 'running' forever (zombie) and blocks all future dispatches.
+    // Uses dispatch_id from hive_backlog (set at dispatch time) for reliable linking.
+    // Falls back to closing the most recent running engineer action if no dispatch_id found.
     if (completed_status !== "in_progress") {
       // "partial" = max_turns reached but progress was made — treat as success for agent_actions
       const actionStatus = (completed_status === "success" || completed_status === "partial") ? "success" : "failed";
       const errorDetail = body.error || null;
-      await sql`
-        UPDATE agent_actions
-        SET status = ${actionStatus},
-            finished_at = COALESCE(finished_at, NOW()),
-            error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
-        WHERE agent = 'engineer'
-          AND status = 'running'
-          AND company_id IS NULL
-          AND description ILIKE ${'%' + completed_id + '%'}
-          AND started_at > NOW() - INTERVAL '2 hours'
-      `.catch((e: any) => { console.warn(`[backlog] close agent_action for ${completed_id} failed: ${e?.message || e}`); });
+
+      // Look up the dispatch_id that links this backlog item to its agent_action
+      const [backlogItem] = await sql`
+        SELECT dispatch_id FROM hive_backlog WHERE id = ${completed_id}
+      `.catch(() => []);
+
+      if (backlogItem?.dispatch_id) {
+        await sql`
+          UPDATE agent_actions
+          SET status = ${actionStatus},
+              finished_at = COALESCE(finished_at, NOW()),
+              error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
+          WHERE id = ${backlogItem.dispatch_id} AND status = 'running'
+        `.catch((e: any) => { console.warn(`[backlog] close agent_action ${backlogItem.dispatch_id} failed: ${e?.message || e}`); });
+      } else {
+        // Fallback: close the most recent running engineer action (best-effort)
+        await sql`
+          UPDATE agent_actions
+          SET status = ${actionStatus},
+              finished_at = COALESCE(finished_at, NOW()),
+              error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
+          WHERE id = (
+            SELECT id FROM agent_actions
+            WHERE agent = 'engineer' AND status = 'running'
+              AND company_id IS NULL
+              AND started_at > NOW() - INTERVAL '2 hours'
+            ORDER BY started_at DESC LIMIT 1
+          )
+        `.catch((e: any) => { console.warn(`[backlog] close most recent engineer action failed: ${e?.message || e}`); });
+      }
     }
 
     // Agent acknowledges work started — transition to in_progress
@@ -1151,11 +1172,12 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "no_scorable_items" });
   }
 
-  // Two-pass selection: specced items first (ready to dispatch immediately),
+  // Build ordered candidate list: specced items first (ready to dispatch immediately),
   // then specless items (need LLM spec generation which may fail).
   // This prevents OpenRouter outages from blocking the entire queue.
-  let topItem: any = null;
-  let speclessCandidate: any = null;
+  // We try multiple candidates — if spec generation fails for one, we move to the next.
+  const speccedCandidates: any[] = [];
+  const speclessCandidates: any[] = [];
 
   for (const candidate of scoredItems) {
     const candidateSpec = candidate.spec;
@@ -1184,26 +1206,27 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // Items with spec or P0 — immediately dispatchable, take the first one
+    // Items with spec or P0 — immediately dispatchable
     if (hasSpec || candidate.priority === "P0") {
-      topItem = candidate;
-      break;
-    }
-
-    // Specless item, first attempt — remember it but keep looking for specced items
-    if (!speclessCandidate) {
-      speclessCandidate = candidate;
+      speccedCandidates.push(candidate);
+    } else {
+      speclessCandidates.push(candidate);
     }
   }
 
-  // Fall back to specless candidate only if no specced items found
-  if (!topItem && speclessCandidate) {
-    topItem = speclessCandidate;
-  }
+  // Ordered: specced first (guaranteed dispatchable), then specless (may fail spec gen)
+  const orderedCandidates = [...speccedCandidates, ...speclessCandidates];
 
-  if (!topItem) {
+  if (orderedCandidates.length === 0) {
     return json({ dispatched: false, reason: "no_spec_items_only", blocked_count: scoredItems.length });
   }
+
+  // Try candidates in order — skip items that fail spec generation
+  let topItem: any = null;
+
+  // We'll select the first item here, but the spec generation loop below
+  // may advance to subsequent candidates if spec fails.
+  topItem = orderedCandidates[0];
 
   // Auto-classify category if item has default category ('feature')
   if (topItem.category === 'feature') {
@@ -1273,34 +1296,18 @@ export async function POST(req: Request) {
   const tokenPrefix = ghPat.substring(0, 4);
   console.log(`[backlog] Using GitHub token: ${tokenPrefix}... (length: ${ghPat.length})`);
 
-  // Check for previous failed attempts — inject error context so Engineer learns
-  const attemptMatch = (topItem.notes || "").match(/\[attempt \d+\]/g);
-  const attemptCount = attemptMatch?.length || 0;
-  let previousErrors = "";
-  if (attemptCount > 0) {
-    // Find the most recent Engineer failures related to this backlog item
-    const failures = await sql`
-      SELECT error, description, finished_at
-      FROM agent_actions
-      WHERE agent = 'engineer' AND status = 'failed'
-      AND company_id IS NULL
-      AND finished_at > NOW() - INTERVAL '7 days'
-      AND (description ILIKE ${"%" + topItem.title.slice(0, 30) + "%"}
-           OR output::text ILIKE ${"%" + (topItem.id || "") + "%"})
-      ORDER BY finished_at DESC
-      LIMIT 3
-    `.catch(() => []);
+  // Previous attempt context is computed AFTER spec generation loop (topItem may change)
 
-    if (failures.length > 0) {
-      previousErrors = failures
-        .map((f, i) => `Attempt ${i + 1}: ${(f.error || f.description || "unknown error").slice(0, 300)}`)
-        .join("\n");
-    }
-  }
-
-  // Planning phase — generate spec before dispatching (P0 hotfixes bypass)
+  // Planning phase — generate spec before dispatching (P0 hotfixes bypass).
+  // If spec generation fails, try the next candidate instead of halting the chain.
+  // This ensures one bad item doesn't block all dispatch.
   let spec = topItem.spec || null;
-  if (!spec && topItem.priority !== "P0") {
+  const MAX_SPEC_ATTEMPTS = 3; // Try up to 3 candidates before giving up
+  let specAttempts = 0;
+  let candidateIdx = 0;
+
+  while (!spec && topItem.priority !== "P0" && specAttempts < MAX_SPEC_ATTEMPTS) {
+    specAttempts++;
     try {
       await sql`
         UPDATE hive_backlog SET status = 'planning' WHERE id = ${topItem.id}
@@ -1324,6 +1331,7 @@ export async function POST(req: Request) {
           UPDATE hive_backlog SET spec = ${JSON.stringify(spec)} WHERE id = ${topItem.id}
         `.catch(() => {});
         console.log(`[backlog] Spec generated for "${topItem.title}" — complexity: ${spec.complexity}, turns: ${spec.estimated_turns}`);
+        break; // Spec succeeded, proceed with this item
       } else {
         // Mark with [no_spec] so next attempt permanently blocks it
         await sql`
@@ -1332,8 +1340,7 @@ export async function POST(req: Request) {
               notes = COALESCE(notes, '') || ' [no_spec] Spec generation returned null — will be blocked on next dispatch attempt.'
           WHERE id = ${topItem.id}
         `.catch(() => {});
-        console.warn(`[backlog] Spec generation failed for "${topItem.title}" — tagged [no_spec], returning to ready`);
-        return json({ dispatched: false, reason: "spec_generation_failed", item: topItem.title });
+        console.warn(`[backlog] Spec generation failed for "${topItem.title}" — tagged [no_spec], trying next candidate`);
       }
     } catch (e) {
       // Mark with [no_spec] on error too
@@ -1344,7 +1351,43 @@ export async function POST(req: Request) {
         WHERE id = ${topItem.id}
       `.catch(() => {});
       console.warn(`[backlog] Planning phase error for "${topItem.title}":`, e instanceof Error ? e.message : "unknown");
-      return json({ dispatched: false, reason: "spec_generation_error", item: topItem.title, error: e instanceof Error ? e.message : "unknown" });
+    }
+
+    // Spec failed — advance to next candidate
+    candidateIdx++;
+    const nextCandidate = orderedCandidates[candidateIdx];
+    if (!nextCandidate) {
+      // No more candidates to try
+      return json({ dispatched: false, reason: "all_candidates_failed_spec", attempted: specAttempts });
+    }
+    topItem = nextCandidate;
+    spec = topItem.spec || null;
+    // If next candidate already has a spec (or is P0), the while condition breaks naturally
+  }
+
+  // Check for previous failed attempts — inject error context so Engineer learns
+  // (computed after spec loop since topItem may have changed)
+  const attemptMatch = (topItem.notes || "").match(/\[attempt \d+\]/g);
+  const attemptCount = attemptMatch?.length || 0;
+  let previousErrors = "";
+  if (attemptCount > 0) {
+    // Find the most recent Engineer failures related to this backlog item
+    const failures = await sql`
+      SELECT error, description, finished_at
+      FROM agent_actions
+      WHERE agent = 'engineer' AND status = 'failed'
+      AND company_id IS NULL
+      AND finished_at > NOW() - INTERVAL '7 days'
+      AND (description ILIKE ${"%" + topItem.title.slice(0, 30) + "%"}
+           OR output::text ILIKE ${"%" + (topItem.id || "") + "%"})
+      ORDER BY finished_at DESC
+      LIMIT 3
+    `.catch(() => []);
+
+    if (failures.length > 0) {
+      previousErrors = failures
+        .map((f, i) => `Attempt ${i + 1}: ${(f.error || f.description || "unknown error").slice(0, 300)}`)
+        .join("\n");
     }
   }
 

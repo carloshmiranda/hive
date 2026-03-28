@@ -1,33 +1,84 @@
 import { getDb } from "./db";
+import crypto from "crypto";
 
 export type AgentType = 'build' | 'growth' | 'fix' | 'ceo' | 'scout' | 'evolver';
 
 /**
- * Generate cache key for agent context
- * Format: company_id:agent_type:cycle_id
+ * Generate content hash for payload deduplication
  */
-export function generateCacheKey(companyId: string, agentType: AgentType, cycleId?: string): string {
-  return `${companyId}:${agentType}:${cycleId || 'no-cycle'}`;
+export function generateContentHash(content: unknown): string {
+  const contentString = typeof content === 'string' ? content : JSON.stringify(content);
+  return crypto.createHash('sha256').update(contentString).digest('hex').substring(0, 16);
 }
 
 /**
- * Get cached context for an agent
+ * Generate cache key for agent context with optional content hash
+ * Format: company_id:agent_type:cycle_id:content_hash
  */
-export async function getCachedContext(companyId: string, agentType: AgentType, cycleId?: string): Promise<unknown | null> {
+export function generateCacheKey(companyId: string, agentType: AgentType, cycleId?: string, contentHash?: string): string {
+  const base = `${companyId}:${agentType}:${cycleId || 'no-cycle'}`;
+  return contentHash ? `${base}:${contentHash}` : base;
+}
+
+/**
+ * Get cached context for an agent with content-based deduplication
+ * Overloaded to support portfolio agents (legacy cacheKey parameter)
+ */
+export async function getCachedContext(
+  companyIdOrKey: string,
+  agentType: AgentType,
+  cycleId?: string,
+  contentHash?: string
+): Promise<unknown | null> {
   const sql = getDb();
-  const cacheKey = generateCacheKey(companyId, agentType, cycleId);
 
   try {
-    // Clean expired entries and get valid cache
-    const [cached] = await sql`
-      DELETE FROM context_cache WHERE expires_at < now();
+    // Clean expired entries first
+    await sql`DELETE FROM context_cache WHERE expires_at < now()`.catch(() => {});
 
+    // Handle portfolio agents (cacheKey starts with _portfolio:)
+    if (companyIdOrKey.startsWith('_portfolio:')) {
+      const [cached] = await sql`
+        SELECT context_data FROM context_cache
+        WHERE cache_key = ${companyIdOrKey} AND expires_at > now()
+        LIMIT 1
+      `.catch(() => []);
+
+      if (cached) {
+        console.log(`[cache] Portfolio cache hit: ${companyIdOrKey}`);
+        return cached.context_data;
+      }
+      return null;
+    }
+
+    // Company-level agents: use enhanced caching with content deduplication
+    const companyId = companyIdOrKey;
+
+    // If we have a content hash, look for exact content match first
+    if (contentHash) {
+      const contentCacheKey = generateCacheKey(companyId, agentType, cycleId, contentHash);
+      const [cached] = await sql`
+        SELECT context_data FROM context_cache
+        WHERE cache_key = ${contentCacheKey} AND expires_at > now()
+        LIMIT 1
+      `.catch(() => []);
+
+      if (cached) {
+        console.log(`[cache] Content hash hit: ${contentCacheKey}`);
+        return cached.context_data;
+      }
+    }
+
+    // Fallback to traditional cache key (for backward compatibility)
+    const cacheKey = generateCacheKey(companyId, agentType, cycleId);
+    const [cached] = await sql`
       SELECT context_data FROM context_cache
       WHERE cache_key = ${cacheKey} AND expires_at > now()
       LIMIT 1
     `.catch(() => []);
 
     if (cached) {
+      console.log(`[cache] Traditional cache hit: ${cacheKey}`);
       return cached.context_data;
     }
 
@@ -39,26 +90,57 @@ export async function getCachedContext(companyId: string, agentType: AgentType, 
 }
 
 /**
- * Store context in cache with 10-minute TTL
+ * Store context in cache with 10-minute TTL and content-based deduplication
+ * Overloaded to support portfolio agents (legacy cacheKey parameter)
  */
 export async function setCachedContext(
-  companyId: string,
+  companyIdOrKey: string,
   agentType: AgentType,
   contextData: unknown,
   cycleId?: string
 ): Promise<void> {
   const sql = getDb();
-  const cacheKey = generateCacheKey(companyId, agentType, cycleId);
+  const contextJson = JSON.stringify(contextData);
 
   try {
+    // Handle portfolio agents (cacheKey starts with _portfolio:)
+    if (companyIdOrKey.startsWith('_portfolio:')) {
+      await sql`
+        INSERT INTO context_cache (cache_key, agent_type, company_id, cycle_id, context_data)
+        VALUES (${companyIdOrKey}, ${agentType}, ${'_portfolio'}, ${null}, ${contextJson})
+        ON CONFLICT (cache_key) DO UPDATE SET
+          context_data = EXCLUDED.context_data,
+          created_at = now(),
+          expires_at = now() + INTERVAL '10 minutes'
+      `.catch(() => {}); // Ignore cache write failures - don't block normal flow
+
+      console.log(`[cache] Stored portfolio context: ${companyIdOrKey}`);
+      return;
+    }
+
+    // Company-level agents: use enhanced caching with content deduplication
+    const companyId = companyIdOrKey;
+    const contentHash = generateContentHash(contextData);
+
+    // Store with content hash for deduplication
+    const contentCacheKey = generateCacheKey(companyId, agentType, cycleId, contentHash);
+
+    // Also store with traditional key for backward compatibility
+    const traditionalKey = generateCacheKey(companyId, agentType, cycleId);
+
+    // Insert/update both keys
     await sql`
       INSERT INTO context_cache (cache_key, agent_type, company_id, cycle_id, context_data)
-      VALUES (${cacheKey}, ${agentType}, ${companyId}, ${cycleId || null}, ${JSON.stringify(contextData)})
+      VALUES
+        (${contentCacheKey}, ${agentType}, ${companyId}, ${cycleId || null}, ${contextJson}),
+        (${traditionalKey}, ${agentType}, ${companyId}, ${cycleId || null}, ${contextJson})
       ON CONFLICT (cache_key) DO UPDATE SET
-        context_data = ${JSON.stringify(contextData)},
+        context_data = EXCLUDED.context_data,
         created_at = now(),
         expires_at = now() + INTERVAL '10 minutes'
     `.catch(() => {}); // Ignore cache write failures - don't block normal flow
+
+    console.log(`[cache] Stored context with deduplication: ${contentCacheKey.substring(0, 40)}...`);
   } catch (error) {
     console.warn('Cache set failed:', error);
     // Don't throw - cache failures shouldn't break the API
