@@ -1,7 +1,14 @@
 import * as Sentry from "@sentry/nextjs";
 import { NextResponse } from "next/server";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET() {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "cron",
+    route: "/api/cron/uptime-monitor"
+  });
+
   return await Sentry.withMonitor(
     "hive-uptime-monitor",
     async () => {

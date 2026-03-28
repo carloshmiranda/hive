@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { json, err } from "@/lib/db";
 import { notifyHive } from "@/lib/telegram";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/notify — send a Telegram notification
 // Auth: CRON_SECRET or OIDC
@@ -8,6 +9,12 @@ import { notifyHive } from "@/lib/telegram";
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
+
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "notification",
+    route: "/api/notify"
+  });
 
   if (authHeader !== `Bearer ${cronSecret}`) {
     const { validateOIDC } = await import("@/lib/oidc");
@@ -28,6 +35,9 @@ export async function POST(req: NextRequest) {
   if (!agent || !action || !status || !summary) {
     return err("Missing required fields: agent, action, status, summary", 400);
   }
+
+  // Add agent to Sentry tags now that we have it
+  setSentryTags({ agent });
 
   // Accept any status — agents use various statuses (dispatched, needs_carlos, etc.)
   // Normalize to the closest valid NotificationEvent status for formatting

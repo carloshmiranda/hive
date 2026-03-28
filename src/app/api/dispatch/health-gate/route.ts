@@ -1,9 +1,16 @@
 import { getDb, json } from "@/lib/db";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // POST /api/dispatch/health-gate — check system health before dispatching next work
 // Returns: { healthy: bool, budget: {...}, blockers: [...], recommendation: "dispatch"|"wait"|"stop" }
 // Auth: CRON_SECRET or OIDC
 export async function POST(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "health_check",
+    route: "/api/dispatch/health-gate"
+  });
+
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
 

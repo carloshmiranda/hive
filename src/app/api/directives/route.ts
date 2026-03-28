@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Parse directive text to extract company and agent hints
 // Format: "pawly: add free trial to checkout" → { company: "pawly", text: "add free trial to checkout" }
@@ -83,11 +84,22 @@ export async function POST(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "directive_create",
+    route: "/api/directives"
+  });
+
   const body = await req.json();
   const { text } = body;
   if (!text?.trim()) return err("Directive text is required");
 
   const parsed = parseDirective(text);
+
+  // Add agent to Sentry tags if specified
+  if (parsed.agent) {
+    setSentryTags({ agent: parsed.agent });
+  }
 
   // Resolve company ID if slug provided
   let companyId: string | null = null;
@@ -95,6 +107,11 @@ export async function POST(req: Request) {
     const sql = getDb();
     const [company] = await sql`SELECT id FROM companies WHERE slug = ${parsed.companySlug}`;
     companyId = company?.id || null;
+
+    // Add company_id to Sentry tags if found
+    if (companyId) {
+      setSentryTags({ company_id: companyId });
+    }
   }
 
   // Create GitHub Issue
@@ -117,6 +134,12 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
+
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "directives_list",
+    route: "/api/directives"
+  });
 
   const { searchParams } = new URL(req.url);
   const companyId = searchParams.get("company_id");

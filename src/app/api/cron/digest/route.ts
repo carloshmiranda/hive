@@ -1,11 +1,18 @@
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { verifyCronAuth } from "@/lib/qstash";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function GET(req: Request) {
+  // Set Sentry tags for error triage and filtering
+  setSentryTags({
+    action_type: "cron",
+    route: "/api/cron/digest"
+  });
+
   const auth = await verifyCronAuth(req);
   if (!auth.authorized) {
     return Response.json({ error: auth.error }, { status: 401 });
