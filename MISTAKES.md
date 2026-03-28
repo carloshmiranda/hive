@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-28 PR review chain was broken — PRs sat unreviewed indefinitely
+**What happened:** Engineer created 4 PRs for Sentry tags (3 conflicting attempts + 1 clean). None were reviewed or merged for 6+ hours. The dispatch loop continued creating new work while PRs piled up.
+**Root cause:** When the GitHub webhook escalates a high-risk PR (creates `pr_review` approval), nothing dispatched the CEO to review it. Sentinel-dispatch had CHECK 4 (no CEO review in 48h) but that's a general staleness check — it doesn't look at pending `pr_review` approvals. The approval just sat in the DB.
+**Fix applied:** (1) Added CHECK 6 to sentinel-dispatch: queries pending `pr_review` approvals and dispatches CEO. (2) Added immediate `dispatchEvent("ceo_review")` in the GitHub webhook right after creating a `pr_review` approval — CEO is triggered within seconds, not hours.
+**Prevention:** Any new approval gate type must have a corresponding dispatch trigger. Test the full chain: event → gate creation → dispatch → agent action → resolution.
+**Affects:** hive
+
 ### 2026-03-28 CRON_SECRET is not the Vercel API token
 **What happened:** During Flolio DB migration, attempted to call Vercel API endpoints (redeploy, list envs) using CRON_SECRET as Bearer token. All returned 401/404.
 **Root cause:** CRON_SECRET (`d28274...`) is for Hive's internal API auth (cron endpoints, agent dispatch). The actual Vercel token is stored encrypted in Hive's `settings` table and only accessible via `getSettingValue("vercel_token")` inside serverless functions. Can't be read via SQL or MCP tools.

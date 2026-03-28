@@ -295,6 +295,25 @@ async function executeSentinelDispatch(request: Request) {
     `;
 
     // ========================================================================
+    // CHECK 6: Pending PR reviews → CEO brain
+    // ========================================================================
+
+    const pendingPrReviews = await sql`
+      SELECT a.id, a.company_id, a.title, a.context,
+             COALESCE(c.slug, '_hive') as slug
+      FROM approvals a
+      LEFT JOIN companies c ON c.id = a.company_id
+      WHERE a.gate_type = 'pr_review' AND a.status = 'pending'
+      AND a.created_at > NOW() - INTERVAL '7 days'
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_actions aa
+        WHERE aa.agent = 'ceo' AND aa.action_type = 'pr_review'
+        AND aa.status IN ('success', 'running')
+        AND aa.started_at > a.created_at
+      )
+    `;
+
+    // ========================================================================
     // CHECK 7/7b: High failure rate + error threshold → Healer
     // ========================================================================
 
@@ -557,6 +576,21 @@ async function executeSentinelDispatch(request: Request) {
       if (i < unverifiedDeploys.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
+    }
+
+    // 6. Pending PR reviews → CEO brain (one at a time)
+    if (pendingPrReviews.length > 0) {
+      const pr = pendingPrReviews[0];
+      const prContext = typeof pr.context === 'string' ? JSON.parse(pr.context) : pr.context;
+      await dispatchToActions(ctx, "ceo_review", {
+        source: "sentinel_pr_review",
+        company: pr.slug,
+        pr_number: prContext?.pr_number,
+        pr_url: prContext?.pr_url,
+        approval_id: pr.id,
+        trace_id: traceId,
+      });
+      dispatches.push({ type: "brain", target: "ceo_review", payload: { company: pr.slug, pr_number: prContext?.pr_number } });
     }
 
     // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)

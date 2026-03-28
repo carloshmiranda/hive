@@ -277,6 +277,15 @@ export async function POST(req: Request) {
                 summary: `PR #${prNumber} escalated (risk ${analysis.riskScore}) - needs manual review`,
               })
             ).catch(() => {});
+
+            // Immediately dispatch CEO to review the PR (don't wait for sentinel cycle)
+            dispatchEvent("ceo_review", {
+              source: "webhook_pr_escalated",
+              company: companySlug,
+              pr_number: prNumber,
+              pr_url: pr.html_url,
+              risk_score: analysis.riskScore,
+            }).catch(() => {});
           }
 
         } catch (error) {
