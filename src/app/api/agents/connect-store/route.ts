@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { json, err } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 /**
  * POST /api/agents/connect-store — Replace a Neon store on a Vercel project.
@@ -26,6 +27,11 @@ const NEON_ENV_KEYS = [
 ];
 
 export async function GET(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/connect-store",
+  });
+
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
@@ -125,6 +131,11 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  setSentryTags({
+    action_type: "agent_api",
+    route: "/api/agents/connect-store",
+  });
+
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {

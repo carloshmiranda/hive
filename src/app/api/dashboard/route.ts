@@ -1,11 +1,17 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { setSentryTags } from "@/lib/sentry-tags";
 
 // Consolidated dashboard endpoint: 1 function invocation instead of 6
 // GET /api/dashboard          → main dashboard data
 // GET /api/dashboard?slug=x   → company detail data
 
 export async function GET(req: Request) {
+  setSentryTags({
+    action_type: "admin",
+    route: "/api/dashboard",
+  });
+
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
