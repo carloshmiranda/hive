@@ -89,6 +89,7 @@ jobs:
         id: agent
         uses: anthropics/claude-code-action@v1
         with:
+          allowed_bots: '*'
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
           claude_args: "--model claude-sonnet-4-20250514 --max-turns 20 --allowedTools Bash,Read,Write,Edit"
           prompt: |

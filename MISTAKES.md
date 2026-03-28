@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-28 allowed_bots regression — company repos blocked for 5+ cycles
+**What happened:** All 4 company repos' engineer dispatches were rejected by claude-code-action@v1 with "Workflow initiated by non-human actor: hive-orchestrator (type: Bot)". CiberPME scored 2,5,2,4,2 over 5 consecutive cycles. Engineer dispatches appeared to succeed at Hive level but failed silently in the company repo workflow.
+**Root cause:** On 2026-03-27, we added `allowed_bots` to all Hive repo workflows (hive-ceo.yml, hive-engineer.yml, etc.) but forgot to update: (1) the boilerplate templates in `templates/boilerplate/.github/workflows/`, (2) the already-deployed workflow files in company repos. The claude-code-action@v1 action added bot rejection as a security feature — our company repo workflows pre-dated this change.
+**Fix applied:** Added `allowed_bots: '*'` to hive-build.yml and hive-fix.yml in all 4 company repos (ciberpme, senhorio, flolio, verdedesk) via GitHub API. Updated boilerplate templates in Hive repo.
+**Prevention:** When fixing workflow issues across the system, always update THREE places: (1) Hive repo workflows, (2) boilerplate templates, (3) all deployed company repos. Add a sentinel check to detect this pattern: if a company has 3+ engineer failures with "non-human actor" error, auto-push the fix.
+**Affects:** both
+
 ### 2026-03-28 PR review chain was broken — PRs sat unreviewed indefinitely
 **What happened:** Engineer created 4 PRs for Sentry tags (3 conflicting attempts + 1 clean). None were reviewed or merged for 6+ hours. The dispatch loop continued creating new work while PRs piled up.
 **Root cause:** When the GitHub webhook escalates a high-risk PR (creates `pr_review` approval), nothing dispatched the CEO to review it. Sentinel-dispatch had CHECK 4 (no CEO review in 48h) but that's a general staleness check — it doesn't look at pending `pr_review` approvals. The approval just sat in the DB.
