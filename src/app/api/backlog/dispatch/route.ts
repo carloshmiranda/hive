@@ -91,20 +91,41 @@ export async function POST(req: Request) {
   if (completed_id && completed_status) {
     // Close the corresponding agent_actions record so the engineer_busy gate unblocks.
     // Without this, the action stays 'running' forever (zombie) and blocks all future dispatches.
+    // Uses dispatch_id from hive_backlog (set at dispatch time) for reliable linking.
+    // Falls back to closing the most recent running engineer action if no dispatch_id found.
     if (completed_status !== "in_progress") {
       const actionStatus = completed_status === "success" ? "success" : "failed";
       const errorDetail = body.error || null;
-      await sql`
-        UPDATE agent_actions
-        SET status = ${actionStatus},
-            finished_at = COALESCE(finished_at, NOW()),
-            error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
-        WHERE agent = 'engineer'
-          AND status = 'running'
-          AND company_id IS NULL
-          AND description ILIKE ${'%' + completed_id + '%'}
-          AND started_at > NOW() - INTERVAL '2 hours'
-      `.catch((e: any) => { console.warn(`[backlog] close agent_action for ${completed_id} failed: ${e?.message || e}`); });
+
+      // Look up the dispatch_id that links this backlog item to its agent_action
+      const [backlogItem] = await sql`
+        SELECT dispatch_id FROM hive_backlog WHERE id = ${completed_id}
+      `.catch(() => []);
+
+      if (backlogItem?.dispatch_id) {
+        await sql`
+          UPDATE agent_actions
+          SET status = ${actionStatus},
+              finished_at = COALESCE(finished_at, NOW()),
+              error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
+          WHERE id = ${backlogItem.dispatch_id} AND status = 'running'
+        `.catch((e: any) => { console.warn(`[backlog] close agent_action ${backlogItem.dispatch_id} failed: ${e?.message || e}`); });
+      } else {
+        // Fallback: close the most recent running engineer action (best-effort)
+        await sql`
+          UPDATE agent_actions
+          SET status = ${actionStatus},
+              finished_at = COALESCE(finished_at, NOW()),
+              error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
+          WHERE id = (
+            SELECT id FROM agent_actions
+            WHERE agent = 'engineer' AND status = 'running'
+              AND company_id IS NULL
+              AND started_at > NOW() - INTERVAL '2 hours'
+            ORDER BY started_at DESC LIMIT 1
+          )
+        `.catch((e: any) => { console.warn(`[backlog] close most recent engineer action failed: ${e?.message || e}`); });
+      }
     }
 
     // Agent acknowledges work started — transition to in_progress
