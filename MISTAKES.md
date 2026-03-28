@@ -737,3 +737,17 @@
 **Fix applied:** Added `addDomain()` call after Vercel project creation to register `{slug}.vercel.app` alias. Updated companies UPDATE to set `domain`, `neon_project_id`. Manually added domain alias + DB records for all 4 existing companies.
 **Prevention:** Provisioning must always: (1) add explicit `.vercel.app` alias, (2) set `domain` on companies table, (3) save `neon_project_id`. Sentinel infra_repair must HTTP-verify after "fixing" — never log success without confirmation.
 **Affects:** both
+
+### 2026-03-28 New file created but never git-added — Vercel build fails with Module not found
+**What happened:** Commit `cca5798` (Layer 2 completion reports) modified 4 route files to import from `@/lib/completion-report`, but the file `src/lib/completion-report.ts` was never staged. Vercel deployed with ERROR status — "Module not found: Can't resolve '@/lib/completion-report'". Two consecutive deploys (`cca5798`, `f99b16d`) failed before the fix.
+**Root cause:** The file was created in the working directory during the previous session but `git add` was never run on it. The commit only included the 4 files that imported from it, not the module itself. Local `next build` wasn't run to catch it.
+**Fix applied:** `git add src/lib/completion-report.ts` + commit `099ce94` + push.
+**Prevention:** Before committing, always run `git status` and check for untracked files (`??`) that should be part of the change. If a commit adds imports from a new module, verify the module file itself is staged. Run `next build` locally before pushing when adding new modules.
+**Affects:** hive
+
+### 2026-03-28 Backlog dispatch chain stalls when Engineer completes without PR
+**What happened:** 56 ready backlog items sat unprocessed for hours. The dispatch chain — where each Engineer completion triggers the next dispatch via QStash — had silently broken. Last 3 completed items all had `pr_number: null` (direct commits, no PR created).
+**Root cause:** The completion callback in `/api/backlog/dispatch/route.ts` had two paths: `pr_open` (PR created) and `done` (no PR). The `pr_open` path correctly called `qstashPublish()` to chain-dispatch the next item. The `done` path marked the item complete but never scheduled the next dispatch — the chain simply stopped.
+**Fix applied:** Added `qstashPublish("/api/backlog/dispatch", { trigger: "done_chain", completed_id }, { deduplicationId, delay: 10 })` to the `done` path, matching the `pr_open` pattern. Commit `3b5e085`.
+**Prevention:** When adding a new code path that handles completion/success, always verify it continues any chain/loop mechanism. Both success paths (with PR and without) must schedule the next step. Test completion callbacks with AND without PR creation.
+**Affects:** hive
