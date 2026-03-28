@@ -1337,8 +1337,17 @@ export async function POST(req: Request) {
     candidateIdx++;
     const nextCandidate = orderedCandidates[candidateIdx];
     if (!nextCandidate) {
-      // No more candidates to try
-      return json({ dispatched: false, reason: "all_candidates_failed_spec", attempted: specAttempts });
+      // No more candidates to try — but don't kill the chain.
+      // Schedule a delayed retry so spec gen can be reattempted later
+      // (models may recover, circuit breakers may reset).
+      await qstashPublish("/api/backlog/dispatch", {
+        trigger: "spec_retry",
+        attempted: specAttempts,
+      }, {
+        deduplicationId: `spec-retry-${Date.now()}`,
+        delay: 300, // 5 minutes — give models time to recover
+      }).catch((e: any) => { console.warn(`[backlog] spec retry chain dispatch failed: ${e?.message || e}`); });
+      return json({ dispatched: false, reason: "all_candidates_failed_spec", attempted: specAttempts, retry_scheduled: true });
     }
     topItem = nextCandidate;
     spec = topItem.spec || null;
