@@ -347,6 +347,7 @@ async function buildContext(sql: any, company: any) {
         SELECT domain, insight FROM playbook
         WHERE confidence >= 0.6
           AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+          AND (relevant_agents @> ARRAY['build'] OR relevant_agents = '{}')
           AND domain = ANY(${['engineering', 'infrastructure', 'payments', 'auth', 'deployment']})
         ORDER BY confidence DESC LIMIT 5
       `.catch(() => [])
@@ -437,6 +438,7 @@ async function growthContext(sql: any, company: any) {
         SELECT domain, insight FROM playbook
         WHERE confidence >= 0.6
           AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+          AND (relevant_agents @> ARRAY['growth'] OR relevant_agents = '{}')
           AND domain = ANY(${['growth', 'seo', 'email_marketing', 'content', 'social']})
         ORDER BY confidence DESC LIMIT 10
       `.catch(() => [])

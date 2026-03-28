@@ -583,6 +583,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "type": "INTEGER",
         "nullable": true,
         "hasDefault": true
+      },
+      "relevant_agents": {
+        "type": "TEXT[]",
+        "nullable": true,
+        "hasDefault": true
       }
     },
     "checks": []
