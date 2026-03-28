@@ -27,6 +27,7 @@ import {
   checkDeployDrift,
   checkDeployHealth,
   isCircuitOpen,
+  batchCheckCircuits,
   REPO,
   type SentinelContext,
   type Dispatch,
@@ -227,9 +228,12 @@ export async function GET(request: Request) {
     // =========================================================================
     // Check 13c: Failed agent tasks → re-dispatch directly to company repo (free Actions)
     // =========================================================================
+    // Pre-fetch all open circuit breakers in one query (O(1) instead of O(N))
+    const openCircuits = await batchCheckCircuits(ctx.sql);
+
     for (const r of failedWithPlanWork) {
       // Circuit breaker: skip if 3+ failures for this agent+company in 24h
-      if (await isCircuitOpen(ctx.sql, r.agent as string, r.company_id as string)) {
+      if (openCircuits.has(`${r.agent}:${r.company_id}`)) {
         await ctx.sql`
           INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
           VALUES (${r.agent}, ${r.company_id}, 'circuit_breaker', 'success',
@@ -298,7 +302,7 @@ export async function GET(request: Request) {
 
     for (const r of rateLimited) {
       // Circuit breaker: skip if this agent+company has 3+ failures in 24h
-      if (await isCircuitOpen(ctx.sql, r.agent as string, r.company_id as string)) {
+      if (openCircuits.has(`${r.agent}:${r.company_id}`)) {
         await ctx.sql`
           INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
           VALUES (${r.agent}, ${r.company_id}, 'circuit_breaker', 'success',

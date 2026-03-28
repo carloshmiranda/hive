@@ -402,6 +402,27 @@ export async function isCircuitOpen(
   return (result?.failures || 0) >= 3;
 }
 
+// Batch circuit breaker check: single query for all agent+company pairs.
+// Returns a Set of "agent:companyId" keys where the circuit is open (3+ failures in 24h).
+// Use this instead of calling isCircuitOpen() in a loop to avoid O(N) DB queries.
+export async function batchCheckCircuits(
+  sql: any
+): Promise<Set<string>> {
+  const rows = await sql`
+    SELECT agent, company_id, COUNT(*)::int as failures
+    FROM agent_actions
+    WHERE status = 'failed' AND started_at > NOW() - INTERVAL '24 hours'
+    AND company_id IS NOT NULL
+    GROUP BY agent, company_id
+    HAVING COUNT(*) >= 3
+  `.catch(() => []);
+  const open = new Set<string>();
+  for (const r of rows) {
+    open.add(`${r.agent}:${r.company_id}`);
+  }
+  return open;
+}
+
 // ---------------------------------------------------------------------------
 // Text similarity (used by playbook consolidation in janitor)
 // ---------------------------------------------------------------------------

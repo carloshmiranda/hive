@@ -24,6 +24,7 @@ import {
   dispatchToWorker,
   dispatchToCompanyWorkflow,
   isCircuitOpen,
+  batchCheckCircuits,
   MAX_CYCLE_DISPATCHES,
   type SentinelContext,
   type Dispatch,
@@ -503,6 +504,9 @@ async function executeSentinelDispatch(request: Request) {
     // DISPATCH LOGIC
     // ========================================================================
 
+    // Pre-fetch all open circuit breakers in one query (O(1) instead of O(N))
+    const openCircuits = await batchCheckCircuits(sql);
+
     // 1. Pipeline low → Scout (if not blocked by proposal backlog)
     if (pipelineLow) {
       await dispatchToActions(ctx, "pipeline_low", { source: "sentinel", trace_id: traceId });
@@ -516,7 +520,7 @@ async function executeSentinelDispatch(request: Request) {
       const r = staleContent[i];
       // Circuit breaker: skip if growth has 3+ failures for this company in 24h
       const [staleCompany] = await sql`SELECT id FROM companies WHERE slug = ${r.slug} LIMIT 1`;
-      if (staleCompany && await isCircuitOpen(sql, "growth", staleCompany.id as string)) {
+      if (staleCompany && openCircuits.has(`growth:${staleCompany.id}`)) {
         await sql`
           INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
           VALUES ('growth', ${staleCompany.id}, 'circuit_breaker', 'success',
@@ -645,7 +649,7 @@ async function executeSentinelDispatch(request: Request) {
     // 11. Chain dispatch gaps → dispatch directly to company repo (free Actions)
     for (const r of chainGaps) {
       const [gapCompany] = await sql`SELECT id FROM companies WHERE slug = ${r.slug} LIMIT 1`;
-      if (gapCompany && await isCircuitOpen(sql, "engineer", gapCompany.id as string)) {
+      if (gapCompany && openCircuits.has(`engineer:${gapCompany.id}`)) {
         await sql`
           INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
           VALUES ('engineer', ${gapCompany.id}, 'circuit_breaker', 'success',
@@ -715,7 +719,7 @@ async function executeSentinelDispatch(request: Request) {
     // 13c. Failed agent tasks → re-dispatch directly to company repo (free Actions)
     for (const r of failedWithPlanWork) {
       // Circuit breaker: skip if 3+ failures for this agent+company in 24h
-      if (await isCircuitOpen(sql, r.agent as string, r.company_id as string)) {
+      if (openCircuits.has(`${r.agent}:${r.company_id}`)) {
         await sql`
           INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
           VALUES (${r.agent}, ${r.company_id}, 'circuit_breaker', 'success',

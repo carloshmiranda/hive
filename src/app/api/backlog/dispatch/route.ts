@@ -495,6 +495,7 @@ export async function POST(req: Request) {
         OR (notes ILIKE '%max_turns failures%' AND source NOT IN ('auto_decompose', 'decomposed'))
       )
       AND NOT notes ILIKE '%[recycled]%'
+      AND NOT notes ILIKE '%[manual_spec_needed]%'
       AND created_at > NOW() - INTERVAL '7 days'
       ORDER BY
         CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
@@ -1096,13 +1097,25 @@ export async function POST(req: Request) {
 
   // Block specless items instead of burning 50 turns blindly
   if (!spec && topItem.priority !== "P0") {
-    await sql`
-      UPDATE hive_backlog
-      SET status = 'blocked', dispatched_at = NULL,
-          notes = COALESCE(notes, '') || ' [no_spec] Spec generation failed — needs manual spec or decomposition before dispatch.'
-      WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
-    `.catch(() => {});
-    console.warn(`[backlog] Blocked specless item: "${topItem.title}" — would burn 50 turns blindly`);
+    const alreadyFailedSpec = (topItem.notes || "").includes("[no_spec]");
+    if (alreadyFailedSpec) {
+      // Second spec failure — permanent block, needs human intervention
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', dispatched_at = NULL,
+            notes = COALESCE(notes, '') || ' [manual_spec_needed] Spec generation failed twice — requires manual spec or rewrite before dispatch.'
+        WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
+      `.catch(() => {});
+      console.warn(`[backlog] Permanently blocked specless item: "${topItem.title}" — spec failed twice, needs manual intervention`);
+    } else {
+      await sql`
+        UPDATE hive_backlog
+        SET status = 'blocked', dispatched_at = NULL,
+            notes = COALESCE(notes, '') || ' [no_spec] Spec generation failed — needs manual spec or decomposition before dispatch.'
+        WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
+      `.catch(() => {});
+      console.warn(`[backlog] Blocked specless item: "${topItem.title}" — would burn 50 turns blindly`);
+    }
 
     // Try next item
     const recursionDepth = (body.recursion_depth || 0) + 1;
