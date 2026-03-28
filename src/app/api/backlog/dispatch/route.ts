@@ -1006,8 +1006,7 @@ export async function POST(req: Request) {
   `.catch(() => [{ rate: 0 }]);
   const overallRate = Number(failRate?.rate || 0);
 
-  let topItem = null;
-  let topScore = -1;
+  const scoredItems: any[] = [];
 
   for (const item of backlogItemsFiltered) {
     const keywords = item.title.split(/\s+/).filter((w: string) => w.length > 4).slice(0, 3);
@@ -1056,14 +1055,51 @@ export async function POST(req: Request) {
       previousAttempts,
     });
 
-    if (scored.priority_score > topScore) {
-      topScore = scored.priority_score;
-      topItem = scored;
+    scoredItems.push(scored);
+  }
+
+  // Sort by score descending — highest priority first
+  scoredItems.sort((a, b) => b.priority_score - a.priority_score);
+
+  if (scoredItems.length === 0) {
+    return json({ dispatched: false, reason: "no_scorable_items" });
+  }
+
+  // Pick the first dispatchable item (skip specless non-P0 items, blocking them as we go)
+  let topItem: any = null;
+  for (const candidate of scoredItems) {
+    const candidateSpec = candidate.spec;
+    const hasSpec = candidateSpec && candidateSpec.acceptance_criteria;
+
+    if (!hasSpec && candidate.priority !== "P0") {
+      // Block specless item and continue to next
+      const alreadyFailedSpec = (candidate.notes || "").includes("[no_spec]");
+      if (alreadyFailedSpec) {
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'blocked', dispatched_at = NULL,
+              notes = COALESCE(notes, '') || ' [manual_spec_needed] Spec generation failed twice — requires manual spec or rewrite before dispatch.'
+          WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
+        `.catch(() => {});
+        console.warn(`[backlog] Permanently blocked specless item: "${candidate.title}" — spec failed twice`);
+      } else {
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'blocked', dispatched_at = NULL,
+              notes = COALESCE(notes, '') || ' [no_spec] Spec generation failed — needs manual spec or decomposition before dispatch.'
+          WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
+        `.catch(() => {});
+        console.warn(`[backlog] Blocked specless item: "${candidate.title}" — skipping to next`);
+      }
+      continue;
     }
+
+    topItem = candidate;
+    break;
   }
 
   if (!topItem) {
-    return json({ dispatched: false, reason: "no_scorable_items" });
+    return json({ dispatched: false, reason: "no_spec_items_only", blocked_count: scoredItems.length });
   }
 
   // Auto-classify category if item has default category ('feature')
@@ -1199,40 +1235,6 @@ export async function POST(req: Request) {
     spec.complexity === "L" ||
     (spec.complexity === "M" && estimatedTurns > turnBudgetThreshold)
   );
-
-  // Block specless items instead of burning 50 turns blindly
-  if (!spec && topItem.priority !== "P0") {
-    const alreadyFailedSpec = (topItem.notes || "").includes("[no_spec]");
-    if (alreadyFailedSpec) {
-      // Second spec failure — permanent block, needs human intervention
-      await sql`
-        UPDATE hive_backlog
-        SET status = 'blocked', dispatched_at = NULL,
-            notes = COALESCE(notes, '') || ' [manual_spec_needed] Spec generation failed twice — requires manual spec or rewrite before dispatch.'
-        WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
-      `.catch(() => {});
-      console.warn(`[backlog] Permanently blocked specless item: "${topItem.title}" — spec failed twice, needs manual intervention`);
-    } else {
-      await sql`
-        UPDATE hive_backlog
-        SET status = 'blocked', dispatched_at = NULL,
-            notes = COALESCE(notes, '') || ' [no_spec] Spec generation failed — needs manual spec or decomposition before dispatch.'
-        WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
-      `.catch(() => {});
-      console.warn(`[backlog] Blocked specless item: "${topItem.title}" — would burn 50 turns blindly`);
-    }
-
-    // Try next item
-    const recursionDepth = (body.recursion_depth || 0) + 1;
-    if (recursionDepth < 5) {
-      return POST(new Request(req.url, {
-        method: 'POST',
-        headers: req.headers,
-        body: JSON.stringify({ ...body, recursion_depth: recursionDepth })
-      }));
-    }
-    return json({ dispatched: false, reason: "no_spec_items_only" });
-  }
 
   // Auto-decompose tasks that exceed turn budget — dispatch to GitHub Actions
   // Claude CLI on Actions has Max subscription access for quality decomposition.
