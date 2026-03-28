@@ -367,9 +367,10 @@ export async function regenerateBacklogMd(sql: any): Promise<void> {
     markdown += `---\n\n*Generated from database at ${timestamp}*\n`;
 
     // Commit to GitHub via Contents API (fs.writeFile doesn't persist on Vercel)
-    const ghPat = process.env.GH_PAT;
+    const { getGitHubToken } = await import("@/lib/github-app");
+    const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
     if (!ghPat) {
-      console.warn("[backlog-planner] No GH_PAT — skipping BACKLOG.md commit");
+      console.warn("[backlog-planner] No GitHub token — skipping BACKLOG.md commit");
       return;
     }
 

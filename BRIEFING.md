@@ -37,6 +37,7 @@
 - **Worker dispatch**: Growth/Outreach/Ops called directly from chain dispatch steps (no GitHub Actions proxy)
 
 - **Blocked on:**
+  - **GH_PAT expired** — `gho_` OAuth token in Vercel env returned 401. Needs replacement with `ghp_` classic PAT (repo scope). Blocks ALL backlog dispatch to Engineer.
   - Resend domain verification (need a real domain for outreach emails)
 - **Known issues:**
   - 33+ Scout proposals pending approval (auto-expiry disabled — manual review only)
@@ -83,6 +84,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-28: **Dispatch loop unblocked — 6 compounding blockers fixed** — Full pipeline was locked: 55 ready items, 0 dispatches. Fixed across 3 sessions: (1) Cleaned zombie `running` agent_actions blocking health gate, (2) Replaced specless recursion deadlock (generateSpec → POST → generateSpec consuming all 5 POST slots) with in-memory iteration, (3) Switched from GitHub App tokens (422) to GH_PAT for repository_dispatch, (4) Allow first specless item through for spec generation instead of blocking on first failure, (5) Added two-pass item selection preferring specced items over specless, (6) Swapped SQL ORDER BY from priority-first to spec-presence-first so the only specced P3 item enters the LIMIT 10 candidate set. **Remaining blocker:** GH_PAT is a `gho_` OAuth token that expired after ~9 days → 401 → dispatch 422. Needs replacement with `ghp_` classic PAT with `repo` scope in Vercel env vars.
 
 - `[code]` 2026-03-28: **Context-preserving decomposition with GitHub Sub-Issues (ADR-039)** — Three-layer context preservation for decomposed tasks: (1) `parent_id` FK on `hive_backlog` replacing fragile regex-based UUID extraction from notes, (2) `decomposition_context` JSONB blob shared between parent and children containing goal, constraints, decisions, file_manifest, sub_tasks with status/summary, and failure_history — propagated to siblings when any sub-task completes, (3) GitHub Sub-Issues API links child Issues to parent for visual hierarchy. Engineer sessions now receive full decomposition context in their prompt (completed siblings, pending siblings, file manifest, failure history). Sentinel Check 46 uses FK for child lookup (legacy regex fallback). Check 50 excludes parents from auto-recovery. Migration 011 applied. Build verified.
 

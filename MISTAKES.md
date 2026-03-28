@@ -15,6 +15,26 @@
 
 ---
 
+### 2026-03-28 Dispatch loop locked — 6 compounding blockers
+**What happened:** Backlog dispatch stopped flowing entirely. No items dispatched for 24+ hours despite 55 ready items and 0% budget used.
+**Root cause:** Six independent issues compounded into a total lock:
+1. **Zombie agent_actions** — stale `running` records from crashed workflows blocked new dispatches (health gate thought agents were active)
+2. **Specless recursion deadlock** — `generateSpec()` called itself via POST to `/api/backlog/dispatch`, consuming all 5 concurrent POST slots in an infinite loop
+3. **GitHub App token 422** — installation tokens lacked `contents:write` for `repository_dispatch`; then GH_PAT (gho_ OAuth token) expired after ~9 days
+4. **Specless items blocked before spec generation** — two-strike system blocked items on first spec failure, preventing retry
+5. **Two-pass selection missed specced items** — scored items list came from SQL LIMIT 10 which excluded the only specced item (P3) because 10+ higher-priority specless items filled the window
+6. **SQL ORDER BY priority-first** — even with two-pass logic, the SQL query sorted by priority before spec presence, so the only specced P3 item never entered the candidate set
+**Fix applied:** (1) Cleaned zombie records, (2) replaced recursive POST with in-memory loop, (3) added GH_PAT fallback (but token expired — needs new classic PAT), (4) allow first specless item through for spec generation, (5) added two-pass selection preferring specced items, (6) swapped ORDER BY to spec-presence-first
+**Prevention:** Dispatch debugging requires checking the full pipeline: DB state → SQL query → candidate selection → spec generation → GitHub dispatch. Each layer can independently block flow. Add monitoring: if 0 dispatches for 6+ hours with ready items, alert.
+**Affects:** hive
+
+### 2026-03-28 GH_PAT OAuth token expires silently — dispatch 422
+**What happened:** GitHub `repository_dispatch` calls returned 422. The `GH_PAT` env var in Vercel contained a `gho_` (OAuth) token that expired after ~9 days.
+**Root cause:** OAuth tokens (`gho_`) are short-lived. The previous fix (blocker #3) switched from GitHub App installation tokens to GH_PAT, but stored an OAuth token instead of a classic PAT. OAuth tokens expire; classic PATs (`ghp_`) can be set to never expire.
+**Fix applied:** Item unblocked in DB. Awaiting new `ghp_` classic PAT with `repo` scope.
+**Prevention:** Always use classic PATs (`ghp_`) for env vars, never OAuth tokens (`gho_`). Set 90-day or no expiration. Add a sentinel check: if dispatch returns 422, test token validity with `GET /user` before blocking the item.
+**Affects:** hive
+
 ### 2026-03-28 allowed_bots regression — company repos blocked for 5+ cycles
 **What happened:** All 4 company repos' engineer dispatches were rejected by claude-code-action@v1 with "Workflow initiated by non-human actor: hive-orchestrator (type: Bot)". CiberPME scored 2,5,2,4,2 over 5 consecutive cycles. Engineer dispatches appeared to succeed at Hive level but failed silently in the company repo workflow.
 **Root cause:** On 2026-03-27, we added `allowed_bots` to all Hive repo workflows (hive-ceo.yml, hive-engineer.yml, etc.) but forgot to update: (1) the boilerplate templates in `templates/boilerplate/.github/workflows/`, (2) the already-deployed workflow files in company repos. The claude-code-action@v1 action added bot rejection as a security feature — our company repo workflows pre-dated this change.

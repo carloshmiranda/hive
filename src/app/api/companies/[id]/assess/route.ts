@@ -128,7 +128,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // 3. Check repo for key files
-  const ghPat = await getSettingValue("github_token").catch(() => null) || process.env.GH_PAT;
+  const { getGitHubToken } = await import("@/lib/github-app");
+  const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
   if (company.github_repo && ghPat) {
     try {
       const repoPath = company.github_repo;

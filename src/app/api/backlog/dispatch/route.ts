@@ -209,7 +209,7 @@ export async function POST(req: Request) {
           const continuationTurns = Math.min(Math.ceil(turnsUsed * 1.5), 75);
           console.log(`[backlog] Continuation dispatch for "${item.title}" — partial progress detected (${turnsUsed} turns used, granting ${continuationTurns}). Last commit: ${lastCommit}`);
 
-          const ghPat = process.env.GH_PAT;
+          const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
           if (ghPat) {
             const contRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
               method: "POST",
@@ -1175,9 +1175,9 @@ export async function POST(req: Request) {
     }
   }
 
-  // Dispatch via GitHub Actions — prefer GH_PAT env var for repository_dispatch
-  // (GitHub App installation tokens may lack contents:write permission needed for dispatches)
-  const ghPat = process.env.GH_PAT || await getGitHubToken().catch(() => null);
+  // Dispatch via GitHub Actions — use GitHub App installation token
+  // GH_PAT fallback removed: gho_ OAuth tokens expire silently, causing 422s
+  const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
   if (!ghPat) {
     return json({ dispatched: false, reason: "no_github_token" });
   }
