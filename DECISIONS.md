@@ -536,3 +536,19 @@ Move ~12 checks to event-driven (no cron):
 - GitHub Issue body as context carrier: Issues are fire-and-forget; DB is the operational source of truth
 - Task comments thread: too unstructured for machine consumption
 **Consequences:** Engineer sessions receive decomposition context in their prompt (completed siblings, pending siblings, file manifest, failure history). Sub-tasks can't accidentally redo completed work. Sentinel Check 46 uses `parent_id` FK for child lookup (with legacy regex fallback). Check 50 excludes parent items from auto-recovery. Migration 011 adds `parent_id` (TEXT FK) and `decomposition_context` (JSONB) columns. Context propagation is eventually consistent — updated on sub-task completion, not real-time.
+
+### ADR-040: Agent collaboration via Blackboard + Coordinator pattern
+**Date:** 2026-03-28
+**Status:** accepted
+**Context:** Agents operated in isolation — fire-and-forget dispatches with no awareness of each other's work. This caused: (1) dispatch chain stalls when PRs opened but no follow-up triggered, (2) Engineers dispatched without knowing what other agents just completed, (3) no visibility into system-wide state (running agents, blocked items, pending approvals), (4) Sentinel was the only "coordinator" but runs on a timer, not reactively.
+**Decision:** Blackboard pattern (shared state in Postgres) + lightweight Coordinator (chain dispatch):
+- **System state awareness**: `getSystemState()` in `/api/agents/context` queries running agents, recent completions, open PRs, blocked items, and pending approvals — injected into every agent's context response in real-time.
+- **Chain dispatch**: After key events (PR merge, PR open, queue full), immediately publish next dispatch via QStash instead of waiting for Sentinel.
+- **Structured handoff**: Dispatch payloads include recent system activity and PR state so agents know what just happened.
+- **Intent registration**: Before dispatching Engineer, write `planned` status to `agent_actions` so other agents see upcoming work.
+**Alternatives considered:**
+- Message bus (pub/sub): Adds infrastructure complexity; Postgres + QStash already provides the primitives
+- Dedicated coordinator agent: Overkill for <10 agents; Sentinel + chain dispatch covers coordination needs
+- Agent-to-agent direct messaging: Creates coupling; shared state via DB is simpler and auditable
+- Full consensus protocol (Raft/BFT): Only needed when agents make conflicting decisions; Hive agents have non-overlapping scopes
+**Consequences:** Every agent now has visibility into the full system state. Chain dispatches close loop gaps (PR open → next dispatch, PR merge → next dispatch, queue full → flush). Intent registration prevents dispatch collisions. The awareness payload adds ~5 queries per context request but all are fast indexed queries with LIMIT clauses. No schema changes required — uses existing `agent_actions`, `hive_backlog`, and `approvals` tables.
