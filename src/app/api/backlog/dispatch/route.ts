@@ -1497,5 +1497,5 @@ export async function POST(req: Request) {
     syncIssueForBacklog(sql, topItem.id, "blocked");
   }
   await scheduleChainRetry("github_dispatch_failed", 5);
-  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
+  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true, _debug: { tokenPrefix, tokenLength: ghPat.length, payloadBytes: payloadStr.length, errBody: errBody.slice(0, 500) } });
 }
