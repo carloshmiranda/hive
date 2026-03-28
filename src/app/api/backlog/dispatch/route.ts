@@ -188,6 +188,17 @@ export async function POST(req: Request) {
           WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
         `.catch((e: any) => { console.warn(`[backlog] update item ${completed_id} to pr_open failed: ${e?.message || e}`); });
         syncIssueForBacklog(sql, completed_id, "pr_open");
+        // Chain dispatch: don't wait for PR to merge — continue with next backlog item.
+        // PRs are merged asynchronously by company-health Check 38. This prevents the
+        // loop from stalling when PRs are open but there's more work to do.
+        await qstashPublish("/api/backlog/dispatch", {
+          trigger: "pr_open_chain",
+          completed_id,
+          pr_number,
+        }, {
+          deduplicationId: `pr-open-chain-${completed_id}`,
+          delay: 10, // 10 second delay to let Engineer finish cleanup
+        }).catch((e: any) => { console.warn(`[backlog] chain dispatch after pr_open failed: ${e?.message || e}`); });
       } else {
         // No PR number — Engineer completed via direct commit or the PR info was lost.
         // Mark as done to prevent phantom pr_open items.
@@ -594,10 +605,16 @@ export async function POST(req: Request) {
   `.catch(() => [{ open_prs: 0 }]);
   const openPRCount = Number(prQueue?.open_prs || 0);
   if (openPRCount >= 3) {
-    // Still try to merge what we have before giving up
+    // Actively try to clear the PR queue by triggering a health check (Check 38 merges PRs)
+    await qstashPublish("/api/cron/company-health", {
+      trigger: "pr_queue_flush",
+      open_prs: openPRCount,
+    }, {
+      deduplicationId: `pr-flush-${Date.now().toString(36)}`,
+    }).catch(() => {});
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     await scheduleChainRetry("pr_queue_full", 10);
-    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true });
+    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true, pr_flush_triggered: true });
   }
 
   // Stale dispatch cleanup: items stuck in 'dispatched' for >30 min
@@ -1463,6 +1480,27 @@ export async function POST(req: Request) {
     `.catch(e => console.error('[backlog] Failed to update backlog item with security note:', e));
   }
 
+  // Structured handoff: give the Engineer awareness of recent system activity.
+  // This prevents blind dispatches — the agent knows what just happened.
+  const [recentActivity] = await sql`
+    SELECT json_agg(sub) as activity FROM (
+      SELECT agent, action_type, status, SUBSTRING(description FROM 1 FOR 120) as summary,
+        EXTRACT(EPOCH FROM (NOW() - COALESCE(finished_at, started_at)))::int / 60 as minutes_ago
+      FROM agent_actions
+      WHERE (status IN ('success', 'failed') AND finished_at > NOW() - INTERVAL '2 hours')
+        OR status = 'running'
+      ORDER BY COALESCE(finished_at, started_at) DESC
+      LIMIT 8
+    ) sub
+  `.catch(() => [{ activity: null }]);
+  const [prState] = await sql`
+    SELECT json_agg(sub) as prs FROM (
+      SELECT title, pr_number, status FROM hive_backlog
+      WHERE status = 'pr_open' AND pr_number IS NOT NULL
+      ORDER BY dispatched_at DESC LIMIT 5
+    ) sub
+  `.catch(() => [{ prs: null }]);
+
   // GitHub repository_dispatch limits client_payload to 10 properties max.
   // Consolidate metadata to stay under the limit.
   const dispatchPayload = {
@@ -1485,9 +1523,23 @@ export async function POST(req: Request) {
         attempt: attemptCount + 1,
         github_issue: topItem.github_issue_number || undefined,
         ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
+        // Handoff context: what's happening in the system right now
+        system_state: {
+          recent_activity: recentActivity?.activity || [],
+          open_prs: prState?.prs || [],
+        },
       },
     },
   };
+  // Intent registration: announce the planned work before dispatching.
+  // Other agents reading system state will see this as "planned" and avoid conflicts.
+  await sql`
+    INSERT INTO agent_actions (agent, action_type, status, description, started_at)
+    VALUES ('engineer', 'feature_request', 'planned',
+      ${`[intent] Will dispatch: "${topItem.title}" (${topItem.priority}, attempt ${attemptCount + 1})`},
+      NOW())
+  `.catch(() => {});
+
   const payloadStr = JSON.stringify(dispatchPayload);
   console.log(`[backlog] Dispatch payload size: ${payloadStr.length} bytes`);
   const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {

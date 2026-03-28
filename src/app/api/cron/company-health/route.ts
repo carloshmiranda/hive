@@ -393,6 +393,17 @@ export async function GET(req: Request) {
             'success', NOW(), NOW())
         `.catch((e: any) => { console.warn(`[company-health] log PR review check failed: ${e?.message || e}`); });
       }
+      // Chain dispatch: after merging PRs, kick the backlog to dispatch next item.
+      // This closes the loop: Engineer creates PR → health check merges → next item dispatched.
+      if (merged > 0) {
+        await qstashPublish("/api/backlog/dispatch", {
+          trigger: "pr_merged_chain",
+          merged_count: merged,
+        }, {
+          deduplicationId: `pr-merge-chain-${Date.now().toString(36)}`,
+          delay: 5, // 5 second delay to let DB settle
+        }).catch((e: any) => { console.warn(`[company-health] chain dispatch after PR merge failed: ${e?.message || e}`); });
+      }
       results.prs_merged = merged;
       results.prs_escalated = escalated;
     }

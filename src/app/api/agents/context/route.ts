@@ -28,6 +28,107 @@ function getAgentDomains(agent: string): string[] | null {
   }
 }
 
+/**
+ * System-wide awareness: gives every agent visibility into what other agents are doing,
+ * what recently completed, and what's blocked. This is the "blackboard" pattern —
+ * agents read shared state before acting instead of operating blind.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getSystemState(sql: any, currentAgent: string): Promise<Record<string, unknown>> {
+  const [runningAgents, recentCompletions, openPRs, blockedItems, pendingApprovals] = await Promise.all([
+    // What agents are running right now?
+    sql`
+      SELECT agent, company_id, action_type, description,
+        EXTRACT(EPOCH FROM (NOW() - started_at))::int / 60 as minutes_ago
+      FROM agent_actions
+      WHERE status = 'running'
+        AND started_at > NOW() - INTERVAL '2 hours'
+      ORDER BY started_at DESC
+      LIMIT 10
+    `.catch(() => []),
+    // What completed in the last 4 hours?
+    sql`
+      SELECT agent, company_id, action_type, status,
+        SUBSTRING(description FROM 1 FOR 200) as summary,
+        EXTRACT(EPOCH FROM (NOW() - finished_at))::int / 60 as minutes_ago
+      FROM agent_actions
+      WHERE status IN ('success', 'failed')
+        AND finished_at > NOW() - INTERVAL '4 hours'
+      ORDER BY finished_at DESC
+      LIMIT 15
+    `.catch(() => []),
+    // What PRs are open?
+    sql`
+      SELECT id, title, pr_number, pr_url, status,
+        EXTRACT(EPOCH FROM (NOW() - dispatched_at))::int / 60 as minutes_open
+      FROM hive_backlog
+      WHERE status = 'pr_open' AND pr_number IS NOT NULL
+      ORDER BY dispatched_at DESC
+      LIMIT 10
+    `.catch(() => []),
+    // What backlog items are blocked?
+    sql`
+      SELECT id, title, priority, status, category,
+        SUBSTRING(notes FROM 1 FOR 150) as reason
+      FROM hive_backlog
+      WHERE status IN ('blocked', 'flagged')
+      ORDER BY priority ASC
+      LIMIT 10
+    `.catch(() => []),
+    // What approvals are pending?
+    sql`
+      SELECT gate_type, title,
+        EXTRACT(EPOCH FROM (NOW() - created_at))::int / 3600 as hours_pending
+      FROM approvals
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT 5
+    `.catch(() => []),
+  ]);
+
+  return {
+    awareness: {
+      running_agents: runningAgents.map((a: any) => ({
+        agent: a.agent,
+        company_id: a.company_id,
+        action: a.action_type,
+        description: a.description,
+        minutes_ago: a.minutes_ago,
+      })),
+      recent_completions: recentCompletions.map((a: any) => ({
+        agent: a.agent,
+        company_id: a.company_id,
+        action: a.action_type,
+        outcome: a.status,
+        summary: a.summary,
+        minutes_ago: a.minutes_ago,
+      })),
+      open_prs: openPRs.map((p: any) => ({
+        id: p.id,
+        title: p.title,
+        pr_number: p.pr_number,
+        pr_url: p.pr_url,
+        minutes_open: p.minutes_open,
+      })),
+      blocked_items: blockedItems.map((b: any) => ({
+        id: b.id,
+        title: b.title,
+        priority: b.priority,
+        status: b.status,
+        category: b.category,
+        reason: b.reason,
+      })),
+      pending_approvals: pendingApprovals.map((a: any) => ({
+        gate_type: a.gate_type,
+        title: a.title,
+        hours_pending: a.hours_pending,
+      })),
+      current_agent: currentAgent,
+      timestamp: new Date().toISOString(),
+    },
+  };
+}
+
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
   setSentryTags({
@@ -63,11 +164,15 @@ export async function GET(req: NextRequest) {
   const sql = getDb();
   const agentType = agent as AgentType;
 
+  // System-wide awareness — every agent gets this regardless of type.
+  // Not cached (must be fresh) but queries are fast (indexed, small result sets).
+  const systemState = await getSystemState(sql, agent).catch(() => ({ awareness: null }));
+
   // Portfolio-level agents don't need a company
   if (PORTFOLIO_AGENTS.includes(agent)) {
     const cacheKey = `_portfolio:${agent}`;
     const cached = await getCachedContext(cacheKey, agentType);
-    if (cached) return json(cached);
+    if (cached) return json({ ...cached, ...systemState });
 
     let contextData;
     if (agent === "scout") {
@@ -76,7 +181,7 @@ export async function GET(req: NextRequest) {
       contextData = await evolverContext(sql);
     }
     await setCachedContext(cacheKey, agentType, contextData);
-    return json(contextData);
+    return json({ ...contextData, ...systemState });
   }
 
   // Company-level agents
@@ -104,7 +209,7 @@ export async function GET(req: NextRequest) {
   // Try cache first
   const cached = await getCachedContext(company.id, agentType, cycleId);
   if (cached) {
-    return json(cached);
+    return json({ ...cached, ...systemState });
   }
 
   // Cache miss - compute context from DB
@@ -124,7 +229,7 @@ export async function GET(req: NextRequest) {
   // Store in cache for future requests
   await setCachedContext(company.id, agentType, contextData, cycleId);
 
-  return json(contextData);
+  return json({ ...contextData, ...systemState });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
