@@ -33,6 +33,7 @@ import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { invalidateCompanyList } from "@/lib/redis-cache";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
+import { fetchRecentErrors, extractErrorPatterns, shouldDispatchHealer, createErrorSummary } from "@/lib/sentry-api";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -165,6 +166,60 @@ async function executeSentinelDispatch(request: Request) {
       }
     } catch (qErr) {
       console.warn("[sentinel-dispatch] QStash health check failed (non-blocking):", qErr instanceof Error ? qErr.message : "unknown");
+    }
+
+    // ========================================================================
+    // SENTRY ERROR SURGE DETECTION
+    // ========================================================================
+
+    try {
+      // Check for Sentry error patterns every 2 hours (when hours since last check >= 2)
+      const lastSentryCheck = await sql`
+        SELECT value FROM settings WHERE key = 'sentry_error_check_at'
+      `.then(rows => rows[0]);
+
+      const lastSentryCheckTime = lastSentryCheck?.value ? new Date(lastSentryCheck.value).getTime() : 0;
+      const hoursSinceSentryCheck = (Date.now() - lastSentryCheckTime) / 3600000;
+
+      if (hoursSinceSentryCheck >= 2) {
+        console.log("[sentinel-dispatch] Running Sentry error surge check");
+
+        // Fetch recent unresolved errors from Sentry (last hour)
+        const recentErrors = await fetchRecentErrors(3600);
+
+        if (recentErrors.length > 0) {
+          // Extract error patterns and check if we should dispatch Healer
+          const errorPatterns = extractErrorPatterns(recentErrors);
+          const shouldDispatch = shouldDispatchHealer(errorPatterns, 3);
+
+          console.log(`[sentinel-dispatch] Sentry check: ${recentErrors.length} errors, ${errorPatterns.length} distinct patterns`);
+
+          if (shouldDispatch) {
+            const errorSummary = createErrorSummary(errorPatterns);
+            console.log(`[sentinel-dispatch] Sentry error surge detected, dispatching Healer`);
+
+            dispatches.push({
+              type: "healer_trigger",
+              target: "_hive",
+              payload: {
+                trigger: "sentry_error_surge",
+                context: errorSummary,
+                detail: `${errorPatterns.length} distinct error patterns detected`,
+              },
+            });
+          }
+        } else {
+          console.log("[sentinel-dispatch] Sentry check: no recent errors found");
+        }
+
+        // Update the check timestamp
+        await sql`
+          INSERT INTO settings (key, value, is_secret) VALUES ('sentry_error_check_at', ${new Date().toISOString()}, false)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        `.catch(() => {});
+      }
+    } catch (sentryErr) {
+      console.warn("[sentinel-dispatch] Sentry error surge check failed (non-blocking):", sentryErr instanceof Error ? sentryErr.message : "unknown");
     }
 
     // ========================================================================
