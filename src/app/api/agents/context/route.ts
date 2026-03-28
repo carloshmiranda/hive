@@ -10,6 +10,7 @@ import { selectEntriesWithMMR, type PlaybookEntry } from "@/lib/mmr";
 import { cachedPlaybook, cachedCompanyList } from "@/lib/redis-cache";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { extractCompletionReport, type CompletionReport, type AgentSignal } from "@/lib/completion-report";
 
 // Domain mappings for agent-specific playbook filtering
 function getAgentDomains(agent: string): string[] | null {
@@ -129,6 +130,85 @@ async function getSystemState(sql: any, currentAgent: string): Promise<Record<st
   };
 }
 
+/**
+ * Recent structured completion reports from other agents.
+ * Gives the current agent insight into what just happened and what was decided.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getRelevantCompletions(sql: any, currentAgent: string, companyId?: string): Promise<CompletionReport[]> {
+  const rows = await sql`
+    SELECT agent, output, finished_at
+    FROM agent_actions
+    WHERE status IN ('success', 'failed')
+      AND agent != ${currentAgent}
+      AND output ? 'summary'
+      AND finished_at > NOW() - INTERVAL '12 hours'
+      ${companyId ? sql`AND (company_id = ${companyId} OR company_id IS NULL)` : sql``}
+    ORDER BY finished_at DESC
+    LIMIT 8
+  `.catch(() => []);
+
+  const reports: CompletionReport[] = [];
+  for (const row of rows) {
+    const report = extractCompletionReport(row.output);
+    if (report) reports.push(report);
+  }
+  return reports;
+}
+
+/**
+ * Agent signals targeted at the current agent.
+ * These are cross-agent recommendations embedded in completion reports.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getAgentSignals(sql: any, targetAgent: string): Promise<AgentSignal[]> {
+  // Map context agent types to signal target names
+  const agentAliases: Record<string, string[]> = {
+    build: ['engineer', 'build'],
+    fix: ['engineer', 'healer', 'fix'],
+    ceo: ['ceo'],
+    growth: ['growth'],
+    scout: ['scout'],
+    evolver: ['evolver'],
+  };
+  const targets = agentAliases[targetAgent] || [targetAgent];
+
+  const rows = await sql`
+    SELECT output->'recommendations' as recommendations, agent, finished_at
+    FROM agent_actions
+    WHERE status = 'success'
+      AND output ? 'recommendations'
+      AND finished_at > NOW() - INTERVAL '24 hours'
+    ORDER BY finished_at DESC
+    LIMIT 20
+  `.catch(() => []);
+
+  const signals: AgentSignal[] = [];
+  for (const row of rows) {
+    const recs = row.recommendations;
+    if (!Array.isArray(recs)) continue;
+    for (const rec of recs) {
+      if (rec && typeof rec.target_agent === 'string' && targets.includes(rec.target_agent)) {
+        signals.push({
+          target_agent: rec.target_agent,
+          priority: rec.priority || 'info',
+          message: typeof rec.message === 'string' ? rec.message : JSON.stringify(rec),
+        });
+      }
+    }
+  }
+  // Deduplicate by message, keep highest priority
+  const seen = new Map<string, AgentSignal>();
+  const priorityOrder = { blocker: 0, action: 1, info: 2 };
+  for (const s of signals) {
+    const existing = seen.get(s.message);
+    if (!existing || (priorityOrder[s.priority] ?? 2) < (priorityOrder[existing.priority] ?? 2)) {
+      seen.set(s.message, s);
+    }
+  }
+  return [...seen.values()].slice(0, 10);
+}
+
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
   setSentryTags({
@@ -166,13 +246,17 @@ export async function GET(req: NextRequest) {
 
   // System-wide awareness — every agent gets this regardless of type.
   // Not cached (must be fresh) but queries are fast (indexed, small result sets).
-  const systemState = await getSystemState(sql, agent).catch(() => ({ awareness: null }));
+  const [systemState, agentSignals] = await Promise.all([
+    getSystemState(sql, agent).catch(() => ({ awareness: null })),
+    getAgentSignals(sql, agent).catch(() => []),
+  ]);
 
   // Portfolio-level agents don't need a company
   if (PORTFOLIO_AGENTS.includes(agent)) {
     const cacheKey = `_portfolio:${agent}`;
     const cached = await getCachedContext(cacheKey, agentType);
-    if (cached) return json({ ...cached, ...systemState });
+    const handoffs = { signals: agentSignals.length > 0 ? agentSignals : undefined };
+    if (cached) return json({ ...cached, ...systemState, ...handoffs });
 
     let contextData;
     if (agent === "scout") {
@@ -181,7 +265,7 @@ export async function GET(req: NextRequest) {
       contextData = await evolverContext(sql);
     }
     await setCachedContext(cacheKey, agentType, contextData);
-    return json({ ...contextData, ...systemState });
+    return json({ ...contextData, ...systemState, ...handoffs });
   }
 
   // Company-level agents
@@ -206,10 +290,17 @@ export async function GET(req: NextRequest) {
 
   const cycleId = currentCycle?.id || null;
 
+  // Fetch recent completion reports relevant to this company + agent signals
+  const recentCompletions = await getRelevantCompletions(sql, agent, company.id).catch(() => []);
+  const handoffs = {
+    ...(recentCompletions.length > 0 ? { recent_handoffs: recentCompletions } : {}),
+    ...(agentSignals.length > 0 ? { signals: agentSignals } : {}),
+  };
+
   // Try cache first
   const cached = await getCachedContext(company.id, agentType, cycleId);
   if (cached) {
-    return json({ ...cached, ...systemState });
+    return json({ ...cached, ...systemState, ...handoffs });
   }
 
   // Cache miss - compute context from DB
@@ -229,7 +320,7 @@ export async function GET(req: NextRequest) {
   // Store in cache for future requests
   await setCachedContext(company.id, agentType, contextData, cycleId);
 
-  return json({ ...contextData, ...systemState });
+  return json({ ...contextData, ...systemState, ...handoffs });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

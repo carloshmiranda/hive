@@ -7,6 +7,7 @@ import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "
 import { qstashPublish } from "@/lib/qstash";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -110,6 +111,15 @@ export async function POST(req: Request) {
               error = CASE WHEN ${errorDetail}::text IS NOT NULL THEN ${errorDetail} ELSE error END
           WHERE id = ${backlogItem.dispatch_id} AND status = 'running'
         `.catch((e: any) => { console.warn(`[backlog] close agent_action ${backlogItem.dispatch_id} failed: ${e?.message || e}`); });
+
+        // Write failure completion report so other agents know what went wrong
+        if (actionStatus === 'failed') {
+          const failReport: CompletionReport = {
+            summary: `Failed: ${errorDetail?.slice(0, 120) || 'unknown error'}`,
+            blockers: [errorDetail || 'Unknown failure'].slice(0, 3),
+          };
+          await writeCompletionReportByDispatchId(sql, backlogItem.dispatch_id, failReport);
+        }
       } else {
         // Fallback: close the most recent running engineer action (best-effort)
         await sql`
@@ -211,7 +221,19 @@ export async function POST(req: Request) {
         syncIssueForBacklog(sql, completed_id, "done");
       }
 
-      // Store PR tracking data in the agent_actions record
+      // Store completion report in the agent_actions record for handoff visibility
+      const [dispatchLink] = await sql`
+        SELECT dispatch_id FROM hive_backlog WHERE id = ${completed_id}
+      `.catch(() => []);
+      if (dispatchLink?.dispatch_id) {
+        const completionReport: CompletionReport = {
+          summary: `${completedItem?.title || completed_id}: ${pr_number ? `PR #${pr_number}` : 'direct commit'}`,
+          files_changed: Array.isArray(changed_files) ? changed_files : undefined,
+          pr_number: pr_number ? parseInt(pr_number, 10) : undefined,
+          branch: branch || undefined,
+        };
+        await writeCompletionReportByDispatchId(sql, dispatchLink.dispatch_id, completionReport);
+      }
       if (pr_number && branch) {
         await sql`
           UPDATE agent_actions

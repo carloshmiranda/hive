@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { writeCompletionReport, type CompletionReport } from "@/lib/completion-report";
 
 // POST /api/agents/log — log agent action via OIDC auth
 // Body: { company_slug, agent, action_type, status, description?, error? }
@@ -21,7 +22,7 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { company_slug, agent, action_type, status, description, error: errorMsg, trace_id, metadata: bodyMetadata } = body;
+  const { company_slug, agent, action_type, status, description, error: errorMsg, trace_id, metadata: bodyMetadata, completion_report } = body;
   if (!agent || !action_type || !status) {
     return err("Missing required fields: agent, action_type, status", 400);
   }
@@ -43,13 +44,29 @@ export async function POST(req: NextRequest) {
   };
   const hasMetadata = Object.keys(metadata).length > 0;
 
-  await sql`
+  const [inserted] = await sql`
     INSERT INTO agent_actions (agent, company_id, action_type, status, description, error, input, started_at, finished_at)
     VALUES (${agent}, ${companyId}, ${action_type}, ${status},
       ${description || null}, ${errorMsg || null},
       ${hasMetadata ? JSON.stringify(metadata) : null}::jsonb,
       NOW() - INTERVAL '20 minutes', NOW())
+    RETURNING id
   `;
+
+  // Write structured completion report if provided by brain agent
+  if (completion_report && inserted?.id) {
+    const report: CompletionReport = {
+      summary: typeof completion_report.summary === 'string' ? completion_report.summary : `${agent}: ${action_type} ${status}`,
+      files_changed: Array.isArray(completion_report.files_changed) ? completion_report.files_changed : undefined,
+      decisions: Array.isArray(completion_report.decisions) ? completion_report.decisions : undefined,
+      blockers: Array.isArray(completion_report.blockers) ? completion_report.blockers : undefined,
+      recommendations: Array.isArray(completion_report.recommendations) ? completion_report.recommendations : undefined,
+      pr_number: typeof completion_report.pr_number === 'number' ? completion_report.pr_number : undefined,
+      branch: typeof completion_report.branch === 'string' ? completion_report.branch : undefined,
+      metrics_impact: typeof completion_report.metrics_impact === 'object' ? completion_report.metrics_impact : undefined,
+    };
+    await writeCompletionReport(sql, inserted.id, report);
+  }
 
   // Update routing weights on agent completion (post-hook)
   await updateRoutingWeights(sql, action_type, agent, status, metadata);

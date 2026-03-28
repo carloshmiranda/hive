@@ -8,6 +8,7 @@ import { callLLMWithLogging } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { type CompletionReport } from "@/lib/completion-report";
 import { cachedPlaybook } from "@/lib/redis-cache";
 import { compressResearchForAgent } from "@/app/api/agents/playbook/route";
 
@@ -311,6 +312,28 @@ ${capabilitiesSummary(company.capabilities)}`;
       deduplication_applied: !!latestCycle?.id,
     };
 
+    // Build completion report from worker output
+    let workerReport: CompletionReport | undefined;
+    try {
+      const reportMatch = output.match(/\{[\s\S]*\}/);
+      if (reportMatch) {
+        const parsed = JSON.parse(reportMatch[0]);
+        workerReport = {
+          summary: `${agentName} for ${company.slug}: ${parsed.health_status || parsed.content_created?.length + ' items' || 'completed'}`,
+          recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : undefined,
+          metrics_impact: typeof parsed.metrics_collected === 'number' ? { metrics_collected: parsed.metrics_collected } : undefined,
+        };
+        // Ops agent: signal engineer if issues found
+        if (agentName === "ops" && parsed.needs_engineer && Array.isArray(parsed.issues_found)) {
+          workerReport.blockers = parsed.issues_found.map((i: any) => typeof i === 'string' ? i : i.title || i.issue || JSON.stringify(i)).slice(0, 3);
+          workerReport.recommendations = [
+            ...(workerReport.recommendations || []),
+            { target_agent: 'engineer', priority: 'action' as const, message: `Ops detected ${parsed.issues_found.length} issue(s) for ${company.slug}` },
+          ];
+        }
+      }
+    } catch { /* best-effort report extraction */ }
+
     await sql`
       INSERT INTO agent_actions (
         company_id, cycle_id, agent, action_type, description,
@@ -322,7 +345,8 @@ ${capabilitiesSummary(company.capabilities)}`;
           output: output.slice(0, 5000),
           context: contextMetadata,
           ...logData,
-          trigger
+          trigger,
+          ...(workerReport || {}),
         })}::jsonb,
         ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
       )
