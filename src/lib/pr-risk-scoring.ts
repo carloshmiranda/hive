@@ -76,17 +76,28 @@ export async function analyzePR(
     hardGateIssues.push('CI checks failed or pending');
   }
 
-  if (!pr.mergeable) {
+  // pr.mergeable is null when GitHub hasn't computed it yet — only flag explicit false
+  if (pr.mergeable === false) {
     hardGateIssues.push('PR has merge conflicts');
   }
 
-  // Check for secrets in diff
-  const secretPatterns = [
-    /API_KEY/i, /SECRET/i, /PASSWORD/i, /Bearer\s+[a-zA-Z0-9]/i,
-    /\.env/i, /sk_live/i, /sk_test/i, /rk_live/i, /rk_test/i
+  // Check for secrets in diff — match actual secret values, not variable names.
+  // Variable names like CRON_SECRET or GEMINI_API_KEY are safe to reference in code.
+  // We look for: hardcoded tokens, .env files being added, actual Bearer tokens with values.
+  const secretValuePatterns = [
+    /sk_live_[a-zA-Z0-9]{20,}/i,       // Stripe live keys
+    /sk_test_[a-zA-Z0-9]{20,}/i,       // Stripe test keys
+    /rk_live_[a-zA-Z0-9]{20,}/i,       // Resend live keys
+    /rk_test_[a-zA-Z0-9]{20,}/i,       // Resend test keys
+    /Bearer\s+[a-zA-Z0-9_\-.]{20,}/i,  // Hardcoded Bearer tokens (20+ chars)
+    /\+\s*password\s*[:=]\s*["'][^"']+["']/i, // Hardcoded passwords in additions
+    /\+.*\.env(?:\.local|\.production)/i,      // .env files being added (not just referenced)
+    /ghp_[a-zA-Z0-9]{36,}/,            // GitHub personal access tokens
+    /gho_[a-zA-Z0-9]{36,}/,            // GitHub OAuth tokens
+    /-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/, // Private keys
   ];
 
-  if (secretPatterns.some(pattern => pattern.test(diff))) {
+  if (secretValuePatterns.some(pattern => pattern.test(diff))) {
     hardGateIssues.push('Potential secrets detected in diff');
   }
 

@@ -27,9 +27,11 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>) {
     if (!prListRes.ok) return;
     const openPRs = await prListRes.json();
     const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
+    console.log(`[backlog] PR review: found ${hivePRs.length} open hive/ PRs`);
     for (const pr of hivePRs) {
       try {
         const analysis = await analyzePR("carloshmiranda", "hive", pr.number, ghToken);
+        console.log(`[backlog] PR #${pr.number}: decision=${analysis.decision}, gates=${analysis.hardGateIssues.join("; ") || "none"}, cost=${analysis.costImpact}`);
         if (analysis.decision === "auto_merge") {
           const result = await autoMergePR("carloshmiranda", "hive", pr.number, ghToken, "squash");
           if (result.success) {
@@ -44,12 +46,16 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>) {
               syncIssueForBacklog(sql, merged.id, "done");
             }
             console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
+          } else {
+            console.log(`[backlog] Auto-merge failed for PR #${pr.number}: ${result.message}`);
           }
         } else {
           // PR escalated — classify why and attempt auto-fix for automatable issues
           await handleEscalatedPR(sql, pr, analysis, ghToken);
         }
-      } catch { /* individual PR analysis — non-blocking */ }
+      } catch (prAnalysisErr) {
+        console.warn(`[backlog] PR #${pr.number} analysis error:`, prAnalysisErr instanceof Error ? prAnalysisErr.message : "unknown");
+      }
     }
   } catch (prErr) {
     console.warn("[backlog] PR review failed:", prErr instanceof Error ? prErr.message : "unknown");
