@@ -1402,28 +1402,29 @@ export async function POST(req: Request) {
     `.catch(e => console.error('[backlog] Failed to update backlog item with security note:', e));
   }
 
+  // GitHub repository_dispatch limits client_payload to 10 properties max.
+  // Consolidate metadata to stay under the limit.
   const dispatchPayload = {
     event_type: "feature_request",
     client_payload: {
       source: "backlog_chain",
       company: "_hive",
       task: taskDescription,
-      title: topItem.title,
       backlog_id: topItem.id,
-      github_issue: topItem.github_issue_number || undefined,
       priority: topItem.priority,
-      priority_score: topItem.priority_score,
-      attempt: attemptCount + 1,
       chain_next: true,
       spec: spec || undefined,
-      // Turn budget: always give at least TURN_BUDGET (50) turns.
-      // Estimates below budget are unreliable — tasks routinely need more turns than estimated
-      // due to context loading, git operations, and unexpected complexity.
-      // On 3rd+ attempt: escalate to Opus with 60-turn budget.
       max_turns: attemptCount >= 2
         ? 60
         : Math.max(50, spec?.estimated_turns || 50),
-      ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
+      // Pack secondary fields into metadata to stay within 10-property limit
+      meta: {
+        title: topItem.title,
+        priority_score: topItem.priority_score,
+        attempt: attemptCount + 1,
+        github_issue: topItem.github_issue_number || undefined,
+        ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
+      },
     },
   };
   const payloadStr = JSON.stringify(dispatchPayload);
@@ -1497,5 +1498,5 @@ export async function POST(req: Request) {
     syncIssueForBacklog(sql, topItem.id, "blocked");
   }
   await scheduleChainRetry("github_dispatch_failed", 5);
-  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true, _debug: { tokenPrefix, tokenLength: ghPat.length, payloadBytes: payloadStr.length, errBody: errBody.slice(0, 500) } });
+  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
 }

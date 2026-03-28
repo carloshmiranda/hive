@@ -1,5 +1,5 @@
 name: Hive Engineer
-run-name: "Engineer: ${{ github.event.action || github.event_name }} — ${{ github.event.client_payload.title || github.event.inputs.task || github.event.client_payload.company || 'task' }}${{ github.event.client_payload.github_issue && format(' (#{0})', github.event.client_payload.github_issue) || github.event.client_payload.pr_number && format(' (PR #{0})', github.event.client_payload.pr_number) || '' }}"
+run-name: "Engineer: ${{ github.event.action || github.event_name }} — ${{ github.event.client_payload.meta.title || github.event.client_payload.title || github.event.inputs.task || github.event.client_payload.company || 'task' }}${{ github.event.client_payload.meta.github_issue && format(' (#{0})', github.event.client_payload.meta.github_issue) || github.event.client_payload.github_issue && format(' (#{0})', github.event.client_payload.github_issue) || github.event.client_payload.pr_number && format(' (PR #{0})', github.event.client_payload.pr_number) || '' }}"
 
 on:
   repository_dispatch:
@@ -623,7 +623,7 @@ jobs:
           COMPANY="${{ needs.context.outputs.company }}"
           COMPANY_REPO="${{ needs.context.outputs.company_repo }}"
           TRIGGER="${{ needs.context.outputs.trigger }}"
-          TASK_SUMMARY=$(echo "$PAYLOAD_JSON" | jq -r '.task // .title // "Build task"' 2>/dev/null | head -c 100)
+          TASK_SUMMARY=$(echo "$PAYLOAD_JSON" | jq -r '.task // .meta.title // .title // "Build task"' 2>/dev/null | head -c 100)
 
           echo "Dispatching build to ${COMPANY_REPO} (runs on company's unlimited Actions minutes)"
 
@@ -708,7 +708,7 @@ jobs:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
           # Model escalation: payload may override model/max_turns for retries
-          MODEL=$(echo "$PAYLOAD_JSON" | jq -r '.model // empty' 2>/dev/null)
+          MODEL=$(echo "$PAYLOAD_JSON" | jq -r '.meta.model // .model // empty' 2>/dev/null)
           MAX_TURNS=$(echo "$PAYLOAD_JSON" | jq -r '.max_turns // empty' 2>/dev/null)
           echo "model=${MODEL:-claude-sonnet-4-20250514}" >> $GITHUB_OUTPUT
           echo "max_turns=${MAX_TURNS:-50}" >> $GITHUB_OUTPUT
