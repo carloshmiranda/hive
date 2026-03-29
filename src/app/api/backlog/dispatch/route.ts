@@ -360,6 +360,41 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   let { completed_id, completed_status, pr_number, branch, changed_files } = body;
 
+  // Handle structured status codes from Engineer callbacks (ADR-032)
+  const { status_code, concerns, context_needed, blocking_issue } = body;
+
+  // Map structured status codes to routing behavior
+  if (status_code) {
+    console.log(`[backlog] Structured status code received: ${status_code}`);
+
+    switch (status_code) {
+      case "DONE":
+        // Continue with normal success processing
+        break;
+      case "DONE_WITH_CONCERNS":
+        // Log concerns but don't block dispatch
+        if (concerns) {
+          console.warn(`[backlog] Engineer concerns (non-blocking): ${concerns}`);
+        }
+        break;
+      case "NEEDS_CONTEXT":
+        // Treat as partial completion, may need follow-up
+        if (context_needed) {
+          console.log(`[backlog] Context needed for completion: ${context_needed}`);
+        }
+        break;
+      case "BLOCKED":
+        // Escalation trigger - blocking issue prevents completion
+        if (blocking_issue) {
+          console.warn(`[backlog] Engineer blocked - escalation needed: ${blocking_issue}`);
+          // TODO: Implement escalation logic for BLOCKED status
+        }
+        break;
+      default:
+        console.warn(`[backlog] Unknown status_code: ${status_code}`);
+    }
+  }
+
   // PR tracking: only trust pr_number explicitly provided by the Engineer callback.
   // Previously auto-extracted from recent open PRs, but this caused wrong PR attribution
   // when multiple Engineer runs overlapped (grabbed most recent hive/* PR, not the right one).

@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless";
+import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ export async function POST(req: Request) {
     source_path: "/pricing",
   }));
 
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
 
   await sql`
     INSERT INTO pricing_clicks (date, tier, source_path)
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
 
 // GET /api/pricing-intent — returns daily click summary (last 14 days)
 export async function GET() {
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
 
   const rows = await sql`
     SELECT date, tier, COUNT(*)::int as clicks

@@ -5,8 +5,8 @@ export async function GET() {
   // Check database connectivity if DATABASE_URL is set
   if (process.env.DATABASE_URL) {
     try {
-      const { neon } = await import("@neondatabase/serverless");
-      const sql = neon(process.env.DATABASE_URL);
+      const { getDb } = await import("@/lib/db");
+      const sql = getDb();
       await sql`SELECT 1`;
       checks.database = "ok";
     } catch {
