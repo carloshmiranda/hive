@@ -593,6 +593,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "type": "TEXT[]",
         "nullable": true,
         "hasDefault": true
+      },
+      "embedding": {
+        "type": "VECTOR(1536)",
+        "nullable": true,
+        "hasDefault": false
       }
     },
     "checks": []
