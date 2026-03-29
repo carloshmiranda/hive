@@ -1909,6 +1909,7 @@ export async function GET(request: Request) {
           priority,
           notes,
           created_at,
+          github_issue_number,
           COALESCE(ARRAY_LENGTH(STRING_TO_ARRAY(notes, '[janitor]'), 1) - 1, 0) as attempt_count,
           LENGTH(COALESCE(notes, '')) as notes_length
         FROM hive_backlog
@@ -1949,6 +1950,13 @@ export async function GET(request: Request) {
                 notes = COALESCE(notes, '') || ${` [janitor] Duplicate of ${keepItem.id} — ${keepItem.title.slice(0, 50)} (similarity: ${avgSimilarity.toFixed(2)})`}
               WHERE id = ${rejectItem.id}
             `;
+
+            // Close GitHub issue for rejected duplicate
+            if (rejectItem.github_issue_number) {
+              import("@/lib/github-issues").then(({ syncBacklogStatus }) =>
+                syncBacklogStatus(rejectItem.github_issue_number, "rejected")
+              ).catch(() => {});
+            }
 
             duplicatesRejected++;
             console.log(`[sentinel-janitor] Backlog Health: Rejected duplicate item "${rejectItem.title}" (similarity: ${avgSimilarity.toFixed(2)} with "${keepItem.title}")`);
@@ -2210,6 +2218,77 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check 51: Ghost pr_open recovery — detect pr_open items whose PR is
+    // closed/merged on GitHub and sync status to done or ready
+    // -----------------------------------------------------------------------
+    let ghostPrFixed = 0;
+    try {
+      const stuckPrOpen = await sql`
+        SELECT id, title, pr_number, github_issue_number, github_repo
+        FROM hive_backlog
+        WHERE status = 'pr_open'
+          AND pr_number IS NOT NULL
+          AND updated_at < NOW() - INTERVAL '2 hours'
+        LIMIT 10
+      `;
+
+      if (stuckPrOpen.length > 0) {
+        const { getGitHubToken } = await import("@/lib/github-app");
+        const { syncBacklogStatus } = await import("@/lib/github-issues");
+        const ghToken = await getGitHubToken().catch(() => null);
+
+        if (ghToken) {
+          for (const item of stuckPrOpen) {
+            try {
+              const repo = item.github_repo || "carloshmiranda/hive";
+              const res = await fetch(
+                `https://api.github.com/repos/${repo}/pulls/${item.pr_number}`,
+                {
+                  headers: {
+                    Authorization: `token ${ghToken}`,
+                    Accept: "application/vnd.github+json",
+                  },
+                  signal: AbortSignal.timeout(8000),
+                }
+              );
+              if (!res.ok) continue;
+              const pr = await res.json();
+
+              if (pr.state === "closed") {
+                const newStatus = pr.merged ? "done" : "ready";
+                const noteFragment = pr.merged
+                  ? ` [janitor] PR #${item.pr_number} merged — marked done.`
+                  : ` [janitor] PR #${item.pr_number} closed unmerged — reset to ready.`;
+
+                await sql`
+                  UPDATE hive_backlog
+                  SET status = ${newStatus},
+                      completed_at = ${pr.merged ? new Date(pr.merged_at) : null},
+                      dispatched_at = NULL,
+                      notes = COALESCE(notes, '') || ${noteFragment}
+                  WHERE id = ${item.id}
+                `;
+
+                if (item.github_issue_number) {
+                  await syncBacklogStatus(item.github_issue_number, newStatus).catch(() => {});
+                }
+
+                ghostPrFixed++;
+                console.log(`[sentinel-janitor] Check 51: ${item.title} — PR #${item.pr_number} was ${pr.state}${pr.merged ? " (merged)" : ""} → ${newStatus}`);
+              }
+            } catch { /* per-item non-blocking */ }
+          }
+        }
+      }
+
+      if (ghostPrFixed > 0) {
+        console.log(`[sentinel-janitor] Check 51: Fixed ${ghostPrFixed} ghost pr_open items`);
+      }
+    } catch (check51Err: any) {
+      console.warn(`[sentinel-janitor] Check 51 failed: ${check51Err?.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Regenerate BACKLOG.md from database
     // -----------------------------------------------------------------------
     let backlogRegenerated = false;
@@ -2252,6 +2331,7 @@ export async function GET(request: Request) {
       backlog_regenerated: backlogRegenerated,
       backlog_duplicates_rejected: duplicatesRejected,
       backlog_stale_deprioritized: staleItemsDeprioritized,
+      ghost_pr_fixed: ghostPrFixed,
       db_slow_queries_found: slowQueriesFound,
       db_cache_hit_ratio_pct: cacheHitRatioPct,
       db_performance_issues: dbPerformanceIssues.length,

@@ -291,9 +291,14 @@ export async function syncBacklogStatus(
   const phaseLabel = `phase:${newStatus.replace("_", "-")}`;
   if (!PHASE_LABELS.includes(phaseLabel)) return;
 
-  // If done, close the issue
+  // If done or rejected, close the issue
   if (newStatus === "done") {
     await closeIssue(HIVE_REPO, issueNumber, "Completed and merged.");
+    return;
+  }
+
+  if (newStatus === "rejected") {
+    await closeIssue(HIVE_REPO, issueNumber, "Rejected — no longer needed.");
     return;
   }
 
