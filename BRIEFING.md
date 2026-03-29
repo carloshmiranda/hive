@@ -66,6 +66,10 @@
   - Backlog duplicates cleaned up (2 duplicate items removed)
   - Circuit breakers cleared on all 4 companies (aged out naturally)
   - PR review improvements: 6 backlog items created (#230-#235) covering risk-score threshold, post-merge health check, actionlint CI, property-based testing, PR #202 docs, MCP category fix
+  - GitHub Issues ↔ DB drift prevented: `syncBacklogStatus()` handles `rejected` (was silent), janitor closes issues on duplicate rejection, Check 51 recovers ghost `pr_open` items whose PR closed without merge
+  - 35 stale GitHub Issues closed manually (32 done + 3 rejected in DB)
+  - Item #187 (pgvector semantic search) reset from `pr_open` → `blocked` (PR #252 was 0-file ghost)
+  - Spec-gen triggered for 10 specless P3 ready items — workflows in progress
 - **Recently fixed:**
   - Schema-map drift: auto-sync from schema.sql (22 tables), CI check prevents drift, generator fixed for UNLOGGED tables
   - Healer Flolio loop: success logging step in workflow + per-company circuit breaker (3 failures/48h → skip)
@@ -94,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-29: **GitHub Issues ↔ DB drift prevention + spec-gen kickoff** — Three-part fix: (1) `syncBacklogStatus()` now handles `rejected` status — was silently skipping because `phase:rejected` not in `PHASE_LABELS`; closes GitHub Issue with "Rejected" comment. (2) sentinel-janitor now closes GitHub Issues when janitor rejects duplicate backlog items (previously DB updated but issue stayed open). (3) Added **Check 51** (ghost `pr_open` recovery): daily scan finds `pr_open` items with `pr_number` that are >2h old, fetches PR state from GitHub API, transitions `merged`→`done` or `closed-without-merge`→`ready` and syncs GitHub Issue. Fixes item #187 (PR #252 was 0-file ghost — never merged, stuck in `pr_open` forever). Manually closed 35 stale GitHub Issues (32 `done` + 3 `rejected` in DB but still open). Reset item #187 to `blocked`. Triggered spec-gen (`hive-spec-gen.yml`) for 10 specless P3 ready items via `spec_request` repository_dispatch. Commit `2f00f63`.
 
 - `[code]` 2026-03-29: **Spec-gen flow verified end-to-end** — `hive-spec-gen.yml` now fully operational with Claude Max (not OpenRouter). Two fixes needed: (1) Added `"hive-spec-gen.yml"` to `ALLOWED_WORKFLOWS` in `src/app/api/agents/token/route.ts` — new workflows must always be explicitly allowlisted or OIDC token fetch returns 403. (2) Bumped `--max-turns` 8→15 — 5-step agentic workflow (npm install, DB fetch, 2-4 file reads, JSON spec write, DB update) hit cap at 9 turns. Verification: run `23711192569` succeeded in 13 turns, $0.29, spec written to DB with all 6 fields. Dispatch retry returned `no_spec_items_only` (the test item `3348b977` was already `blocked` before manual trigger — not a regression). All 29+ `ready` items with `[unblocked-2026-03-29]` tags will now get specs via Sentinel-driven spec-gen queue.
 

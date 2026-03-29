@@ -824,6 +824,15 @@
 
 ---
 
+### 2026-03-29 `gh api --field` sends value as string, not object — breaks `client_payload`
+**What happened:** Trying to trigger `repository_dispatch` with `client_payload` using `gh api --field client_payload='{"backlog_id":"...","title":"..."}'` failed with HTTP 422 "client_payload is not an object".
+**Root cause:** `--field` sends every value as a JSON string, even if the value looks like an object. GitHub requires `client_payload` to be a JSON object, not a string.
+**Fix applied:** Use `echo '{"event_type":"...", "client_payload":{...}}' | gh api repos/.../dispatches --method POST --input -` to pass the entire body as a JSON object via stdin.
+**Prevention:** When using `gh api` to send nested JSON payloads (e.g., `client_payload`, any object field), always use `--input -` with piped JSON. Never use `--field` for values that must be parsed as objects by the server.
+**Affects:** hive
+
+---
+
 **What happened:** 56 ready backlog items sat unprocessed for hours. The dispatch chain — where each Engineer completion triggers the next dispatch via QStash — had silently broken. Last 3 completed items all had `pr_number: null` (direct commits, no PR created).
 **Root cause:** The completion callback in `/api/backlog/dispatch/route.ts` had two paths: `pr_open` (PR created) and `done` (no PR). The `pr_open` path correctly called `qstashPublish()` to chain-dispatch the next item. The `done` path marked the item complete but never scheduled the next dispatch — the chain simply stopped.
 **Fix applied:** Added `qstashPublish("/api/backlog/dispatch", { trigger: "done_chain", completed_id }, { deduplicationId, delay: 10 })` to the `done` path, matching the `pr_open` pattern. Commit `3b5e085`.
