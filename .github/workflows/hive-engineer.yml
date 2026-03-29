@@ -726,6 +726,43 @@ jobs:
           echo "model=${MODEL:-claude-sonnet-4-20250514}" >> $GITHUB_OUTPUT
           echo "max_turns=${MAX_TURNS}" >> $GITHUB_OUTPUT
 
+      - name: Pre-execution guard — check turn budget
+        id: turn_guard
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
+        run: |
+          # Extract estimated_turns from spec (if present)
+          ESTIMATED_TURNS=$(echo "$PAYLOAD_JSON" | jq -r '.spec.estimated_turns // empty' 2>/dev/null)
+
+          if [ -n "$ESTIMATED_TURNS" ] && [ "$ESTIMATED_TURNS" -gt 28 ]; then
+            echo "⚠️  Pre-execution guard: estimated_turns ($ESTIMATED_TURNS) > 28, marking for decomposition"
+
+            # Extract backlog_id to mark item as needing decomposition
+            BACKLOG_ID=$(echo "$PAYLOAD_JSON" | jq -r '.backlog_id // empty' 2>/dev/null)
+
+            if [ -n "$BACKLOG_ID" ]; then
+              # Get OIDC token and mark item as needs_decomposition
+              OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+                | jq -r '.value')
+
+              # Mark item as needs_decomposition (this prevents retry loops)
+              curl -s -X POST "https://hive-phi.vercel.app/api/backlog/update" \
+                -H "Authorization: Bearer $OIDC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"id\":\"$BACKLOG_ID\",\"status\":\"blocked\",\"notes_append\":\" [needs_decomposition] Estimated turns ($ESTIMATED_TURNS) exceeds budget (28) — blocked by pre-execution guard.\"}" || true
+
+              echo "Marked backlog item $BACKLOG_ID as needs_decomposition"
+            else
+              echo "No backlog_id found — cannot update status"
+            fi
+
+            echo "Exiting successfully to prevent burning CI minutes"
+            exit 0
+          else
+            echo "✅ Turn budget check passed: estimated_turns=${ESTIMATED_TURNS:-"not specified"}, proceeding with Claude execution"
+          fi
+
       - name: Run build agent (Hive-internal only)
         id: agent
         env:
