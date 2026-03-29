@@ -132,9 +132,9 @@ export async function DELETE(req: NextRequest) {
       )
       ON CONFLICT (company_id, report_type) DO UPDATE SET
         content = jsonb_set(
-          COALESCE(outreach_log.content, '{}'::jsonb),
+          COALESCE(research_reports.content, '{}'::jsonb),
           '{suppressions_removed}',
-          COALESCE(outreach_log.content->'suppressions_removed', '[]'::jsonb) || ${JSON.stringify([removalEntry])}::jsonb
+          COALESCE(research_reports.content->'suppressions_removed', '[]'::jsonb) || ${JSON.stringify([removalEntry])}::jsonb
         ),
         updated_at = now()
     `;

@@ -44,9 +44,9 @@ export async function POST(req: NextRequest) {
       )
       ON CONFLICT (company_id, report_type) DO UPDATE SET
         content = jsonb_set(
-          COALESCE(outreach_log.content, '{}'::jsonb),
+          COALESCE(research_reports.content, '{}'::jsonb),
           '{webhook_events}',
-          COALESCE(outreach_log.content->'webhook_events', '[]'::jsonb) || ${JSON.stringify([{ type, data, timestamp: new Date().toISOString() }])}::jsonb
+          COALESCE(research_reports.content->'webhook_events', '[]'::jsonb) || ${JSON.stringify([{ type, data, timestamp: new Date().toISOString() }])}::jsonb
         ),
         updated_at = now()
     `;
@@ -92,9 +92,9 @@ async function handleUnsubscribe(sql: any, contactData: any) {
       )
       ON CONFLICT (company_id, report_type) DO UPDATE SET
         content = jsonb_set(
-          COALESCE(outreach_log.content, '{}'::jsonb),
+          COALESCE(research_reports.content, '{}'::jsonb),
           '{unsubscribes}',
-          COALESCE(outreach_log.content->'unsubscribes', '[]'::jsonb) || ${JSON.stringify([{
+          COALESCE(research_reports.content->'unsubscribes', '[]'::jsonb) || ${JSON.stringify([{
             email: contactData.email,
             contact_id: contactData.id,
             audience_id: contactData.audience_id,
@@ -165,9 +165,9 @@ async function handleBounce(sql: any, bounceData: any) {
             )
             ON CONFLICT (company_id, report_type) DO UPDATE SET
               content = jsonb_set(
-                COALESCE(outreach_log.content, '{}'::jsonb),
+                COALESCE(research_reports.content, '{}'::jsonb),
                 '{bounces}',
-                COALESCE(outreach_log.content->'bounces', '[]'::jsonb) || ${JSON.stringify([{
+                COALESCE(research_reports.content->'bounces', '[]'::jsonb) || ${JSON.stringify([{
                   email,
                   contact_id: contact.id,
                   bounce_type: bounceData.type,

@@ -136,9 +136,9 @@ export async function suppressEmail(companyId: string, email: string, reason: st
       )
       ON CONFLICT (company_id, report_type) DO UPDATE SET
         content = jsonb_set(
-          COALESCE(outreach_log.content, '{}'::jsonb),
+          COALESCE(research_reports.content, '{}'::jsonb),
           '{manual_suppressions}',
-          COALESCE(outreach_log.content->'manual_suppressions', '[]'::jsonb) || ${JSON.stringify([suppressionEntry])}::jsonb
+          COALESCE(research_reports.content->'manual_suppressions', '[]'::jsonb) || ${JSON.stringify([suppressionEntry])}::jsonb
         ),
         updated_at = now()
     `;
