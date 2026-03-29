@@ -1514,7 +1514,7 @@ async function executeSentinelDispatch(request: Request) {
       `.catch(() => []);
 
       const queueItems = [];
-      const [totalCompanies] = await sql`SELECT COUNT(*)::int as count FROM companies WHERE lifecycle NOT IN ('killed', 'archived')`.catch(() => [{ count: 0 }]);
+      const [totalCompanies] = await sql`SELECT COUNT(*)::int as count FROM companies WHERE status NOT IN ('killed', 'idea')`.catch(() => [{ count: 0 }]);
       const [failureRateResult] = await sql`
         SELECT COUNT(CASE WHEN status = 'failed' THEN 1 END)::FLOAT / NULLIF(COUNT(*)::FLOAT, 0) AS failure_rate
         FROM agent_actions
