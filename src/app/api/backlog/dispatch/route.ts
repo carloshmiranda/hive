@@ -934,15 +934,16 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "rate_limit_cooldown", cooldown_remaining_minutes: minutesRemaining, free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
-  // Clean up ghost locks: running engineer actions >90 min old with no completion callback.
-  // GitHub Actions jobs timeout at 60 min by default — anything running longer is a ghost.
+  // Clean up ghost locks: running engineer actions >30 min old with no completion callback.
+  // Our engineer jobs complete in 5-15 min. 30 min is a safe threshold that catches
+  // callback failures without risk of clearing genuinely running jobs.
   await sql`
     UPDATE agent_actions
     SET status = 'failed', finished_at = NOW(),
-        error = 'Ghost lock: auto-cleanup — action ran >90 min without completion callback'
+        error = 'Ghost lock: auto-cleanup — action ran >30 min without completion callback'
     WHERE agent = 'engineer' AND status = 'running'
     AND company_id IS NULL
-    AND started_at < NOW() - INTERVAL '90 minutes'
+    AND started_at < NOW() - INTERVAL '30 minutes'
   `.catch(() => {});
 
   // Check for running Hive Engineer jobs (dedup)
