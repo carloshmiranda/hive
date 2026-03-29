@@ -135,19 +135,20 @@ async function applySuccessRateWeighting(
 // Review and auto-merge all open hive/ PRs.
 // Extracted as a helper so it can run on both completion callbacks AND fresh dispatches.
 // This ensures existing PRs get merged even when the chain restarts from sentinel/manual kicks.
-async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>) {
+async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>): Promise<{ ciFixDispatched: boolean }> {
   try {
     const ghToken = await getGitHubToken();
-    if (!ghToken) return;
+    if (!ghToken) return { ciFixDispatched: false };
     const { analyzePR, autoMergePR } = await import("@/lib/pr-risk-scoring");
     const prListRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/pulls?state=open&per_page=30", {
       headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
       signal: AbortSignal.timeout(10000),
     });
-    if (!prListRes.ok) return;
+    if (!prListRes.ok) return { ciFixDispatched: false };
     const openPRs = await prListRes.json();
     const hivePRs = openPRs.filter((pr: any) => pr.head?.ref?.startsWith("hive/"));
     console.log(`[backlog] PR review: found ${hivePRs.length} open hive/ PRs`);
+    let ciFixDispatched = false;
     for (const pr of hivePRs) {
       try {
         const analysis = await analyzePR("carloshmiranda", "hive", pr.number, ghToken);
@@ -176,25 +177,29 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>) {
           }
         } else {
           // PR escalated — classify why and attempt auto-fix for automatable issues
-          await handleEscalatedPR(sql, pr, analysis, ghToken);
+          const dispatched = await handleEscalatedPR(sql, pr, analysis, ghToken);
+          if (dispatched) ciFixDispatched = true;
         }
       } catch (prAnalysisErr) {
         console.warn(`[backlog] PR #${pr.number} analysis error:`, prAnalysisErr instanceof Error ? prAnalysisErr.message : "unknown");
       }
     }
+    return { ciFixDispatched };
   } catch (prErr) {
     console.warn("[backlog] PR review failed:", prErr instanceof Error ? prErr.message : "unknown");
+    return { ciFixDispatched: false };
   }
 }
 
 // Handle PRs that failed risk analysis — auto-fix CI/conflict issues, escalate true safety concerns.
 // Mirrors the Check 39 pattern from company-health but runs inline during dispatch.
+// Returns true if a ci_fix Engineer was dispatched (caller should skip new backlog work).
 async function handleEscalatedPR(
   sql: ReturnType<typeof getDb>,
   pr: any,
   analysis: PRAnalysis,
   ghToken: string,
-) {
+): Promise<boolean> {
   const { hardGateIssues, costImpact, costFactors } = analysis;
 
   // Classify: is this fixable (CI failure, merge conflicts) or a true safety/cost concern?
@@ -218,7 +223,7 @@ async function handleEscalatedPR(
       ON CONFLICT DO NOTHING
     `.catch(() => {});
     console.log(`[backlog] PR #${pr.number} escalated for review: ${reasons.slice(0, 150)}`);
-    return;
+    return false;
   }
 
   // Fixable — rate-limit: skip if we already attempted a fix in the last 2 hours
@@ -229,7 +234,7 @@ async function handleEscalatedPR(
     AND started_at > NOW() - INTERVAL '2 hours'
     LIMIT 1
   `.catch(() => []);
-  if (recentFix) return;
+  if (recentFix) return false;
 
   // Step 1: Try updating the branch (merges main into PR branch).
   // Resolves "behind main" CI failures and simple merge conflicts.
@@ -251,7 +256,7 @@ async function handleEscalatedPR(
           NOW(), NOW())
       `.catch(() => {});
       console.log(`[backlog] Updated branch for PR #${pr.number} — CI will re-run`);
-      return; // Branch update may fix it — wait for next cycle to re-evaluate
+      return false; // Branch update may fix it — wait for next cycle to re-evaluate
     }
   } catch { /* fall through to Engineer dispatch */ }
 
@@ -263,7 +268,7 @@ async function handleEscalatedPR(
     AND started_at > NOW() - INTERVAL '1 hour'
     LIMIT 1
   `.catch(() => []);
-  if (runningEng) return; // Engineer busy — will retry next dispatch cycle
+  if (runningEng) return false; // Engineer busy — will retry next dispatch cycle
 
   const ciErrorSummary = hardGateIssues.join("; ");
   const [backlogItem] = await sql`
@@ -293,6 +298,7 @@ async function handleEscalatedPR(
       NOW(), NOW())
   `.catch(() => {});
   console.log(`[backlog] Dispatched Engineer to fix PR #${pr.number}: ${ciErrorSummary.slice(0, 100)}`);
+  return true; // ci_fix engineer dispatched — caller should skip new backlog work
 }
 
 // Fire-and-forget GitHub Issue sync for backlog status transitions
@@ -988,16 +994,22 @@ export async function POST(req: Request) {
   `.catch(() => {});
 
   // PR review runs on every dispatch call — even when Engineer is busy.
-  // PRs are independent of the Engineer queue; no reason to delay them.
+  // If a ci_fix Engineer was dispatched for a failing PR, skip new backlog work this cycle.
+  // PRs must be fixed before piling on new work to avoid compounding merge conflicts.
   if (!completed_id) {
-    await reviewAndMergeOpenPRs(sql);
+    const { ciFixDispatched } = await reviewAndMergeOpenPRs(sql);
+    if (ciFixDispatched) {
+      await scheduleChainRetry("ci_fix_dispatched", 15);
+      return json({ dispatched: false, reason: "ci_fix_dispatched", chain_retry: true });
+    }
   }
 
-  // Check for running Hive Engineer jobs (dedup)
+  // Check for running Hive Engineer jobs (dedup) — includes ci_fix so a running PR fix
+  // also blocks new feature work from starting in parallel.
   const [running] = await sql`
     SELECT id FROM agent_actions
     WHERE agent = 'engineer' AND status = 'running'
-    AND action_type IN ('feature_request', 'self_improvement')
+    AND action_type IN ('feature_request', 'self_improvement', 'ci_fix')
     AND company_id IS NULL
     AND started_at > NOW() - INTERVAL '1 hour'
     LIMIT 1
