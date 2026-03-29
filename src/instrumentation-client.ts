@@ -10,9 +10,9 @@ Sentry.init({
   // Only report errors in production
   enabled: process.env.NODE_ENV === "production",
 
-  // Replay is Pro-only, skip it
+  // Capture replays only on errors (50 free/month)
   replaysSessionSampleRate: 0,
-  replaysOnErrorSampleRate: 0,
+  replaysOnErrorSampleRate: 1.0,
 });
 
 // Export router transition hook for navigation instrumentation
