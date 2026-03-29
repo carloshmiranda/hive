@@ -158,7 +158,7 @@ export async function POST(req: NextRequest) {
       // Log the rate limit hit for debugging
       await sql`
         INSERT INTO agent_actions (company_id, agent, action_type, status, description, started_at, finished_at)
-        VALUES (${company.id}, ${agentName}, 'dispatch_attempt', 'rate_limited',
+        VALUES (${company.id}, ${agentName}, 'dispatch_attempt', 'skipped',
           ${`Per-agent hourly rate limit exceeded: ${hourlyCount.dispatch_count}/${hourlyThreshold} dispatches in last hour for ${company.slug}`},
           NOW(), NOW())
       `.catch(() => {});
