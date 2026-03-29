@@ -124,6 +124,16 @@ export interface LLMOptions {
       schema: any;
     };
   };
+  tools?: Array<{
+    type: "function";
+    function: {
+      name: string;
+      description: string;
+      parameters: any;
+    };
+  }>;
+  toolChoice?: "auto" | "none" | string;
+  parallelToolCalls?: boolean;
 }
 
 export interface LLMResponse {
@@ -136,6 +146,14 @@ export interface LLMResponse {
     cost_usd?: number;
   };
   routing_reason: string;
+  toolCalls?: Array<{
+    id: string;
+    type: "function";
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
 }
 
 // Curated primary models — quality picks that go first in the chain.
@@ -270,25 +288,32 @@ async function fetchFreeModels(): Promise<FreeModelEntry[]> {
  *
  * Deduplicates so curated models aren't listed twice.
  * Filters dynamic pool by agent's minContext requirement.
+ * Supports :exacto suffix for quality-first provider sorting on tool-calling requests.
  */
-async function buildModelChain(agent: string): Promise<string[]> {
+async function buildModelChain(agent: string, useExacto = false): Promise<string[]> {
   const config = AGENT_PRIMARIES[agent];
   if (!config) throw new Error(`No routing configuration for agent: ${agent}`);
 
-  const primaries = [...config.models];
+  let primaries = [...config.models];
+
+  // Apply :exacto suffix for quality-first provider sorting on tool-calling requests
+  if (useExacto) {
+    primaries = primaries.map(model => `${model}:exacto`);
+  }
+
   const dynamicPool = await fetchFreeModels();
 
   // Filter dynamic pool: meets min context, not already in primaries
-  const primarySet = new Set(primaries);
+  const primarySet = new Set(primaries.map(m => m.replace(':exacto', '')));
   const extras = dynamicPool
     .filter((m) => !primarySet.has(m.id) && m.contextLength >= config.minContext)
-    .map((m) => m.id);
+    .map((m) => useExacto ? `${m.id}:exacto` : m.id);
 
   // Combine: primaries first, then dynamic pool, then meta-router
   return [
     ...primaries,
     ...extras,
-    OPENROUTER_MODELS.free,
+    useExacto ? `${OPENROUTER_MODELS.free}:exacto` : OPENROUTER_MODELS.free,
   ];
 }
 
@@ -348,11 +373,12 @@ async function fetchWithRetry(
 // Single provider: OpenRouter with native server-side fallback
 // Uses `models` array — OpenRouter tries each model in order in ONE request.
 // Falls back server-side without consuming additional rate limit.
+// Now supports OpenAI-format tool calling with parallel_tool_calls.
 async function callOpenRouter(
   prompt: string,
   models: string[],
   options: LLMOptions = {}
-): Promise<{ content: string; model: string }> {
+): Promise<{ content: string; model: string; toolCalls?: any[] }> {
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
 
@@ -381,6 +407,21 @@ async function callOpenRouter(
   if (options.responseFormat) {
     requestBody.response_format = options.responseFormat;
     requestBody.plugins = [{ id: "response-healing" }]; // Safety net for malformed JSON
+  }
+
+  // Add tool calling support
+  if (options.tools && options.tools.length > 0) {
+    requestBody.tools = options.tools;
+
+    // Enable parallel tool calls for efficiency
+    if (options.parallelToolCalls !== false) {
+      requestBody.parallel_tool_calls = true;
+    }
+
+    // Add tool choice if specified
+    if (options.toolChoice) {
+      requestBody.tool_choice = options.toolChoice;
+    }
   }
 
   const res = await fetchWithRetry("https://openrouter.ai/api/v1/chat/completions", {
@@ -417,12 +458,20 @@ async function callOpenRouter(
   }
 
   const data = await res.json();
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`OpenRouter returned empty response (models: ${models[0]}...)`);
+  const message = data.choices?.[0]?.message;
+  if (!message) throw new Error(`OpenRouter returned empty response (models: ${models[0]}...)`);
+
+  const text = message.content || "";
+  const toolCalls = message.tool_calls || undefined;
+
+  // Ensure we have either content or tool calls
+  if (!text && !toolCalls) {
+    throw new Error(`OpenRouter returned empty content and no tool calls (models: ${models[0]}...)`);
+  }
 
   // OpenRouter returns which model actually handled the request
   const actualModel = data.model || models[0];
-  return { content: text.trim(), model: actualModel };
+  return { content: text.trim(), model: actualModel, toolCalls };
 }
 
 // AI SDK-based structured output wrapper using OpenRouter provider
@@ -527,13 +576,17 @@ async function callLLMStructured(
 // Main unified LLM calling interface
 // Uses OpenRouter's native `models` array for server-side fallback.
 // One API request covers all fallback models — saves rate limit budget.
+// Supports tool calling with :exacto suffix for quality-first provider routing.
 export async function callLLM(
   agent: string,
   prompt: string,
   options: LLMOptions & { sql?: any } = {}
 ): Promise<LLMResponse> {
+  // Use :exacto suffix for quality-first provider sorting when tools are specified
+  const useExacto = options.tools && options.tools.length > 0;
+
   // Build full model chain: curated primaries + dynamic free models + meta-routers
-  const fullChain = await buildModelChain(agent);
+  const fullChain = await buildModelChain(agent, useExacto);
   const primaryModel = AGENT_PRIMARIES[agent]?.models[0] ?? fullChain[0];
 
   const { sql, ...llmOptions } = options;
@@ -545,7 +598,9 @@ export async function callLLM(
 
   // Filter out models with open circuit breakers
   const availableModels = fullChain.filter(model => {
-    const circuitKey = `openrouter:${model}`;
+    // Strip :exacto suffix for circuit breaker key
+    const baseModel = model.replace(':exacto', '');
+    const circuitKey = `openrouter:${baseModel}`;
     if (!isProviderAvailable(circuitKey)) {
       console.warn(`[circuit-breaker] Skipping ${model} (circuit open)`);
       return false;
@@ -561,8 +616,9 @@ export async function callLLM(
     // Single request — OpenRouter handles fallback server-side
     const result = await callOpenRouter(prompt, availableModels, llmOptions);
 
-    // Record success for the model that actually responded
-    recordProviderSuccess(`openrouter:${result.model}`);
+    // Record success for the model that actually responded (strip :exacto suffix)
+    const baseModel = result.model.replace(':exacto', '');
+    recordProviderSuccess(`openrouter:${baseModel}`);
 
     return {
       content: result.content,
@@ -570,20 +626,23 @@ export async function callLLM(
       model: result.model,
       usage: { cost_usd: 0 },
       routing_reason: result.model === primaryModel
-        ? `primary:${result.model}`
-        : `fallback:${result.model} (${availableModels.length} models in chain)`,
+        ? `primary:${result.model}${useExacto ? ' (exacto)' : ''}`
+        : `fallback:${result.model}${useExacto ? ' (exacto)' : ''} (${availableModels.length} models in chain)`,
+      toolCalls: result.toolCalls,
     };
   } catch (error: any) {
     // Check if OpenRouter told us which specific model failed
     if (error.failedModel) {
-      // Record failure for the specific model that OpenRouter identified as failed
-      recordProviderFailure(`openrouter:${error.failedModel}`);
-      console.warn(`[circuit-breaker] Recording failure for specific model: ${error.failedModel}`);
+      // Record failure for the specific model that OpenRouter identified as failed (strip :exacto)
+      const baseModel = error.failedModel.replace(':exacto', '');
+      recordProviderFailure(`openrouter:${baseModel}`);
+      console.warn(`[circuit-breaker] Recording failure for specific model: ${baseModel}`);
     } else {
       // Fallback: if we don't know which specific model failed, record failure for all models
       // that were passed to OpenRouter since any of them could have failed
       for (const model of availableModels) {
-        recordProviderFailure(`openrouter:${model}`);
+        const baseModel = model.replace(':exacto', '');
+        recordProviderFailure(`openrouter:${baseModel}`);
       }
       console.warn(`[circuit-breaker] No specific model failure info, recording failure for all ${availableModels.length} models in chain`);
     }
@@ -600,8 +659,11 @@ export async function callLLMStructuredResponse(
   prompt: string | { system?: string; user: string },
   options: StructuredLLMOptions & { sql?: any } = {}
 ): Promise<StructuredLLMResponse> {
+  // Use :exacto suffix for quality-first provider sorting when tools are specified
+  const useExacto = options.tools && options.tools.length > 0;
+
   // Build full model chain using existing routing logic
-  const fullChain = await buildModelChain(agent);
+  const fullChain = await buildModelChain(agent, useExacto);
   const primaryModel = AGENT_PRIMARIES[agent]?.models[0] ?? fullChain[0];
 
   const { sql, ...llmOptions } = options;
@@ -672,6 +734,7 @@ export async function callLLMWithLogging(
       cost_usd: response.usage?.cost_usd || 0,
       duration_s: duration,
       status: "success",
+      tool_calls_count: response.toolCalls?.length || 0,
     };
 
     return { response, logData };
@@ -686,8 +749,102 @@ export async function callLLMWithLogging(
       duration_s: duration,
       status: "failed",
       error: error.message?.slice(0, 500),
+      tool_calls_count: 0,
     };
 
     throw { error, logData };
+  }
+}
+
+// Tool calling wrapper: handles tool calls and conversation flow
+// Executes tool calls via the /api/agents/tools endpoint and continues the conversation
+export async function callLLMWithTools(
+  agent: string,
+  prompt: string,
+  options: LLMOptions & { sql?: any; company?: string } = {}
+): Promise<{ response: LLMResponse; logData: Record<string, any>; toolResults?: any[] }> {
+  const { company, ...llmOptions } = options;
+  let toolResults: any[] = [];
+
+  // First call with tools
+  const { response, logData } = await callLLMWithLogging(agent, prompt, llmOptions);
+
+  // If no tool calls, return the response
+  if (!response.toolCalls || response.toolCalls.length === 0) {
+    return { response, logData, toolResults };
+  }
+
+  try {
+    // Execute tool calls
+    const cronSecret = process.env.CRON_SECRET;
+    const toolExecutionUrl = process.env.NEXT_PUBLIC_URL
+      ? `${process.env.NEXT_PUBLIC_URL}/api/agents/tools`
+      : "https://hive-phi.vercel.app/api/agents/tools";
+
+    const toolResponse = await fetch(toolExecutionUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cronSecret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        toolCalls: response.toolCalls,
+        agent,
+        company,
+      }),
+    });
+
+    if (!toolResponse.ok) {
+      throw new Error(`Tool execution failed: HTTP ${toolResponse.status}`);
+    }
+
+    const toolData = await toolResponse.json();
+    toolResults = toolData.results || [];
+
+    // Build tool results messages
+    const toolMessages = response.toolCalls.map((call, index) => {
+      const result = toolResults[index];
+      return `Tool call ${call.function.name} (${call.id}): ${
+        result?.error ? `Error: ${result.error}` : JSON.stringify(result?.result || {}, null, 2)
+      }`;
+    }).join('\n\n');
+
+    // Continue conversation with tool results
+    const followUpPrompt = `${prompt}\n\nTool results:\n${toolMessages}\n\nBased on the tool results above, provide your final response:`;
+
+    // Second call without tools to get final response
+    const { response: finalResponse, logData: finalLogData } = await callLLMWithLogging(
+      agent,
+      followUpPrompt,
+      { ...llmOptions, tools: undefined }
+    );
+
+    // Combine log data
+    const combinedLogData = {
+      ...logData,
+      tool_execution_success: toolResults.every(r => !r.error),
+      tool_errors: toolResults.filter(r => r.error).map(r => r.error),
+      final_call_duration: finalLogData.duration_s,
+      total_duration: logData.duration_s + finalLogData.duration_s,
+    };
+
+    return {
+      response: finalResponse,
+      logData: combinedLogData,
+      toolResults,
+    };
+
+  } catch (error: any) {
+    console.warn(`[llm] Tool execution failed for ${agent}: ${error.message}`);
+
+    // Return original response with tool execution error logged
+    return {
+      response,
+      logData: {
+        ...logData,
+        tool_execution_error: error.message,
+      },
+      toolResults,
+    };
   }
 }

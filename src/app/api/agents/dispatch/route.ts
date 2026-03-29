@@ -4,8 +4,9 @@ import { getGitHubToken } from "@/lib/github-app";
 import { capabilitiesSummary } from "@/lib/capabilities";
 import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
-import { callLLMWithLogging } from "@/lib/llm";
+import { callLLMWithLogging, callLLMWithTools } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
+import { HIVE_TOOLS } from "@/lib/hive-tools";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { type CompletionReport } from "@/lib/completion-report";
@@ -296,21 +297,28 @@ ${capabilitiesSummary(company.capabilities)}`;
       if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${truncateJson(contentPerf.content, 2000)}`;
     }
 
-    // 5. Call the unified LLM interface with structured JSON response format
+    // 5. Call the unified LLM interface with tool calling support
+    // Use tools for dynamic context loading instead of pre-loading everything
     const responseFormat = getResponseFormat(agentName as keyof typeof AGENT_SCHEMAS);
-    const { response, logData } = await callLLMWithLogging(agentName, fullPrompt, {
+    const { response, logData, toolResults } = await callLLMWithTools(agentName, fullPrompt, {
       sql,
-      responseFormat
+      responseFormat,
+      tools: HIVE_TOOLS,
+      parallelToolCalls: true,
+      company: company.slug,
     });
     const output = response.content;
 
-    // 6. Log the result to agent_actions with provider metadata and context tracking
+    // 6. Log the result to agent_actions with provider metadata and tool calling tracking
     const duration = Math.round((Date.now() - startTime) / 1000);
     const contextMetadata = {
       playbook_entries: playbook.map((p: any) => p.insight),
       research_types: researchReports.map((r: any) => r.report_type),
       compressed_research: true,
       deduplication_applied: !!latestCycle?.id,
+      tool_calls_used: response.toolCalls?.length || 0,
+      tool_results: toolResults?.length || 0,
+      tool_execution_success: logData.tool_execution_success || true,
     };
 
     // Build completion report from worker output
