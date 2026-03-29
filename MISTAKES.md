@@ -56,6 +56,19 @@
 **Prevention:** When defining enum values in multiple places (Zod schema, DB CHECK, TypeScript types), always derive from a single source of truth. Add a CI check or integration test that validates MCP tool schemas against DB constraints.
 **Affects:** hive
 
+### 2026-03-29 Engineers repeatedly ship SQL with non-existent columns → perpetual CI stoppage
+**What happened:** PRs #270, #271, #272, #274, #276 all failed CI with `Column does not exist` or invalid enum errors. ci_fix Engineers were dispatched to fix them but never actually ran because the dedup check treated a 202 branch-update response as a successful `ci_fix` — blocking Engineer dispatch for 2 hours per PR. PRs accumulated past the queue threshold, blocking all new work.
+**Root cause:** Two compounding problems:
+1. Engineers wrote SQL referencing `hive_backlog.github_repo` and `companies.lifecycle` (neither column exists) and used `agent_actions.status = 'rate_limited'` (not in CHECK constraint). No schema validation before push.
+2. The ci_fix dedup recorded branch-update attempts (202 response) as `ci_fix/success`, triggering the 2-hour Engineer dispatch cooldown. The actual Engineer to fix the code bugs was never dispatched.
+**Fix applied:**
+- Branch-update attempts now recorded as `ci_fix/branch_updated` (30-min cooldown only). Actual Engineer dispatches use separate `running|success` dedup (2-hour cooldown).
+- 422 response (branch already up-to-date with main) now falls through immediately to Engineer dispatch — no wait.
+- PR queue blocking threshold lowered from 3 to 2 open PRs.
+- Both Engineer workflow paths (ci_fix and Hive-internal) now require `npx tsx scripts/lint-sql.ts` pre-check and `schema.sql` column verification before writing any SQL.
+**Prevention:** Run `npx tsx scripts/lint-sql.ts` before every push. Read `schema.sql` to verify column names and CHECK constraint enums before writing queries. Never assume a column exists — grep the schema. The lint script catches `Column does not exist` and `Value not allowed for status` errors before CI does.
+**Affects:** hive
+
 ### 2026-03-29 Healer feedback loop — Sentinel re-dispatches for same unfixable errors
 **What happened:** Flolio accumulated 9+ failed Healer dispatches in a single day. The Healer kept being dispatched for the same `@openrouter/ai-sdk-provider module not found` error that it cannot fix (it's a dependency/config issue, not a code issue).
 **Root cause:** Sentinel Check 7 dispatches Healer when failure rate >20%. Healer fails → next Sentinel run sees same high failure rate → dispatches again. The per-company circuit breaker (3 failures/48h) exists but resets, and there's no Sentinel-level dedup that remembers *why* the Healer failed or whether the error is fixable.
