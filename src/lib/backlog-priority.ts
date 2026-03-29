@@ -96,16 +96,18 @@ export function computeBacklogScore(item: BacklogItem, signals: BacklogSignals):
   const similarPenalty = signals.hasSimilarFailed ? 0.8 : 1.0;
   const novelty = attemptPenalty * similarPenalty;
 
-  // Weighted sum × category × novelty
-  const rawScore = (
+  // Weighted sum × category × novelty (within-tier score, 0-100)
+  const withinTierScore = (
     (impact * 0.35) +
     (urgency * 0.25) +
     (reliability * 0.20) +
     (blockingScore * 0.15)
   ) * (CATEGORY_MULTIPLIER[item.category] || 1.0) * novelty;
 
-  // Normalize to 0-100
-  const priorityScore = Math.round(Math.min(100, rawScore));
+  // Priority tier offset: ensures P0 always beats P1, P1 always beats P2, etc.
+  // Each tier gets a 200-point band. Within-tier score (0-100) ranks items inside their band.
+  const TIER_OFFSET: Record<string, number> = { P0: 600, P1: 400, P2: 200, P3: 0 };
+  const priorityScore = Math.round((TIER_OFFSET[item.priority] ?? 0) + Math.min(100, withinTierScore));
 
   return {
     ...item,
