@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { type HiveToolCall, type HiveToolResult } from "@/lib/hive-tools";
 import { setSentryTags } from "@/lib/sentry-tags";
-import { getStripeToolkit, getStripeAgentTools } from "@/lib/stripe";
+import { getStripeForCompany, getStripeAgentTools } from "@/lib/stripe";
 
 // Tool execution endpoint for Hive API functions
 // Called by agents via tool calling to query/update the Hive database
@@ -300,29 +300,11 @@ async function createPaymentLink(sql: any, args: { company: string; name: string
   if (!companyData) throw new Error(`Company not found: ${company}`);
 
   try {
-    const toolkit = await getStripeToolkit(company);
-
-    // Use the MCP client to call the tool directly
-    const result = await toolkit.mcpClient.callTool("create_payment_link", {
-      line_items: [{
-        price_data: {
-          currency: currency.toLowerCase(),
-          product_data: {
-            name,
-            description,
-            metadata: { hive_company: company }
-          },
-          unit_amount: Math.round(amount * 100), // Convert to cents
-        },
-        quantity: 1,
-      }],
-      metadata: { hive_company: company }
-    });
-
-    return {
-      company,
-      payment_link: JSON.parse(result),
-    };
+    const stripe = await getStripeForCompany(company);
+    const product = await stripe.products.create({ name, ...(description ? { description } : {}), metadata: { hive_company: company } });
+    const price = await stripe.prices.create({ product: product.id, unit_amount: Math.round(amount * 100), currency: currency.toLowerCase(), metadata: { hive_company: company } });
+    const link = await stripe.paymentLinks.create({ line_items: [{ price: price.id, quantity: 1 }], metadata: { hive_company: company } });
+    return { company, payment_link: { id: link.id, url: link.url } };
   } catch (error: any) {
     throw new Error(`Failed to create payment link: ${error.message}`);
   }
@@ -338,27 +320,33 @@ async function createSubscription(sql: any, args: { company: string; customer_em
   if (!companyData) throw new Error(`Company not found: ${company}`);
 
   try {
-    const toolkit = await getStripeToolkit(company);
+    const stripe = await getStripeForCompany(company);
+
+    // Find or create customer
+    const customers = await stripe.customers.list({ email: customer_email, limit: 1 });
+    let customerId: string;
+    if (customers.data.length > 0) {
+      customerId = customers.data[0].id;
+    } else {
+      const customer = await stripe.customers.create({ email: customer_email, metadata: { hive_company: company } });
+      customerId = customer.id;
+    }
 
     const subscriptionParams: any = {
-      customer: {
-        email: customer_email,
-      },
-      items: [{
-        price: price_id,
-      }],
-      metadata: { hive_company: company }
+      customer: customerId,
+      items: [{ price: price_id }],
+      metadata: { hive_company: company },
     };
 
     if (trial_days) {
       subscriptionParams.trial_period_days = trial_days;
     }
 
-    const result = await toolkit.mcpClient.callTool("create_subscription", subscriptionParams);
+    const subscription = await stripe.subscriptions.create(subscriptionParams);
 
     return {
       company,
-      subscription: JSON.parse(result),
+      subscription: { id: subscription.id, status: subscription.status, customer: customerId },
     };
   } catch (error: any) {
     throw new Error(`Failed to create subscription: ${error.message}`);
@@ -375,26 +363,26 @@ async function issueRefund(sql: any, args: { company: string; charge_id: string;
   if (!companyData) throw new Error(`Company not found: ${company}`);
 
   try {
-    const toolkit = await getStripeToolkit(company);
+    const stripe = await getStripeForCompany(company);
 
     const refundParams: any = {
       charge: charge_id,
-      metadata: { hive_company: company }
+      metadata: { hive_company: company },
     };
 
     if (amount) {
-      refundParams.amount = Math.round(amount * 100); // Convert to cents
+      refundParams.amount = Math.round(amount * 100);
     }
 
     if (reason) {
       refundParams.reason = reason;
     }
 
-    const result = await toolkit.mcpClient.callTool("create_refund", refundParams);
+    const refund = await stripe.refunds.create(refundParams);
 
     return {
       company,
-      refund: JSON.parse(result),
+      refund: { id: refund.id, status: refund.status, amount: refund.amount },
     };
   } catch (error: any) {
     throw new Error(`Failed to issue refund: ${error.message}`);
@@ -411,18 +399,18 @@ async function applyCoupon(sql: any, args: { company: string; coupon_id: string;
   if (!companyData) throw new Error(`Company not found: ${company}`);
 
   try {
-    const toolkit = await getStripeToolkit(company);
+    const stripe = await getStripeForCompany(company);
 
     const couponParams: any = {
       id: coupon_id,
       duration,
-      metadata: { hive_company: company }
+      metadata: { hive_company: company },
     };
 
     if (discount_type === "percent") {
       couponParams.percent_off = discount_value;
     } else {
-      couponParams.amount_off = Math.round(discount_value * 100); // Convert to cents
+      couponParams.amount_off = Math.round(discount_value * 100);
       couponParams.currency = "eur";
     }
 
@@ -430,11 +418,11 @@ async function applyCoupon(sql: any, args: { company: string; coupon_id: string;
       couponParams.duration_in_months = duration_in_months;
     }
 
-    const result = await toolkit.mcpClient.callTool("create_coupon", couponParams);
+    const coupon = await stripe.coupons.create(couponParams);
 
     return {
       company,
-      coupon: JSON.parse(result),
+      coupon: { id: coupon.id, percent_off: coupon.percent_off, amount_off: coupon.amount_off, duration: coupon.duration },
     };
   } catch (error: any) {
     throw new Error(`Failed to create coupon: ${error.message}`);

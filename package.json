@@ -16,7 +16,6 @@
     "@react-email/components": "^1.0.10",
     "@react-email/render": "^2.0.4",
     "@sentry/nextjs": "^10.46.0",
-    "@stripe/agent-toolkit": "^0.9.0",
     "@stripe/mcp": "^0.3.3",
     "@upstash/qstash": "^2.10.1",
     "@upstash/redis": "^1.37.0",

@@ -1,9 +1,7 @@
 import Stripe from "stripe";
-import { StripeAgentToolkit } from "@stripe/agent-toolkit/ai-sdk";
 import { getSettingValue } from "@/lib/settings";
 
 let _stripe: Stripe | null = null;
-let _stripeToolkit: StripeAgentToolkit | null = null;
 
 async function getStripe(): Promise<Stripe> {
   if (_stripe) return _stripe;
@@ -13,55 +11,23 @@ async function getStripe(): Promise<Stripe> {
   return _stripe;
 }
 
-// Get Stripe Agent Toolkit with company-scoped restricted key if available
-export async function getStripeToolkit(companySlug?: string): Promise<StripeAgentToolkit> {
-  // Try company-specific restricted key first (for per-company security)
-  let secretKey: string | null = null;
-  if (companySlug) {
-    secretKey = await getSettingValue(`stripe_restricted_key_${companySlug}`);
-  }
-
-  // Fallback to default restricted key, then main secret key
-  if (!secretKey) {
-    secretKey = await getSettingValue("stripe_restricted_key") ||
-               await getSettingValue("stripe_secret_key");
-  }
-
-  if (!secretKey) {
-    throw new Error("Stripe key not configured. Add stripe_secret_key or stripe_restricted_key in Hive Settings.");
-  }
-
-  // Always create a new toolkit instance to ensure fresh tool definitions
-  const toolkit = new StripeAgentToolkit({
-    secretKey,
-    configuration: {
-      context: companySlug ? { account: companySlug } : {}
-    }
-  });
-
-  await toolkit.initialize();
-  return toolkit;
+// Get company-scoped Stripe instance (uses restricted key if configured)
+export async function getStripeForCompany(companySlug?: string): Promise<Stripe> {
+  if (!companySlug) return getStripe();
+  const restrictedKey = await getSettingValue(`stripe_restricted_key_${companySlug}`) ||
+                        await getSettingValue("stripe_restricted_key");
+  if (!restrictedKey) return getStripe();
+  return new Stripe(restrictedKey);
 }
 
-// Get available Stripe agent tools as OpenAI-format tool definitions
-export async function getStripeAgentTools(companySlug?: string): Promise<any[]> {
-  try {
-    const toolkit = await getStripeToolkit(companySlug);
-    const tools = toolkit.getTools();
-
-    // Convert from ai-sdk format to OpenAI function calling format
-    return Object.entries(tools).map(([name, tool]) => ({
-      type: "function",
-      function: {
-        name: name,
-        description: tool.description || `Stripe ${name} tool`,
-        parameters: tool.inputSchema || { type: "object", properties: {} }
-      }
-    }));
-  } catch (error) {
-    console.warn(`[stripe-agent] Failed to get tools: ${error}`);
-    return [];
-  }
+// Get available Stripe agent tools as OpenAI-format tool definitions (static list)
+export async function getStripeAgentTools(_companySlug?: string): Promise<any[]> {
+  return [
+    { type: "function", function: { name: "create_payment_link", description: "Create a Stripe payment link for a product", parameters: { type: "object", properties: { company: { type: "string" }, name: { type: "string" }, amount: { type: "number" }, currency: { type: "string" }, description: { type: "string" } }, required: ["company", "name", "amount"] } } },
+    { type: "function", function: { name: "create_subscription", description: "Create a Stripe subscription", parameters: { type: "object", properties: { company: { type: "string" }, customer_email: { type: "string" }, price_id: { type: "string" }, trial_days: { type: "number" } }, required: ["company", "customer_email", "price_id"] } } },
+    { type: "function", function: { name: "issue_refund", description: "Issue a Stripe refund", parameters: { type: "object", properties: { company: { type: "string" }, charge_id: { type: "string" }, amount: { type: "number" }, reason: { type: "string" } }, required: ["company", "charge_id"] } } },
+    { type: "function", function: { name: "apply_coupon", description: "Create a Stripe coupon/discount", parameters: { type: "object", properties: { company: { type: "string" }, coupon_id: { type: "string" }, discount_type: { type: "string" }, discount_value: { type: "number" }, duration: { type: "string" }, duration_in_months: { type: "number" } }, required: ["company", "coupon_id", "discount_type", "discount_value", "duration"] } } },
+  ];
 }
 
 // Create product + price tagged to a company (single Stripe account)
