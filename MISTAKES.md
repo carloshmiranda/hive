@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-03-29 GitHub App lacks workflows permission to push schema-diff CI fixes
+**What happened:** Engineer agent implemented a fix for the failing schema-diff CI check (graceful skip when Neon credentials missing) but cannot push the workflow file changes due to GitHub permission restrictions.
+**Root cause:** GitHub Apps cannot modify workflow files (.github/workflows/*.yml) without explicit `workflows` permission. The claude-code-action@v1 GitHub App lacks this permission for security reasons.
+**Fix applied:** Documented the complete solution - workflow file modified to check for NEON_API_KEY/NEON_PROJECT_ID and exit gracefully (exit 0) with informative message if missing. Change committed locally but blocked from push.
+**Prevention:** For workflow modifications: (1) Grant workflows permission to GitHub App, or (2) Use manual PR creation by Carlos, or (3) Use different auth token with sufficient permissions, or (4) Implement workflow changes outside of automated agents.
+**Affects:** hive
+
 ### 2026-03-28 Schema-map drift causes cascading CI failures across all PRs
 **What happened:** All 4 open PRs failed CI with SQL linter errors. The linter validated against a stale schema-map that was missing columns added by recent migrations (parent_id, decomposition_context, github_issue_number, etc.). Every PR branch inherited these false failures from main.
 **Root cause:** Schema-map generation (`scripts/generate-schema-map.ts`) must be run after every schema.sql change, but this wasn't enforced. CI runs the linter against the checked-in schema-map, not the live database.
