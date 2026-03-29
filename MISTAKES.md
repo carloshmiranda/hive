@@ -785,6 +785,18 @@
 **Affects:** hive
 
 ### 2026-03-28 Backlog dispatch chain stalls when Engineer completes without PR
+---
+
+## [manual_spec] in notes doesn't set the `spec` variable — LLM spec gen loop fires anyway
+
+**What happened:** Backlog items with detailed `[manual_spec]` implementation instructions in their `notes` field kept returning `all_candidates_failed_spec`. The items were correctly routed to `speccedCandidates` (the `hasManualSpecInNotes` check worked), but each dispatch attempt still triggered LLM spec generation and ultimately failed.
+**Root cause:** `let spec = topItem.spec || null` at line 1740 reads only the DB JSON column (`hive_backlog.spec`). The while loop condition `!spec` fired regardless of `[manual_spec]` in notes because the notes check was never translated into a `spec` value. 40+ `[no_spec]` annotations accumulated on both affected items as each LLM attempt failed.
+**Fix applied:** Immediately after `let spec = topItem.spec || null`, detect `[manual_spec]` in notes, extract the spec text via regex (`/\[manual_spec\]([\s\S]*?)(?=\s*\[(?!manual_spec)[^\]]+\]|$)/`), and synthesize a `spec` object. This sets `!spec` to false, skipping the while loop entirely. The extracted text is embedded in `acceptance_criteria` and `approach` so Engineer receives the actual instructions. Commit `b8bcf18`.
+**Prevention:** The `hasManualSpecInNotes` check gates routing (blocking, speccedCandidates) but the `spec` variable is completely separate. Any future gating that uses `spec` directly must also check for manual specs in notes. When adding new spec-dependent logic, check both `topItem.spec` (DB column) AND `topItem.notes.includes('[manual_spec]')`.
+**Affects:** hive
+
+---
+
 **What happened:** 56 ready backlog items sat unprocessed for hours. The dispatch chain — where each Engineer completion triggers the next dispatch via QStash — had silently broken. Last 3 completed items all had `pr_number: null` (direct commits, no PR created).
 **Root cause:** The completion callback in `/api/backlog/dispatch/route.ts` had two paths: `pr_open` (PR created) and `done` (no PR). The `pr_open` path correctly called `qstashPublish()` to chain-dispatch the next item. The `done` path marked the item complete but never scheduled the next dispatch — the chain simply stopped.
 **Fix applied:** Added `qstashPublish("/api/backlog/dispatch", { trigger: "done_chain", completed_id }, { deduplicationId, delay: 10 })` to the `done` path, matching the `pr_open` pattern. Commit `3b5e085`.
