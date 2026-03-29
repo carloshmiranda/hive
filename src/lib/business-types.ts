@@ -15,6 +15,8 @@ export interface BusinessTypeDefinition {
   label: string;
   /** Legacy company_type values that map to this type */
   legacyTypes: string[];
+  /** Default framework for this business type (CEO can override) */
+  defaultFramework: "nextjs" | "astro" | "sveltekit" | "static";
   /** Lifecycle phases with score thresholds */
   phases: { name: string; threshold: number }[];
   /** Scoring function key — which scoring model to use */
@@ -41,6 +43,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "saas",
     label: "SaaS",
     legacyTypes: ["b2c_saas", "b2b_saas"],
+    defaultFramework: "nextjs",
     phases: [
       { name: "validate", threshold: 0 },
       { name: "test_intent", threshold: 25 },
@@ -68,6 +71,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "blog",
     label: "Blog",
     legacyTypes: ["blog"],
+    defaultFramework: "astro",
     phases: [
       { name: "seed_content", threshold: 0 },
       { name: "seo_growth", threshold: 25 },
@@ -93,6 +97,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "affiliate_site",
     label: "Affiliate Site",
     legacyTypes: ["affiliate_site"],
+    defaultFramework: "astro",
     phases: [
       { name: "build_directory", threshold: 0 },
       { name: "drive_traffic", threshold: 25 },
@@ -118,6 +123,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "newsletter",
     label: "Newsletter",
     legacyTypes: ["newsletter"],
+    defaultFramework: "astro",
     phases: [
       { name: "seed_content", threshold: 0 },
       { name: "grow_subscribers", threshold: 25 },
@@ -144,6 +150,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "marketplace",
     label: "Marketplace",
     legacyTypes: ["marketplace"],
+    defaultFramework: "nextjs",
     phases: [
       { name: "validate", threshold: 0 },
       { name: "build_supply", threshold: 25 },
@@ -170,6 +177,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "digital_product",
     label: "Digital Product",
     legacyTypes: ["digital_product"],
+    defaultFramework: "nextjs",
     phases: [
       { name: "validate", threshold: 0 },
       { name: "test_intent", threshold: 25 },
@@ -195,6 +203,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "faceless_channel",
     label: "Faceless Channel",
     legacyTypes: ["faceless_channel"],
+    defaultFramework: "static",
     phases: [
       { name: "seed_content", threshold: 0 },
       { name: "grow_audience", threshold: 25 },
@@ -219,6 +228,7 @@ export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
     id: "api_service",
     label: "API Service",
     legacyTypes: ["api_service"],
+    defaultFramework: "nextjs",
     phases: [
       { name: "validate", threshold: 0 },
       { name: "test_intent", threshold: 25 },
