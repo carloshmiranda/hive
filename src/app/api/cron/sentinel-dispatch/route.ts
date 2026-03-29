@@ -504,6 +504,9 @@ async function executeSentinelDispatch(request: Request) {
 
     // ========================================================================
     // CHECK 6: Pending PR reviews → CEO brain
+    // Combines two sources:
+    //   a) approvals table (webhook-driven, high-risk PRs escalated by auto-merge)
+    //   b) hive_backlog pr_open status (catches PRs the webhook missed)
     // ========================================================================
 
     const pendingPrReviews = await sql`
@@ -518,6 +521,22 @@ async function executeSentinelDispatch(request: Request) {
         WHERE aa.agent = 'ceo' AND aa.action_type = 'pr_review'
         AND aa.status IN ('success', 'running')
         AND aa.started_at > a.created_at
+      )
+    `;
+
+    // Also scan backlog for pr_open items not covered by the approvals table
+    const backlogOpenPrs = await sql`
+      SELECT b.id, b.company_id, b.title, b.pr_number, b.pr_url,
+             COALESCE(c.slug, '_hive') as slug
+      FROM hive_backlog b
+      LEFT JOIN companies c ON c.id = b.company_id
+      WHERE b.status = 'pr_open' AND b.pr_number IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_actions aa
+        WHERE aa.agent = 'ceo' AND aa.action_type = 'pr_review'
+        AND aa.status IN ('success', 'running')
+        AND aa.started_at > NOW() - INTERVAL '4 hours'
+        AND (aa.output::text LIKE ${'%"pr_number":' + '%'} OR aa.description LIKE ${'%PR #%'})
       )
     `;
 
@@ -807,6 +826,34 @@ async function executeSentinelDispatch(request: Request) {
       console.log(`[sentinel-dispatch] Scout blocked: ${pendingProposals.cnt} pending, ${staleProposals.cnt} stale proposals`);
     }
 
+    // 1b. Open PRs → CEO brain (highest priority — before growth/content/cycles)
+    // Checks both the approvals table (webhook-driven) and backlog pr_open items (webhook-missed)
+    const prToReview = pendingPrReviews[0] ?? null;
+    const backlogPrToReview = backlogOpenPrs[0] ?? null;
+
+    if (prToReview) {
+      const prContext = typeof prToReview.context === 'string' ? JSON.parse(prToReview.context) : prToReview.context;
+      await dispatchToActions(ctx, "ceo_review", {
+        source: "sentinel_pr_review",
+        company: prToReview.slug,
+        pr_number: prContext?.pr_number,
+        pr_url: prContext?.pr_url,
+        approval_id: prToReview.id,
+        trace_id: traceId,
+      });
+      dispatches.push({ type: "brain", target: "ceo_review", payload: { company: prToReview.slug, pr_number: prContext?.pr_number } });
+    } else if (backlogPrToReview) {
+      // PR exists in backlog but no approval record — dispatch CEO directly
+      await dispatchToActions(ctx, "ceo_review", {
+        source: "sentinel_backlog_pr",
+        company: backlogPrToReview.slug,
+        pr_number: backlogPrToReview.pr_number,
+        pr_url: backlogPrToReview.pr_url,
+        trace_id: traceId,
+      });
+      dispatches.push({ type: "brain", target: "ceo_review", payload: { company: backlogPrToReview.slug, pr_number: backlogPrToReview.pr_number } });
+    }
+
     // 2. Stale content → Growth on company repo (free Actions) with Vercel fallback
     for (let i = 0; i < staleContent.length; i++) {
       const r = staleContent[i];
@@ -874,21 +921,6 @@ async function executeSentinelDispatch(request: Request) {
       if (i < unverifiedDeploys.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
-    }
-
-    // 6. Pending PR reviews → CEO brain (one at a time)
-    if (pendingPrReviews.length > 0) {
-      const pr = pendingPrReviews[0];
-      const prContext = typeof pr.context === 'string' ? JSON.parse(pr.context) : pr.context;
-      await dispatchToActions(ctx, "ceo_review", {
-        source: "sentinel_pr_review",
-        company: pr.slug,
-        pr_number: prContext?.pr_number,
-        pr_url: prContext?.pr_url,
-        approval_id: pr.id,
-        trace_id: traceId,
-      });
-      dispatches.push({ type: "brain", target: "ceo_review", payload: { company: pr.slug, pr_number: prContext?.pr_number } });
     }
 
     // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)
