@@ -474,6 +474,78 @@ async function callOpenRouter(
   return { content: text.trim(), model: actualModel, toolCalls };
 }
 
+// Claude API fallback implementation
+// When OpenRouter fails completely, try Claude via Anthropic API as last resort
+async function callClaude(
+  prompt: string,
+  options: LLMOptions = {}
+): Promise<{ content: string; model: string; toolCalls?: any[] }> {
+  const apiKey = await getSettingValue("anthropic_api_key");
+  if (!apiKey) {
+    throw new Error("Claude fallback not available: ANTHROPIC_API_KEY not configured in settings");
+  }
+
+  const requestBody: any = {
+    model: "claude-3-haiku-20240307",  // Use fastest/cheapest Claude model for fallback
+    max_tokens: options.maxTokens || 8192,
+    temperature: options.temperature || 0.7,
+    messages: [{ role: "user", content: prompt }],
+  };
+
+  // Add tool calling support if specified
+  if (options.tools && options.tools.length > 0) {
+    requestBody.tools = options.tools.map((tool: any) => ({
+      name: tool.function.name,
+      description: tool.function.description,
+      input_schema: tool.function.parameters,
+    }));
+  }
+
+  const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify(requestBody),
+  }, 2);
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Claude API HTTP ${res.status}: ${body.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const content = data.content?.[0]?.text || "";
+
+  // Handle tool calls if present
+  let toolCalls: any[] | undefined;
+  if (data.content?.some((c: any) => c.type === "tool_use")) {
+    toolCalls = data.content
+      .filter((c: any) => c.type === "tool_use")
+      .map((c: any) => ({
+        id: c.id,
+        type: "function",
+        function: {
+          name: c.name,
+          arguments: JSON.stringify(c.input),
+        },
+      }));
+  }
+
+  // Ensure we have either content or tool calls
+  if (!content && !toolCalls) {
+    throw new Error("Claude returned empty content and no tool calls");
+  }
+
+  return {
+    content: content.trim(),
+    model: data.model || "claude-3-haiku-20240307",
+    toolCalls
+  };
+}
+
 // AI SDK-based structured output wrapper using OpenRouter provider
 // Coexists with existing callOpenRouter() — used only where structured output
 // or system/user message split is needed. Preserves circuit breaker logic.
@@ -647,6 +719,35 @@ export async function callLLM(
       console.warn(`[circuit-breaker] No specific model failure info, recording failure for all ${availableModels.length} models in chain`);
     }
 
+    // Try Claude API as final fallback
+    const claudeCircuitKey = "claude:api";
+    if (isProviderAvailable(claudeCircuitKey)) {
+      console.warn(`[llm] OpenRouter failed for ${agent}, trying Claude API fallback`);
+      try {
+        const claudeResult = await callClaude(prompt, llmOptions);
+
+        // Record success for Claude
+        recordProviderSuccess(claudeCircuitKey);
+
+        return {
+          content: claudeResult.content,
+          provider: "claude",
+          model: claudeResult.model,
+          usage: { cost_usd: 0 },  // Not tracking Claude usage costs for now
+          routing_reason: `claude_fallback:${claudeResult.model} (OpenRouter failed)`,
+          toolCalls: claudeResult.toolCalls,
+        };
+      } catch (claudeError: any) {
+        // Record Claude failure
+        recordProviderFailure(claudeCircuitKey);
+        console.warn(`[llm] Claude fallback also failed for ${agent}: ${claudeError.message}`);
+
+        throw new Error(`All providers failed for agent ${agent}. OpenRouter: ${error.message}. Claude: ${claudeError.message}`);
+      }
+    } else {
+      console.warn(`[llm] Claude fallback circuit open, not attempting for ${agent}`);
+    }
+
     throw new Error(`All OpenRouter models failed for agent ${agent}. Chain: ${availableModels.length} models (primaries: ${AGENT_PRIMARIES[agent]?.models.slice(0, 3).join(", ") ?? "none"}). Last error: ${error.message}`);
   }
 }
@@ -741,10 +842,21 @@ export async function callLLMWithLogging(
   } catch (error: any) {
     const duration = Math.round((Date.now() - startTime) / 1000);
 
+    // Extract provider info from error message if available
+    let provider = "unknown";
+    let routingReason = "all_providers_failed";
+    if (error.message?.includes("Claude")) {
+      provider = "claude";
+      routingReason = "claude_fallback_failed";
+    } else if (error.message?.includes("OpenRouter")) {
+      provider = "openrouter";
+      routingReason = "openrouter_failed";
+    }
+
     const logData = {
-      provider: "openrouter",
+      provider,
       model: "unknown",
-      routing_reason: "all_models_failed",
+      routing_reason: routingReason,
       cost_usd: 0,
       duration_s: duration,
       status: "failed",

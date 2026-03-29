@@ -487,13 +487,38 @@ async function growthContext(sql: any, company: any) {
   `.catch(() => []);
   const validation = computeValidationScore(businessType, growthMetrics as Parameters<typeof computeValidationScore>[1], company.created_at);
 
+  // Helper function to determine if a Growth task requires repo access (file writes)
+  function taskRequiresRepoAccess(task: { title: string; description: string }): boolean {
+    const taskText = `${task.title} ${task.description}`.toLowerCase();
+
+    // File-write tasks that need company repo access
+    const fileWriteKeywords = [
+      'blog post', 'blog content', 'write blog', 'create blog',
+      'seo page', 'landing page', 'comparison page', 'feature page',
+      'content creation', 'create content', 'write content',
+      'meta tag', 'meta description', 'meta optimization',
+      'sitemap', 'robots.txt',
+      'email sequence', 'email template',
+      'page content', 'website content',
+      'mdx', 'tsx', 'html file', 'css file'
+    ];
+
+    return fileWriteKeywords.some(keyword => taskText.includes(keyword));
+  }
+
   // Phase gate: filter out growth tasks that violate the current validation phase
-  type GrowthTask = { id: string; title: string; description: string; priority: number; acceptance: string; status: string };
+  type GrowthTask = { id: string; title: string; description: string; priority: number; acceptance: string; status: string; task_requires_repo_access?: boolean };
   let filteredGrowthTasks = tasks as GrowthTask[];
   const gatedGrowthTasks: string[] = [];
+  // Add repo access flags to all tasks
+  const enrichedTasks = (tasks as GrowthTask[]).map(task => ({
+    ...task,
+    task_requires_repo_access: taskRequiresRepoAccess(task)
+  }));
+
   if (validation.forbidden && validation.forbidden.length > 0) {
     filteredGrowthTasks = [];
-    for (const task of tasks as GrowthTask[]) {
+    for (const task of enrichedTasks) {
       const violations = checkForbidden(`${task.title}: ${task.description}`, validation.forbidden, validation.phase);
       if (violations.length > 0) {
         gatedGrowthTasks.push(`${task.title} (violates: ${violations[0].rule})`);
@@ -501,6 +526,8 @@ async function growthContext(sql: any, company: any) {
         filteredGrowthTasks.push(task);
       }
     }
+  } else {
+    filteredGrowthTasks = enrichedTasks;
   }
 
   return {
@@ -524,6 +551,7 @@ async function growthContext(sql: any, company: any) {
     playbook: (playbook as any[]).map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
     evolver_proposals: proposals.map((p: { proposed_fix: string }) => p.proposed_fix),
     growth_tasks: filteredGrowthTasks,
+    has_file_write_tasks: filteredGrowthTasks.some(task => task.task_requires_repo_access),
     ...(gatedGrowthTasks.length > 0 ? { phase_gated_tasks: gatedGrowthTasks } : {}),
     hive_capabilities: getCapabilitySummary(),
   };

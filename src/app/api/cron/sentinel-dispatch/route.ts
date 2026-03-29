@@ -23,6 +23,7 @@ import {
   dispatchToActions,
   dispatchToWorker,
   dispatchToCompanyWorkflow,
+  hasFileWriteTasks,
   isCircuitOpen,
   batchCheckCircuits,
   checkHealerCompanyCircuitBreaker,
@@ -855,7 +856,7 @@ async function executeSentinelDispatch(request: Request) {
       dispatches.push({ type: "brain", target: "ceo_review", payload: { company: backlogPrToReview.slug, pr_number: backlogPrToReview.pr_number } });
     }
 
-    // 2. Stale content → Growth on company repo (free Actions) with Vercel fallback
+    // 2. Stale content → Growth routing based on task type (file-write vs analysis)
     for (let i = 0; i < staleContent.length; i++) {
       const r = staleContent[i];
       // Circuit breaker: skip if growth has 3+ failures for this company in 24h
@@ -871,21 +872,41 @@ async function executeSentinelDispatch(request: Request) {
         dispatches.push({ type: "circuit_breaker", target: "growth", payload: { company: r.slug, reason: "3+_failures_24h" } });
         continue;
       }
-      if (r.github_repo) {
+
+      // Check if growth tasks require repo access (file writes) for proper routing
+      const needsRepoAccess = await hasFileWriteTasks(ctx.baseUrl, r.slug as string, ctx.ghPat);
+
+      if (needsRepoAccess && r.github_repo) {
+        // File-write tasks → company workflow ONLY (no fallback to avoid content stranding)
         try {
           await dispatchToCompanyWorkflow(ctx, r.github_repo as string, "hive-growth.yml", {
             company_slug: r.slug as string,
             trigger: "sentinel_stale_content",
-            task_summary: `Content refresh for ${r.slug}`,
+            task_summary: `Content creation for ${r.slug}`,
           });
           dispatches.push({ type: "company_actions", target: "growth", payload: { company: r.slug, repo: r.github_repo } });
-          continue;
-        } catch {
-          // Fall through to Vercel serverless
+        } catch (error) {
+          // Log the error but don't fall back to Vercel for file-write tasks
+          await sql`
+            INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+            VALUES ('growth', ${staleCompany?.id}, 'dispatch_failed', 'failed',
+              ${"Growth dispatch to company workflow failed: " + (error as Error).message},
+              NOW(), NOW())
+          `;
         }
+      } else if (!needsRepoAccess) {
+        // Analysis/planning tasks → Vercel worker ONLY
+        await dispatchToWorker(ctx, "growth", r.slug as string, "sentinel_stale_content");
+        dispatches.push({ type: "worker", target: "growth", payload: { company: r.slug } });
+      } else {
+        // Has file-write tasks but no github_repo → log error
+        await sql`
+          INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+          VALUES ('growth', ${staleCompany?.id}, 'dispatch_blocked', 'failed',
+            ${"Growth needs repo access but company has no github_repo: " + r.slug},
+            NOW(), NOW())
+        `;
       }
-      await dispatchToWorker(ctx, "growth", r.slug as string, "sentinel_stale_content");
-      dispatches.push({ type: "worker", target: "growth", payload: { company: r.slug } });
 
       // Add 1-second stagger between Growth dispatches to avoid API rate limits
       if (i < staleContent.length - 1) {
@@ -927,7 +948,7 @@ async function executeSentinelDispatch(request: Request) {
     // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)
     const [lastEvolverDispatch] = await sql`
       SELECT MAX(started_at) as last_run FROM agent_actions
-      WHERE agent = 'evolver' AND started_at > NOW() - INTERVAL '24 hours'
+      WHERE agent = 'evolver' AND started_at > NOW() - INTERVAL '48 hours'
     `;
     if (highFailureRate && !lastEvolverDispatch?.last_run) {
       await dispatchToActions(ctx, "evolve_trigger", { source: "sentinel", reason: "high_failure_rate", trace_id: traceId });
