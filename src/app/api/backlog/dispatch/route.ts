@@ -5,6 +5,7 @@ import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch";
 import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
+import { queuePop, queueRebuild, queueSyncItem } from "@/lib/redis-cache";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
@@ -162,6 +163,11 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>): Promise<{ c
                 AND pr_number = ${pr.number}
               RETURNING id
             `.catch(() => []);
+
+            // Remove merged items from dispatch queue
+            for (const item of mergedItems) {
+              await queueSyncItem(item.id, 'done').catch(() => {});
+            }
             for (const merged of mergedItems || []) {
               syncIssueForBacklog(sql, merged.id, "done");
             }
@@ -1139,6 +1145,8 @@ export async function POST(req: Request) {
               notes = COALESCE(notes, '') || ' [recycled] Sub-task unblocked for retry.'
           WHERE id = ${item.id} AND status = 'blocked'
         `.catch(() => {});
+
+        // Re-add to dispatch queue when recycled to ready (will be scored in next rebuild)
         console.log(`[backlog] Recycled sub-task: "${item.title}" → ready for retry`);
         continue;
       }
@@ -1304,37 +1312,86 @@ export async function POST(req: Request) {
     console.warn(`[backlog] Work stealing failed: ${e}`);
   }
 
-  let backlogItems: any[];
+  // Try Redis-first dispatch: pop highest-priority item from queue
+  let redisResult = null;
   try {
-    backlogItems = await sql`
-      SELECT * FROM hive_backlog
-      WHERE (
-        status IN ('ready', 'approved')
-        OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
-      )
-      AND NOT (
-        notes ~ '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)'
-        AND dispatched_at IS NOT NULL
-        AND dispatched_at > NOW() - CASE
-          WHEN notes ~ '\\[attempt 3\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '24 hours'
-          WHEN notes ~ '\\[attempt 2\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '6 hours'
-          ELSE INTERVAL '2 hours'
-        END
-      )
-      AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)', 'g')) < 3
-      ORDER BY
-        CASE WHEN spec IS NOT NULL AND spec->>'approach' IS NOT NULL THEN 0 ELSE 1 END,
-        CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
-        created_at ASC
-      LIMIT 10
-    `;
-
-    if (isChainDispatch) {
-      console.log(`[backlog] Chain dispatch: all priorities, budget-gated (triggered by completion of ${completed_id})`);
+    redisResult = await queuePop();
+    if (redisResult) {
+      console.log(`[backlog] Redis queue hit: item ${redisResult.itemId} (score: ${redisResult.score})`);
     }
   } catch (e) {
-    console.error("[backlog] Query failed:", e instanceof Error ? e.message : String(e));
-    backlogItems = [];
+    console.warn(`[backlog] Redis queue pop failed, falling back to SQL: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  let backlogItems: any[] = [];
+
+  // If Redis returned an item, fetch it from database for full details
+  if (redisResult) {
+    try {
+      backlogItems = await sql`
+        SELECT * FROM hive_backlog
+        WHERE id = ${redisResult.itemId}
+        AND status IN ('ready', 'approved')
+        AND NOT (
+          notes ~ '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)'
+          AND dispatched_at IS NOT NULL
+          AND dispatched_at > NOW() - CASE
+            WHEN notes ~ '\\[attempt 3\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '24 hours'
+            WHEN notes ~ '\\[attempt 2\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '6 hours'
+            ELSE INTERVAL '2 hours'
+          END
+        )
+        AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)', 'g')) < 3
+      `;
+
+      // If item is no longer eligible, remove it from queue and fall back to SQL
+      if (backlogItems.length === 0) {
+        console.log(`[backlog] Redis item ${redisResult.itemId} no longer eligible, removing from queue`);
+        // Item is removed from queue when status changes
+        redisResult = null;
+      } else {
+        console.log(`[backlog] Redis dispatch: using item ${redisResult.itemId}`);
+      }
+    } catch (e) {
+      console.error(`[backlog] Failed to fetch Redis item ${redisResult?.itemId || 'unknown'}, falling back to SQL: ${e instanceof Error ? e.message : String(e)}`);
+      backlogItems = [];
+      redisResult = null;
+    }
+  }
+
+  // Fallback to SQL if Redis unavailable or returned invalid item
+  if (!redisResult) {
+    try {
+      backlogItems = await sql`
+        SELECT * FROM hive_backlog
+        WHERE (
+          status IN ('ready', 'approved')
+          OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
+        )
+        AND NOT (
+          notes ~ '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)'
+          AND dispatched_at IS NOT NULL
+          AND dispatched_at > NOW() - CASE
+            WHEN notes ~ '\\[attempt 3\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '24 hours'
+            WHEN notes ~ '\\[attempt 2\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '6 hours'
+            ELSE INTERVAL '2 hours'
+          END
+        )
+        AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)', 'g')) < 3
+        ORDER BY
+          CASE WHEN spec IS NOT NULL AND spec->>'approach' IS NOT NULL THEN 0 ELSE 1 END,
+          CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+          created_at ASC
+        LIMIT 10
+      `;
+
+      if (isChainDispatch) {
+        console.log(`[backlog] Chain dispatch: all priorities, budget-gated (triggered by completion of ${completed_id})`);
+      }
+    } catch (e) {
+      console.error("[backlog] Query failed:", e instanceof Error ? e.message : String(e));
+      backlogItems = [];
+    }
   }
 
   // Auto-block items with 3+ failed attempts at query time (defense-in-depth).
@@ -1351,6 +1408,9 @@ export async function POST(req: Request) {
             notes = COALESCE(notes, '') || ${` [auto-blocked] ${attemptCount} failed attempts — needs decomposition or manual review.`}
         WHERE id = ${item.id} AND status IN ('ready', 'approved', 'planning')
       `.catch(() => {});
+
+      // Remove from dispatch queue when auto-blocked
+      await queueSyncItem(item.id, 'blocked').catch(() => {});
     }
   }
   backlogItems = backlogItems.filter(item => {
@@ -1381,6 +1441,9 @@ export async function POST(req: Request) {
         SET status = 'blocked', notes = COALESCE(notes, '') || ' [auto] Cost-risk: may incur spend — needs approval.'
         WHERE id = ${item.id} AND status = 'ready'
       `.catch(() => {});
+
+      // Remove from dispatch queue when cost-risk blocked
+      await queueSyncItem(item.id, 'blocked').catch(() => {});
     }
   }
   if (costRiskItems.length > 0) {
@@ -1645,6 +1708,20 @@ export async function POST(req: Request) {
   // Sort by score descending — highest priority first
   scoredItems.sort((a, b) => b.priority_score - a.priority_score);
 
+  // Rebuild Redis queue with scored items (only when using SQL fallback)
+  if (!redisResult && scoredItems.length > 0) {
+    try {
+      const queueItems = scoredItems.map(item => ({
+        id: item.id,
+        priority_score: item.priority_score
+      }));
+      await queueRebuild(queueItems);
+      console.log(`[backlog] Redis queue rebuilt with ${queueItems.length} items`);
+    } catch (e) {
+      console.warn(`[backlog] Failed to rebuild Redis queue: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   if (scoredItems.length === 0) {
     return json({ dispatched: false, reason: "no_scorable_items" });
   }
@@ -1827,6 +1904,9 @@ export async function POST(req: Request) {
       UPDATE hive_backlog SET status = 'planning', dispatched_at = NULL WHERE id = ${topItem.id}
     `.catch(() => {});
 
+    // Remove from dispatch queue when moved to planning
+    await queueSyncItem(topItem.id, 'planning').catch(() => {});
+
     if (ghPat) {
       const specRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
         method: "POST",
@@ -1852,6 +1932,9 @@ export async function POST(req: Request) {
     await sql`
       UPDATE hive_backlog SET status = 'ready', dispatched_at = NULL WHERE id = ${topItem.id}
     `.catch(() => {});
+
+    // Re-add to dispatch queue when reverted to ready (need to recompute score)
+    // For now, just trigger a queue rebuild on next Sentinel cycle
     console.warn(`[backlog] No spec for "${topItem.title}" and spec_request dispatch failed — reverted to ready`);
     return json({ dispatched: false, reason: "spec_requested_failed", item_id: topItem.id });
   }

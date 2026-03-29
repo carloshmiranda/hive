@@ -211,6 +211,143 @@ export async function cacheHealthCheck(): Promise<{ ok: boolean; latencyMs?: num
   }
 }
 
+// --- Dispatch Queue (Redis Sorted Set) ---
+// Priority queue for backlog dispatch using Redis sorted sets.
+// Score = computed priority score (higher = more urgent).
+// Replaces complex SQL ORDER BY with atomic Redis operations.
+
+const DISPATCH_QUEUE_KEY = "dispatch:queue";
+
+/**
+ * Add an item to the dispatch queue with its priority score.
+ */
+export async function queueAdd(itemId: string, priorityScore: number): Promise<void> {
+  try {
+    const r = getRedis();
+    if (!r) return;
+    await r.zadd(DISPATCH_QUEUE_KEY, { score: priorityScore, member: itemId });
+  } catch {
+    // Queue write failure is non-fatal
+  }
+}
+
+/**
+ * Remove an item from the dispatch queue.
+ */
+export async function queueRemove(itemId: string): Promise<void> {
+  try {
+    const r = getRedis();
+    if (!r) return;
+    await r.zrem(DISPATCH_QUEUE_KEY, itemId);
+  } catch {
+    // Queue write failure is non-fatal
+  }
+}
+
+/**
+ * Atomically pop the highest-priority item from the queue.
+ * Returns the item ID and its score, or null if queue is empty.
+ */
+export async function queuePop(): Promise<{ itemId: string; score: number } | null> {
+  try {
+    const r = getRedis();
+    if (!r) return null;
+
+    // ZPOPMAX gets highest score (most urgent)
+    const result = await r.zpopmax(DISPATCH_QUEUE_KEY, 1);
+    if (!result || result.length === 0) return null;
+
+    return { itemId: result[0] as string, score: result[1] as number };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the queue size (number of items waiting).
+ */
+export async function queueSize(): Promise<number> {
+  try {
+    const r = getRedis();
+    if (!r) return 0;
+    return await r.zcard(DISPATCH_QUEUE_KEY);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Get top N items from the queue without removing them.
+ * Returns array of {itemId, score} ordered by priority (highest first).
+ */
+export async function queuePeek(count: number = 10): Promise<Array<{ itemId: string; score: number }>> {
+  try {
+    const r = getRedis();
+    if (!r) return [];
+
+    // ZRANGE with REV and scores gets highest scores first
+    const result = await r.zrange(DISPATCH_QUEUE_KEY, 0, count - 1, { withScores: true, rev: true });
+
+    const items: Array<{ itemId: string; score: number }> = [];
+    for (let i = 0; i < result.length; i += 2) {
+      items.push({
+        itemId: result[i] as string,
+        score: result[i + 1] as number
+      });
+    }
+
+    return items;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Rebuild the entire dispatch queue from database.
+ * Should be called when queue gets out of sync or on Sentinel cycles.
+ */
+export async function queueRebuild(readyItems: Array<{ id: string; priority_score: number }>): Promise<void> {
+  try {
+    const r = getRedis();
+    if (!r) return;
+
+    // Clear existing queue
+    await r.del(DISPATCH_QUEUE_KEY);
+
+    if (readyItems.length === 0) return;
+
+    // Batch add all items
+    if (readyItems.length === 1) {
+      await r.zadd(DISPATCH_QUEUE_KEY, { score: readyItems[0].priority_score, member: readyItems[0].id });
+    } else {
+      const members: Array<{ score: number; member: string }> = readyItems.map(item => ({
+        score: item.priority_score,
+        member: item.id
+      }));
+      await r.zadd(DISPATCH_QUEUE_KEY, members[0], ...members.slice(1));
+    }
+  } catch {
+    // Queue rebuild failure is non-fatal
+  }
+}
+
+/**
+ * Sync a single backlog item to the dispatch queue.
+ * - If status is 'ready': add/update item with its priority score
+ * - If status is not 'ready': remove item from queue
+ */
+export async function queueSyncItem(
+  itemId: string,
+  status: string,
+  priorityScore?: number
+): Promise<void> {
+  if (status === "ready" && priorityScore !== undefined) {
+    await queueAdd(itemId, priorityScore);
+  } else {
+    await queueRemove(itemId);
+  }
+}
+
 // --- Circuit breaker cache ---
 
 const CIRCUIT_BREAKER_TTL = 172800; // 48 hours (48 * 60 * 60)
