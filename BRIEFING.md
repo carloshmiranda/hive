@@ -43,6 +43,10 @@
   - All 4 companies have neon_project_id IS NULL (Neon DBs managed by Vercel integration — not a bug)
   - Zero metrics across all companies — stats endpoints broken at company level
   - Healer wastes turns on config issues (Neon API key) — needs config-vs-code classification
+  - Healer feedback loop: Sentinel re-dispatches Healer for same unfixable errors (per-company circuit breaker exists but Sentinel-level dedup missing) — 5 backlog items created (#257-#261)
+  - Engineer max_turns continuations bypass decomposition gate — cumulative turn tracking needed
+  - `hive_sql_mutate` MCP tool returns 0 affected rows on `hive_backlog` table (also affects `approvals`) — workaround: use API endpoints or `gh` CLI
+  - GitHub MCP server (`@modelcontextprotocol/server-github`) has expired `GH_PAT` — use `gh` CLI as fallback
   - MCP `hive_sql_mutate` tool cannot update `approvals` table (returns 0 affected rows) — root cause unknown, possibly RLS or trigger
   - 20+ pending approvals need triage (duplicate new_company proposals, resolved escalations, capability_migration dupes)
   - OpenRouter free models intermittently down — mitigated by dynamic model discovery (20-30+ models per agent chain) + $10 credits (1,000 req/day)
@@ -90,6 +94,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-03-29: **Loop quality analysis + root cause investigation** — Failure rate improved from 44% (Mar 25) to sub-1% (Mar 27-28), regressed to 15% today. Root causes: (1) Healer feedback loop — Sentinel re-dispatches Healer for same unfixable company errors (Flolio `@openrouter/ai-sdk-provider` not found), per-company circuit breaker exists but Sentinel-level dedup doesn't prevent re-dispatch after cooldown. (2) Engineer max_turns — continuation dispatches and CI fixes bypass decomposition gate, allowing infinite retry loops. (3) Zombie actions — 1h stale timeout too long, no heartbeat mechanism. Created 5 backlog items (#257-#261) with GitHub Issues linked.
 
 - `[code]` 2026-03-29: **Worker completion callback chain via QStash (PR #228)** — Fixed critical 4-hour latency bottleneck where Growth/Outreach/Ops workers complete LLM calls but never chain forward. Added `qstashPublish("/api/dispatch/cycle-complete")` callback after worker success in `/api/agents/dispatch`. Triggers immediate cycle completion flow instead of waiting for Sentinel's 4-hour schedule. Turns gaps from hours to seconds. Uses deduplication and error handling for reliable dispatch.
 

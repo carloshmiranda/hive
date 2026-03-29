@@ -29,6 +29,13 @@
 **Prevention:** When defining enum values in multiple places (Zod schema, DB CHECK, TypeScript types), always derive from a single source of truth. Add a CI check or integration test that validates MCP tool schemas against DB constraints.
 **Affects:** hive
 
+### 2026-03-29 Healer feedback loop — Sentinel re-dispatches for same unfixable errors
+**What happened:** Flolio accumulated 9+ failed Healer dispatches in a single day. The Healer kept being dispatched for the same `@openrouter/ai-sdk-provider module not found` error that it cannot fix (it's a dependency/config issue, not a code issue).
+**Root cause:** Sentinel Check 7 dispatches Healer when failure rate >20%. Healer fails → next Sentinel run sees same high failure rate → dispatches again. The per-company circuit breaker (3 failures/48h) exists but resets, and there's no Sentinel-level dedup that remembers *why* the Healer failed or whether the error is fixable.
+**Fix applied:** 5 backlog items created (#257-#261) covering: per-company+error dedup, Healer null logging fix, Engineer max_turns cumulative tracking, Sentinel cooldown after Healer failure, zombie action heartbeat mechanism.
+**Prevention:** Circuit breakers should operate at the granularity of (agent, company, error_pattern), not just (agent, global). Unfixable errors (config, missing deps) should be classified differently from code errors and routed to backlog creation instead of repeated Healer dispatch.
+**Affects:** hive
+
 ### 2026-03-29 PR review deadlock — queue gate blocks the only code path that clears the queue
 **What happened:** 5 open PRs accumulated but never got reviewed/merged. PR queue gate (`openPRCount >= 3`) returned early at line 760, but `reviewAndMergeOpenPRs()` was at line 788 — unreachable when the gate triggered. PRs piled up indefinitely.
 **Root cause:** Gate checked BEFORE the review function. The gate's purpose (prevent more dispatches when too many PRs exist) conflicted with the review function's purpose (clear old PRs). They were in the wrong order.

@@ -8,7 +8,7 @@ import { fileURLToPath } from "url";
 
 // Load env vars from .env.local if not set
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ENV_KEYS = ["DATABASE_URL", "CRON_SECRET", "NEXT_PUBLIC_URL"];
+const ENV_KEYS = ["DATABASE_URL", "CRON_SECRET", "NEXT_PUBLIC_URL", "GH_PAT"];
 for (const envKey of ENV_KEYS) {
   if (!process.env[envKey]) {
     try {
@@ -24,23 +24,81 @@ for (const envKey of ENV_KEYS) {
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 const CRON_SECRET = process.env.CRON_SECRET || "";
+const GH_PAT = process.env.GH_PAT || "";
 
 const sql = neon(process.env.DATABASE_URL);
 
 // Import deduplication logic
 import { deduplicateTask, extractAffectedCompanies, isCrossCompanyPattern } from "../src/lib/task-deduplication.js";
 
-// GitHub Issue creation helper (fire-and-forget for backlog/task items)
+// GitHub Issue creation helper — creates issue directly via GitHub API
+// Uses github_token from settings table (same token used by github-app.ts fallback)
+const HIVE_REPO = "carloshmiranda/hive";
+
 async function createGitHubIssueForBacklog(item) {
   try {
-    const rows = await sql(`SELECT value FROM settings WHERE key = 'github_app_installation_id' LIMIT 1`);
-    // Use the Hive API to create issue (it handles token fetching)
-    await fetch(`${HIVE_URL}/api/backlog/sync-issue`, {
+    // Token priority: GH_PAT env var > github_token from settings DB > gh auth token CLI
+    let token = GH_PAT;
+    if (!token) {
+      const rows = await sql.query(
+        `SELECT value FROM settings WHERE key = 'github_token' LIMIT 1`
+      );
+      token = rows?.[0]?.value;
+    }
+    if (!token) {
+      try {
+        const { execSync } = await import("child_process");
+        token = execSync("gh auth token", { encoding: "utf-8", timeout: 3000 }).trim();
+      } catch { /* gh CLI not available */ }
+    }
+    if (!token) {
+      console.error("[mcp] No GitHub token available (set GH_PAT or github_token in settings)");
+      return;
+    }
+
+    // Create GitHub Issue
+    const body = [
+      `## ${item.title}`,
+      "",
+      item.description || item.title,
+      "",
+      "---",
+      `**Priority:** ${item.priority} | **Category:** ${item.category}${item.theme ? ` | **Theme:** ${item.theme}` : ""}`,
+      `**Backlog ID:** \`${item.id}\``,
+      "",
+      "*Auto-created by Hive work tracker*",
+    ].join("\n");
+
+    const res = await fetch(`https://api.github.com/repos/${HIVE_REPO}/issues`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${CRON_SECRET}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ backlog_id: item.id, title: item.title, description: item.description, priority: item.priority, category: item.category, theme: item.theme }),
-    }).catch(() => {});
-  } catch { /* non-critical */ }
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: `${item.priority}: ${item.title}`,
+        body,
+        labels: ["hive-backlog"],
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) {
+      console.error(`[mcp] GitHub issue creation failed: ${res.status} ${res.statusText}`);
+      return;
+    }
+
+    const data = await res.json();
+    // Update backlog item with GitHub issue link
+    await sql.query(
+      `UPDATE hive_backlog SET github_issue_number = $1, github_issue_url = $2 WHERE id = $3`,
+      [data.number, data.html_url, item.id]
+    );
+    console.error(`[mcp] Created GitHub issue #${data.number} for backlog ${item.id}`);
+  } catch (e) {
+    console.error(`[mcp] GitHub issue creation error: ${e?.message || e}`);
+  }
 }
 
 const server = new McpServer({
