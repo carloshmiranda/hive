@@ -20,6 +20,7 @@ const ALLOWED_WORKFLOWS = [
   "hive-evolver.yml",
   "hive-healer.yml",
   "hive-sentinel.yml",
+  "hive-spec-gen.yml",
 ];
 
 export async function POST(req: NextRequest) {
