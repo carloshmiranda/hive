@@ -71,6 +71,7 @@ export default function CompanyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [directive, setDirective] = useState("");
   const [sending, setSending] = useState(false);
+  const [directiveSent, setDirectiveSent] = useState<string | null>(null);
   const [taskCategoryFilter, setTaskCategoryFilter] = useState("all");
   const [unitEcon, setUnitEcon] = useState<{
     ltv: number | null; cac: number | null; ltv_cac_ratio: number | null;
@@ -117,13 +118,17 @@ export default function CompanyDetailPage() {
   const sendDirective = async () => {
     if (!directive.trim() || !company) return;
     setSending(true);
-    await fetch("/api/directives", {
+    const res = await fetch("/api/directives", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ company_id: company.id, text: directive }),
     });
+    const data = await res.json();
     setDirective("");
     setSending(false);
+    const issueUrl = data?.data?.github_issue?.url;
+    setDirectiveSent(issueUrl || "sent");
+    setTimeout(() => setDirectiveSent(null), 4000);
     fetchData();
   };
 
@@ -179,9 +184,15 @@ export default function CompanyDetailPage() {
             style={{ padding: "10px 20px", background: "var(--hive-amber-bg)", border: "1px solid var(--hive-amber-border)",
               borderRadius: 8, color: "var(--hive-amber)", fontSize: 13, fontFamily: "var(--hive-mono)", fontWeight: 500, cursor: "pointer",
               opacity: directive.trim() ? 1 : 0.4 }}>
-            Send
+            {sending ? "Sending..." : "Send"}
           </button>
         </div>
+        {directiveSent && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--hive-green)", fontFamily: "var(--hive-mono)" }}>
+            ✓ Directive sent
+            {directiveSent !== "sent" && <> — <a href={directiveSent} target="_blank" rel="noreferrer" style={{ color: "var(--hive-green)" }}>view issue</a></>}
+          </div>
+        )}
       </div>
 
       {/* Pending approvals */}

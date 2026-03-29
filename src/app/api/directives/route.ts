@@ -84,13 +84,14 @@ export async function POST(req: Request) {
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
-  const { text } = body;
+  const { text, company_id: bodyCompanyId } = body;
   if (!text?.trim()) return err("Directive text is required");
 
   const parsed = parseDirective(text);
 
-  // Resolve company ID if slug provided
-  let companyId: string | null = null;
+  // Resolve company ID: first try slug from text parsing, then fall back to company_id from body
+  // (company_id is sent when using the "Send directive" button on a company page)
+  let companyId: string | null = bodyCompanyId || null;
   if (parsed.companySlug) {
     const sql = getDb();
     const [company] = await sql`SELECT id FROM companies WHERE slug = ${parsed.companySlug}`;
