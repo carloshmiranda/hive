@@ -55,6 +55,13 @@
   - Sentry uptime monitoring for /api/health + cron monitoring for sentinel-dispatch
   - Redis auto-pipelining enabled + batch settings fetches
   - OpenRouter verbosity parameter per agent + :online suffix for Growth web research
+- **Recently resolved (2026-03-29):**
+  - Zombie "running" actions root cause fixed: added dedicated success logging step to hive-engineer.yml build-hive job (was only a prompt instruction, now a workflow step)
+  - MCP hive_backlog_create category mismatch fixed: Zod enum aligned with DB CHECK (bug→bugfix, docs→quality)
+  - MCP backlog auto-prioritization: items now auto-prioritize based on category + content signals when no explicit priority given
+  - Backlog duplicates cleaned up (2 duplicate items removed)
+  - Circuit breakers cleared on all 4 companies (aged out naturally)
+  - PR review improvements: 6 backlog items created (#230-#235) covering risk-score threshold, post-merge health check, actionlint CI, property-based testing, PR #202 docs, MCP category fix
 - **Recently fixed:**
   - Schema-map drift: auto-sync from schema.sql (22 tables), CI check prevents drift, generator fixed for UNLOGGED tables
   - Healer Flolio loop: success logging step in workflow + per-company circuit breaker (3 failures/48h → skip)
@@ -85,6 +92,10 @@
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
 - `[code]` 2026-03-29: **Worker completion callback chain via QStash (PR #228)** — Fixed critical 4-hour latency bottleneck where Growth/Outreach/Ops workers complete LLM calls but never chain forward. Added `qstashPublish("/api/dispatch/cycle-complete")` callback after worker success in `/api/agents/dispatch`. Triggers immediate cycle completion flow instead of waiting for Sentinel's 4-hour schedule. Turns gaps from hours to seconds. Uses deduplication and error handling for reliable dispatch.
+
+- `[code]` 2026-03-29: **Deep infrastructure audit → 14 backlog items created** — Deep-dived into all agent dispatch chains, Redis utilization, QStash patterns, Sentinel heuristics, and feedback loops. Key findings: (1) Worker fire-and-forget gap — Growth/Outreach/Ops never chain forward after completion, causing 4h latency gaps. (2) Redis underutilized — only 3 cache types active, missing circuit breaker state, metrics, failed item cooldown. (3) Sentinel ignores validation scores and agent success rates. (4) Healer is a terminal node — never verifies fixes or retries failed agents. (5) CEO signal extraction uses brittle regex. Created 14 items: 1 P0 (worker callback chain), 4 P1 (partial completion chain, healer chain dispatch, cooldown→Redis, validation-driven Sentinel), 8 P2 (circuit breaker→Redis, metrics cache, post-merge refresh, success rate weighting, healer verification, revenue readiness auto-task, CEO signal hardening, context enrichment), 1 P3 (playbook usage verification). Skipped 1 item already covered by existing backlog (7a1d5138 context cache→Redis).
+
+- `[code]` 2026-03-29: **PR review deadlock fix + agent audit** — (1) Fixed PR review deadlock: `openPRCount >= 3` gate at line 760 returned early BEFORE `reviewAndMergeOpenPRs()` at line 788, creating a deadlock where PRs couldn't be merged because the gate blocked first. Fix: moved PR review before the queue gate so PRs are reviewed/merged first, then count rechecked. (2) PR #209 auto-merged by hive-orchestrator[bot] — confirms PR risk scoring fixes (mergeable null check + secret pattern overmatch) from prior session work correctly. (3) Comprehensive agent audit completed — identified: 90% agents don't write completion reports (only Ops does), Growth/Outreach completely silent, CEO→worker dispatch uses brittle regex, Scout generates duplicate proposals, Evolver/Healer have no downstream dispatch, multi-company cycle-complete only dispatches 1 company. Implementation of improvements starting.
 
 - `[code]` 2026-03-28: **Fix backlog dispatch chain stall** — 56 ready items sat unprocessed for hours. Root cause: when Engineer completes without creating a PR (direct commit), the `done` completion path in `/api/backlog/dispatch` marked the item complete but never scheduled a QStash chain dispatch for the next item. The `pr_open` path had it; `done` didn't. Fixed in `3b5e085`. Chain kicked after deploy.
 

@@ -860,6 +860,22 @@ jobs:
             - If the spec has acceptance_criteria, tackle them in priority order. Each completed
               criterion is progress that survives even if you run out of turns.
 
+      - name: Log success to Hive API
+        if: steps.agent.outcome == 'success'
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+          TASK=$(echo "${PAYLOAD_JSON}" | jq -r '.task // "Hive-internal work"' 2>/dev/null | head -c 200 || echo "Hive-internal work")
+          TASK_ESCAPED=$(echo "$TASK" | jq -Rs '.' | sed 's/^"//;s/"$//')
+          TRIGGER="${{ needs.context.outputs.trigger }}"
+          curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"${TRIGGER:-feature_request}\",\"status\":\"success\",\"description\":\"${TASK_ESCAPED}\"}" || true
+
       - name: Notify via Telegram
         if: always()
         env:

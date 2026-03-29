@@ -105,12 +105,26 @@ server.registerTool(
       title: z.string().describe("Short title for the backlog item"),
       description: z.string().describe("Detailed description of the work"),
       priority: z.enum(["P0", "P1", "P2", "P3"]).default("P2").describe("Priority level"),
-      category: z.enum(["feature", "bug", "refactor", "infra", "docs", "research"]).default("feature").describe("Category"),
+      category: z.enum(["feature", "bugfix", "refactor", "infra", "quality", "research"]).default("feature").describe("Category (bugfix, feature, refactor, infra, quality, research)"),
       source: z.string().default("brainstorm").describe("Origin (brainstorm, sentinel, evolver, manual)"),
       theme: z.string().optional().describe("Roadmap theme (e.g. 'zero_intervention', 'dispatch_chain')"),
     },
   },
   async ({ title, description, priority, category, source, theme }) => {
+    // Auto-prioritize when caller uses default P2 — infer from category + content signals
+    if (priority === "P2") {
+      const text = `${title} ${description}`.toLowerCase();
+      const isBlocking = /block|break|crash|fail|can't|cannot|prevent|stop/i.test(text);
+      const isSecurityOrAuth = /secret|auth|token|credential|inject|xss|sql.inject/i.test(text);
+      if (category === "bugfix" && (isBlocking || isSecurityOrAuth)) priority = "P0";
+      else if (category === "bugfix") priority = "P1";
+      else if (category === "infra" && isBlocking) priority = "P0";
+      else if (category === "infra") priority = "P1";
+      else if (category === "quality") priority = "P2";
+      else if (category === "research") priority = "P3";
+      // feature and refactor stay at P2
+    }
+
     // Dedup check
     const prefix = title.slice(0, 50);
     const [existing] = await sql.query(

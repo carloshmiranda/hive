@@ -15,12 +15,28 @@
 
 ---
 
-### 2026-03-29 GitHub App lacks workflows permission to push schema-diff CI fixes
-**What happened:** Engineer agent implemented a fix for the failing schema-diff CI check (graceful skip when Neon credentials missing) but cannot push the workflow file changes due to GitHub permission restrictions.
-**Root cause:** GitHub Apps cannot modify workflow files (.github/workflows/*.yml) without explicit `workflows` permission. The claude-code-action@v1 GitHub App lacks this permission for security reasons.
-**Fix applied:** Documented the complete solution - workflow file modified to check for NEON_API_KEY/NEON_PROJECT_ID and exit gracefully (exit 0) with informative message if missing. Change committed locally but blocked from push.
-**Prevention:** For workflow modifications: (1) Grant workflows permission to GitHub App, or (2) Use manual PR creation by Carlos, or (3) Use different auth token with sufficient permissions, or (4) Implement workflow changes outside of automated agents.
+### 2026-03-29 Zombie "running" actions from missing success callback step
+**What happened:** Hive-internal engineer actions stayed in "running" state forever, triggering the health gate (`running_engineers: 2`) and blocking all new dispatches. Circuit breakers opened on all 4 companies.
+**Root cause:** The `build-hive` job in `hive-engineer.yml` had no dedicated workflow step for logging success to the Hive API. It relied on a prompt instruction ("Log success to agent_actions via the Hive API") which the Claude agent often skips when running out of turns. The company-dispatch job and failure path both had dedicated workflow steps — only the hive-internal success path was missing.
+**Fix applied:** Added a `Log success to Hive API` step with `if: steps.agent.outcome == 'success'` before the Telegram notification step. Mirrors the company-dispatch job pattern at line 663.
+**Prevention:** Every GitHub Actions job that creates an agent_action must have a **dedicated workflow step** for both success and failure callbacks. Never rely on prompt instructions for critical state transitions — Claude agents may run out of turns, forget, or error before reaching that instruction.
 **Affects:** hive
+
+### 2026-03-29 MCP hive_backlog_create category enum mismatch with DB CHECK constraint
+**What happened:** Creating backlog items via MCP with categories `bug` or `docs` silently failed with a DB constraint violation (`hive_backlog_category_check`). The `catch(() => {})` pattern swallowed the error.
+**Root cause:** MCP server Zod enum had `["feature", "bug", "refactor", "infra", "docs", "research"]` but DB CHECK constraint requires `["bugfix", "feature", "refactor", "infra", "quality", "research"]`. Two values mismatched: `bug` → `bugfix`, `docs` → `quality`.
+**Fix applied:** Aligned MCP Zod enum to match DB CHECK constraint exactly.
+**Prevention:** When defining enum values in multiple places (Zod schema, DB CHECK, TypeScript types), always derive from a single source of truth. Add a CI check or integration test that validates MCP tool schemas against DB constraints.
+**Affects:** hive
+
+### 2026-03-29 PR review deadlock — queue gate blocks the only code path that clears the queue
+**What happened:** 5 open PRs accumulated but never got reviewed/merged. PR queue gate (`openPRCount >= 3`) returned early at line 760, but `reviewAndMergeOpenPRs()` was at line 788 — unreachable when the gate triggered. PRs piled up indefinitely.
+**Root cause:** Gate checked BEFORE the review function. The gate's purpose (prevent more dispatches when too many PRs exist) conflicted with the review function's purpose (clear old PRs). They were in the wrong order.
+**Fix applied:** Moved `reviewAndMergeOpenPRs()` before the queue gate. Now PRs are reviewed/merged first, then the gate checks the updated count.
+**Prevention:** When adding early-return gates, always ask: "Does any code AFTER this gate need to run to CLEAR the condition this gate checks?" If yes, that code must come BEFORE the gate.
+**Affects:** hive
+
+---
 
 ### 2026-03-28 Schema-map drift causes cascading CI failures across all PRs
 **What happened:** All 4 open PRs failed CI with SQL linter errors. The linter validated against a stale schema-map that was missing columns added by recent migrations (parent_id, decomposition_context, github_issue_number, etc.). Every PR branch inherited these false failures from main.

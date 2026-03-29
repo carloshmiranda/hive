@@ -43,16 +43,8 @@ interface DecompositionContext {
 // Label mappings
 // ---------------------------------------------------------------------------
 
-function backlogLabels(item: {
-  priority: string;
-  category: string;
-  theme?: string | null;
-}): string[] {
-  const labels: string[] = ["hive-backlog"];
-  if (item.priority) labels.push(`priority:${item.priority.toLowerCase()}`);
-  if (item.category) labels.push(`type:${item.category}`);
-  if (item.theme) labels.push(`theme:${item.theme}`);
-  return labels;
+function backlogLabels(): string[] {
+  return ["hive-backlog"];
 }
 
 function companyTaskLabels(task: {
@@ -234,8 +226,8 @@ export async function createBacklogIssue(item: {
     `*Auto-created by Hive work tracker*`,
   ].join("\n");
 
-  const labels = backlogLabels(item);
-  return createIssue(HIVE_REPO, `[${item.priority}] ${item.title}`, body, labels);
+  const labels = backlogLabels();
+  return createIssue(HIVE_REPO, `${item.priority}: ${item.title}`, body, labels);
 }
 
 // ---------------------------------------------------------------------------
