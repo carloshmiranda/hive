@@ -905,6 +905,14 @@ jobs:
           COMPANY=$(echo "${PAYLOAD_JSON}" | jq -r '.company // empty' 2>/dev/null || echo "")
           CONFIGURED_MAX_TURNS="${{ steps.model.outputs.max_turns }}"
 
+          # Pre-execution guard skipped the agent step — guard already marked item as
+          # needs_decomposition via API. No callback needed here; exit to avoid
+          # inflating the circuit breaker with false-positive failures.
+          if [ "$AGENT_OUTCOME" = "skipped" ]; then
+            echo "Agent step skipped by pre-execution guard — guard handled the item, no callback needed"
+            exit 0
+          fi
+
           # Extract error subtype and message for decompose logic + chain propagation
           ERROR_TYPE=""
           ERROR_DETAIL=""
