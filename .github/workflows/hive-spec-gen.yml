@@ -1,0 +1,135 @@
+name: Hive Spec Gen
+run-name: "Spec: ${{ github.event.client_payload.title || github.event.inputs.title || 'unknown' }}"
+
+on:
+  repository_dispatch:
+    types:
+      - spec_request
+
+  workflow_dispatch:
+    inputs:
+      backlog_id:
+        description: 'Backlog item ID to spec'
+        required: true
+      title:
+        description: 'Task title (for display)'
+        required: false
+        default: 'manual'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Hive
+        uses: actions/checkout@v4
+
+      - name: Extract payload
+        id: payload
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "backlog_id=${{ github.event.client_payload.backlog_id }}" >> "$GITHUB_OUTPUT"
+            echo "title=${{ github.event.client_payload.title }}" >> "$GITHUB_OUTPUT"
+            echo "priority=${{ github.event.client_payload.priority }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "backlog_id=${{ github.event.inputs.backlog_id }}" >> "$GITHUB_OUTPUT"
+            echo "title=${{ github.event.inputs.title }}" >> "$GITHUB_OUTPUT"
+            echo "priority=P2" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get tokens via OIDC
+        id: auth
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "claude:claude_token:true"
+
+      - name: Generate spec with Claude
+        id: spec
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "hive-orchestrator[bot]"
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 8 --allowedTools Bash,Read"
+          prompt: |
+            You are generating an implementation spec for a Hive backlog item.
+
+            BACKLOG ITEM ID: ${{ steps.payload.outputs.backlog_id }}
+
+            Steps:
+            1. Fetch the full item from the database:
+               ```bash
+               npm install --no-save postgres 2>/dev/null
+               node -e "
+                 const postgres = require('postgres');
+                 const sql = postgres(process.env.DATABASE_URL);
+                 sql\`SELECT id, title, description, priority, category, notes, spec FROM hive_backlog WHERE id = '${{ steps.payload.outputs.backlog_id }}' LIMIT 1\`
+                   .then(r => { console.log(JSON.stringify(r[0], null, 2)); return sql.end(); });
+               "
+               ```
+
+            2. Read 2-4 source files most relevant to this task (use the title/description to identify them). Check src/lib/, src/app/api/, .github/workflows/ as appropriate.
+
+            3. Generate a spec as a JSON object with this exact schema:
+               {
+                 "acceptance_criteria": ["string — what done looks like, testable"],
+                 "affected_files": ["src/path/to/file.ts"],
+                 "approach": ["step 1", "step 2", "step 3"],
+                 "risks": ["string — what could go wrong"],
+                 "complexity": "S" | "M",
+                 "estimated_turns": <number>,
+                 "specialist": "frontend" | "backend" | "database" | "devops" | "security"
+               }
+
+               Complexity guide (NEVER output L — decompose instead):
+               - S: 1-3 files changed, 10-15 turns
+               - M: 3-6 files changed, 16-28 turns
+
+               estimated_turns must be honest. If the task would need >28 turns, set complexity "M" and estimated_turns 28 — the dispatcher will decompose it.
+
+            4. Write the spec to the database and set status back to ready:
+               ```bash
+               node -e "
+                 const postgres = require('postgres');
+                 const sql = postgres(process.env.DATABASE_URL);
+                 const spec = JSON.parse(process.argv[1]);
+                 sql\`UPDATE hive_backlog SET spec = \${JSON.stringify(spec)}::jsonb, status = 'ready', dispatched_at = NULL WHERE id = '${{ steps.payload.outputs.backlog_id }}'\`
+                   .then(() => { console.log('spec written'); return sql.end(); })
+                   .catch(e => { console.error(e.message); process.exit(1); });
+               " '<SPEC_JSON_HERE>'
+               ```
+
+            5. Print a one-line summary: "Spec for '<title>': complexity=<X>, turns=<N>, files=<count>"
+
+      - name: Trigger dispatch retry
+        if: success()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app' }}/api/backlog/dispatch" \
+            -d '{"trigger": "spec_complete"}' || true
+
+      - name: Log failure
+        if: failure()
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          node -e "
+            const postgres = require('postgres');
+            const sql = postgres(process.env.DATABASE_URL);
+            sql\`UPDATE hive_backlog SET status = 'ready', dispatched_at = NULL WHERE id = '${{ steps.payload.outputs.backlog_id }}' AND status = 'planning'\`
+              .then(() => sql.end())
+              .catch(() => process.exit(0));
+          " || true
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app' }}/api/actions" \
+            -d "{\"agent\": \"planner\", \"action_type\": \"spec_request\", \"status\": \"failed\", \"description\": \"Spec gen failed for backlog item ${{ steps.payload.outputs.backlog_id }}: ${{ steps.payload.outputs.title }}\"}" || true

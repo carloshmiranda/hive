@@ -1757,76 +1757,42 @@ export async function POST(req: Request) {
     };
     console.log(`[backlog] Using manual spec from notes for "${topItem.title}" (spec text: ${manualSpecText.length} chars)`);
   }
-  const MAX_SPEC_ATTEMPTS = 3; // Try up to 3 candidates before giving up
-  let specAttempts = 0;
-  let candidateIdx = 0;
+  // If item has no spec, dispatch to GitHub Actions for Claude Max spec generation.
+  // This replaces the old inline OpenRouter spec gen — Claude writes far better specs.
+  // The item stays in 'planning' status until the hive-spec-gen workflow writes the spec
+  // and sets it back to 'ready'. Next Sentinel cycle will pick it up.
+  if (!spec && topItem.priority !== "P0") {
+    await sql`
+      UPDATE hive_backlog SET status = 'planning', dispatched_at = NULL WHERE id = ${topItem.id}
+    `.catch(() => {});
 
-  while (!spec && topItem.priority !== "P0" && specAttempts < MAX_SPEC_ATTEMPTS) {
-    specAttempts++;
-    try {
-      await sql`
-        UPDATE hive_backlog SET status = 'planning' WHERE id = ${topItem.id}
-      `.catch(() => {});
+    if (ghPat) {
+      const specRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_type: "spec_request",
+          client_payload: {
+            backlog_id: topItem.id,
+            title: topItem.title,
+            priority: topItem.priority,
+          },
+        }),
+        signal: AbortSignal.timeout(8000),
+      }).catch((e: any) => { console.warn(`[backlog] spec_request dispatch failed: ${e?.message || e}`); return null; });
 
-      const { generateSpec } = await import("@/lib/backlog-planner");
-      spec = await generateSpec(
-        {
-          id: topItem.id,
-          title: topItem.title,
-          description: topItem.description,
-          priority: topItem.priority,
-          category: topItem.category,
-          notes: topItem.notes,
-        },
-        sql
-      );
-
-      if (spec) {
-        await sql`
-          UPDATE hive_backlog SET spec = ${JSON.stringify(spec)} WHERE id = ${topItem.id}
-        `.catch(() => {});
-        console.log(`[backlog] Spec generated for "${topItem.title}" — complexity: ${spec.complexity}, turns: ${spec.estimated_turns}`);
-        break; // Spec succeeded, proceed with this item
-      } else {
-        // Mark with [no_spec] so next attempt permanently blocks it
-        await sql`
-          UPDATE hive_backlog
-          SET status = 'ready', dispatched_at = NULL,
-              notes = COALESCE(notes, '') || ' [no_spec] Spec generation returned null — will be blocked on next dispatch attempt.'
-          WHERE id = ${topItem.id}
-        `.catch(() => {});
-        console.warn(`[backlog] Spec generation failed for "${topItem.title}" — tagged [no_spec], trying next candidate`);
+      if (specRes?.ok || specRes?.status === 204) {
+        console.log(`[backlog] No spec for "${topItem.title}" — dispatched spec_request to GitHub Actions`);
+        return json({ dispatched: false, reason: "spec_requested", item_id: topItem.id });
       }
-    } catch (e) {
-      // Mark with [no_spec] on error too
-      await sql`
-        UPDATE hive_backlog
-        SET status = 'ready', dispatched_at = NULL,
-            notes = COALESCE(notes, '') || ' [no_spec] Spec generation error — will be blocked on next dispatch attempt.'
-        WHERE id = ${topItem.id}
-      `.catch(() => {});
-      console.warn(`[backlog] Planning phase error for "${topItem.title}":`, e instanceof Error ? e.message : "unknown");
     }
 
-    // Spec failed — advance to next candidate
-    candidateIdx++;
-    const nextCandidate = orderedCandidates[candidateIdx];
-    if (!nextCandidate) {
-      // No more candidates to try — but don't kill the chain.
-      // Schedule a delayed retry so spec gen can be reattempted later
-      // (models may recover, circuit breakers may reset).
-      await qstashPublish("/api/backlog/dispatch", {
-        trigger: "spec_retry",
-        attempted: specAttempts,
-      }, {
-        deduplicationId: `spec-retry-${Date.now()}`,
-        delay: 300, // 5 minutes — give models time to recover
-      }).catch((e: any) => { console.warn(`[backlog] spec retry chain dispatch failed: ${e?.message || e}`); });
-      return json({ dispatched: false, reason: "all_candidates_failed_spec", attempted: specAttempts, retry_scheduled: true });
-    }
-    topItem = nextCandidate;
-    spec = topItem.spec || null;
-    // If next candidate already has a spec (or is P0), the while condition breaks naturally
+    // No GH PAT or dispatch failed — revert to ready so it can be retried next cycle
+    await sql`
+      UPDATE hive_backlog SET status = 'ready', dispatched_at = NULL WHERE id = ${topItem.id}
+    `.catch(() => {});
+    console.warn(`[backlog] No spec for "${topItem.title}" and spec_request dispatch failed — reverted to ready`);
+    return json({ dispatched: false, reason: "spec_requested_failed", item_id: topItem.id });
   }
 
   // Check for previous failed attempts — inject error context so Engineer learns
