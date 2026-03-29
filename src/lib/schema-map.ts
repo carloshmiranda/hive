@@ -137,6 +137,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "type": "TEXT",
         "nullable": true,
         "hasDefault": false
+      },
+      "resend_audience_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
       }
     },
     "checks": [

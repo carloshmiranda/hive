@@ -5,6 +5,7 @@ import { capabilitiesSummary } from "@/lib/capabilities";
 import { getFilePrompt } from "@/lib/prompts";
 import { canSendOutreach } from "@/lib/resend";
 import { callLLMWithLogging, callLLMWithTools } from "@/lib/llm";
+import { getSuppressedEmails } from "@/lib/outreach-suppression";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { HIVE_TOOLS } from "@/lib/hive-tools";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
@@ -512,13 +513,32 @@ async function processOutreachResults(sql: any, company: any, output: string) {
     if (!jsonMatch) return;
     const parsed = JSON.parse(jsonMatch[0]);
 
+    let leadsUpdated = false;
+
     if (parsed.leads?.length) {
+      // Filter out suppressed emails before storing leads
+      const suppressedEmails = await getSuppressedEmails(company.id);
+      const filteredLeads = parsed.leads.filter((lead: any) => {
+        if (!lead.email) return true; // Keep leads without email
+        return !suppressedEmails.has(lead.email.toLowerCase());
+      });
+
+      const originalCount = parsed.leads.length;
+      const filteredCount = filteredLeads.length;
+
+      if (originalCount > filteredCount) {
+        console.log(`[dispatch] Filtered ${originalCount - filteredCount} suppressed leads for ${company.slug}`);
+      }
+
+      const processedData = { ...parsed, leads: filteredLeads };
+
       await sql`
         INSERT INTO research_reports (company_id, report_type, content, summary)
-        VALUES (${company.id}, 'lead_list', ${JSON.stringify(parsed)}, ${`${parsed.leads.length} leads tracked`})
+        VALUES (${company.id}, 'lead_list', ${JSON.stringify(processedData)}, ${`${filteredLeads.length} leads tracked (${originalCount - filteredCount} filtered)`})
         ON CONFLICT (company_id, report_type) DO UPDATE SET
-          content = ${JSON.stringify(parsed)}, summary = ${`${parsed.leads.length} leads tracked`}, updated_at = now()
+          content = ${JSON.stringify(processedData)}, summary = ${`${filteredLeads.length} leads tracked (${originalCount - filteredCount} filtered)`}, updated_at = now()
       `;
+      leadsUpdated = true;
     }
 
     if (parsed.emails_drafted?.length) {
@@ -529,5 +549,26 @@ async function processOutreachResults(sql: any, company: any, output: string) {
           content = ${JSON.stringify(parsed)}, summary = ${`${parsed.emails_drafted.length} emails drafted`}, updated_at = now()
       `;
     }
+
+    // Auto-sync leads to Resend after updating lead_list
+    if (leadsUpdated) {
+      try {
+        const syncResponse = await fetch(`${process.env.VERCEL_URL || 'https://hive-phi.vercel.app'}/api/outreach/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ company_id: company.id }),
+        });
+
+        if (syncResponse.ok) {
+          const syncResult = await syncResponse.json();
+          console.log(`[dispatch] Auto-synced ${syncResult.leads_synced || 0} leads to Resend for ${company.slug}`);
+        } else {
+          console.warn(`[dispatch] Resend sync failed for ${company.slug}: ${syncResponse.status}`);
+        }
+      } catch (syncError: any) {
+        console.warn(`[dispatch] Resend sync error for ${company.slug}: ${syncError.message}`);
+      }
+    }
+
   } catch (e: any) { console.warn(`[dispatch] outreach result parsing for ${company.slug} failed: ${e?.message || e}`); }
 }
