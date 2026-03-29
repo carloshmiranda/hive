@@ -2224,7 +2224,7 @@ export async function GET(request: Request) {
     let ghostPrFixed = 0;
     try {
       const stuckPrOpen = await sql`
-        SELECT id, title, pr_number, github_issue_number, github_repo
+        SELECT id, title, pr_number, github_issue_number
         FROM hive_backlog
         WHERE status = 'pr_open'
           AND pr_number IS NOT NULL
@@ -2240,7 +2240,7 @@ export async function GET(request: Request) {
         if (ghToken) {
           for (const item of stuckPrOpen) {
             try {
-              const repo = item.github_repo || "carloshmiranda/hive";
+              const repo = "carloshmiranda/hive";
               const res = await fetch(
                 `https://api.github.com/repos/${repo}/pulls/${item.pr_number}`,
                 {
