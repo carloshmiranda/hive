@@ -21,22 +21,37 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
     steps:
+      - name: Check Neon secrets are configured
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.NEON_API_KEY }}" ] || [ -z "${{ secrets.NEON_PROJECT_ID }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⚠️ NEON_API_KEY or NEON_PROJECT_ID not configured. Skipping schema diff."
+            echo "To enable schema diff, add these secrets to the repository."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout PR branch
+        if: steps.check-secrets.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
+        if: steps.check-secrets.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
       - name: Install dependencies
+        if: steps.check-secrets.outputs.skip != 'true'
         run: npm ci
 
       - name: Create temporary Neon branch for schema diff
+        if: steps.check-secrets.outputs.skip != 'true'
         id: create-branch
         run: |
           # Generate unique branch name based on PR
@@ -66,6 +81,7 @@ jobs:
           echo "Created temporary Neon branch: $TEMP_BRANCH_NAME (ID: $BRANCH_ID)"
 
       - name: Apply schema changes to temporary branch
+        if: steps.check-secrets.outputs.skip != 'true'
         run: |
           # Get the connection string for the temporary branch
           TEMP_DB_RESPONSE=$(curl -s -X GET \
@@ -101,6 +117,7 @@ jobs:
           "
 
       - name: Compare schema between branches
+        if: steps.check-secrets.outputs.skip != 'true'
         id: schema-diff
         run: |
           echo "Comparing schema between main and temporary branch..."
@@ -135,6 +152,7 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: Comment schema diff on PR
+        if: steps.check-secrets.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -165,7 +183,7 @@ jobs:
             });
 
       - name: Clean up temporary Neon branch
-        if: always()
+        if: always() && steps.check-secrets.outputs.skip != 'true'
         run: |
           if [ -n "${{ steps.create-branch.outputs.temp_branch_id }}" ]; then
             echo "Deleting temporary Neon branch..."
@@ -177,6 +195,7 @@ jobs:
           fi
 
       - name: Fail if schema validation errors
+        if: steps.check-secrets.outputs.skip != 'true'
         run: |
           # Check if there were any validation errors in the diff
           if grep -i "error\|fail\|invalid" schema_diff.txt > /dev/null 2>&1; then
