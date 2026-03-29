@@ -496,3 +496,29 @@ CREATE UNLOGGED TABLE context_cache (
 CREATE INDEX idx_context_cache_expires ON context_cache(expires_at);
 CREATE INDEX idx_context_cache_company ON context_cache(company_id);
 CREATE INDEX idx_context_cache_cycle ON context_cache(cycle_id);
+
+-- CEO Strategic Decision Journal: track strategic decisions and validate them retroactively
+-- Creates institutional memory for strategic quality and decision patterns
+CREATE TABLE decision_log (
+  id                TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id        TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  decision_type     TEXT NOT NULL CHECK (decision_type IN (
+                      'kill',            -- company kill decision
+                      'pivot',           -- business model/strategy pivot
+                      'phase_change',    -- lifecycle phase transition
+                      'priority_shift'   -- major task priority change
+                    )),
+  cycle_id          TEXT REFERENCES cycles(id),      -- which cycle triggered this decision
+  reasoning         TEXT NOT NULL,                   -- CEO's explanation of why
+  expected_outcome  TEXT NOT NULL,                   -- what CEO expects to happen
+  actual_outcome    TEXT,                            -- what actually happened (filled retroactively)
+  was_correct       BOOLEAN,                         -- retrospective validation (filled by Sentinel)
+  decision_data     JSONB,                           -- additional context (old/new values, metrics, etc.)
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  validated_at      TIMESTAMPTZ                      -- when retrospective validation was done
+);
+
+CREATE INDEX idx_decision_log_company ON decision_log(company_id);
+CREATE INDEX idx_decision_log_type ON decision_log(decision_type);
+CREATE INDEX idx_decision_log_validation ON decision_log(was_correct) WHERE was_correct IS NOT NULL;
+CREATE INDEX idx_decision_log_pending_validation ON decision_log(created_at) WHERE was_correct IS NULL;

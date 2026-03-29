@@ -1740,6 +1740,76 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         ]
       }
     ]
+  },
+  "decision_log": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "decision_type": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "cycle_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "reasoning": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "expected_outcome": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "actual_outcome": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "was_correct": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "decision_data": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "validated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      }
+    },
+    "checks": [
+      {
+        "column": "decision_type",
+        "allowedValues": [
+          "kill",
+          "pivot",
+          "phase_change",
+          "priority_shift"
+        ]
+      }
+    ]
   }
 };
 
