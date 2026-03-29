@@ -1,0 +1,187 @@
+name: Log Agent Completion
+description: Logs successful agent execution to Neon DB with playbook verification
+
+inputs:
+  agent:
+    description: Agent name (ceo, engineer, healer)
+    required: true
+  trigger:
+    description: The action_type / trigger that caused this run
+    required: true
+  execution_file:
+    description: Path to claude execution output JSON
+    required: false
+    default: ''
+  cron_secret:
+    description: Cron secret for log API
+    required: false
+    default: ''
+  company:
+    description: Company slug (if applicable)
+    required: false
+    default: ''
+  context_payload:
+    description: JSON payload for extracting company (fallback)
+    required: false
+    default: '{}'
+
+runs:
+  using: composite
+  steps:
+    - name: Log completion with playbook verification
+      shell: bash
+      env:
+        DATABASE_URL: ${{ env.DATABASE_URL }}
+        CRON_SECRET: ${{ inputs.cron_secret }}
+      run: |
+        npm install --no-save postgres 2>/dev/null
+
+        EXEC_FILE="${{ inputs.execution_file }}"
+        if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+          EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+        fi
+
+        RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+        # Extract execution metadata and agent output
+        if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
+          SUBTYPE=$(jq -r '.[-1].subtype // "completion"' "$EXEC_FILE" 2>/dev/null || echo "completion")
+          TURNS=$(jq -r '.[-1].num_turns // 1' "$EXEC_FILE" 2>/dev/null || echo "1")
+          COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+
+          # Extract agent output for playbook verification (combine all agent messages)
+          AGENT_OUTPUT=$(jq -r '
+            [.[] | select(.type == "assistant" or .type == "agent") | .content // .text // ""]
+            | join("\n\n")
+            | tostring
+          ' "$EXEC_FILE" 2>/dev/null || echo "")
+
+          SUCCESS_MSG="Completed ${SUBTYPE} in ${TURNS} turns (\$${COST})"
+        else
+          SUBTYPE="unknown"
+          TURNS="1"
+          COST="0"
+          AGENT_OUTPUT=""
+          SUCCESS_MSG="No execution output — ${{ inputs.agent }} agent completed without output file. Run: ${RUN_URL}"
+        fi
+
+        export AGENT_OUTPUT SUCCESS_MSG
+
+        # Determine company slug
+        COMPANY="${{ inputs.company }}"
+        if [ -z "$COMPANY" ]; then
+          COMPANY=$(echo '${{ inputs.context_payload }}' | jq -r '.company // ""' 2>/dev/null || echo "")
+        fi
+
+        # Direct database logging with playbook verification
+        node -e "
+        const postgres = require('postgres');
+        const sql = postgres(process.env.DATABASE_URL);
+
+        async function logCompletion() {
+          try {
+            // Get company ID if company slug provided
+            let companyId = null;
+            let contentLanguage = 'en';
+            if ('$COMPANY') {
+              const [company] = await sql\`
+                SELECT id, content_language FROM companies WHERE slug = \${'$COMPANY'} LIMIT 1
+              \`.catch(() => []);
+              companyId = company?.id || null;
+              contentLanguage = company?.content_language || 'en';
+            }
+
+            // Perform playbook verification for brain agents
+            let playbookUsage = null;
+            const brainAgents = ['ceo', 'engineer'];
+            const agentOutput = process.env.AGENT_OUTPUT || '';
+
+            if (brainAgents.includes('${{ inputs.agent }}') && companyId && agentOutput.length > 10) {
+              try {
+                // Get relevant playbook entries
+                const playbook = await sql\`
+                  SELECT id, domain, insight, confidence, COALESCE(reference_count, 0) as reference_count
+                  FROM playbook
+                  WHERE superseded_by IS NULL
+                    AND confidence >= 0.6
+                    AND (content_language IS NULL OR content_language = \${contentLanguage})
+                    AND (
+                      relevant_agents = '{}'
+                      OR '${{ inputs.agent }}' = ANY(relevant_agents)
+                      OR CASE
+                        WHEN '${{ inputs.agent }}' = 'engineer' THEN domain IN ('engineering', 'infrastructure', 'auth', 'payments', 'deployment')
+                        WHEN '${{ inputs.agent }}' = 'ceo' THEN domain IN ('pricing', 'strategy', 'growth', 'onboarding')
+                        ELSE true
+                      END
+                    )
+                  ORDER BY confidence DESC, reference_count ASC
+                  LIMIT 10
+                \`;
+
+                // Simple verification - check if any key phrases from playbook entries appear in output
+                const outputLower = agentOutput.toLowerCase();
+                const referencedInsights = [];
+
+                for (const entry of playbook) {
+                  const insight = entry.insight.toLowerCase();
+                  // Check for key phrases (simplified matching)
+                  const keyWords = insight.split(' ')
+                    .filter(word => word.length > 4)
+                    .filter(word => !['that', 'with', 'have', 'this', 'will', 'your', 'from', 'they'].includes(word));
+
+                  const matches = keyWords.filter(word => outputLower.includes(word)).length;
+                  if (matches >= 2 || (matches >= 1 && keyWords.length <= 3)) {
+                    referencedInsights.push(entry.insight);
+
+                    // Update reference count
+                    await sql\`
+                      UPDATE playbook
+                      SET reference_count = COALESCE(reference_count, 0) + 1,
+                          last_referenced_at = NOW()
+                      WHERE id = \${entry.id}
+                    \`.catch(() => {});
+                  }
+                }
+
+                playbookUsage = {
+                  hit_count: referencedInsights.length,
+                  miss_count: playbook.length - referencedInsights.length,
+                  insights_referenced: referencedInsights,
+                  total_playbook_entries: playbook.length,
+                  verification_score: playbook.length > 0 ? Math.round((referencedInsights.length / playbook.length) * 1000) / 1000 : 1.0
+                };
+              } catch (e) {
+                console.warn('Playbook verification failed:', e.message);
+              }
+            }
+
+            // Build metadata with playbook verification results
+            const metadata = {
+              subtype: '$SUBTYPE',
+              turns: parseInt('$TURNS'),
+              cost: parseFloat('$COST'),
+              run_url: '$RUN_URL',
+              execution_source: 'github_actions',
+              ...(playbookUsage ? { playbook_usage: playbookUsage } : {})
+            };
+
+            await sql\`
+              INSERT INTO agent_actions (agent, company_id, action_type, status, description, output, started_at, finished_at)
+              VALUES ('${{ inputs.agent }}', \${companyId}, '${{ inputs.trigger }}', 'success',
+                \${process.env.SUCCESS_MSG},
+                \${JSON.stringify(metadata)}::jsonb,
+                NOW() - INTERVAL '\${parseInt('$TURNS')} minutes', NOW())
+            \`;
+
+            console.log('Logged completion with playbook verification:', playbookUsage);
+            await sql.end();
+          } catch (error) {
+            console.error('DB log failed:', error.message);
+            process.exit(1);
+          }
+        }
+
+        logCompletion();
+        "
+
+        echo "Logged ${{ inputs.agent }} completion: $SUBTYPE ($TURNS turns) — with playbook verification"

@@ -3,6 +3,7 @@ import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { writeCompletionReport, type CompletionReport } from "@/lib/completion-report";
+import { verifyPlaybookUsage, getRelevantPlaybookEntries } from "@/lib/playbook-verification";
 
 // POST /api/agents/log — log agent action via OIDC auth
 // Body: { company_slug, agent, action_type, status, description?, error? }
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { company_slug, agent, action_type, status, description, error: errorMsg, trace_id, metadata: bodyMetadata, completion_report } = body;
+  const { company_slug, agent, action_type, status, description, error: errorMsg, trace_id, metadata: bodyMetadata, completion_report, agent_output } = body;
   if (!agent || !action_type || !status) {
     return err("Missing required fields: agent, action_type, status", 400);
   }
@@ -30,17 +31,38 @@ export async function POST(req: NextRequest) {
   const sql = getDb();
 
   let companyId = null;
+  let company = null;
   if (company_slug) {
-    const [company] = await sql`
-      SELECT id FROM companies WHERE slug = ${company_slug} LIMIT 1
+    const [companyRow] = await sql`
+      SELECT id, content_language FROM companies WHERE slug = ${company_slug} LIMIT 1
     `.catch(() => []);
-    companyId = company?.id || null;
+    company = companyRow;
+    companyId = companyRow?.id || null;
   }
 
-  // Merge trace_id into metadata for correlation across dispatch chains
+  // Add playbook verification for brain agents with successful completions
+  let playbookUsage = null;
+  const brainAgents = ['ceo', 'engineer'];
+  if (brainAgents.includes(agent) && status === 'success' && agent_output && companyId) {
+    try {
+      const playbookEntries = await getRelevantPlaybookEntries(
+        companyId,
+        agent,
+        company?.content_language || 'en',
+        10
+      );
+      playbookUsage = await verifyPlaybookUsage(agent_output, playbookEntries);
+    } catch (error) {
+      console.error('Playbook verification failed for brain agent:', error);
+      // Don't fail the request, just log without verification
+    }
+  }
+
+  // Merge trace_id and playbook_usage into metadata for correlation across dispatch chains
   const metadata = {
     ...(typeof bodyMetadata === "object" && bodyMetadata ? bodyMetadata : {}),
     ...(trace_id ? { trace_id } : {}),
+    ...(playbookUsage ? { playbook_usage: playbookUsage } : {}),
   };
   const hasMetadata = Object.keys(metadata).length > 0;
 
