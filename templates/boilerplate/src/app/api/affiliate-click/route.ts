@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless";
+import { getDb } from "@/lib/db";
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     source_path: "/",
   }));
 
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
 
   await sql`
     INSERT INTO affiliate_clicks (date, link_id, destination_url, source_path)
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
 // GET /api/affiliate-click?days=14 — returns click summary
 export async function GET(req: NextRequest) {
   const days = Number(req.nextUrl.searchParams.get("days") || "14");
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
 
   const rows = await sql`
     SELECT date, link_id, COUNT(*)::int as clicks

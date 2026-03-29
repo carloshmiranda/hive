@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { neon } from "@neondatabase/serverless";
-
-function getDb() {
-  return neon(process.env.DATABASE_URL!);
-}
+import { getDb } from "@/lib/db";
 
 function json(data: any, status = 200) {
   return NextResponse.json(data, { status });
