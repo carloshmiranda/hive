@@ -84,6 +84,8 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+- `[code]` 2026-03-29: **Worker completion callback chain via QStash (PR #228)** — Fixed critical 4-hour latency bottleneck where Growth/Outreach/Ops workers complete LLM calls but never chain forward. Added `qstashPublish("/api/dispatch/cycle-complete")` callback after worker success in `/api/agents/dispatch`. Triggers immediate cycle completion flow instead of waiting for Sentinel's 4-hour schedule. Turns gaps from hours to seconds. Uses deduplication and error handling for reliable dispatch.
+
 - `[code]` 2026-03-28: **Fix backlog dispatch chain stall** — 56 ready items sat unprocessed for hours. Root cause: when Engineer completes without creating a PR (direct commit), the `done` completion path in `/api/backlog/dispatch` marked the item complete but never scheduled a QStash chain dispatch for the next item. The `pr_open` path had it; `done` didn't. Fixed in `3b5e085`. Chain kicked after deploy.
 
 - `[code]` 2026-03-28: **Build fix — missing completion-report.ts** — Previous session created `src/lib/completion-report.ts` but never `git add`'ed it. Two ERROR deploys on Vercel before caught. Fixed in `099ce94`. Added MISTAKES.md entry. Learning: always check `git status` for untracked files before committing.
