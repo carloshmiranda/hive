@@ -205,8 +205,17 @@ If `text-secondary` in `globals.css` is `#6b7280` (gray-400):
 **Application:** Check these rules before starting any UI work. Apply missing fixes silently as part of your normal workflow. Each rule is a one-time check — once applied to a company, it doesn't need checking again until the next major boilerplate update.
 
 ## Output format (JSON):
+
+**IMPORTANT: Always include a `status_code` field to help Sentinel route your completion:**
+
+- **DONE**: All tasks completed successfully, no concerns, ready for next cycle
+- **DONE_WITH_CONCERNS**: Tasks completed but with non-blocking issues that should be noted
+- **NEEDS_CONTEXT**: Partially completed, need clarification or more context to finish
+- **BLOCKED**: Unable to proceed due to blocking issues requiring escalation
+
 ```json
 {
+  "status_code": "DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED",
   "tasks_completed": [
     {
       "task_id": "eng-1 (reference the ID from CEO plan)",
@@ -226,9 +235,9 @@ If `text-secondary` in `globals.css` is `#6b7280` (gray-400):
       }
     }
   ],
-  "growth_prespec_completed": [
-    "List of build_requests from Growth's pre-spec that you completed (if any)"
-  ],
+  "concerns": ["List any non-blocking concerns (only if status_code is DONE_WITH_CONCERNS)"],
+  "context_needed": "What clarification is needed (only if status_code is NEEDS_CONTEXT)",
+  "blocking_issue": "What is blocking progress (only if status_code is BLOCKED)",
   "build_status": "passed|failed",
   "deploy_status": "success|failed|skipped",
   "errors": ["any errors encountered"],
