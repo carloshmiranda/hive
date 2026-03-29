@@ -79,12 +79,43 @@ export const BacklogPlannerResponseSchema = z.object({
   ready_for_dispatch: z.boolean(),
 });
 
+// Engineer agent - structured callback with status codes
+export const EngineerResponseSchema = z.object({
+  status_code: z.enum(["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"]),
+  tasks_completed: z.array(z.object({
+    task_id: z.string(),
+    task: z.string(),
+    commit: z.string().optional(),
+    files_changed: z.array(z.string()),
+    status: z.enum(["done", "partial", "blocked"]),
+    blockers: z.string().optional(),
+    acceptance_verification: z.array(z.object({
+      criteria: z.string(),
+      verified: z.boolean(),
+      evidence: z.string().optional(),
+    })).optional(),
+    scope_compliance: z.object({
+      files_allowed_respected: z.boolean(),
+      files_forbidden_avoided: z.boolean(),
+      forbidden_files_attempted: z.array(z.string()),
+    }).optional(),
+  })),
+  concerns: z.array(z.string()).optional(),
+  context_needed: z.string().optional(),
+  blocking_issue: z.string().optional(),
+  build_status: z.enum(["passed", "failed"]),
+  deploy_status: z.enum(["success", "failed", "skipped"]),
+  errors: z.array(z.string()),
+  notes: z.string().optional(),
+});
+
 // Schema registry for easy lookup by agent name
 export const AGENT_SCHEMAS = {
   growth: GrowthResponseSchema,
   outreach: OutreachResponseSchema,
   ops: OpsResponseSchema,
   "backlog-planner": BacklogPlannerResponseSchema,
+  engineer: EngineerResponseSchema,
 } as const;
 
 // Type helpers for agent responses
@@ -92,6 +123,7 @@ export type GrowthResponse = z.infer<typeof GrowthResponseSchema>;
 export type OutreachResponse = z.infer<typeof OutreachResponseSchema>;
 export type OpsResponse = z.infer<typeof OpsResponseSchema>;
 export type BacklogPlannerResponse = z.infer<typeof BacklogPlannerResponseSchema>;
+export type EngineerResponse = z.infer<typeof EngineerResponseSchema>;
 
 // Simplified JSON schema definitions for our agent responses
 // Using manual definitions since zod-to-json-schema conversion is complex
@@ -232,6 +264,60 @@ const AGENT_JSON_SCHEMAS = {
       ready_for_dispatch: { type: "boolean" },
     },
     required: ["task_analysis", "spec", "decomposition_needed", "ready_for_dispatch"],
+    additionalProperties: false,
+  },
+  engineer: {
+    type: "object",
+    properties: {
+      status_code: { type: "string", enum: ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"] },
+      tasks_completed: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            task_id: { type: "string" },
+            task: { type: "string" },
+            commit: { type: "string" },
+            files_changed: { type: "array", items: { type: "string" } },
+            status: { type: "string", enum: ["done", "partial", "blocked"] },
+            blockers: { type: "string" },
+            acceptance_verification: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  criteria: { type: "string" },
+                  verified: { type: "boolean" },
+                  evidence: { type: "string" },
+                },
+                required: ["criteria", "verified"],
+                additionalProperties: false,
+              },
+            },
+            scope_compliance: {
+              type: "object",
+              properties: {
+                files_allowed_respected: { type: "boolean" },
+                files_forbidden_avoided: { type: "boolean" },
+                forbidden_files_attempted: { type: "array", items: { type: "string" } },
+              },
+              required: ["files_allowed_respected", "files_forbidden_avoided", "forbidden_files_attempted"],
+              additionalProperties: false,
+            },
+          },
+          required: ["task_id", "task", "files_changed", "status"],
+          additionalProperties: false,
+        },
+      },
+      concerns: { type: "array", items: { type: "string" } },
+      context_needed: { type: "string" },
+      blocking_issue: { type: "string" },
+      build_status: { type: "string", enum: ["passed", "failed"] },
+      deploy_status: { type: "string", enum: ["success", "failed", "skipped"] },
+      errors: { type: "array", items: { type: "string" } },
+      notes: { type: "string" },
+    },
+    required: ["status_code", "tasks_completed", "build_status", "deploy_status", "errors"],
     additionalProperties: false,
   },
 } as const;
