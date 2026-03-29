@@ -438,6 +438,13 @@ CREATE TABLE hive_backlog (
   theme         TEXT,              -- links to ROADMAP.md milestone (e.g. 'dispatch_chain', 'self_improving')
   spec          JSONB,             -- planning phase output (acceptance criteria, affected files, approach)
   notes         TEXT,              -- resolution notes, blockers, etc.
+  -- Work stealing fields
+  stealable     BOOLEAN DEFAULT false,     -- true after 2 failures, available for any agent
+  claimed_by    TEXT,                      -- agent that claimed this stealable task
+  claimed_at    TIMESTAMPTZ,               -- when task was claimed (for 10-min grace period)
+  original_agent TEXT,                     -- agent that originally failed on this task
+  failure_count INTEGER DEFAULT 0,         -- persistent failure tracking (vs attempt tracking in notes)
+  completion_percentage INTEGER DEFAULT 0 CHECK (completion_percentage >= 0 AND completion_percentage <= 100), -- for 75% protection
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ DEFAULT now(),
   dispatched_at TIMESTAMPTZ,
@@ -446,6 +453,10 @@ CREATE TABLE hive_backlog (
 CREATE INDEX idx_hive_backlog_status ON hive_backlog(status);
 CREATE INDEX idx_hive_backlog_priority ON hive_backlog(priority);
 CREATE INDEX idx_hive_backlog_parent_id ON hive_backlog(parent_id) WHERE parent_id IS NOT NULL;
+-- Work stealing indexes
+CREATE INDEX idx_hive_backlog_stealable ON hive_backlog(stealable) WHERE stealable = true;
+CREATE INDEX idx_hive_backlog_claimed_at ON hive_backlog(claimed_at) WHERE claimed_at IS NOT NULL;
+CREATE INDEX idx_hive_backlog_failure_count ON hive_backlog(failure_count) WHERE failure_count > 0;
 
 -- Routing weights: dynamic model routing based on task success rates
 -- Tracks success/failure rates per (task_type, model) to auto-promote failing models

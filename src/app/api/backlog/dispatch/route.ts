@@ -9,6 +9,7 @@ import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer"
 import { setSentryTags } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
 import type { PRAnalysis } from "@/lib/pr-risk-scoring";
+import { markTaskAsStealable, claimStealableTask, type WorkStealingResult } from "@/lib/work-stealing";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -820,6 +821,17 @@ export async function POST(req: Request) {
       }
 
       if (!decomposed && !continued) {
+        // Work stealing: after 2 failures, mark task as stealable
+        if (attempt >= 2 && !isMaxTurns) { // Don't apply work stealing to max_turns failures (they need decomposition)
+          try {
+            const failingAgent = body.agent || 'engineer';
+            await markTaskAsStealable(sql, completed_id, failingAgent);
+            console.log(`[backlog] Marked "${item?.title || completed_id}" as stealable after ${attempt} failures by ${failingAgent}`);
+          } catch (e) {
+            console.warn(`[backlog] Failed to mark item ${completed_id} as stealable: ${e}`);
+          }
+        }
+
         // Auto-block: 1 attempt for max_turns errors (decompose immediately), 3 for others
         const blockThreshold = isMaxTurns ? 1 : 3;
         if (attempt >= blockThreshold) {
@@ -1120,6 +1132,70 @@ export async function POST(req: Request) {
   // query as regular dispatch — no P0/P1 filter. If high-priority items exist
   // they go first; if not, P2/P3 dispatch immediately instead of waiting for Sentinel.
   const isChainDispatch = !!completed_id;
+
+  // Work stealing: check for stealable tasks first before regular backlog
+  let stealableResult: WorkStealingResult | null = null;
+  try {
+    stealableResult = await claimStealableTask(sql, 'engineer');
+    if (stealableResult.task) {
+      console.log(`[backlog] Work stealing success: claimed "${stealableResult.task.title}" (reason: ${stealableResult.reason}${stealableResult.contested ? ', contested' : ''})`);
+
+      // Dispatch the stealable task immediately
+      const stealableItem = stealableResult.task;
+      const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
+
+      if (ghPat) {
+        const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json" },
+          body: JSON.stringify({
+            event_type: "feature_request",
+            client_payload: {
+              source: "work_stealing",
+              company: "_hive",
+              task: stealableItem.description,
+              title: stealableItem.title,
+              backlog_id: stealableItem.id,
+              priority: stealableItem.priority,
+              chain_next: true,
+              max_turns: 50,
+              meta: {
+                attempt: stealableItem.failure_count + 1,
+                stolen_from: stealableItem.original_agent,
+                claim_type: stealableResult.reason
+              }
+            }
+          }),
+        });
+
+        if (res.ok) {
+          console.log(`[backlog] Work stealing dispatch successful for "${stealableItem.title}"`);
+          return json({
+            dispatched: true,
+            stolen: true,
+            item_id: stealableItem.id,
+            item_title: stealableItem.title,
+            original_agent: stealableItem.original_agent,
+            failure_count: stealableItem.failure_count,
+            reason: stealableResult.reason
+          });
+        } else {
+          console.warn(`[backlog] Work stealing dispatch failed: ${res.status} ${await res.text()}`);
+          // Reset the claim since dispatch failed
+          await sql`
+            UPDATE hive_backlog
+            SET claimed_by = NULL, claimed_at = NULL, status = 'ready'
+            WHERE id = ${stealableItem.id}
+          `;
+        }
+      }
+    } else if (stealableResult.reason !== "no_stealable_tasks") {
+      console.log(`[backlog] Work stealing: ${stealableResult.reason}`);
+    }
+  } catch (e) {
+    console.warn(`[backlog] Work stealing failed: ${e}`);
+  }
+
   let backlogItems: any[];
   try {
     backlogItems = await sql`
