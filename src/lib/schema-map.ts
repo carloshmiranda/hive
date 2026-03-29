@@ -93,6 +93,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "nullable": true,
         "hasDefault": true
       },
+      "framework": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": true
+      },
       "market": {
         "type": "TEXT",
         "nullable": true,

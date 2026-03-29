@@ -5,6 +5,7 @@ import { createProject as createNeonProject } from "@/lib/neon-api";
 import { createProject as createVercelProject, setEnvVars, addDomain, provisionNeonStore, hasEnvVar, getEnvVar } from "@/lib/vercel";
 import { getSettingValue } from "@/lib/settings";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { getFramework, recommendFramework } from "@/lib/frameworks";
 
 // POST /api/agents/provision — one-call infrastructure provisioning
 // Creates Neon DB + runs schema, creates Vercel project + enables Web Analytics,
@@ -20,17 +21,21 @@ export async function POST(req: NextRequest) {
   if (claims instanceof Response) return claims;
 
   const body = await req.json();
-  const { company_slug, company_id } = body;
+  const { company_slug, company_id, framework: requestedFramework, company_type } = body;
 
   if (!company_slug || !company_id) {
     return err("Missing company_slug or company_id", 400);
   }
 
+  // Resolve framework: explicit request > recommendation from business type > nextjs default
+  const frameworkId = requestedFramework || recommendFramework(company_type) || "nextjs";
+  const fw = getFramework(frameworkId);
+
   // Add company_id tag to Sentry
   setSentryTags({ company_id });
 
   const sql = getDb();
-  const results: Record<string, unknown> = { company_slug, company_id };
+  const results: Record<string, unknown> = { company_slug, company_id, framework: frameworkId, boilerplate_dir: fw.boilerplateDir };
 
   // ── Step 1: Create Neon database (3-tier: Vercel Marketplace → Neon API → existing) ──
   let connectionUri: string | null = null;
@@ -102,7 +107,11 @@ export async function POST(req: NextRequest) {
   // ── Step 2: Create Vercel project + enable Web Analytics ──
   let vercelProjectId: string | null = null;
   try {
-    const project = await createVercelProject(company_slug, `carloshmiranda/${company_slug}`);
+    const project = await createVercelProject(company_slug, `carloshmiranda/${company_slug}`, {
+      framework: fw.vercelFramework,
+      buildCommand: fw.buildCommand,
+      outputDirectory: fw.outputDirectory,
+    });
     vercelProjectId = project.id;
     results.vercel = { project_id: project.id, created: true };
 
@@ -193,6 +202,7 @@ export async function POST(req: NextRequest) {
       vercel_url = COALESCE(${actualVercelUrl}, vercel_url),
       domain = COALESCE(${companyDomain}, domain),
       neon_project_id = COALESCE(${neonProjectId ?? null}, neon_project_id),
+      framework = ${frameworkId},
       updated_at = NOW()
     WHERE id = ${company_id}
   `.catch(() => {});

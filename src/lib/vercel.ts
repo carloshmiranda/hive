@@ -28,19 +28,21 @@ async function vercel(path: string, method = "GET", body?: any) {
   return res.json();
 }
 
-export async function createProject(slug: string, githubRepo: string) {
-  // Note: The vercel() function already batches vercel_token + vercel_team_id
-  // This additional call would benefit from batching if called together with vercel()
+export async function createProject(
+  slug: string,
+  githubRepo: string,
+  options?: { framework?: string; buildCommand?: string; outputDirectory?: string }
+) {
   const owner = await getSettingValue("github_owner");
   return vercel("/v10/projects", "POST", {
     name: slug,
-    framework: "nextjs",
+    framework: options?.framework || "nextjs",
     gitRepository: {
       repo: `${owner}/${slug}`,
       type: "github",
     },
-    buildCommand: "npm run build",
-    outputDirectory: ".next",
+    buildCommand: options?.buildCommand || "npm run build",
+    outputDirectory: options?.outputDirectory || ".next",
   });
 }
 

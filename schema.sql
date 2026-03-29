@@ -26,6 +26,7 @@ CREATE TABLE companies (
   domain              TEXT,       -- custom domain (null = vercel subdomain)
   capabilities  JSONB DEFAULT '{}',              -- structured capability inventory
   company_type  TEXT DEFAULT 'b2c_saas',         -- for compatibility matrix
+  framework     TEXT DEFAULT 'nextjs',           -- nextjs, astro, sveltekit, static
   market        TEXT DEFAULT 'global',           -- 'portugal' or 'global' — determines content language
   content_language TEXT DEFAULT 'en',            -- 'en' or 'pt' — enforced by agents
   imported      BOOLEAN DEFAULT false,           -- true for non-Hive-provisioned companies

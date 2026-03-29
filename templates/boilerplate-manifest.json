@@ -1,6 +1,7 @@
 {
-  "version": "0.1.0",
-  "description": "Next.js + Neon + Stripe + Tailwind boilerplate for Hive companies",
+  "version": "0.2.0",
+  "description": "Multi-framework boilerplate for Hive companies (Next.js, Astro, SvelteKit, static)",
+  "framework": "nextjs",
   "features": [
     {
       "id": "waitlist",
