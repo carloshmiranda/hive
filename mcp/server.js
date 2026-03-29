@@ -27,6 +27,9 @@ const CRON_SECRET = process.env.CRON_SECRET || "";
 
 const sql = neon(process.env.DATABASE_URL);
 
+// Import deduplication logic
+import { deduplicateTask, extractAffectedCompanies, isCrossCompanyPattern } from "../src/lib/task-deduplication.js";
+
 // GitHub Issue creation helper (fire-and-forget for backlog/task items)
 async function createGitHubIssueForBacklog(item) {
   try {
@@ -125,8 +128,36 @@ server.registerTool(
       // feature and refactor stay at P2
     }
 
-    // Dedup check
-    const prefix = title.slice(0, 50);
+    // Cross-company task deduplication via playbook
+    let finalTitle = title;
+    let finalDescription = description;
+    let finalCategory = category;
+    let finalPriority = priority;
+
+    try {
+      // Check if this is a cross-company pattern
+      const affectedCompanies = extractAffectedCompanies(description);
+      if (isCrossCompanyPattern(description) && source === 'sentinel') {
+        console.log(`[task-dedup] Checking cross-company pattern: "${title}" (${affectedCompanies.length} companies)`);
+
+        const deduped = await deduplicateTask(sql, title, description, affectedCompanies);
+        finalTitle = deduped.title;
+        finalDescription = deduped.description;
+        finalCategory = deduped.category;
+        finalPriority = deduped.priority;
+
+        // If playbook entry exists, tag this for the deduplication theme
+        if (deduped.playbookReference) {
+          theme = theme || 'work_tracking';
+          console.log(`[task-dedup] ${deduped.playbookReference ? 'Referenced' : 'Created'} playbook pattern for cross-company issue`);
+        }
+      }
+    } catch (error) {
+      console.warn('[task-dedup] Deduplication failed, proceeding with original task:', error);
+    }
+
+    // Dedup check against existing tasks
+    const prefix = finalTitle.slice(0, 50);
     const [existing] = await sql.query(
       `SELECT id, title, status FROM hive_backlog WHERE status IN ('ready','approved','dispatched','in_progress') AND title ILIKE $1 LIMIT 1`,
       [prefix + "%"]
@@ -134,13 +165,86 @@ server.registerTool(
     if (existing) {
       return { content: [{ type: "text", text: `Duplicate: "${existing.title}" (${existing.status}, id: ${existing.id})` }] };
     }
+
     const [item] = await sql.query(
       `INSERT INTO hive_backlog (priority, title, description, category, source, theme) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, priority, title, status, theme, description, category`,
-      [priority, title, description, category, source, theme || null]
+      [finalPriority, finalTitle, finalDescription, finalCategory, source, theme || null]
     );
+
     // Fire-and-forget: create GitHub Issue for visibility
     createGitHubIssueForBacklog({ ...item, theme }).catch(() => {});
     return { content: [{ type: "text", text: JSON.stringify(item, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "hive_cross_company_tasks",
+  {
+    description: "Create consolidated tasks for cross-company issues via playbook deduplication. Use when the same issue affects multiple companies.",
+    inputSchema: {
+      pattern: z.string().describe("The common pattern (e.g., 'Fix /api/stats endpoint')"),
+      companies: z.array(z.string()).describe("List of affected company slugs"),
+      description: z.string().describe("Description of the issue"),
+      evidence: z.record(z.any()).optional().describe("Supporting evidence (metrics, errors, etc.)"),
+    },
+  },
+  async ({ pattern, companies, description, evidence }) => {
+    if (companies.length < 2) {
+      return { content: [{ type: "text", text: "Cross-company tasks require at least 2 companies" }] };
+    }
+
+    try {
+      console.log(`[cross-company] Creating consolidated task for pattern: "${pattern}" across ${companies.join(', ')}`);
+
+      // Build enhanced description with company list
+      const enhancedDescription = `${description}\n\n**Affected Companies**: ${companies.join(', ')}\n\nThis issue was detected across multiple companies and may indicate a systemic problem that requires a common solution.`;
+
+      // Use deduplication logic to create playbook-aware task
+      const deduped = await deduplicateTask(sql, pattern, enhancedDescription, companies);
+
+      // Create the consolidated task
+      const [item] = await sql.query(
+        `INSERT INTO hive_backlog (priority, title, description, category, source, theme) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, priority, title, status, theme, description, category`,
+        [deduped.priority, deduped.title, deduped.description, deduped.category, 'sentinel', 'work_tracking']
+      );
+
+      // Create GitHub Issue
+      createGitHubIssueForBacklog({ ...item, theme: 'work_tracking' }).catch(() => {});
+
+      // If we have a playbook reference, create individual company tasks that reference the main task
+      if (deduped.playbookReference) {
+        const individualTasks = [];
+        for (const company of companies) {
+          const companyTitle = `${pattern} for ${company}`;
+          const companyDescription = `Company-specific implementation of #${item.id}\n\n**See Main Task**: #${item.id}\n**Playbook Reference**: ${deduped.playbookReference.insight}\n\nImplement the solution for ${company} following the pattern established in the playbook.`;
+
+          const [companyTask] = await sql.query(
+            `INSERT INTO hive_backlog (priority, title, description, category, source, theme) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, title`,
+            ['P1', companyTitle, companyDescription, 'bugfix', 'sentinel', 'work_tracking']
+          );
+
+          individualTasks.push(companyTask);
+          createGitHubIssueForBacklog({ ...companyTask, theme: 'work_tracking' }).catch(() => {});
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              main_task: item,
+              individual_tasks: individualTasks,
+              playbook_reference: deduped.playbookReference,
+              companies_affected: companies.length
+            }, null, 2)
+          }]
+        };
+      }
+
+      return { content: [{ type: "text", text: JSON.stringify(item, null, 2) }] };
+    } catch (error) {
+      console.error('[cross-company] Failed to create consolidated task:', error);
+      return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    }
   }
 );
 
