@@ -156,8 +156,56 @@ export interface LLMResponse {
   }>;
 }
 
+// ---------------------------------------------------------------------------
+// OpenRouter Preset Utilities
+// ---------------------------------------------------------------------------
+//
+// OpenRouter presets (@preset/name) provide centralized model configuration:
+// - Model selection and fallback chains
+// - Provider routing and temperature settings
+// - System prompts and output formatting
+//
+// Benefits over per-request configuration:
+// - Change routing without code deployments
+// - Version control with rollback via OpenRouter dashboard
+// - Consistent configuration across agent types
+//
+// Setup: Create presets manually at https://openrouter.ai/settings/presets
+// Usage: Reference as @preset/name in AGENT_PRIMARIES.models arrays
+
+/**
+ * Checks if a model reference is an OpenRouter preset (starts with @preset/)
+ */
+function isPresetReference(model: string): boolean {
+  return model.startsWith("@preset/");
+}
+
+/**
+ * Extracts the base model name from a preset reference for circuit breaker tracking.
+ * For presets, we can't determine the exact base model, so we use the preset name as the key.
+ */
+function getCircuitBreakerKey(model: string): string {
+  if (isPresetReference(model)) {
+    // For presets, use the preset name without @preset/ prefix for circuit tracking
+    return `openrouter:preset:${model.replace("@preset/", "")}`;
+  }
+
+  // Strip :exacto and other modifiers for regular models
+  const baseModel = model.replace(/:exacto$/, "").replace(/:online$/, "");
+  return `openrouter:${baseModel}`;
+}
+
 // Curated primary models — quality picks that go first in the chain.
 // Dynamic discovery pads the rest with all available free models.
+//
+// NOTE: OpenRouter presets (@preset/name) must be created manually at:
+// https://openrouter.ai/settings/presets
+//
+// Recommended preset configurations:
+// - hive-growth: High verbosity models, content-optimized (hermes-405b, llama-70b)
+// - hive-outreach: Medium verbosity, instruction-following models (llama-70b, hermes-405b)
+// - hive-ops: Low verbosity, fast models with throughput sorting (mistral-24b, phi4)
+// - hive-planner: Low temperature, large context models (qwen-coder, hermes-405b)
 export const OPENROUTER_MODELS = {
   // Tier 1: Large models (best quality)
   hermes_405b: "nousresearch/hermes-3-llama-3.1-405b:free",
@@ -175,9 +223,14 @@ export const OPENROUTER_MODELS = {
 
 // Agent-specific curated primaries — quality picks go first.
 // Dynamic free models are appended after these (see buildModelChain).
+//
+// @preset/ references are OpenRouter presets that must be configured manually at:
+// https://openrouter.ai/settings/presets before use. They provide centralized
+// model selection, routing, and temperature control without code deployment.
 export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: number; verbosity: "low" | "medium" | "high" | "max" }> = {
   growth: {
     models: [
+      "@preset/hive-growth",  // High verbosity, content-optimized models
       OPENROUTER_MODELS.hermes_405b + ":online",
       OPENROUTER_MODELS.llama_70b + ":online",
       OPENROUTER_MODELS.gemma_27b + ":online",
@@ -187,6 +240,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
   },
   outreach: {
     models: [
+      "@preset/hive-outreach",  // Medium verbosity, instruction-following models
       OPENROUTER_MODELS.llama_70b,
       OPENROUTER_MODELS.hermes_405b,
       OPENROUTER_MODELS.gemma_27b,
@@ -196,6 +250,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
   },
   ops: {
     models: [
+      "@preset/hive-ops",  // Low verbosity, fast models, throughput sort
       OPENROUTER_MODELS.mistral_24b,
       OPENROUTER_MODELS.phi4,
       OPENROUTER_MODELS.gemma_27b,
@@ -205,6 +260,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
   },
   planner: {
     models: [
+      "@preset/hive-planner",  // Low temp, large context models
       OPENROUTER_MODELS.qwen_coder,
       OPENROUTER_MODELS.hermes_405b,
       OPENROUTER_MODELS.llama_70b,
@@ -282,13 +338,14 @@ async function fetchFreeModels(): Promise<FreeModelEntry[]> {
 
 /**
  * Build the full model chain for an agent:
- * 1. Curated primaries (quality — agent-specific ordering)
+ * 1. Curated primaries (quality — agent-specific ordering, including @preset/ references)
  * 2. Dynamic free models (resilience — everything else, sorted by context_length)
  * 3. Meta-router fallback (openrouter/free)
  *
  * Deduplicates so curated models aren't listed twice.
  * Filters dynamic pool by agent's minContext requirement.
  * Supports :exacto suffix for quality-first provider sorting on tool-calling requests.
+ * Preserves @preset/ references without modification (they're handled by OpenRouter).
  */
 async function buildModelChain(agent: string, useExacto = false): Promise<string[]> {
   const config = AGENT_PRIMARIES[agent];
@@ -297,19 +354,32 @@ async function buildModelChain(agent: string, useExacto = false): Promise<string
   let primaries = [...config.models];
 
   // Apply :exacto suffix for quality-first provider sorting on tool-calling requests
+  // but preserve @preset/ references as-is (they handle provider routing internally)
   if (useExacto) {
-    primaries = primaries.map(model => `${model}:exacto`);
+    primaries = primaries.map(model => {
+      if (isPresetReference(model)) {
+        return model; // Presets handle provider routing internally, don't add :exacto
+      }
+      return `${model}:exacto`;
+    });
   }
 
   const dynamicPool = await fetchFreeModels();
 
   // Filter dynamic pool: meets min context, not already in primaries
-  const primarySet = new Set(primaries.map(m => m.replace(':exacto', '')));
+  // Create comparison set that strips @preset/ prefix and modifiers for deduplication
+  const primarySet = new Set(primaries.map(m => {
+    if (isPresetReference(m)) {
+      return m; // Keep presets as-is for comparison
+    }
+    return m.replace(':exacto', '').replace(':online', '');
+  }));
+
   const extras = dynamicPool
     .filter((m) => !primarySet.has(m.id) && m.contextLength >= config.minContext)
     .map((m) => useExacto ? `${m.id}:exacto` : m.id);
 
-  // Combine: primaries first, then dynamic pool, then meta-router
+  // Combine: primaries first (including presets), then dynamic pool, then meta-router
   return [
     ...primaries,
     ...extras,
@@ -585,7 +655,7 @@ async function callLLMStructured(
 
   // Filter models by circuit breaker availability
   const availableModels = models.filter(model => {
-    const circuitKey = `openrouter:${model}`;
+    const circuitKey = getCircuitBreakerKey(model);
     return isProviderAvailable(circuitKey);
   });
 
@@ -603,7 +673,7 @@ async function callLLMStructured(
 
   // Try models sequentially with circuit breaker tracking
   for (const model of availableModels) {
-    const circuitKey = `openrouter:${model}`;
+    const circuitKey = getCircuitBreakerKey(model);
 
     try {
       if (options.schema) {
@@ -670,9 +740,7 @@ export async function callLLM(
 
   // Filter out models with open circuit breakers
   const availableModels = fullChain.filter(model => {
-    // Strip :exacto suffix for circuit breaker key
-    const baseModel = model.replace(':exacto', '');
-    const circuitKey = `openrouter:${baseModel}`;
+    const circuitKey = getCircuitBreakerKey(model);
     if (!isProviderAvailable(circuitKey)) {
       console.warn(`[circuit-breaker] Skipping ${model} (circuit open)`);
       return false;
@@ -688,9 +756,9 @@ export async function callLLM(
     // Single request — OpenRouter handles fallback server-side
     const result = await callOpenRouter(prompt, availableModels, llmOptions);
 
-    // Record success for the model that actually responded (strip :exacto suffix)
-    const baseModel = result.model.replace(':exacto', '');
-    recordProviderSuccess(`openrouter:${baseModel}`);
+    // Record success for the model that actually responded
+    const circuitKey = getCircuitBreakerKey(result.model);
+    recordProviderSuccess(circuitKey);
 
     return {
       content: result.content,
@@ -705,16 +773,16 @@ export async function callLLM(
   } catch (error: any) {
     // Check if OpenRouter told us which specific model failed
     if (error.failedModel) {
-      // Record failure for the specific model that OpenRouter identified as failed (strip :exacto)
-      const baseModel = error.failedModel.replace(':exacto', '');
-      recordProviderFailure(`openrouter:${baseModel}`);
-      console.warn(`[circuit-breaker] Recording failure for specific model: ${baseModel}`);
+      // Record failure for the specific model that OpenRouter identified as failed
+      const circuitKey = getCircuitBreakerKey(error.failedModel);
+      recordProviderFailure(circuitKey);
+      console.warn(`[circuit-breaker] Recording failure for specific model: ${error.failedModel}`);
     } else {
       // Fallback: if we don't know which specific model failed, record failure for all models
       // that were passed to OpenRouter since any of them could have failed
       for (const model of availableModels) {
-        const baseModel = model.replace(':exacto', '');
-        recordProviderFailure(`openrouter:${baseModel}`);
+        const circuitKey = getCircuitBreakerKey(model);
+        recordProviderFailure(circuitKey);
       }
       console.warn(`[circuit-breaker] No specific model failure info, recording failure for all ${availableModels.length} models in chain`);
     }
