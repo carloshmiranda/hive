@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { invalidateCompanyMetrics } from "@/lib/redis-cache";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
@@ -54,5 +55,18 @@ export async function POST(req: Request) {
       social_posts = EXCLUDED.social_posts, social_engagement = EXCLUDED.social_engagement
     RETURNING *
   `;
+
+  // Invalidate metrics cache for this company
+  try {
+    const company = await sql`SELECT slug FROM companies WHERE id = ${company_id} LIMIT 1`;
+    if (company.length > 0) {
+      await invalidateCompanyMetrics(company[0].slug);
+      await invalidateCompanyMetrics(`${company[0].slug}:growth`); // Invalidate growth cache too
+    }
+  } catch (err) {
+    // Cache invalidation failure should not break the metrics update
+    console.warn(`Failed to invalidate metrics cache for company ${company_id}:`, err);
+  }
+
   return json(metric, 201);
 }

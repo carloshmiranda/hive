@@ -9,6 +9,7 @@ import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache"
 import { selectEntriesWithMMR, type PlaybookEntry } from "@/lib/mmr";
 import { cachedPlaybook, cachedCompanyList } from "@/lib/redis-cache";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
+import { getCachedCompanyMetrics, getCachedGrowthMetrics } from "@/lib/cached-metrics";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { extractCompletionReport, type CompletionReport, type AgentSignal } from "@/lib/completion-report";
 
@@ -359,13 +360,7 @@ async function buildContext(sql: any, company: any) {
         AND status IN ('proposed', 'approved')
       ORDER BY priority ASC, created_at ASC LIMIT 5
     `.catch(() => []),
-    sql`
-      SELECT date, page_views, signups, waitlist_signups, waitlist_total,
-        revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
-        affiliate_clicks, affiliate_revenue
-      FROM metrics WHERE company_id = ${company.id}
-      ORDER BY date DESC LIMIT 14
-    `.catch(() => []),
+    getCachedCompanyMetrics(sql, company.id, company.slug),
   ]);
 
   // Context optimization: use summaries by default, full content only when requested
@@ -448,12 +443,7 @@ async function growthContext(sql: any, company: any) {
           'visibility_snapshot','llm_visibility','content_performance','product_spec')
       ORDER BY updated_at DESC
     `.catch(() => []),
-    sql`
-      SELECT date, mrr, customers, page_views, signups, waitlist_total, waitlist_signups
-      FROM metrics WHERE company_id = ${company.id}
-        AND date >= CURRENT_DATE - INTERVAL '7 days'
-      ORDER BY date DESC LIMIT 14
-    `.catch(() => []),
+    getCachedGrowthMetrics(sql, company.id, company.slug),
     cachedPlaybook('growth', () =>
       sql`
         SELECT domain, insight FROM playbook
@@ -525,7 +515,7 @@ async function growthContext(sql: any, company: any) {
     validation,
     ceo_plan: cycle[0]?.ceo_plan || null,
     research,
-    metrics: metrics.map((m: Record<string, unknown>) => ({
+    metrics: metrics.map((m) => ({
       date: m.date, mrr: m.mrr, customers: m.customers,
       page_views: m.page_views, signups: m.signups, waitlist: m.waitlist_total,
     })),
@@ -658,13 +648,7 @@ async function ceoContext(sql: any, company: any) {
         AND status IN ('proposed', 'approved', 'in_progress')
       ORDER BY priority ASC LIMIT 5
     `.catch(() => []),
-    sql`
-      SELECT date, page_views, signups, waitlist_signups, waitlist_total,
-        revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
-        affiliate_clicks, affiliate_revenue
-      FROM metrics WHERE company_id = ${company.id}
-      ORDER BY date DESC LIMIT 14
-    `.catch(() => []),
+    getCachedCompanyMetrics(sql, company.id, company.slug),
     sql`
       SELECT id, text FROM directives
       WHERE company_id = ${company.id} AND status = 'open'
