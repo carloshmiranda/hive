@@ -15,6 +15,15 @@
 
 ---
 
+### 2026-03-29 [manual_spec] in notes doesn't unblock dispatch — two gates ignored it
+**What happened:** 7 P1 items had complete manual specs written into their `notes` field (tagged `[manual_spec]`) and were set to `ready`, but dispatch kept returning `backlogDispatched: 0`. Items were immediately re-blocked on every dispatch attempt.
+**Root cause:** The dispatch candidate loop had two permanent-block gates that checked for `[no_spec]` and `[manual_spec_needed]` but had no exemption for items where a human had subsequently added `[manual_spec]` content. Both gates re-blocked to `blocked` status and called `continue`, skipping the item before it could be dispatched.
+**Fix applied:** Added `&& !hasManualSpecInNotes` guard to both gates. Also updated `hasSpec` to `true` when `[manual_spec]` is in notes (so item routes to `speccedCandidates` instead of `speclessCandidates`).
+**Prevention:** Whenever a "permanent block" gate is added to the dispatch route, add a human-override exemption. The `[manual_spec]` tag is the canonical signal that a human has resolved a blocked item. Any gate that ignores it will silently swallow manual interventions.
+**Affects:** hive
+
+---
+
 ### 2026-03-29 Zombie "running" actions from missing success callback step
 **What happened:** Hive-internal engineer actions stayed in "running" state forever, triggering the health gate (`running_engineers: 2`) and blocking all new dispatches. Circuit breakers opened on all 4 companies.
 **Root cause:** The `build-hive` job in `hive-engineer.yml` had no dedicated workflow step for logging success to the Hive API. It relied on a prompt instruction ("Log success to agent_actions via the Hive API") which the Claude agent often skips when running out of turns. The company-dispatch job and failure path both had dedicated workflow steps — only the hive-internal success path was missing.
