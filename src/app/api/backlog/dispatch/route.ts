@@ -220,39 +220,51 @@ async function handleEscalatedPR(
     return false;
   }
 
-  // Fixable — rate-limit: skip if we already attempted a fix in the last 2 hours
-  const [recentFix] = await sql`
+  // Rate-limit Engineer dispatches: skip if we already dispatched one in the last 2 hours.
+  // Branch-update attempts use a separate, shorter cooldown (30 min).
+  const [recentEngineerDispatch] = await sql`
     SELECT id FROM agent_actions
-    WHERE agent = 'engineer' AND action_type = 'ci_fix'
+    WHERE agent = 'engineer' AND action_type = 'ci_fix' AND status IN ('running', 'success')
     AND description LIKE ${`%PR #${pr.number}%`}
     AND started_at > NOW() - INTERVAL '2 hours'
     LIMIT 1
   `.catch(() => []);
-  if (recentFix) return false;
+  if (recentEngineerDispatch) return false;
 
   // Step 1: Try updating the branch (merges main into PR branch).
   // Resolves "behind main" CI failures and simple merge conflicts.
-  // GitHub re-runs CI automatically after a branch update.
-  try {
-    const updateRes = await fetch(
-      `https://api.github.com/repos/carloshmiranda/hive/pulls/${pr.number}/update-branch`,
-      {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
-        body: JSON.stringify({ expected_head_sha: pr.head.sha }),
+  // Only skip for 30 min after a branch-update attempt — short enough that if CI re-fails
+  // the Engineer dispatch path runs on the next cycle.
+  const [recentBranchUpdate] = await sql`
+    SELECT id FROM agent_actions
+    WHERE agent = 'engineer' AND action_type = 'ci_fix' AND status = 'branch_updated'
+    AND description LIKE ${`%PR #${pr.number}%`}
+    AND started_at > NOW() - INTERVAL '30 minutes'
+    LIMIT 1
+  `.catch(() => []);
+
+  if (!recentBranchUpdate) {
+    try {
+      const updateRes = await fetch(
+        `https://api.github.com/repos/carloshmiranda/hive/pulls/${pr.number}/update-branch`,
+        {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" },
+          body: JSON.stringify({ expected_head_sha: pr.head.sha }),
+        }
+      );
+      if (updateRes.ok || updateRes.status === 202) {
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
+          VALUES ('engineer', 'ci_fix', 'branch_updated',
+            ${`Branch update for PR #${pr.number}: ${pr.title} — merged main, CI will re-run`},
+            NOW(), NOW())
+        `.catch(() => {});
+        console.log(`[backlog] Updated branch for PR #${pr.number} — CI will re-run, will dispatch Engineer if CI still fails`);
+        return false; // Wait one cycle for CI to complete
       }
-    );
-    if (updateRes.ok || updateRes.status === 202) {
-      await sql`
-        INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
-        VALUES ('engineer', 'ci_fix', 'success',
-          ${`Branch update for PR #${pr.number}: ${pr.title} — merged main, CI will re-run`},
-          NOW(), NOW())
-      `.catch(() => {});
-      console.log(`[backlog] Updated branch for PR #${pr.number} — CI will re-run`);
-      return false; // Branch update may fix it — wait for next cycle to re-evaluate
-    }
-  } catch { /* fall through to Engineer dispatch */ }
+    } catch { /* fall through to Engineer dispatch */ }
+  }
 
   // Step 2: Branch update failed — dispatch Engineer to fix the PR
   const [runningEng] = await sql`
