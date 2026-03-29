@@ -94,6 +94,181 @@ export async function canSendOutreach(): Promise<boolean> {
   return !!(domain && apiKey);
 }
 
+// === RESEND AUDIENCES & CONTACTS API ===
+
+interface ResendAudience {
+  id: string;
+  name: string;
+  created_at: string;
+  object: "audience";
+}
+
+interface ResendContact {
+  id: string;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  unsubscribed: boolean;
+  audience_id: string;
+  created_at: string;
+  object: "contact";
+}
+
+interface CreateAudienceOptions {
+  name: string;
+}
+
+interface CreateContactOptions {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  unsubscribed?: boolean;
+  audienceId: string;
+}
+
+/**
+ * Create a new audience in Resend for a company
+ */
+export async function createAudience(options: CreateAudienceOptions): Promise<{ success: boolean; audience?: ResendAudience; error?: string }> {
+  const apiKey = await getSettingValue("resend_api_key");
+  if (!apiKey) return { success: false, error: "Resend API key not configured" };
+
+  try {
+    const res = await fetch("https://api.resend.com/audiences", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: options.name }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) return { success: false, error: data.message || `HTTP ${res.status}` };
+
+    return { success: true, audience: data };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * List all audiences
+ */
+export async function listAudiences(): Promise<{ success: boolean; audiences?: ResendAudience[]; error?: string }> {
+  const apiKey = await getSettingValue("resend_api_key");
+  if (!apiKey) return { success: false, error: "Resend API key not configured" };
+
+  try {
+    const res = await fetch("https://api.resend.com/audiences", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+
+    const data = await res.json();
+    if (!res.ok) return { success: false, error: data.message || `HTTP ${res.status}` };
+
+    return { success: true, audiences: data.data };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Add a contact to an audience
+ */
+export async function addContact(options: CreateContactOptions): Promise<{ success: boolean; contact?: ResendContact; error?: string }> {
+  const apiKey = await getSettingValue("resend_api_key");
+  if (!apiKey) return { success: false, error: "Resend API key not configured" };
+
+  try {
+    const body: Record<string, unknown> = {
+      email: options.email,
+      unsubscribed: options.unsubscribed || false,
+    };
+
+    if (options.firstName) body.first_name = options.firstName;
+    if (options.lastName) body.last_name = options.lastName;
+
+    const res = await fetch(`https://api.resend.com/audiences/${options.audienceId}/contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json();
+    if (!res.ok) return { success: false, error: data.message || `HTTP ${res.status}` };
+
+    return { success: true, contact: data };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Update contact subscription status
+ */
+export async function updateContactSubscription(audienceId: string, contactId: string, unsubscribed: boolean): Promise<{ success: boolean; error?: string }> {
+  const apiKey = await getSettingValue("resend_api_key");
+  if (!apiKey) return { success: false, error: "Resend API key not configured" };
+
+  try {
+    const res = await fetch(`https://api.resend.com/audiences/${audienceId}/contacts/${contactId}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ unsubscribed }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) return { success: false, error: data.message || `HTTP ${res.status}` };
+
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * List contacts in an audience
+ */
+export async function listContacts(audienceId: string): Promise<{ success: boolean; contacts?: ResendContact[]; error?: string }> {
+  const apiKey = await getSettingValue("resend_api_key");
+  if (!apiKey) return { success: false, error: "Resend API key not configured" };
+
+  try {
+    const res = await fetch(`https://api.resend.com/audiences/${audienceId}/contacts`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+
+    const data = await res.json();
+    if (!res.ok) return { success: false, error: data.message || `HTTP ${res.status}` };
+
+    return { success: true, contacts: data.data };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Remove a contact from an audience
+ */
+export async function removeContact(audienceId: string, contactId: string): Promise<{ success: boolean; error?: string }> {
+  const apiKey = await getSettingValue("resend_api_key");
+  if (!apiKey) return { success: false, error: "Resend API key not configured" };
+
+  try {
+    const res = await fetch(`https://api.resend.com/audiences/${audienceId}/contacts/${contactId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      return { success: false, error: data.message || `HTTP ${res.status}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
 // === DIGEST EMAIL ===
 
 export async function renderDigestHtml(data: DigestData): Promise<string> {

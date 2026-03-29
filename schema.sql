@@ -34,7 +34,8 @@ CREATE TABLE companies (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   killed_at     TIMESTAMPTZ,
-  kill_reason   TEXT
+  kill_reason   TEXT,
+  resend_audience_id TEXT        -- Resend Audiences API audience ID for this company's leads
 );
 
 -- Agent cycles: one row per nightly orchestrator run per company
