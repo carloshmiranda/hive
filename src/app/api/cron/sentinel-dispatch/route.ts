@@ -526,10 +526,9 @@ async function executeSentinelDispatch(request: Request) {
 
     // Also scan backlog for pr_open items not covered by the approvals table
     const backlogOpenPrs = await sql`
-      SELECT b.id, b.company_id, b.title, b.pr_number, b.pr_url,
-             COALESCE(c.slug, '_hive') as slug
+      SELECT b.id, b.title, b.pr_number, b.pr_url,
+             '_hive' as slug
       FROM hive_backlog b
-      LEFT JOIN companies c ON c.id = b.company_id
       WHERE b.status = 'pr_open' AND b.pr_number IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM agent_actions aa
