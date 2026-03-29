@@ -3,6 +3,9 @@
 -- Run against Neon Postgres. This is the single source of truth.
 -- ============================================================================
 
+-- Enable pgvector extension for semantic search
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Companies: each venture Hive manages
 CREATE TABLE companies (
   id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -150,7 +153,8 @@ CREATE TABLE playbook (
   content_language TEXT DEFAULT NULL, -- NULL = universal/language-agnostic, 'en'/'pt' for language-specific
   last_referenced_at TIMESTAMPTZ,
   reference_count INTEGER DEFAULT 0,
-  relevant_agents TEXT[] DEFAULT '{}'  -- agent roles this entry is relevant to (empty = all agents)
+  relevant_agents TEXT[] DEFAULT '{}',  -- agent roles this entry is relevant to (empty = all agents)
+  embedding     vector(1536)     -- semantic embeddings for similarity search
 );
 
 -- Backfill: UPDATE playbook p SET content_language = c.content_language FROM companies c WHERE p.source_company_id = c.id AND p.source_company_id IS NOT NULL AND c.content_language IS NOT NULL;
@@ -253,6 +257,7 @@ CREATE INDEX idx_approvals_pending ON approvals(status) WHERE status = 'pending'
 CREATE INDEX idx_metrics_company_date ON metrics(company_id, date DESC);
 CREATE INDEX idx_playbook_domain ON playbook(domain);
 CREATE INDEX idx_playbook_agents ON playbook USING GIN(relevant_agents);
+CREATE INDEX idx_playbook_embedding ON playbook USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 CREATE INDEX idx_infra_company ON infra(company_id);
 CREATE INDEX idx_directives_open ON directives(status) WHERE status = 'open';
 CREATE INDEX idx_imports_company ON imports(company_id);

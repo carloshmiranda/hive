@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import { invalidateCompanyMetrics } from "@/lib/redis-cache";
+import { generatePlaybookEmbedding } from "@/lib/embeddings";
 
 /**
  * Convergent Data Structures
@@ -293,11 +294,24 @@ export async function upsertPlaybookEntry(entry: PlaybookEntry): Promise<string>
 
   if (!conflictingEntry) {
     // No conflict, insert new entry
+    let embedding = null;
+    try {
+      const embeddingArray = await generatePlaybookEmbedding(
+        entry.insight,
+        entry.domain,
+        entry.evidence
+      );
+      embedding = `[${embeddingArray.join(',')}]`;
+    } catch (error) {
+      console.warn("Failed to generate embedding for playbook entry:", error);
+      // Continue without embedding - can be generated later
+    }
+
     const [newEntry] = await sql`
-      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
+      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language, embedding)
       VALUES (${entry.source_company_id || null}, ${entry.domain}, ${entry.insight},
               ${entry.evidence ? JSON.stringify(entry.evidence) : null}, ${entry.confidence},
-              ${entry.content_language || null})
+              ${entry.content_language || null}, ${embedding ? `${embedding}::vector` : null})
       RETURNING id
     `;
     return newEntry.id;
@@ -306,11 +320,24 @@ export async function upsertPlaybookEntry(entry: PlaybookEntry): Promise<string>
   // Found conflicting entry - apply highest-confidence-wins
   if (entry.confidence > conflictingEntry.confidence) {
     // New entry has higher confidence - supersede the old one
+    let embedding = null;
+    try {
+      const embeddingArray = await generatePlaybookEmbedding(
+        entry.insight,
+        entry.domain,
+        entry.evidence
+      );
+      embedding = `[${embeddingArray.join(',')}]`;
+    } catch (error) {
+      console.warn("Failed to generate embedding for playbook entry:", error);
+      // Continue without embedding - can be generated later
+    }
+
     const [newEntry] = await sql`
-      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
+      INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language, embedding)
       VALUES (${entry.source_company_id || null}, ${entry.domain}, ${entry.insight},
               ${entry.evidence ? JSON.stringify(entry.evidence) : null}, ${entry.confidence},
-              ${entry.content_language || null})
+              ${entry.content_language || null}, ${embedding ? `${embedding}::vector` : null})
       RETURNING id
     `;
 
