@@ -42,14 +42,14 @@ export async function POST(req: NextRequest) {
       // API stats endpoint
       {
         path: "src/app/api/stats/route.ts",
-        content: `import { neon } from "@neondatabase/serverless";
+        content: `import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/stats — returns today's pageview, pricing click, and affiliate click counts
 // Called by Hive's metrics cron to collect validation metrics across companies
 export async function GET() {
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
   const today = new Date().toISOString().split("T")[0];
 
   const [[views], [pricing], [affiliate]] = await Promise.all([
@@ -70,7 +70,7 @@ export async function GET() {
 // POST /api/stats — increment pageview counter (called from middleware)
 export async function POST(req: Request) {
   const { path = "/" } = await req.json().catch(() => ({ path: "/" }));
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
 
   await sql\`
     INSERT INTO page_views (date, path, views)
@@ -85,7 +85,7 @@ export async function POST(req: Request) {
       // Pricing intent tracking endpoint
       {
         path: "src/app/api/pricing-intent/route.ts",
-        content: `import { neon } from "@neondatabase/serverless";
+        content: `import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -96,7 +96,7 @@ export async function POST(req: Request) {
     return Response.json({ ok: false, error: "tier required" }, { status: 400 });
   }
 
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
   await sql\`
     INSERT INTO pricing_clicks (tier, source_path)
     VALUES (\${tier}, \${source_path})
@@ -109,7 +109,7 @@ export async function POST(req: Request) {
       // Affiliate click tracking endpoint
       {
         path: "src/app/api/affiliate-click/route.ts",
-        content: `import { neon } from "@neondatabase/serverless";
+        content: `import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -120,7 +120,7 @@ export async function POST(req: Request) {
     return Response.json({ ok: false, error: "link_id required" }, { status: 400 });
   }
 
-  const sql = neon(process.env.DATABASE_URL!);
+  const sql = getDb();
   await sql\`
     INSERT INTO affiliate_clicks (link_id, destination_url, source_path)
     VALUES (\${link_id}, \${destination_url}, \${source_path})
