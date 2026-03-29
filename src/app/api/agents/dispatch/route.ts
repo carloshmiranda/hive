@@ -141,6 +141,40 @@ export async function POST(req: NextRequest) {
     // Add company_id to Sentry tags now that we have it
     setSentryTags({ company_id: company.id });
 
+    // Per-agent hourly rate limit: prevent dispatch burst patterns
+    // Brain agents: 3/hr, Workers: 8/hr (defense-in-depth on top of specific dedup guards)
+    const isWorkerAgent = WORKER_AGENTS.includes(agentName);
+    const hourlyThreshold = isWorkerAgent ? 8 : 3; // Workers: 8/hr, Brain agents: 3/hr
+
+    const [hourlyCount] = await sql`
+      SELECT COUNT(*)::int as dispatch_count FROM agent_actions
+      WHERE agent = ${agentName}
+      AND company_id = ${company.id}
+      AND started_at > NOW() - INTERVAL '1 hour'
+      AND status IN ('running', 'success', 'failed')  -- All dispatch attempts
+    `.catch(() => [{ dispatch_count: 0 }]);
+
+    if (hourlyCount.dispatch_count >= hourlyThreshold) {
+      // Log the rate limit hit for debugging
+      await sql`
+        INSERT INTO agent_actions (company_id, agent, action_type, status, description, started_at, finished_at)
+        VALUES (${company.id}, ${agentName}, 'dispatch_attempt', 'rate_limited',
+          ${`Per-agent hourly rate limit exceeded: ${hourlyCount.dispatch_count}/${hourlyThreshold} dispatches in last hour for ${company.slug}`},
+          NOW(), NOW())
+      `.catch(() => {});
+
+      console.log(`[dispatch] Rate limit: ${agentName} for ${company.slug} blocked - ${hourlyCount.dispatch_count}/${hourlyThreshold} dispatches in last hour`);
+      return json({
+        ok: true,
+        skipped: true,
+        reason: "rate_limited",
+        agent: agentName,
+        company: company.slug,
+        hourly_count: hourlyCount.dispatch_count,
+        threshold: hourlyThreshold
+      });
+    }
+
     // 2. Load context: latest CEO plan, metrics, research, playbook
     const [latestCycle] = await sql`
       SELECT id, cycle_number, ceo_plan FROM cycles

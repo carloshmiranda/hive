@@ -1013,6 +1013,39 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "engineer_busy", running_id: running.id });
   }
 
+  // Per-agent hourly rate limit: prevent dispatch burst patterns
+  // Brain agents: 3/hr, Workers: 8/hr (defense-in-depth on top of specific dedup guards)
+  const agentToDispatch = 'engineer'; // This route dispatches engineer for Hive work
+  const isWorkerAgent = ['growth', 'outreach', 'ops'].includes(agentToDispatch);
+  const hourlyThreshold = isWorkerAgent ? 8 : 3; // Workers: 8/hr, Brain agents: 3/hr
+
+  const [hourlyCount] = await sql`
+    SELECT COUNT(*)::int as dispatch_count FROM agent_actions
+    WHERE agent = ${agentToDispatch}
+    AND company_id IS NULL  -- Hive work only
+    AND started_at > NOW() - INTERVAL '1 hour'
+    AND status IN ('running', 'success', 'failed')  -- All dispatch attempts
+  `.catch(() => [{ dispatch_count: 0 }]);
+
+  if (hourlyCount.dispatch_count >= hourlyThreshold) {
+    // Log the rate limit hit for debugging
+    await sql`
+      INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
+      VALUES (${agentToDispatch}, 'dispatch_attempt', 'rate_limited',
+        ${`Per-agent hourly rate limit exceeded: ${hourlyCount.dispatch_count}/${hourlyThreshold} dispatches in last hour`},
+        NOW(), NOW())
+    `.catch(() => {});
+
+    console.log(`[backlog] Rate limit: ${agentToDispatch} blocked - ${hourlyCount.dispatch_count}/${hourlyThreshold} dispatches in last hour`);
+    return json({
+      dispatched: false,
+      reason: "rate_limited",
+      agent: agentToDispatch,
+      hourly_count: hourlyCount.dispatch_count,
+      threshold: hourlyThreshold
+    });
+  }
+
   // Stale dispatch cleanup: items stuck in 'dispatched' for >30 min
   // with no Engineer run picking them up — reset to ready so they can be retried.
   // This prevents items from blocking the cascade indefinitely.
