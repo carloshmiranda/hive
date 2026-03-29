@@ -429,6 +429,11 @@ export async function POST(req: Request) {
     }
 
     if (completed_status === "success") {
+      // Update completion percentage and reset work stealing state on success
+      const { updateTaskCompletion, resetTaskStealingState } = await import("@/lib/work-stealing");
+      await updateTaskCompletion(sql, completed_id, 100);
+      await resetTaskStealingState(sql, completed_id);
+
       // Update parent's decomposition_context when a sub-task completes (ADR-031 Phase 2)
       const [completedItem] = await sql`
         SELECT parent_id, title, description FROM hive_backlog WHERE id = ${completed_id}
@@ -551,7 +556,12 @@ export async function POST(req: Request) {
       const branchName = body.branch || "";
       const continuationTurns = Math.min(Math.ceil(maxTurns * 1.5), 75);
 
-      console.log(`[backlog] Partial completion for "${completed_id}" — ${turnsUsed}/${maxTurns} turns, continuing with ${continuationTurns}. Last commit: ${lastCommit}`);
+      // Estimate completion percentage based on turns used and progress
+      const { updateTaskCompletion } = await import("@/lib/work-stealing");
+      const estimatedCompletion = Math.min(Math.round((turnsUsed / maxTurns) * 60), 75); // Max 75% for partial
+      await updateTaskCompletion(sql, completed_id, estimatedCompletion);
+
+      console.log(`[backlog] Partial completion for "${completed_id}" — ${turnsUsed}/${maxTurns} turns (${estimatedCompletion}% complete), continuing with ${continuationTurns}. Last commit: ${lastCommit}`);
 
       // Mark as in_progress (not failed) — this is a continuation, not a retry
       await sql`
@@ -679,6 +689,15 @@ export async function POST(req: Request) {
       const maxAttempts = isMaxTurns ? 1 : 3;
       if (item && attempt < maxAttempts && !continued) {
         trackFailedBacklogItem(item.id, attempt);
+      }
+
+      // Work stealing: mark task as stealable after 2 failures
+      if (item && !continued) {
+        const { markTaskStealableOnFailure } = await import("@/lib/work-stealing");
+        const wasMarkedStealable = await markTaskStealableOnFailure(sql, item.id, "engineer");
+        if (wasMarkedStealable) {
+          console.log(`[backlog] Task ${item.id} ("${item.title}") marked as stealable after ${attempt} failures`);
+        }
       }
 
       // On max_turns failure: LLM-assisted decompose if complexity is M or L
@@ -1125,8 +1144,22 @@ export async function POST(req: Request) {
     backlogItems = await sql`
       SELECT * FROM hive_backlog
       WHERE (
-        status IN ('ready', 'approved')
-        OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
+        -- Regular ready/approved tasks
+        (
+          status IN ('ready', 'approved')
+          OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
+        )
+        -- OR stealable tasks that are available for claiming
+        OR (
+          is_stealable = true
+          AND status IN ('ready', 'approved')
+          AND completion_percentage <= 75
+          AND (
+            claimed_by IS NULL
+            OR claimed_at < NOW() - INTERVAL '10 minutes'
+            OR (contest_window_until IS NOT NULL AND contest_window_until < NOW())
+          )
+        )
       )
       AND NOT (
         notes ILIKE '%[attempt %]%'
@@ -1140,6 +1173,8 @@ export async function POST(req: Request) {
       AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
            OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
       ORDER BY
+        -- Prioritize stealable tasks (work stealing optimization)
+        CASE WHEN is_stealable = true THEN 0 ELSE 1 END,
         CASE WHEN spec IS NOT NULL AND spec->>'approach' IS NOT NULL THEN 0 ELSE 1 END,
         CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
         created_at ASC
@@ -1928,6 +1963,17 @@ export async function POST(req: Request) {
         NOW())
       RETURNING id
     `.catch(() => [{ id: null }]);
+
+    // Work stealing: claim task if it's stealable
+    if (topItem.is_stealable) {
+      const { claimStealableTask } = await import("@/lib/work-stealing");
+      const claimResult = await claimStealableTask(sql, topItem.id, "engineer");
+      if (!claimResult.success) {
+        console.warn(`[backlog] Failed to claim stealable task ${topItem.id}: ${claimResult.reason}`);
+        return json({ dispatched: false, reason: "claim_failed", item_id: topItem.id, claim_error: claimResult.reason });
+      }
+      console.log(`[backlog] Successfully claimed stealable task ${topItem.id} for Engineer`);
+    }
 
     // Mark as dispatched with race condition protection + link dispatch_id
     const updateResult = await sql`
