@@ -63,10 +63,23 @@ export async function POST(req: Request) {
   const rejected: { title: string; phase: string | null; violations: string[] }[] = [];
 
   for (const item of items) {
-    const { company_id, category, title, description, priority, source, prerequisites, acceptance } = item;
+    const { company_id, category, title, description, priority, source, prerequisites, acceptance,
+      // Structured spec fields from CEO engineering_tasks
+      files_allowed, files_forbidden, acceptance_criteria, specialist, complexity, approach,
+    } = item;
     if (!company_id || !category || !title || !description) {
       continue;
     }
+
+    // Build structured spec from CEO plan fields (if provided)
+    const spec = (files_allowed || files_forbidden || acceptance_criteria || specialist || complexity || approach) ? {
+      ...(acceptance_criteria ? { acceptance_criteria: Array.isArray(acceptance_criteria) ? acceptance_criteria : [acceptance_criteria] } : {}),
+      ...(files_allowed ? { files_allowed: Array.isArray(files_allowed) ? files_allowed : [files_allowed] } : {}),
+      ...(files_forbidden ? { files_forbidden: Array.isArray(files_forbidden) ? files_forbidden : [files_forbidden] } : {}),
+      ...(approach ? { approach: Array.isArray(approach) ? approach : [approach] } : {}),
+      ...(specialist ? { specialist } : {}),
+      ...(complexity ? { complexity: complexity === "complex" ? "M" : complexity === "mechanical" ? "S" : complexity } : {}),
+    } : null;
 
     // Phase gate: reject tasks that violate the company's validation phase
     const gate = await validateTaskAgainstPhase(sql, company_id, title, description);
@@ -90,12 +103,12 @@ export async function POST(req: Request) {
     // CEO-sourced tasks are auto-approved (already validated by phase gate above)
     const taskStatus = (source || "ceo") === "ceo" ? "approved" : "proposed";
     const [task] = await sql`
-      INSERT INTO company_tasks (company_id, category, title, description, priority, source, prerequisites, acceptance, status)
+      INSERT INTO company_tasks (company_id, category, title, description, priority, source, prerequisites, acceptance, status, spec)
       VALUES (
         ${company_id}, ${category}, ${title}, ${description},
         ${priority ?? 2}, ${source || "ceo"},
         ${prerequisites || []}, ${acceptance || null},
-        ${taskStatus}
+        ${taskStatus}, ${spec ? JSON.stringify(spec) : null}::jsonb
       )
       RETURNING *
     `;

@@ -353,7 +353,7 @@ async function buildContext(sql: any, company: any) {
       `.catch(() => [])
     ),
     sql`
-      SELECT id, title, description, priority, acceptance, status
+      SELECT id, title, description, priority, acceptance, status, spec
       FROM company_tasks
       WHERE company_id = ${company.id} AND category = 'engineering'
         AND status IN ('proposed', 'approved')
@@ -380,7 +380,7 @@ async function buildContext(sql: any, company: any) {
   const validation = computeValidationScore(businessType, metrics, company.created_at);
 
   // Phase gate: filter out tasks that violate the current validation phase
-  type Task = { id: string; title: string; description: string; priority: number; acceptance: string; status: string };
+  type Task = { id: string; title: string; description: string; priority: number; acceptance: string; status: string; spec: Record<string, unknown> | null };
   let filteredTasks = tasks as Task[];
   const gatedTasks: string[] = [];
   if (validation.forbidden && validation.forbidden.length > 0) {
@@ -395,6 +395,27 @@ async function buildContext(sql: any, company: any) {
     }
   }
 
+  // Enrich tasks with spec data for Engineer consumption
+  const enrichedTasks = filteredTasks.map(task => {
+    const spec = task.spec as Record<string, unknown> | null;
+    return {
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      acceptance: task.acceptance,
+      status: task.status,
+      // Spread spec fields directly for backward-compatible Engineer consumption
+      ...(spec?.acceptance_criteria ? { acceptance_criteria: spec.acceptance_criteria } : {}),
+      ...(spec?.files_allowed ? { files_allowed: spec.files_allowed } : {}),
+      ...(spec?.files_forbidden ? { files_forbidden: spec.files_forbidden } : {}),
+      ...(spec?.approach ? { approach: spec.approach } : {}),
+      ...(spec?.complexity ? { complexity: spec.complexity } : {}),
+      ...(spec?.estimated_turns ? { estimated_turns: spec.estimated_turns } : {}),
+      ...(spec?.specialist ? { specialist: spec.specialist } : {}),
+    };
+  });
+
   return {
     description: company.description,
     business_type: businessType,
@@ -406,7 +427,7 @@ async function buildContext(sql: any, company: any) {
     research,
     proposal: proposal[0]?.context?.proposal || null,
     playbook: (playbook as any[]).map((p: { domain: string; insight: string }) => `${p.domain}: ${p.insight}`),
-    engineering_tasks: filteredTasks,
+    engineering_tasks: enrichedTasks,
     ...(gatedTasks.length > 0 ? { phase_gated_tasks: gatedTasks } : {}),
     metrics: metrics.slice(0, 7),
     hive_capabilities: getCapabilitySummary(),
