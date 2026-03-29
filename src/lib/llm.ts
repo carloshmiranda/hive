@@ -396,7 +396,24 @@ async function callOpenRouter(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`OpenRouter HTTP ${res.status}: ${body.slice(0, 300)}`);
+
+    // Try to parse error response to extract which specific model failed
+    let failedModel = null;
+    try {
+      const errorData = JSON.parse(body);
+      // Check if OpenRouter provides model information in error response
+      if (errorData.model) {
+        failedModel = errorData.model;
+      } else if (errorData.error?.model) {
+        failedModel = errorData.error.model;
+      }
+    } catch {
+      // If we can't parse the error response, we'll fall back to penalizing all models
+    }
+
+    const error = new Error(`OpenRouter HTTP ${res.status}: ${body.slice(0, 300)}`);
+    (error as any).failedModel = failedModel;
+    throw error;
   }
 
   const data = await res.json();
@@ -557,13 +574,21 @@ export async function callLLM(
         : `fallback:${result.model} (${availableModels.length} models in chain)`,
     };
   } catch (error: any) {
-    // Record failure for primary models only (don't penalize entire dynamic pool)
-    const primaries = AGENT_PRIMARIES[agent]?.models ?? [];
-    for (const model of primaries) {
-      recordProviderFailure(`openrouter:${model}`);
+    // Check if OpenRouter told us which specific model failed
+    if (error.failedModel) {
+      // Record failure for the specific model that OpenRouter identified as failed
+      recordProviderFailure(`openrouter:${error.failedModel}`);
+      console.warn(`[circuit-breaker] Recording failure for specific model: ${error.failedModel}`);
+    } else {
+      // Fallback: if we don't know which specific model failed, record failure for all models
+      // that were passed to OpenRouter since any of them could have failed
+      for (const model of availableModels) {
+        recordProviderFailure(`openrouter:${model}`);
+      }
+      console.warn(`[circuit-breaker] No specific model failure info, recording failure for all ${availableModels.length} models in chain`);
     }
 
-    throw new Error(`All OpenRouter models failed for agent ${agent}. Chain: ${availableModels.length} models (primaries: ${primaries.slice(0, 3).join(", ")}). Last error: ${error.message}`);
+    throw new Error(`All OpenRouter models failed for agent ${agent}. Chain: ${availableModels.length} models (primaries: ${AGENT_PRIMARIES[agent]?.models.slice(0, 3).join(", ") ?? "none"}). Last error: ${error.message}`);
   }
 }
 
@@ -601,12 +626,8 @@ export async function callLLMStructuredResponse(
       structured: result.structured,
     };
   } catch (error: any) {
-    // Record failure for primary models only
-    const primaries = AGENT_PRIMARIES[agent]?.models ?? [];
-    for (const model of primaries) {
-      recordProviderFailure(`openrouter:${model}`);
-    }
-
+    // Don't record additional failures here - callLLMStructured already recorded
+    // specific failures for each model it tried, which is more accurate
     throw new Error(`AI SDK OpenRouter models failed for agent ${agent}. Last error: ${error.message}`);
   }
 }
