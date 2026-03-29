@@ -170,6 +170,32 @@ export async function invalidateCompanyList(): Promise<void> {
   await cacheInvalidatePattern(COMPANIES_PREFIX + "*");
 }
 
+// --- Company metrics cache ---
+
+const METRICS_TTL = 21600; // 6 hours — aligned with metrics collection schedule
+const METRICS_PREFIX = "met:"; // met:{company_slug}
+
+export async function cachedCompanyMetrics<T>(
+  companySlug: string,
+  fetcher: () => Promise<T>
+): Promise<T> {
+  const cacheKey = METRICS_PREFIX + companySlug;
+  const cached = await cacheGet<T>(cacheKey);
+  if (cached !== null && cached !== undefined) return cached;
+
+  const value = await fetcher();
+  await cacheSet(cacheKey, value, METRICS_TTL);
+  return value;
+}
+
+export async function invalidateCompanyMetrics(companySlug: string): Promise<void> {
+  await cacheDel(METRICS_PREFIX + companySlug);
+}
+
+export async function invalidateAllMetrics(): Promise<void> {
+  await cacheInvalidatePattern(METRICS_PREFIX + "*");
+}
+
 /**
  * Health check for cache availability.
  */

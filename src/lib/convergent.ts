@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/db";
+import { invalidateCompanyMetrics } from "@/lib/redis-cache";
 
 /**
  * Convergent Data Structures
@@ -233,6 +234,18 @@ export async function updateMetrics(update: MetricUpdate): Promise<void> {
       ON CONFLICT (company_id, date) DO UPDATE SET
         waitlist_total = ${update.waitlist_total}
     `;
+  }
+
+  // Invalidate metrics cache for this company
+  try {
+    const company = await sql`SELECT slug FROM companies WHERE id = ${company_id} LIMIT 1`;
+    if (company.length > 0) {
+      await invalidateCompanyMetrics(company[0].slug);
+      await invalidateCompanyMetrics(`${company[0].slug}:growth`); // Invalidate growth cache too
+    }
+  } catch (err) {
+    // Cache invalidation failure should not break the metrics update
+    console.warn(`Failed to invalidate metrics cache for company ${company_id}:`, err);
   }
 }
 
