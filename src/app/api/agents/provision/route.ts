@@ -181,8 +181,17 @@ export async function POST(req: NextRequest) {
       const dbUrl = await getEnvVar(vercelProjectId, "DATABASE_URL");
       if (dbUrl) {
         connectionUri = dbUrl;
+
+        // Verify pooled connection (should contain '-pooler' in hostname)
+        const isPooled = dbUrl.includes('-pooler');
+        if (!isPooled) {
+          console.warn(`[provision] ${company_slug}: DATABASE_URL may not use pooled connections (missing '-pooler' in hostname)`);
+          results.env_vars = { DATABASE_URL: "auto_injected", pooled: false, warning: "non_pooled_connection" };
+        } else {
+          results.env_vars = { DATABASE_URL: "auto_injected", pooled: true };
+        }
+
         const schemaOk = await applySchema(dbUrl);
-        results.env_vars = { DATABASE_URL: "auto_injected" };
         (results.neon as Record<string, unknown>).schema_applied = schemaOk;
       } else {
         results.env_vars = { DATABASE_URL: "pending_marketplace_injection" };
