@@ -682,8 +682,11 @@ async function ceoContext(sql: any, company: any) {
   const growthRates = calculateWoWGrowthRates(metrics);
   const growthSummary = generateGrowthSummary(growthRates);
 
-  // Add portfolio context with current company highlighted
-  const portfolioContext = await enrichPortfolioWithContext(sql, portfolioData, company.id);
+  // Add portfolio context with current company highlighted (cached with 5-min TTL)
+  const portfolioContext = await cachedCompanyList(
+    () => enrichPortfolioWithContext(sql, portfolioData, company.id),
+    `portfolio-context-${company.id}-${Math.floor(Date.now() / 300000)}`
+  );
 
   // Check for CEO score kill evaluation trigger
   const ceoScoreKillTrigger = checkCEOScoreKillTrigger(recentCycles.map((c: { cycle_number: number; score: string }) => ({
@@ -914,20 +917,54 @@ async function enrichPortfolioWithContext(sql: any, portfolioData: any, currentC
     cycleMap.set(cycle.company_id, cycle.cycle_count);
   }
 
+  // Get all company IDs for batch query
+  const companyIds = companies.map((company: any) => company.id);
+
+  // Batch query for all companies' recent metrics (fixes N+1 query)
+  const allCompanyMetrics = companyIds.length > 0
+    ? await sql`
+        SELECT
+          company_id,
+          date,
+          page_views,
+          signups,
+          waitlist_signups,
+          waitlist_total,
+          revenue,
+          mrr,
+          customers,
+          pricing_page_views,
+          pricing_cta_clicks,
+          affiliate_clicks,
+          affiliate_revenue
+        FROM (
+          SELECT *,
+                 ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY date DESC) as rn
+          FROM metrics
+          WHERE company_id = ANY(${companyIds})
+        ) ranked_metrics
+        WHERE rn <= 14
+        ORDER BY company_id, date DESC
+      `.catch(() => [])
+    : [];
+
+  // Group metrics by company for validation score calculation
+  const companyMetricsMap = new Map();
+  for (const metric of allCompanyMetrics) {
+    if (!companyMetricsMap.has(metric.company_id)) {
+      companyMetricsMap.set(metric.company_id, []);
+    }
+    companyMetricsMap.get(metric.company_id).push(metric);
+  }
+
   // Enrich companies with metrics and validation scores
   const enrichedCompanies = [];
   for (const company of companies) {
     const metric = metricsMap.get(company.id) || {};
     const businessType = normalizeBusinessType(company.company_type);
 
-    // Get recent metrics for validation score calculation
-    const companyMetrics = await sql`
-      SELECT date, page_views, signups, waitlist_signups, waitlist_total,
-        revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
-        affiliate_clicks, affiliate_revenue
-      FROM metrics WHERE company_id = ${company.id}
-      ORDER BY date DESC LIMIT 14
-    `.catch(() => []);
+    // Get recent metrics for validation score calculation from cached batch query
+    const companyMetrics = companyMetricsMap.get(company.id) || [];
 
     const validation = computeValidationScore(businessType, companyMetrics, company.created_at);
 
