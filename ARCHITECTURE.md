@@ -482,6 +482,28 @@ Errors normalized (strip UUIDs, timestamps, URLs) and grouped into patterns via 
 
 ---
 
+## MCP Tooling & External Integrations
+
+Hive uses **13+ MCP (Model Context Protocol) tools** for agent orchestration, metrics querying, cross-company learning, and per-company MCP servers. MCP tools enable agents to interact with external services and databases through standardized interfaces.
+
+### Current MCP Surface Area
+
+- **Agent orchestration controls**: Dispatch triggers, health gates, approval workflows
+- **Metrics querying**: Company stats, validation scores, portfolio analytics
+- **Cross-company learning**: Playbook entries, error patterns, successful strategies
+- **Per-company MCP servers**: Company-specific tools for content, SEO, customer data
+
+### MCP Expansion Guidelines
+
+When expanding Hive's MCP tooling surface area, reference the **mcp-builder skill** for:
+- **API design best practices**: Tool naming conventions, response formatting, error handling
+- **TypeScript MCP SDK patterns**: Project structure, schema validation, testing approaches
+- **Testing and deployment**: Quality checklist, MCP Inspector validation, evaluation creation
+
+The mcp-builder skill provides comprehensive guidance for creating high-quality MCP servers that enable agents to accomplish real-world tasks effectively.
+
+---
+
 ## Provisioning a New Company
 
 When `gate_type='new_company'` is approved:
