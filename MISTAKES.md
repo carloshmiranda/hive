@@ -54,6 +54,15 @@
 
 ---
 
+### 2026-03-29 Pre-execution guard `skip=true` inflated circuit breaker with false-positive `workflow_crash`
+**What happened:** System stalled completely — all 4 circuit breakers open (engineer systemic + engineer/senhorio + engineer/verdedesk + healer/flolio), 139 blocked backlog items, 0 dispatches for 5+ hours.
+**Root cause:** The pre-execution guard in `hive-engineer.yml` sets `skip=true` when `estimated_turns > 28`, causing the Claude agent step to be skipped (outcome=`"skipped"`). The callback step (`Chain dispatch next work item`) runs unconditionally (`if: always()`). It found no execution output file and reported `STATUS="failed"` with `workflow_crash` — inflating the circuit breaker counter on every guard-skipped run. 18 false-positive failures had accumulated on the systemic breaker alone.
+**Fix applied:** Added early exit in the callback step: `if [ "$AGENT_OUTCOME" = "skipped" ]; then exit 0; fi` after reading `AGENT_OUTCOME`. Guard-skipped runs now exit cleanly without touching the circuit breaker. Committed as `c28afcb`.
+**Prevention:** Any workflow step with `if: always()` that uses agent execution output **must** handle `"skipped"` as a valid non-failure outcome. Pre-execution guards that prevent the agent from running must either (a) have their own callback path or (b) the unconditional callback must detect and ignore them. Pattern: check `$AGENT_OUTCOME` before doing any failure reporting.
+**Affects:** hive
+
+---
+
 ### 2026-03-28 Schema-map drift causes cascading CI failures across all PRs
 **What happened:** All 4 open PRs failed CI with SQL linter errors. The linter validated against a stale schema-map that was missing columns added by recent migrations (parent_id, decomposition_context, github_issue_number, etc.). Every PR branch inherited these false failures from main.
 **Root cause:** Schema-map generation (`scripts/generate-schema-map.ts`) must be run after every schema.sql change, but this wasn't enforced. CI runs the linter against the checked-in schema-map, not the live database.
