@@ -981,6 +981,12 @@ export async function POST(req: Request) {
     AND started_at < NOW() - INTERVAL '30 minutes'
   `.catch(() => {});
 
+  // PR review runs on every dispatch call — even when Engineer is busy.
+  // PRs are independent of the Engineer queue; no reason to delay them.
+  if (!completed_id) {
+    await reviewAndMergeOpenPRs(sql);
+  }
+
   // Check for running Hive Engineer jobs (dedup)
   const [running] = await sql`
     SELECT id FROM agent_actions
@@ -1005,12 +1011,6 @@ export async function POST(req: Request) {
     WHERE status = 'dispatched'
     AND dispatched_at < NOW() - INTERVAL '30 minutes'
   `.catch(() => {});
-
-  // PR review BEFORE the queue gate — attempt to merge/fix open PRs first,
-  // so the queue can self-clear instead of blocking indefinitely.
-  if (!completed_id) {
-    await reviewAndMergeOpenPRs(sql);
-  }
 
   // PR queue gate: don't pile up PRs that increase merge conflict risk.
   // If 3+ PRs are still open after review, force the system to clear its queue first.
