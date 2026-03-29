@@ -33,7 +33,9 @@ import {
 } from "@/lib/sentinel-helpers";
 import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
-import { invalidateCompanyList } from "@/lib/redis-cache";
+import { invalidateCompanyList, queueRebuild } from "@/lib/redis-cache";
+import { computeBacklogScore, detectBlockedAgents } from "@/lib/backlog-priority";
+import type { BacklogItem } from "@/lib/backlog-priority";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
 import { fetchRecentErrors, extractErrorPatterns, shouldDispatchHealer, createErrorSummary } from "@/lib/sentry-api";
 
@@ -1467,6 +1469,67 @@ async function executeSentinelDispatch(request: Request) {
         payload: { company: r.slug, priority_score: r.priority_score },
       });
       cycleDispatches++;
+    }
+
+    // ========================================================================
+    // REDIS QUEUE REBUILD
+    // ========================================================================
+    // Rebuild dispatch queue with fresh priority scores after Sentinel cycle
+    try {
+      const readyItems = await sql`
+        SELECT id, title, description, priority, category, notes, created_at
+        FROM hive_backlog
+        WHERE status IN ('ready', 'approved')
+        AND NOT (
+          notes ~ '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)'
+          AND dispatched_at IS NOT NULL
+          AND dispatched_at > NOW() - CASE
+            WHEN notes ~ '\\[attempt 3\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '24 hours'
+            WHEN notes ~ '\\[attempt 2\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '6 hours'
+            ELSE INTERVAL '2 hours'
+          END
+        )
+        AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)', 'g')) < 3
+      `.catch(() => []);
+
+      const queueItems = [];
+      const [totalCompanies] = await sql`SELECT COUNT(*)::int as count FROM companies WHERE lifecycle NOT IN ('killed', 'archived')`.catch(() => [{ count: 0 }]);
+      const [failureRateResult] = await sql`
+        SELECT COUNT(CASE WHEN status = 'failed' THEN 1 END)::FLOAT / NULLIF(COUNT(*)::FLOAT, 0) AS failure_rate
+        FROM agent_actions
+        WHERE finished_at > NOW() - INTERVAL '7 days'
+      `.catch(() => [{ failure_rate: 0 }]);
+      const overallRate = Number(failureRateResult?.failure_rate || 0);
+
+      for (const item of readyItems) {
+        // Quick scoring for queue rebuild (simplified version)
+        const blocksAgents = detectBlockedAgents(item.title, item.description || "");
+        const daysSinceCreated = Math.max(0, item.created_at ? (Date.now() - new Date(item.created_at).getTime()) / 86400000 : 0);
+        const previousAttempts = (item.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g)?.length || 0;
+
+        const scored = computeBacklogScore(item as BacklogItem, {
+          relatedErrors: 0,
+          companiesAffected: 0,
+          systemFailureRate: overallRate,
+          hasSimilarFailed: false,
+          blocksAgents,
+          daysSinceCreated,
+          totalCompanies: totalCompanies.count,
+          previousAttempts,
+        });
+
+        queueItems.push({
+          id: scored.id,
+          priority_score: scored.priority_score
+        });
+      }
+
+      if (queueItems.length > 0) {
+        await queueRebuild(queueItems);
+        console.log(`[sentinel-dispatch] Redis queue rebuilt with ${queueItems.length} items`);
+      }
+    } catch (e) {
+      console.warn(`[sentinel-dispatch] Failed to rebuild Redis queue: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     // ========================================================================
