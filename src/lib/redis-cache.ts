@@ -210,3 +210,66 @@ export async function cacheHealthCheck(): Promise<{ ok: boolean; latencyMs?: num
     return { ok: false };
   }
 }
+
+// --- Circuit breaker cache ---
+
+const CIRCUIT_BREAKER_TTL = 172800; // 48 hours (48 * 60 * 60)
+const CIRCUIT_BREAKER_PREFIX = "cb:"; // cb:{company}:{agent}
+
+/**
+ * Get circuit breaker state from Redis cache.
+ * Returns true if circuit is open (cached), false if closed, or null if not in cache.
+ */
+export async function getCachedCircuitState(
+  companyId: string,
+  agent: string
+): Promise<boolean | null> {
+  const cacheKey = `${CIRCUIT_BREAKER_PREFIX}${companyId}:${agent}`;
+  const cached = await cacheGet<boolean>(cacheKey);
+  return cached;
+}
+
+/**
+ * Set circuit breaker state in Redis cache with 48h TTL.
+ */
+export async function setCachedCircuitState(
+  companyId: string,
+  agent: string,
+  isOpen: boolean
+): Promise<void> {
+  const cacheKey = `${CIRCUIT_BREAKER_PREFIX}${companyId}:${agent}`;
+  await cacheSet(cacheKey, isOpen, CIRCUIT_BREAKER_TTL);
+}
+
+/**
+ * Batch set multiple circuit breaker states.
+ */
+export async function batchSetCircuitStates(
+  states: Array<{ companyId: string; agent: string; isOpen: boolean }>
+): Promise<void> {
+  const r = getRedis();
+  if (!r) return;
+
+  try {
+    // Use pipeline for efficient batch operations
+    const pipeline = r.pipeline();
+    for (const state of states) {
+      const cacheKey = `${CIRCUIT_BREAKER_PREFIX}${state.companyId}:${state.agent}`;
+      pipeline.set(cacheKey, state.isOpen, { ex: CIRCUIT_BREAKER_TTL });
+    }
+    await pipeline.exec();
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
+/**
+ * Invalidate circuit breaker cache for a specific company.
+ */
+export async function invalidateCircuitBreakers(companyId?: string): Promise<void> {
+  if (companyId) {
+    await cacheInvalidatePattern(`${CIRCUIT_BREAKER_PREFIX}${companyId}:*`);
+  } else {
+    await cacheInvalidatePattern(`${CIRCUIT_BREAKER_PREFIX}*`);
+  }
+}
