@@ -72,6 +72,13 @@ export default function CompanyDetailPage() {
   const [directive, setDirective] = useState("");
   const [sending, setSending] = useState(false);
   const [taskCategoryFilter, setTaskCategoryFilter] = useState("all");
+  const [unitEcon, setUnitEcon] = useState<{
+    ltv: number | null; cac: number | null; ltv_cac_ratio: number | null;
+    arpu: number | null; monthly_churn: number | null; avg_customer_lifespan_months: number | null;
+    total_ad_spend: number; total_revenue: number; total_customers: number;
+    cohorts: Array<{ month: string; customers_acquired: number; cumulative_revenue: number; avg_revenue_per_customer: number }>;
+    health: string; health_reason: string; kill_signal: boolean; kill_reason: string | null;
+  } | null>(null);
 
   const fetchData = useCallback(async () => {
     const res = await fetch(`/api/dashboard?slug=${slug}`);
@@ -86,6 +93,11 @@ export default function CompanyDetailPage() {
     setResearch(data.research || []);
     setTasks(data.tasks || []);
     setLoading(false);
+    // Fetch unit economics separately
+    fetch(`/api/metrics/unit-economics?slug=${slug}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.data) setUnitEcon(d.data); })
+      .catch(() => {});
   }, [slug]);
 
   useEffect(() => {
@@ -229,6 +241,72 @@ export default function CompanyDetailPage() {
               </div>
             );
           })()}
+        </div>
+      )}
+
+      {/* Unit Economics */}
+      {unitEcon && unitEcon.health !== 'insufficient_data' && (
+        <div style={{ marginBottom: 24 }}>
+          <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: "0 0 12px", fontWeight: 500 }}>Unit Economics</h3>
+          {/* Health badge */}
+          <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 8,
+            background: unitEcon.health === 'excellent' ? "var(--hive-green-bg)" : unitEcon.health === 'good' ? "var(--hive-green-bg)" : unitEcon.health === 'warning' ? "var(--hive-amber-bg)" : "var(--hive-red-bg)",
+            border: `1px solid ${unitEcon.health === 'excellent' || unitEcon.health === 'good' ? "var(--hive-green-border)" : unitEcon.health === 'warning' ? "var(--hive-amber-border)" : "var(--hive-red-border)"}`,
+          }}>
+            <span style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
+              color: unitEcon.health === 'excellent' || unitEcon.health === 'good' ? "var(--hive-green)" : unitEcon.health === 'warning' ? "var(--hive-amber)" : "var(--hive-red)",
+            }}>{unitEcon.health.toUpperCase()}</span>
+            <span style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginLeft: 8 }}>{unitEcon.health_reason}</span>
+          </div>
+          {/* Kill signal */}
+          {unitEcon.kill_signal && unitEcon.kill_reason && (
+            <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 8, background: "var(--hive-red-bg)", border: "1px solid var(--hive-red-border)" }}>
+              <span style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-red)" }}>KILL SIGNAL</span>
+              <span style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginLeft: 8 }}>{unitEcon.kill_reason}</span>
+            </div>
+          )}
+          {/* KPI cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 8 }}>
+            {[
+              { label: "LTV", value: unitEcon.ltv !== null ? `€${unitEcon.ltv.toFixed(0)}` : "—", highlight: (unitEcon.ltv || 0) > 0 },
+              { label: "CAC", value: unitEcon.cac !== null ? `€${unitEcon.cac.toFixed(0)}` : "—", highlight: false },
+              { label: "LTV/CAC", value: unitEcon.ltv_cac_ratio !== null ? `${unitEcon.ltv_cac_ratio.toFixed(1)}x` : "—",
+                highlight: (unitEcon.ltv_cac_ratio || 0) >= 3 },
+              { label: "ARPU/mo", value: unitEcon.arpu !== null ? `€${unitEcon.arpu.toFixed(2)}` : "—", highlight: (unitEcon.arpu || 0) > 0 },
+              { label: "Churn/mo", value: unitEcon.monthly_churn !== null ? `${(unitEcon.monthly_churn * 100).toFixed(1)}%` : "—", highlight: false },
+              { label: "Avg lifespan", value: unitEcon.avg_customer_lifespan_months !== null ? `${unitEcon.avg_customer_lifespan_months}mo` : "—", highlight: false },
+              { label: "Ad spend", value: `€${unitEcon.total_ad_spend.toFixed(0)}`, highlight: false },
+            ].map((m, i) => (
+              <div key={i} style={{ padding: "12px 14px", background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+                <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
+                <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginTop: 2 }}>{m.label}</div>
+              </div>
+            ))}
+          </div>
+          {/* Cohort table */}
+          {unitEcon.cohorts.length > 0 && (
+            <div style={{ marginTop: 12, overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "var(--hive-mono)" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--hive-border)" }}>
+                    {["Month", "New customers", "Cum. revenue", "Rev/customer"].map(h => (
+                      <th key={h} style={{ padding: "6px 10px", textAlign: "left", color: "var(--hive-text-secondary)", fontWeight: 500 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {unitEcon.cohorts.slice(-6).map(c => (
+                    <tr key={c.month} style={{ borderBottom: "1px solid var(--hive-border)" }}>
+                      <td style={{ padding: "6px 10px", color: "var(--hive-text)" }}>{c.month}</td>
+                      <td style={{ padding: "6px 10px", color: "var(--hive-text)" }}>{c.customers_acquired}</td>
+                      <td style={{ padding: "6px 10px", color: "var(--hive-text)" }}>€{c.cumulative_revenue.toFixed(0)}</td>
+                      <td style={{ padding: "6px 10px", color: c.avg_revenue_per_customer > 0 ? "var(--hive-green)" : "var(--hive-text-dim)" }}>€{c.avg_revenue_per_customer.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

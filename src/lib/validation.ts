@@ -3,6 +3,7 @@
 // Used by CEO agent to decide what work is appropriate each cycle
 
 import { normalizeType, getTypeDefinition } from "./business-types";
+import { computeUnitEconomics } from "./unit-economics";
 
 // Re-export for backwards compatibility
 export type BusinessType = string;
@@ -21,6 +22,9 @@ export interface MetricsRow {
   pricing_page_views?: number;
   affiliate_clicks?: number;
   affiliate_revenue?: number;
+  churn_rate?: number;
+  cac?: number;
+  ad_spend?: number;
 }
 
 export interface ValidationResult {
@@ -37,6 +41,13 @@ export interface ValidationResult {
   kill_evaluation_triggers: string[];
   revenue_readiness_score: number;
   revenue_readiness_message: string | null;
+  unit_economics: {
+    ltv: number | null;
+    cac: number | null;
+    ltv_cac_ratio: number | null;
+    health: string;
+    health_reason: string;
+  } | null;
 }
 
 // ─── Phase-specific rules ───
@@ -356,6 +367,27 @@ function checkKillEvaluationTriggers(type: BusinessType, metrics: MetricsRow[], 
     triggers.push(`LOW MONETIZATION READINESS: Score ${revenueReadinessScore}/100 after ${daysSinceCreation} days — poor fundamentals`);
   }
 
+  // 6. LTV/CAC ratio kill signal — losing money on acquisition
+  const hasAdSpend = metrics.some(m => (m.ad_spend || 0) > 0 || (m.cac || 0) > 0);
+  if (hasAdSpend) {
+    const econ = computeUnitEconomics({
+      metrics: metrics.map(m => ({
+        date: m.date,
+        revenue: m.revenue || 0,
+        mrr: m.mrr || 0,
+        customers: m.customers || 0,
+        churn_rate: m.churn_rate || 0,
+        cac: m.cac || 0,
+        ad_spend: m.ad_spend || 0,
+        signups: m.signups || 0,
+      })),
+      companyCreatedAt,
+    });
+    if (econ.kill_signal && econ.kill_reason) {
+      triggers.push(`UNIT ECONOMICS: ${econ.kill_reason}`);
+    }
+  }
+
   return { triggers };
 }
 
@@ -493,6 +525,22 @@ export function computeValidationScore(
   // Kill evaluation triggers (benchmark-based)
   const killEvaluationTriggers = checkKillEvaluationTriggers(type, metrics, companyCreatedAt, revenueReadiness.score);
 
+  // Unit economics (only compute when ad spend or CAC data exists)
+  const hasAcquisitionData = metrics.some(m => (m.ad_spend || 0) > 0 || (m.cac || 0) > 0);
+  const unitEcon = hasAcquisitionData ? computeUnitEconomics({
+    metrics: metrics.map(m => ({
+      date: m.date,
+      revenue: m.revenue || 0,
+      mrr: m.mrr || 0,
+      customers: m.customers || 0,
+      churn_rate: m.churn_rate || 0,
+      cac: m.cac || 0,
+      ad_spend: m.ad_spend || 0,
+      signups: m.signups || 0,
+    })),
+    companyCreatedAt,
+  }) : null;
+
   return {
     score,
     phase,
@@ -507,5 +555,12 @@ export function computeValidationScore(
     kill_evaluation_triggers: killEvaluationTriggers.triggers,
     revenue_readiness_score: revenueReadiness.score,
     revenue_readiness_message: revenueReadiness.message,
+    unit_economics: unitEcon ? {
+      ltv: unitEcon.ltv,
+      cac: unitEcon.cac,
+      ltv_cac_ratio: unitEcon.ltv_cac_ratio,
+      health: unitEcon.health,
+      health_reason: unitEcon.health_reason,
+    } : null,
   };
 }
