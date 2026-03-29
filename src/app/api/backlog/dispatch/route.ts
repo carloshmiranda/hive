@@ -12,6 +12,124 @@ import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
+// Agent success rate weighting for dispatch optimization
+interface AgentSuccessRate {
+  agent: string;
+  company_id: string | null;
+  company_slug: string | null;
+  success_rate: number;
+  total_actions: number;
+  recent_failures: number;
+}
+
+interface WeightedItem {
+  [key: string]: any;
+  success_rate_weight: number;
+  company_slug?: string | null;
+}
+
+// Get agent success rates per company from agent_actions table
+async function getAgentSuccessRates(sql: ReturnType<typeof getDb>): Promise<AgentSuccessRate[]> {
+  try {
+    const rates = await sql`
+      SELECT
+        a.agent,
+        a.company_id,
+        c.slug as company_slug,
+        COUNT(CASE WHEN a.status = 'success' THEN 1 END)::int as successes,
+        COUNT(CASE WHEN a.status = 'failed' THEN 1 END)::int as failures,
+        COUNT(*)::int as total_actions,
+        COALESCE(
+          COUNT(CASE WHEN a.status = 'success' THEN 1 END)::numeric /
+          NULLIF(COUNT(CASE WHEN a.status IN ('success', 'failed') THEN 1 END), 0),
+          0.5
+        ) as success_rate,
+        COUNT(CASE WHEN a.status = 'failed' AND a.finished_at > NOW() - INTERVAL '24 hours' THEN 1 END)::int as recent_failures
+      FROM agent_actions a
+      LEFT JOIN companies c ON a.company_id = c.id
+      WHERE a.agent = 'engineer'
+        AND a.finished_at > NOW() - INTERVAL '7 days'
+        AND a.status IN ('success', 'failed')
+      GROUP BY a.agent, a.company_id, c.slug
+      HAVING COUNT(CASE WHEN a.status IN ('success', 'failed') THEN 1 END) >= 2
+    `;
+    return rates as AgentSuccessRate[];
+  } catch (error) {
+    console.warn('[backlog] Failed to query agent success rates:', error);
+    return [];
+  }
+}
+
+// Apply success rate weighting to scored items
+async function applySuccessRateWeighting(
+  sql: ReturnType<typeof getDb>,
+  scoredItems: any[],
+  agentSuccessRates: AgentSuccessRate[]
+): Promise<WeightedItem[]> {
+  // Get company info for items that have companies
+  const companyItemIds = scoredItems
+    .filter(item => item.description && /company:|for \w+:/i.test(item.description))
+    .map(item => item.id);
+
+  let itemCompanyMap: Record<string, string> = {};
+  if (companyItemIds.length > 0) {
+    try {
+      const itemCompanies = await sql`
+        SELECT DISTINCT
+          b.id as backlog_id,
+          c.slug as company_slug
+        FROM hive_backlog b
+        CROSS JOIN companies c
+        WHERE b.id = ANY(${companyItemIds})
+          AND (
+            b.description ILIKE '%company: ' || c.slug || '%'
+            OR b.description ILIKE '%for ' || c.slug || ':%'
+          )
+      `;
+      itemCompanyMap = Object.fromEntries(
+        itemCompanies.map((ic: any) => [ic.backlog_id, ic.company_slug])
+      );
+    } catch (error) {
+      console.warn('[backlog] Failed to map items to companies:', error);
+    }
+  }
+
+  // Create success rate lookup
+  const successRateMap = new Map<string, number>();
+  for (const rate of agentSuccessRates) {
+    const key = rate.company_slug || 'hive_internal';
+    successRateMap.set(key, rate.success_rate);
+  }
+
+  return scoredItems.map(item => {
+    const companySlug = itemCompanyMap[item.id] || null;
+    let successRateWeight = 1.0;
+
+    if (companySlug) {
+      const successRate = successRateMap.get(companySlug);
+      if (successRate !== undefined) {
+        // Convert success rate to weight:
+        // 0.0-0.2 success rate → 0.0 weight (filtered out)
+        // 0.2-0.8 success rate → 0.2-0.8 weight (proportional penalty)
+        // 0.8+ success rate → 1.0 weight (no penalty)
+        if (successRate >= 0.8) {
+          successRateWeight = 1.0;
+        } else if (successRate >= 0.2) {
+          successRateWeight = successRate;
+        } else {
+          successRateWeight = 0.0; // Will be filtered out
+        }
+      }
+    }
+
+    return {
+      ...item,
+      success_rate_weight: successRateWeight,
+      company_slug: companySlug,
+    };
+  });
+}
+
 // Review and auto-merge all open hive/ PRs.
 // Extracted as a helper so it can run on both completion callbacks AND fresh dispatches.
 // This ensures existing PRs get merged even when the chain restarts from sentinel/manual kicks.
@@ -1348,6 +1466,22 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "no_scorable_items" });
   }
 
+  // =========================================================================
+  // Agent Success Rate Weighting: deprioritize items for companies where
+  // the engineer agent has poor success rates. Combines with circuit breaker state.
+  // =========================================================================
+  const agentSuccessRates = await getAgentSuccessRates(sql);
+  const weightedItems = await applySuccessRateWeighting(sql, scoredItems, agentSuccessRates);
+  const filteredItems = weightedItems.filter(item => item.success_rate_weight > 0.2); // Skip companies with <20% success rate
+
+  if (filteredItems.length === 0 && weightedItems.length > 0) {
+    // All items filtered out due to poor success rates
+    const poorCompanies = weightedItems.filter(item => item.success_rate_weight <= 0.2).map(item => item.company_slug).filter(Boolean);
+    return json({ dispatched: false, reason: "agent_success_rate_filtered", poor_companies: poorCompanies.slice(0, 3) });
+  }
+
+  const finalItems = filteredItems.length > 0 ? filteredItems : scoredItems;
+
   // Build ordered candidate list: specced items first (ready to dispatch immediately),
   // then specless items (need LLM spec generation which may fail).
   // This prevents OpenRouter outages from blocking the entire queue.
@@ -1355,7 +1489,7 @@ export async function POST(req: Request) {
   const speccedCandidates: any[] = [];
   const speclessCandidates: any[] = [];
 
-  for (const candidate of scoredItems) {
+  for (const candidate of finalItems) {
     const candidateSpec = candidate.spec;
     const hasSpec = candidateSpec && candidateSpec.acceptance_criteria;
     const notes = candidate.notes || "";
@@ -1394,7 +1528,7 @@ export async function POST(req: Request) {
   const orderedCandidates = [...speccedCandidates, ...speclessCandidates];
 
   if (orderedCandidates.length === 0) {
-    return json({ dispatched: false, reason: "no_spec_items_only", blocked_count: scoredItems.length });
+    return json({ dispatched: false, reason: "no_spec_items_only", blocked_count: finalItems.length });
   }
 
   // Try candidates in order — skip items that fail spec generation
