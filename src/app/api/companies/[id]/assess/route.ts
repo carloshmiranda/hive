@@ -24,15 +24,32 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const issues: string[] = [];
 
   // 1. Check database — inspect which tables exist in the company's Neon project
-  if (company.neon_project_id) {
+  if (company.neon_project_id && company.vercel_project_id) {
     const [dbInfra] = await sql`
       SELECT config FROM infra
       WHERE company_id = ${company.id} AND service = 'neon' AND status = 'active'
     `;
-    if (dbInfra?.config?.connection_string) {
+
+    let companyDbUrl: string | null = null;
+
+    // For Vercel marketplace databases, fetch DATABASE_URL from Vercel env vars
+    if (dbInfra?.config?.method === "vercel_marketplace") {
+      try {
+        const { getEnvVar } = await import("@/lib/vercel");
+        companyDbUrl = await getEnvVar(company.vercel_project_id, "DATABASE_URL");
+      } catch (e: any) {
+        console.warn(`[assess] Failed to fetch DATABASE_URL for ${company.slug}:`, e.message);
+      }
+    }
+    // For direct Neon API databases, use stored connection string if available
+    else if (dbInfra?.config?.connection_string) {
+      companyDbUrl = dbInfra.config.connection_string;
+    }
+
+    if (companyDbUrl) {
       try {
         const { neon } = await import("@neondatabase/serverless");
-        const companyDb = neon(dbInfra.config.connection_string);
+        const companyDb = neon(companyDbUrl);
 
         const tables = await companyDb`
           SELECT table_name FROM information_schema.tables
