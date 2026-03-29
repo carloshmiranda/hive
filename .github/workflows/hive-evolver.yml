@@ -73,30 +73,40 @@ jobs:
 
             Use this data to perform your three-layer gap detection (outcome, capability, knowledge).
 
-            ## STEP 2: Write proposals and log results
-            4. CHECK FOR DUPLICATES — Before creating proposals:
+            ## STEP 2: Check pipeline capacity and write proposals
+            4. CHECK PIPELINE CAPACITY — Exit early if proposal pipeline is full:
+               ```sql
+               SELECT COUNT(*) as pending_count FROM evolver_proposals WHERE status IN ('pending', 'deferred')
+               ```
+               If pending_count > 10, output: {"analysis": {"pipeline_full": true}, "proposals": []}
+               and exit. The review pipeline is at capacity.
+
+            5. CHECK FOR DUPLICATES — Before creating proposals:
                ```sql
                SELECT id, title, status FROM evolver_proposals WHERE status IN ('pending', 'deferred')
                ```
+               Use semantic comparison, not just exact title matches. Consider these similar:
+               - "Agent performance regression: engineer" vs "Engineer agent failing frequently"
+               - "Growth content quality issues" vs "Growth agent producing low-quality content"
 
-            5. WRITE PROPOSALS to evolver_proposals table (max 5):
+            6. WRITE PROPOSALS to evolver_proposals table (max 5):
                ```sql
                INSERT INTO evolver_proposals (gap_type, severity, title, diagnosis, signal_source, signal_data, proposed_fix, affected_companies, cross_company)
                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::text[], $9)
                ```
 
-            6. UPDATE PLAYBOOK REFERENCES — For any playbook entries you consulted:
+            7. UPDATE PLAYBOOK REFERENCES — For any playbook entries you consulted:
                ```sql
                UPDATE playbook SET last_referenced_at = NOW(), reference_count = reference_count + 1 WHERE id = $1
                ```
 
-            7. LOG your analysis to agent_actions:
+            8. LOG your analysis to agent_actions:
                ```sql
                INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
                VALUES ('evolver', 'gap_analysis', $1, 'success', $2::jsonb, $3, NOW())
                ```
 
-            8. Output your full JSON analysis (see prompts/evolver.md for format).
+            9. Output your full JSON analysis (see prompts/evolver.md for format).
 
             RULES:
             - Never auto-implement. Every proposal goes through approval.
