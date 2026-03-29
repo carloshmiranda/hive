@@ -223,6 +223,154 @@ async function executeSentinelDispatch(request: Request) {
     }
 
     // ========================================================================
+    // CEO DECISION RETROSPECTIVE VALIDATION
+    // ========================================================================
+    // Monthly retrospective analysis of strategic decisions to validate CEO decision quality
+    // and build institutional memory for strategic patterns
+
+    try {
+      // Check for decision retrospectives monthly (when days since last check >= 30)
+      const [lastDecisionCheck] = await sql`
+        SELECT value FROM settings WHERE key = 'decision_retrospective_check_at'
+      `.catch(() => []);
+
+      const lastDecisionCheckTime = lastDecisionCheck?.value ? new Date(lastDecisionCheck.value).getTime() : 0;
+      const daysSinceDecisionCheck = (Date.now() - lastDecisionCheckTime) / 86400000; // days
+
+      if (daysSinceDecisionCheck >= 30) {
+        console.log("[sentinel-dispatch] Running CEO decision retrospective validation");
+
+        // Find decisions >30 days old that haven't been validated yet
+        const pendingDecisions = await sql`
+          SELECT d.*, c.slug as company_slug, c.name as company_name
+          FROM decision_log d
+          JOIN companies c ON c.id = d.company_id
+          WHERE d.was_correct IS NULL
+          AND d.created_at < NOW() - INTERVAL '30 days'
+          ORDER BY d.created_at ASC
+          LIMIT 10
+        `;
+
+        console.log(`[sentinel-dispatch] Found ${pendingDecisions.length} decisions needing retrospective validation`);
+
+        if (pendingDecisions.length > 0) {
+          // Analyze each decision and validate it
+          let correctDecisions = 0;
+          let totalValidated = 0;
+
+          for (const decision of pendingDecisions) {
+            try {
+              // Gather current metrics to compare against expected_outcome
+              const [currentMetrics] = await sql`
+                SELECT
+                  c.status as current_status,
+                  COALESCE(
+                    (SELECT SUM(revenue) FROM metrics
+                     WHERE company_id = ${decision.company_id}
+                     AND date >= ${decision.created_at}::date),
+                    0
+                  ) as revenue_since_decision,
+                  COALESCE(
+                    (SELECT traffic FROM metrics
+                     WHERE company_id = ${decision.company_id}
+                     ORDER BY date DESC LIMIT 1),
+                    0
+                  ) as current_traffic,
+                  COALESCE(
+                    (SELECT signups FROM metrics
+                     WHERE company_id = ${decision.company_id}
+                     ORDER BY date DESC LIMIT 1),
+                    0
+                  ) as current_signups
+                FROM companies c
+                WHERE c.id = ${decision.company_id}
+              `.catch(() => [{}]);
+
+              // Simple validation logic based on decision type
+              let wasCorrect = false;
+              let actualOutcome = "No measurable change";
+
+              // Extract metrics safely with defaults
+              const status = (currentMetrics && 'current_status' in currentMetrics) ? currentMetrics.current_status : 'unknown';
+              const revenue = (currentMetrics && 'revenue_since_decision' in currentMetrics) ? Number(currentMetrics.revenue_since_decision) || 0 : 0;
+              const traffic = (currentMetrics && 'current_traffic' in currentMetrics) ? Number(currentMetrics.current_traffic) || 0 : 0;
+              const signups = (currentMetrics && 'current_signups' in currentMetrics) ? Number(currentMetrics.current_signups) || 0 : 0;
+
+              if (decision.decision_type === 'kill') {
+                // Kill decision: correct if company is actually killed or performing very poorly
+                wasCorrect = status === 'killed' || (revenue === 0 && traffic < 100);
+                actualOutcome = status === 'killed'
+                  ? "Company was killed as expected"
+                  : `Company still active but low performance: ${traffic} traffic, €${revenue} revenue`;
+              } else if (decision.decision_type === 'phase_change') {
+                // Phase change: correct if there's measurable improvement in key metrics
+                const hasImprovement = revenue > 0 || traffic > 1000 || signups > 50;
+                wasCorrect = hasImprovement;
+                actualOutcome = hasImprovement
+                  ? `Metrics improved: €${revenue} revenue, ${traffic} traffic, ${signups} signups`
+                  : `No significant improvement: €${revenue} revenue, ${traffic} traffic, ${signups} signups`;
+              } else if (decision.decision_type === 'priority_shift' || decision.decision_type === 'pivot') {
+                // Priority/pivot decisions: correct if there's any positive momentum
+                const hasMomentum = revenue > 0 || traffic > 500;
+                wasCorrect = hasMomentum;
+                actualOutcome = hasMomentum
+                  ? `Positive momentum: €${revenue} revenue, ${traffic} traffic`
+                  : `Limited momentum: €${revenue} revenue, ${traffic} traffic`;
+              }
+
+              // Update the decision with validation results
+              await sql`
+                UPDATE decision_log
+                SET was_correct = ${wasCorrect},
+                    actual_outcome = ${actualOutcome},
+                    validated_at = NOW()
+                WHERE id = ${decision.id}
+              `;
+
+              if (wasCorrect) correctDecisions++;
+              totalValidated++;
+
+              console.log(`[sentinel-dispatch] Validated decision ${decision.id} (${decision.decision_type}): ${wasCorrect ? 'CORRECT' : 'INCORRECT'}`);
+
+            } catch (validationError) {
+              console.warn(`[sentinel-dispatch] Failed to validate decision ${decision.id}:`, validationError instanceof Error ? validationError.message : "unknown");
+            }
+          }
+
+          // Create a summary for CEO feedback
+          const successRate = totalValidated > 0 ? Math.round((correctDecisions / totalValidated) * 100) : 0;
+
+          if (totalValidated > 0) {
+            dispatches.push({
+              type: "healer_trigger", // Using healer for now to log the analysis
+              target: "_hive",
+              payload: {
+                trigger: "decision_retrospective",
+                context: `CEO decision track record: ${correctDecisions}/${totalValidated} decisions validated as correct (${successRate}% success rate)`,
+                detail: `Monthly retrospective completed. Analyzed decisions from ${pendingDecisions[0]?.company_slug || 'multiple companies'}.`,
+                metadata: {
+                  correct_decisions: correctDecisions,
+                  total_validated: totalValidated,
+                  success_rate: successRate,
+                  analysis_period: "30+ days ago"
+                }
+              },
+            });
+          }
+        }
+
+        // Update the check timestamp
+        await sql`
+          INSERT INTO settings (key, value, is_secret) VALUES ('decision_retrospective_check_at', ${new Date().toISOString()}, false)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        `.catch(() => {});
+
+      }
+    } catch (decisionErr) {
+      console.warn("[sentinel-dispatch] Decision retrospective check failed (non-blocking):", decisionErr instanceof Error ? decisionErr.message : "unknown");
+    }
+
+    // ========================================================================
     // APPROVAL EXPIRY + ORPHANED IDEA CLEANUP
     // ========================================================================
 
