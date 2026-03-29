@@ -801,18 +801,18 @@ jobs:
                If the spec exists, go straight to implementation. Do NOT explore or re-plan.
             4. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
                `git checkout -b <branch>`
-            4. Implement the change
-            5. Run `npx next build` — fix any errors until it passes
-            6. Commit with conventional commit message (feat/fix/refactor)
-            7. Push the branch and create a PR:
+            5. Implement the change
+            6. Run `npx next build` — fix any errors until it passes
+            7. Commit with conventional commit message (feat/fix/refactor)
+            8. Push the branch and create a PR:
                `GH_TOKEN="$GH_PAT" gh pr create --title "<title>" --body "<diagnosis + what was done>"`
-            8. Log success to agent_actions via the Hive API
+            9. Enable auto-merge so CI triggers the merge automatically:
+               `GH_TOKEN="$GH_PAT" gh pr merge --auto --squash --delete-branch <PR_NUMBER>`
+            10. Log success to agent_actions via the Hive API
 
-            IMPORTANT for self-improvement:
-            - SAFE changes (no schema.sql, no workflow yml, no lib/auth.ts, no middleware.ts changes):
-              Push to main directly. These are low-risk improvements.
-            - RISKY changes (schema, workflows, auth, middleware, crypto, core orchestration):
-              Create a PR on a branch. Carlos will review via Telegram.
+            IMPORTANT: ALL self-improvement changes go through a PR — no direct pushes to main.
+            main is branch-protected and requires CI to pass. Auto-merge handles the merge the
+            moment CI goes green (~2-3 min). Do NOT attempt to push directly to main.
 
             ## CI fix workflow (TRIGGER = ci_fix)
 
@@ -836,10 +836,14 @@ jobs:
             ## Regular Hive-internal work
 
             For non-self-improvement tasks (ops_escalation, deploy_drift, etc.):
-            1. Implement the change in the current directory
-            2. Build to verify: `npx next build` — fix any errors
-            3. Commit and push to main
-            4. Log to agent_actions
+            1. Create a branch: `git checkout -b hive/fix/short-slug`
+            2. Implement the change
+            3. Build to verify: `npx next build` — fix any errors
+            4. Commit and push the branch
+            5. Create a PR and enable auto-merge:
+               `GH_TOKEN="$GH_PAT" gh pr create --title "<title>" --body "<what was done>"`
+               `GH_TOKEN="$GH_PAT" gh pr merge --auto --squash --delete-branch <PR_NUMBER>`
+            6. Log to agent_actions
 
             ## Rules
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
