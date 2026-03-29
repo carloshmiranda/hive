@@ -946,7 +946,7 @@ async function executeSentinelDispatch(request: Request) {
     // 7. High failure rate → Evolver brain (urgent) + Healer (fix code)
     const [lastEvolverDispatch] = await sql`
       SELECT MAX(started_at) as last_run FROM agent_actions
-      WHERE agent = 'evolver' AND started_at > NOW() - INTERVAL '24 hours'
+      WHERE agent = 'evolver' AND started_at > NOW() - INTERVAL '48 hours'
     `;
     if (highFailureRate && !lastEvolverDispatch?.last_run) {
       await dispatchToActions(ctx, "evolve_trigger", { source: "sentinel", reason: "high_failure_rate", trace_id: traceId });

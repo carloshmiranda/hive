@@ -160,13 +160,14 @@ export async function GET(request: Request) {
     // Dispatch evolver if due and not recently run (6 + 10)
     const [lastEvolverDispatch] = await sql`
       SELECT MAX(started_at) as last_run FROM agent_actions
-      WHERE agent = 'evolver' AND started_at > NOW() - INTERVAL '24 hours'
+      WHERE agent = 'evolver' AND started_at > NOW() - INTERVAL '48 hours'
     `;
     if (evolveDue && !lastEvolverDispatch?.last_run) {
       await dispatchToActions(ctx, "evolve_trigger", { source: "sentinel-janitor", trace_id: traceId });
       dispatches.push({ type: "brain", target: "evolve_trigger", payload: { source: "sentinel-janitor" } });
     }
-    if (maxTurnsHits.length > 0) {
+    // Check max turns exhaustion but respect the same 48h dedup window
+    if (maxTurnsHits.length > 0 && !lastEvolverDispatch?.last_run) {
       const agents = maxTurnsHits.map((r) => ({
         agent: r.agent as string,
         count: parseInt(r.cnt as string),
