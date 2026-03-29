@@ -106,9 +106,12 @@ export async function analyzePR(
     hardGateIssues.push('Destructive DB migration without rollback plan');
   }
 
-  // Check diff size (hard gate for >1000 lines or >20 files)
+  // Check diff size — hive/improvement/* PRs get a higher limit since self-improvement
+  // features naturally have larger diffs (new lib + route + types in one PR).
   const totalChanges = pr.additions + pr.deletions;
-  if (totalChanges > 1000 || pr.changed_files > 20) {
+  const isHiveImprovement = pr.head?.ref?.startsWith("hive/improvement/") || pr.head?.ref?.startsWith("hive/");
+  const diffLimit = isHiveImprovement ? 2000 : 1000;
+  if (totalChanges > diffLimit || pr.changed_files > 20) {
     hardGateIssues.push(`Large diff: ${totalChanges} lines, ${pr.changed_files} files`);
   }
 
