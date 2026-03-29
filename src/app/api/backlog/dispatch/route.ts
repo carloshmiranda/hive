@@ -254,15 +254,18 @@ async function handleEscalatedPR(
         }
       );
       if (updateRes.ok || updateRes.status === 202) {
+        // Branch was behind main — merged and CI will re-run. Wait one cycle.
         await sql`
           INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
           VALUES ('engineer', 'ci_fix', 'branch_updated',
             ${`Branch update for PR #${pr.number}: ${pr.title} — merged main, CI will re-run`},
             NOW(), NOW())
         `.catch(() => {});
-        console.log(`[backlog] Updated branch for PR #${pr.number} — CI will re-run, will dispatch Engineer if CI still fails`);
-        return false; // Wait one cycle for CI to complete
+        console.log(`[backlog] Updated branch for PR #${pr.number} — waiting for CI re-run`);
+        return false;
       }
+      // 422 = branch already up-to-date with main. CI failure is a code bug — fall through to Engineer.
+      // Any other non-2xx also falls through.
     } catch { /* fall through to Engineer dispatch */ }
   }
 
@@ -1043,7 +1046,7 @@ export async function POST(req: Request) {
     WHERE status = 'pr_open' AND pr_number IS NOT NULL
   `.catch(() => [{ open_prs: 0 }]);
   const openPRCount = Number(prQueue?.open_prs || 0);
-  if (openPRCount >= 3) {
+  if (openPRCount >= 2) {
     // Actively try to clear the PR queue by triggering a health check (Check 38 merges PRs)
     await qstashPublish("/api/cron/company-health", {
       trigger: "pr_queue_flush",

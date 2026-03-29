@@ -823,27 +823,41 @@ jobs:
                `git fetch origin && git checkout <branch>`
             3. Read CLAUDE.md and MISTAKES.md for context
             4. Read the ci_errors from PAYLOAD — these are the actual CI failure messages
-            5. Fix ALL the errors. Common CI failures:
+            5. **Before touching any code**, validate what you are about to write:
+               - Run `npx tsx scripts/lint-sql.ts` to see ALL current SQL errors
+               - Read `schema.sql` to verify column names before writing any SQL query
+               - Common SQL lint failures and their fixes:
+                 - `Column 'X' does not exist` → check schema.sql for correct column name
+                 - `Value 'X' not allowed for Y.status` → check the CHECK constraint in schema.sql
+                 - Never use columns like `github_repo`, `lifecycle` on tables that don't have them
+                   (run `grep -A 30 "CREATE TABLE companies" schema.sql` to see exact columns)
+            6. Fix ALL the errors. Common CI failures:
                - `npx next build` type/import errors → fix the TypeScript
-               - `lint-sql` failures → fix schema.sql syntax
+               - `lint-sql` failures → check schema.sql, fix column/enum references
+               - `npm ci` ERESOLVE errors → check peer deps before adding packages; use `npm install --legacy-peer-deps` only if necessary and document why
                - `schema-map:check` failures → run `npx tsx scripts/generate-schema-map.ts` after schema changes
-            6. Run `npx next build` locally to verify the fix
-            7. Commit with: `fix: resolve CI failures on PR #<pr_number>`
-            8. Push to the same branch: `git push origin HEAD`
+            7. Run `npx tsx scripts/lint-sql.ts && npx next build` to verify ALL errors are fixed before pushing
+            8. Commit with: `fix: resolve CI failures on PR #<pr_number>`
+            9. Push to the same branch: `git push origin HEAD`
                Do NOT create a new PR — one already exists for this branch.
-            9. Log success to agent_actions via the Hive API
+            10. Log success to agent_actions via the Hive API
 
             ## Regular Hive-internal work
 
             For non-self-improvement tasks (ops_escalation, deploy_drift, etc.):
             1. Create a branch: `git checkout -b hive/fix/short-slug`
-            2. Implement the change
-            3. Build to verify: `npx next build` — fix any errors
-            4. Commit and push the branch
-            5. Create a PR and enable auto-merge:
+            2. **Before writing any code**, validate the schema:
+               - Run `npx tsx scripts/lint-sql.ts` to see existing SQL errors (fix any you notice)
+               - Read `schema.sql` to verify column names before writing any SQL query
+               - Never reference columns that don't exist in the schema (e.g. `github_repo` on `hive_backlog`, `lifecycle` on `companies`)
+               - Never use enum values not in the CHECK constraint (e.g. `rate_limited` is not a valid `agent_actions.status`)
+            3. Implement the change
+            4. Run `npx tsx scripts/lint-sql.ts && npx next build` — fix ALL errors before proceeding
+            5. Commit and push the branch
+            6. Create a PR and enable auto-merge:
                `GH_TOKEN="$GH_PAT" gh pr create --title "<title>" --body "<what was done>"`
                `GH_TOKEN="$GH_PAT" gh pr merge --auto --squash --delete-branch <PR_NUMBER>`
-            6. Log to agent_actions
+            7. Log to agent_actions
 
             ## Rules
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
