@@ -12,8 +12,9 @@ import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspicious
 import { setSentryTags } from "@/lib/sentry-tags";
 import { type CompletionReport } from "@/lib/completion-report";
 import { cachedPlaybook } from "@/lib/redis-cache";
-import { compressResearchForAgent } from "@/app/api/agents/playbook/route";
+import { compressResearchForAgent } from "@/lib/research-compression";
 import { qstashPublish } from "@/lib/qstash";
+import { verifyPlaybookUsage } from "@/lib/playbook-verification";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -344,10 +345,14 @@ ${capabilitiesSummary(company.capabilities)}`;
     });
     const output = response.content;
 
-    // 6. Log the result to agent_actions with provider metadata and tool calling tracking
+    // 6. Verify playbook usage before logging
+    const playbookUsage = await verifyPlaybookUsage(output, playbook);
+
+    // 7. Log the result to agent_actions with provider metadata and tool calling tracking
     const duration = Math.round((Date.now() - startTime) / 1000);
     const contextMetadata = {
       playbook_entries: playbook.map((p: any) => p.insight),
+      playbook_usage: playbookUsage,
       research_types: researchReports.map((r: any) => r.report_type),
       compressed_research: true,
       deduplication_applied: !!latestCycle?.id,
@@ -396,12 +401,12 @@ ${capabilitiesSummary(company.capabilities)}`;
       )
     `;
 
-    // 7. Agent-specific post-processing
+    // 8. Agent-specific post-processing
     if (agentName === "outreach") {
       await processOutreachResults(sql, company, output);
     }
 
-    // 7b. Track worker output as company_tasks (best-effort JSON parsing)
+    // 9. Track worker output as company_tasks (best-effort JSON parsing)
     try {
       const jsonMatch = output.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -431,7 +436,7 @@ ${capabilitiesSummary(company.capabilities)}`;
       }
     } catch { /* best-effort — don't fail dispatch on parse errors */ }
 
-    // 8. Ops escalation → dispatch fix to company repo (free Actions) with Hive fallback
+    // 10. Ops escalation → dispatch fix to company repo (free Actions) with Hive fallback
     if (agentName === "ops" && output.includes("needs_engineer")) {
       try {
         const ghPat = await getGitHubToken() || process.env.GH_PAT;
