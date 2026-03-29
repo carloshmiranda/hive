@@ -818,8 +818,25 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "engineer_busy", running_id: running.id });
   }
 
+  // Stale dispatch cleanup: items stuck in 'dispatched' for >30 min
+  // with no Engineer run picking them up — reset to ready so they can be retried.
+  // This prevents items from blocking the cascade indefinitely.
+  await sql`
+    UPDATE hive_backlog
+    SET status = 'ready', dispatched_at = NULL,
+        notes = COALESCE(notes, '') || ' [stale] Dispatch expired after 30min with no callback — reset to ready.'
+    WHERE status = 'dispatched'
+    AND dispatched_at < NOW() - INTERVAL '30 minutes'
+  `.catch(() => {});
+
+  // PR review BEFORE the queue gate — attempt to merge/fix open PRs first,
+  // so the queue can self-clear instead of blocking indefinitely.
+  if (!completed_id) {
+    await reviewAndMergeOpenPRs(sql);
+  }
+
   // PR queue gate: don't pile up PRs that increase merge conflict risk.
-  // If 3+ PRs are open, force the system to clear its queue first.
+  // If 3+ PRs are still open after review, force the system to clear its queue first.
   const [prQueue] = await sql`
     SELECT COUNT(*)::int as open_prs FROM hive_backlog
     WHERE status = 'pr_open' AND pr_number IS NOT NULL
@@ -836,24 +853,6 @@ export async function POST(req: Request) {
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     await scheduleChainRetry("pr_queue_full", 10);
     return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true, pr_flush_triggered: true });
-  }
-
-  // Stale dispatch cleanup: items stuck in 'dispatched' for >30 min
-  // with no Engineer run picking them up — reset to ready so they can be retried.
-  // This prevents items from blocking the cascade indefinitely.
-  await sql`
-    UPDATE hive_backlog
-    SET status = 'ready', dispatched_at = NULL,
-        notes = COALESCE(notes, '') || ' [stale] Dispatch expired after 30min with no callback — reset to ready.'
-    WHERE status = 'dispatched'
-    AND dispatched_at < NOW() - INTERVAL '30 minutes'
-  `.catch(() => {});
-
-  // PR review on fresh dispatches (sentinel kicks, manual triggers, chain retries).
-  // Merges existing open PRs before selecting new work — prevents PR pile-up and
-  // ensures the chain processes existing PRs even when no completion callback fires.
-  if (!completed_id) {
-    await reviewAndMergeOpenPRs(sql);
   }
 
   // Check for recently dispatched backlog items (covers the race window
