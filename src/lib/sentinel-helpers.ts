@@ -394,33 +394,187 @@ export async function isCircuitOpen(
   companyId: string | null
 ): Promise<boolean> {
   if (!companyId) return false;
+
+  // Check Redis cache first
+  try {
+    const cachedState = await import("@/lib/redis-cache").then(({ getCachedCircuitState }) =>
+      getCachedCircuitState(companyId, agent)
+    );
+    if (cachedState !== null) {
+      return cachedState;
+    }
+  } catch {
+    // Fall through to DB query
+  }
+
+  // Cache miss or Redis unavailable - query DB
   const [result] = await sql`
     SELECT COUNT(*)::int as failures FROM agent_actions
     WHERE agent = ${agent} AND company_id = ${companyId}
-    AND status = 'failed' AND started_at > NOW() - INTERVAL '24 hours'
+    AND status = 'failed' AND started_at > NOW() - INTERVAL '48 hours'
   `;
-  return (result?.failures || 0) >= 3;
+
+  const isOpen = (result?.failures || 0) >= 3;
+
+  // Cache the result
+  try {
+    await import("@/lib/redis-cache").then(({ setCachedCircuitState }) =>
+      setCachedCircuitState(companyId, agent, isOpen)
+    );
+  } catch {
+    // Cache write failure is non-fatal
+  }
+
+  return isOpen;
 }
 
-// Batch circuit breaker check: single query for all agent+company pairs.
-// Returns a Set of "agent:companyId" keys where the circuit is open (3+ failures in 24h).
-// Use this instead of calling isCircuitOpen() in a loop to avoid O(N) DB queries.
+// Batch circuit breaker check: Redis-first with DB fallback.
+// Returns a Set of "agent:companyId" keys where the circuit is open (3+ failures in 48h).
+// Uses Redis cache to avoid repeated agent_actions scans during Sentinel dispatch loops.
 export async function batchCheckCircuits(
   sql: any
 ): Promise<Set<string>> {
-  const rows = await sql`
-    SELECT agent, company_id, COUNT(*)::int as failures
-    FROM agent_actions
-    WHERE status = 'failed' AND started_at > NOW() - INTERVAL '24 hours'
-    AND company_id IS NOT NULL
-    GROUP BY agent, company_id
-    HAVING COUNT(*) >= 3
-  `.catch(() => []);
-  const open = new Set<string>();
-  for (const r of rows) {
-    open.add(`${r.agent}:${r.company_id}`);
+  const openCircuits = new Set<string>();
+
+  try {
+    // Step 1: Get all distinct agent+company pairs that have recent actions
+    const activePairs = await sql`
+      SELECT DISTINCT agent, company_id
+      FROM agent_actions
+      WHERE started_at > NOW() - INTERVAL '48 hours'
+      AND company_id IS NOT NULL
+    `.catch(() => []);
+
+    if (activePairs.length === 0) {
+      return openCircuits;
+    }
+
+    // Step 2: Check Redis cache for all pairs
+    const cachePromises = activePairs.map(async (pair: any) => {
+      const cachedState = await import("@/lib/redis-cache").then(({ getCachedCircuitState }) =>
+        getCachedCircuitState(pair.company_id, pair.agent)
+      ).catch(() => null);
+      return { ...pair, cachedState };
+    });
+
+    const pairsWithCache = await Promise.all(cachePromises);
+    const uncachedPairs = [];
+
+    // Step 3: Collect cached results and identify uncached pairs
+    for (const pair of pairsWithCache) {
+      if (pair.cachedState === true) {
+        openCircuits.add(`${pair.agent}:${pair.company_id}`);
+      } else if (pair.cachedState === null) {
+        uncachedPairs.push(pair);
+      }
+      // cachedState === false means circuit is closed (cached), no need to add to set
+    }
+
+    // Step 4: Query DB for uncached pairs only
+    if (uncachedPairs.length > 0) {
+      const dbRows = await sql`
+        SELECT agent, company_id, COUNT(*)::int as failures
+        FROM agent_actions
+        WHERE status = 'failed' AND started_at > NOW() - INTERVAL '48 hours'
+        AND company_id IS NOT NULL
+        AND (agent, company_id) IN ${sql(uncachedPairs.map((p: any) => [p.agent, p.company_id]))}
+        GROUP BY agent, company_id
+        HAVING COUNT(*) >= 3
+      `.catch(() => []);
+
+      // Step 5: Update Redis cache with DB results
+      const cacheUpdates = uncachedPairs.map((pair: any) => ({
+        companyId: pair.company_id,
+        agent: pair.agent,
+        isOpen: dbRows.some((r: any) => r.agent === pair.agent && r.company_id === pair.company_id)
+      }));
+
+      // Batch update Redis cache
+      await import("@/lib/redis-cache").then(({ batchSetCircuitStates }) =>
+        batchSetCircuitStates(cacheUpdates)
+      ).catch(() => {});
+
+      // Add open circuits from DB to result set
+      for (const row of dbRows) {
+        openCircuits.add(`${row.agent}:${row.company_id}`);
+      }
+    }
+
+    return openCircuits;
+  } catch (error) {
+    // Fallback to original DB-only query if anything fails
+    console.warn("[batchCheckCircuits] Redis-enhanced check failed, falling back to DB-only:", error);
+
+    const rows = await sql`
+      SELECT agent, company_id, COUNT(*)::int as failures
+      FROM agent_actions
+      WHERE status = 'failed' AND started_at > NOW() - INTERVAL '48 hours'
+      AND company_id IS NOT NULL
+      GROUP BY agent, company_id
+      HAVING COUNT(*) >= 3
+    `.catch(() => []);
+
+    const fallbackOpen = new Set<string>();
+    for (const r of rows) {
+      fallbackOpen.add(`${r.agent}:${r.company_id}`);
+    }
+    return fallbackOpen;
   }
-  return open;
+}
+
+// ---------------------------------------------------------------------------
+// Agent action logging with circuit breaker cache invalidation
+// ---------------------------------------------------------------------------
+
+/**
+ * Log an agent action to the database and invalidate circuit breaker cache if it's a failure.
+ * This ensures that circuit breaker state stays accurate when new failures occur.
+ */
+export async function logAgentAction(
+  sql: any,
+  action: {
+    agent: string;
+    company_id?: string | null;
+    cycle_id?: string | null;
+    action_type: string;
+    description: string;
+    status: 'started' | 'success' | 'failed';
+    error?: string | null;
+    output?: string | null;
+    started_at?: Date;
+    finished_at?: Date;
+  }
+): Promise<void> {
+  // Insert the agent action
+  await sql`
+    INSERT INTO agent_actions (
+      agent, company_id, cycle_id, action_type, description,
+      status, error, output, started_at, finished_at
+    ) VALUES (
+      ${action.agent},
+      ${action.company_id || null},
+      ${action.cycle_id || null},
+      ${action.action_type},
+      ${action.description},
+      ${action.status},
+      ${action.error || null},
+      ${action.output || null},
+      ${action.started_at || new Date()},
+      ${action.finished_at || (action.status !== 'started' ? new Date() : null)}
+    )
+  `;
+
+  // If this is a failed action with a company_id, invalidate the circuit breaker cache
+  // for this specific agent+company pair to ensure the cache reflects the new failure
+  if (action.status === 'failed' && action.company_id) {
+    try {
+      await import("@/lib/redis-cache").then(({ invalidateCircuitBreaker }) =>
+        invalidateCircuitBreaker(action.company_id!, action.agent)
+      );
+    } catch {
+      // Cache invalidation failure is non-fatal
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
