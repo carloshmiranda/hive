@@ -1,7 +1,9 @@
 import Stripe from "stripe";
+import { StripeAgentToolkit } from "@stripe/agent-toolkit/ai-sdk";
 import { getSettingValue } from "@/lib/settings";
 
 let _stripe: Stripe | null = null;
+let _stripeToolkit: StripeAgentToolkit | null = null;
 
 async function getStripe(): Promise<Stripe> {
   if (_stripe) return _stripe;
@@ -9,6 +11,57 @@ async function getStripe(): Promise<Stripe> {
   if (!key) throw new Error("Stripe secret key not configured. Add it in Hive Settings.");
   _stripe = new Stripe(key);
   return _stripe;
+}
+
+// Get Stripe Agent Toolkit with company-scoped restricted key if available
+export async function getStripeToolkit(companySlug?: string): Promise<StripeAgentToolkit> {
+  // Try company-specific restricted key first (for per-company security)
+  let secretKey: string | null = null;
+  if (companySlug) {
+    secretKey = await getSettingValue(`stripe_restricted_key_${companySlug}`);
+  }
+
+  // Fallback to default restricted key, then main secret key
+  if (!secretKey) {
+    secretKey = await getSettingValue("stripe_restricted_key") ||
+               await getSettingValue("stripe_secret_key");
+  }
+
+  if (!secretKey) {
+    throw new Error("Stripe key not configured. Add stripe_secret_key or stripe_restricted_key in Hive Settings.");
+  }
+
+  // Always create a new toolkit instance to ensure fresh tool definitions
+  const toolkit = new StripeAgentToolkit({
+    secretKey,
+    configuration: {
+      context: companySlug ? { account: companySlug } : {}
+    }
+  });
+
+  await toolkit.initialize();
+  return toolkit;
+}
+
+// Get available Stripe agent tools as OpenAI-format tool definitions
+export async function getStripeAgentTools(companySlug?: string): Promise<any[]> {
+  try {
+    const toolkit = await getStripeToolkit(companySlug);
+    const tools = toolkit.getTools();
+
+    // Convert from ai-sdk format to OpenAI function calling format
+    return Object.entries(tools).map(([name, tool]) => ({
+      type: "function",
+      function: {
+        name: name,
+        description: tool.description || `Stripe ${name} tool`,
+        parameters: tool.inputSchema || { type: "object", properties: {} }
+      }
+    }));
+  } catch (error) {
+    console.warn(`[stripe-agent] Failed to get tools: ${error}`);
+    return [];
+  }
 }
 
 // Create product + price tagged to a company (single Stripe account)

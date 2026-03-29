@@ -163,6 +163,155 @@ export const HIVE_TOOLS: Array<{
         required: ["company", "agent", "action_type", "description", "status"]
       }
     }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "create_payment_link",
+      description: "Create a Stripe payment link for a product or service",
+      parameters: {
+        type: "object",
+        properties: {
+          company: {
+            type: "string",
+            description: "Company slug for this payment link"
+          },
+          name: {
+            type: "string",
+            description: "Product or service name"
+          },
+          amount: {
+            type: "number",
+            description: "Amount in euros (will be converted to cents)"
+          },
+          currency: {
+            type: "string",
+            description: "Currency code (default: EUR)",
+            default: "EUR"
+          },
+          description: {
+            type: "string",
+            description: "Optional description for the payment link"
+          }
+        },
+        required: ["company", "name", "amount"]
+      }
+    }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "create_subscription",
+      description: "Create a Stripe subscription for recurring payments",
+      parameters: {
+        type: "object",
+        properties: {
+          company: {
+            type: "string",
+            description: "Company slug for this subscription"
+          },
+          customer_email: {
+            type: "string",
+            description: "Customer email address"
+          },
+          price_id: {
+            type: "string",
+            description: "Stripe price ID for the subscription"
+          },
+          trial_days: {
+            type: "number",
+            description: "Optional trial period in days"
+          }
+        },
+        required: ["company", "customer_email", "price_id"]
+      }
+    }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "issue_refund",
+      description: "Issue a full or partial refund for a charge",
+      parameters: {
+        type: "object",
+        properties: {
+          company: {
+            type: "string",
+            description: "Company slug for this refund"
+          },
+          charge_id: {
+            type: "string",
+            description: "Stripe charge ID to refund"
+          },
+          amount: {
+            type: "number",
+            description: "Amount to refund in euros (optional for partial refund)"
+          },
+          reason: {
+            type: "string",
+            description: "Reason for the refund",
+            enum: ["duplicate", "fraudulent", "requested_by_customer"]
+          }
+        },
+        required: ["company", "charge_id"]
+      }
+    }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "apply_coupon",
+      description: "Create and apply a discount coupon",
+      parameters: {
+        type: "object",
+        properties: {
+          company: {
+            type: "string",
+            description: "Company slug for this coupon"
+          },
+          coupon_id: {
+            type: "string",
+            description: "Unique coupon identifier"
+          },
+          discount_type: {
+            type: "string",
+            description: "Type of discount",
+            enum: ["percent", "amount"]
+          },
+          discount_value: {
+            type: "number",
+            description: "Discount value (percentage or amount in euros)"
+          },
+          duration: {
+            type: "string",
+            description: "How long the coupon lasts",
+            enum: ["once", "repeating", "forever"]
+          },
+          duration_in_months: {
+            type: "number",
+            description: "Number of months for repeating coupons"
+          }
+        },
+        required: ["company", "coupon_id", "discount_type", "discount_value", "duration"]
+      }
+    }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_stripe_tools",
+      description: "Get available Stripe Agent Toolkit tools for a company",
+      parameters: {
+        type: "object",
+        properties: {
+          company: {
+            type: "string",
+            description: "Company slug to get restricted tools for"
+          }
+        },
+        required: ["company"]
+      }
+    }
   }
 ];
 
