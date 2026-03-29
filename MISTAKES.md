@@ -15,6 +15,24 @@
 
 ---
 
+### 2026-03-29 New GitHub Actions workflow not in OIDC allowlist → 403 on every run
+**What happened:** `hive-spec-gen.yml` was created and deployed but every run failed immediately at "Get tokens via OIDC" with `FATAL: Failed to get claude token: Workflow 'hive-spec-gen.yml' not authorized`.
+**Root cause:** `src/app/api/agents/token/route.ts` has an explicit `ALLOWED_WORKFLOWS` array. New workflows are not added automatically — they must be explicitly whitelisted. The array had 10 workflows; spec-gen was missing.
+**Fix applied:** Added `"hive-spec-gen.yml"` to `ALLOWED_WORKFLOWS`. Commit `212deb7`.
+**Prevention:** Any time a new `hive-*.yml` workflow is created that calls `get-hive-tokens`, immediately add its filename to `ALLOWED_WORKFLOWS` in `src/app/api/agents/token/route.ts`. Treat this as a required step in the "create new workflow" checklist.
+**Affects:** hive
+
+---
+
+### 2026-03-29 `--max-turns 8` insufficient for 5-step agentic spec-gen workflow
+**What happened:** Spec-gen second run hit `error_max_turns` at turn 9 and logged `STATUS="failed"`, triggering `Log failure` step.
+**Root cause:** The spec-gen prompt has 5 steps: npm install, DB fetch, 2-4 file reads, JSON spec generation, DB write. Each step is 1-3 tool calls. Minimum realistic turn count is 10-12. `--max-turns 8` was copied from a simpler workflow template without adjustment.
+**Fix applied:** Bumped to `--max-turns 15`. Commit `d1a8f74`. Verified: third run used 13 turns successfully.
+**Prevention:** When setting `--max-turns` for a Claude Code action, count the minimum tool calls the workflow requires. Add ~3 turns buffer for retries and reasoning. 5-step workflows need 12-15 turns minimum. 3-step workflows can use 8-10.
+**Affects:** hive
+
+---
+
 ### 2026-03-29 [manual_spec] in notes doesn't unblock dispatch — two gates ignored it
 **What happened:** 7 P1 items had complete manual specs written into their `notes` field (tagged `[manual_spec]`) and were set to `ready`, but dispatch kept returning `backlogDispatched: 0`. Items were immediately re-blocked on every dispatch attempt.
 **Root cause:** The dispatch candidate loop had two permanent-block gates that checked for `[no_spec]` and `[manual_spec_needed]` but had no exemption for items where a human had subsequently added `[manual_spec]` content. Both gates re-blocked to `blocked` status and called `continue`, skipping the item before it could be dispatched.
