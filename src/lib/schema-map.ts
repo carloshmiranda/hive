@@ -1554,6 +1554,36 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "nullable": true,
         "hasDefault": false
       },
+      "stealable": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "claimed_by": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "claimed_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "original_agent": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "failure_count": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "completion_percentage": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": true
+      },
       "created_at": {
         "type": "TIMESTAMPTZ",
         "nullable": false,
