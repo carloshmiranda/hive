@@ -77,8 +77,27 @@ export function compressResearchForAgent(
     });
 }
 
+// Map domain to relevant agent roles for auto-tagging
+function deriveAgentsFromDomain(domain: string): string[] {
+  const domainToAgents: Record<string, string[]> = {
+    engineering: ['build', 'fix'],
+    infrastructure: ['build', 'fix'],
+    payments: ['build', 'fix'],
+    auth: ['build', 'fix'],
+    deployment: ['build', 'fix'],
+    growth: ['growth'],
+    seo: ['growth'],
+    email_marketing: ['growth'],
+    content: ['growth'],
+    social: ['growth'],
+    pricing: ['growth', 'ceo'],
+    onboarding: ['build', 'growth'],
+  };
+  return domainToAgents[domain] || [];
+}
+
 // POST /api/agents/playbook — write playbook entry via OIDC auth
-// Body: { domain, insight, evidence?, confidence? }
+// Body: { domain, insight, evidence?, confidence?, relevant_agents? }
 export async function POST(req: NextRequest) {
   const claims = await validateOIDC(req);
   if (claims instanceof Response) return claims;
@@ -90,10 +109,15 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { source_company_id, domain, insight, evidence, confidence, content_language } = body;
+  const { source_company_id, domain, insight, evidence, confidence, content_language, relevant_agents } = body;
   if (!domain || !insight) {
     return err("Missing required fields: domain, insight", 400);
   }
+
+  // Use provided relevant_agents or auto-derive from domain
+  const agents: string[] = Array.isArray(relevant_agents) && relevant_agents.length > 0
+    ? relevant_agents
+    : deriveAgentsFromDomain(domain);
 
   const sql = getDb();
 
@@ -111,9 +135,9 @@ export async function POST(req: NextRequest) {
   }
 
   const [entry] = await sql`
-    INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language)
-    VALUES (${source_company_id || null}, ${domain}, ${insight}, ${evidence || null}, ${confidence ?? 0.7}, ${content_language || null})
-    RETURNING id, domain, insight, confidence, content_language
+    INSERT INTO playbook (source_company_id, domain, insight, evidence, confidence, content_language, relevant_agents)
+    VALUES (${source_company_id || null}, ${domain}, ${insight}, ${evidence || null}, ${confidence ?? 0.7}, ${content_language || null}, ${agents})
+    RETURNING id, domain, insight, confidence, content_language, relevant_agents
   `;
 
   await invalidatePlaybook();

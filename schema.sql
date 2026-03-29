@@ -148,10 +148,12 @@ CREATE TABLE playbook (
   superseded_by TEXT REFERENCES playbook(id), -- if a newer insight replaces this
   content_language TEXT DEFAULT NULL, -- NULL = universal/language-agnostic, 'en'/'pt' for language-specific
   last_referenced_at TIMESTAMPTZ,
-  reference_count INTEGER DEFAULT 0
+  reference_count INTEGER DEFAULT 0,
+  relevant_agents TEXT[] DEFAULT '{}'  -- agent roles this entry is relevant to (empty = all agents)
 );
 
 -- Backfill: UPDATE playbook p SET content_language = c.content_language FROM companies c WHERE p.source_company_id = c.id AND p.source_company_id IS NOT NULL AND c.content_language IS NOT NULL;
+-- Backfill: UPDATE playbook SET relevant_agents = CASE WHEN domain IN ('engineering', 'infrastructure', 'payments', 'auth', 'deployment') THEN '{build,fix}' WHEN domain IN ('growth', 'seo', 'email_marketing', 'content', 'social') THEN '{growth}' ELSE '{}' END WHERE relevant_agents = '{}';
 
 -- Agent prompts: versioned system prompts (for Prompt Evolver)
 CREATE TABLE agent_prompts (
@@ -249,6 +251,7 @@ CREATE INDEX idx_actions_company ON agent_actions(company_id, started_at DESC);
 CREATE INDEX idx_approvals_pending ON approvals(status) WHERE status = 'pending';
 CREATE INDEX idx_metrics_company_date ON metrics(company_id, date DESC);
 CREATE INDEX idx_playbook_domain ON playbook(domain);
+CREATE INDEX idx_playbook_agents ON playbook USING GIN(relevant_agents);
 CREATE INDEX idx_infra_company ON infra(company_id);
 CREATE INDEX idx_directives_open ON directives(status) WHERE status = 'open';
 CREATE INDEX idx_imports_company ON imports(company_id);
