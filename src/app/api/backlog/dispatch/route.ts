@@ -1738,6 +1738,26 @@ export async function POST(req: Request) {
   // If spec generation fails, try the next candidate instead of halting the chain.
   // This ensures one bad item doesn't block all dispatch.
   let spec = topItem.spec || null;
+  // If human provided a manual spec via [manual_spec] tag in notes, synthesize a spec
+  // object from the notes content so the spec generation loop is skipped entirely.
+  if (!spec && (topItem.notes || "").includes("[manual_spec]")) {
+    // Extract text between [manual_spec] and the next tag (or end of string)
+    const manualSpecMatch = (topItem.notes || "").match(/\[manual_spec\]([\s\S]*?)(?=\s*\[(?!manual_spec)[^\]]+\]|$)/);
+    const manualSpecText = manualSpecMatch ? manualSpecMatch[1].trim() : "";
+    spec = {
+      acceptance_criteria: manualSpecText
+        ? [manualSpecText.slice(0, 2000)]
+        : ["Manual spec provided — see item notes for implementation details"],
+      approach: manualSpecText
+        ? [manualSpecText.slice(0, 2000)]
+        : ["Follow implementation instructions in item notes"],
+      complexity: "medium",
+      estimated_turns: 30,
+      affected_files: [],
+      risks: [],
+    };
+    console.log(`[backlog] Using manual spec from notes for "${topItem.title}" (spec text: ${manualSpecText.length} chars)`);
+  }
   const MAX_SPEC_ATTEMPTS = 3; // Try up to 3 candidates before giving up
   let specAttempts = 0;
   let candidateIdx = 0;
