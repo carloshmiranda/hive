@@ -1243,6 +1243,42 @@ async function executeSentinelDispatch(request: Request) {
           `.catch(() => {});
         }
 
+        // ========================================================================
+        // CHECK 13b: Cross-company task deduplication
+        // ========================================================================
+
+        try {
+          const crossCompanyUrl = `${ctx.baseUrl}/api/agents/cross-company-tasks`;
+          const crossCompanyResponse = await fetch(crossCompanyUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${ctx.cronSecret}`
+            }
+          });
+
+          if (crossCompanyResponse.ok) {
+            const crossCompanyResult = await crossCompanyResponse.json();
+            if (crossCompanyResult.consolidated_tasks_created > 0) {
+              console.log(`[sentinel-dispatch] Cross-company: created ${crossCompanyResult.consolidated_tasks_created} consolidated tasks`);
+              await sql`
+                INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+                VALUES ('sentinel', 'cross_company_dedup', ${`Cross-company deduplication: created ${crossCompanyResult.consolidated_tasks_created} consolidated tasks from ${crossCompanyResult.detected_issues} patterns`}, 'success', NOW(), NOW())
+              `;
+              dispatches.push({
+                type: "cross_company",
+                target: "task_deduplication",
+                payload: {
+                  consolidated_tasks: crossCompanyResult.consolidated_tasks_created,
+                  detected_issues: crossCompanyResult.detected_issues
+                }
+              });
+            }
+          }
+        } catch (crossCompanyError: any) {
+          console.warn(`[sentinel-dispatch] Cross-company deduplication failed: ${crossCompanyError?.message || crossCompanyError}`);
+        }
+
         if (hiveFixesDispatched > 0) {
           await sql`
             INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
