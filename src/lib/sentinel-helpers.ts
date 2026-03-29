@@ -578,6 +578,129 @@ export async function logAgentAction(
 }
 
 // ---------------------------------------------------------------------------
+// Healer Circuit Breaker (per-company, with error pattern dedup and exponential backoff)
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if healer should be blocked for a specific company based on:
+ * 1. Per-company failure count (not global)
+ * 2. Error pattern deduplication (same error description)
+ * 3. Exponential backoff (2h → 4h → 8h → 24h)
+ */
+export async function checkHealerCompanyCircuitBreaker(
+  sql: any,
+  companyId: string
+): Promise<{
+  blocked: boolean;
+  reason?: string;
+  failures?: number;
+  lastErrorPattern?: string;
+  backoffHours?: number;
+}> {
+  try {
+    // Get recent healer failures for this company
+    const healerFailures = await sql`
+      SELECT
+        status,
+        description,
+        started_at,
+        finished_at
+      FROM agent_actions
+      WHERE agent = 'healer'
+        AND company_id = ${companyId}
+        AND finished_at > NOW() - INTERVAL '48 hours'
+      ORDER BY finished_at DESC
+      LIMIT 10
+    `;
+
+    const failedActions = healerFailures.filter((action: any) => action.status === 'failed');
+    const failureCount = failedActions.length;
+
+    // Rule 1: If 2+ healer failures for this company in 24h, calculate backoff
+    if (failureCount >= 2) {
+      const mostRecentFailure = failedActions[0];
+      const failureAgeHours = mostRecentFailure?.finished_at
+        ? (Date.now() - new Date(mostRecentFailure.finished_at).getTime()) / (1000 * 60 * 60)
+        : 48;
+
+      // Exponential backoff: 2h → 4h → 8h → 24h (capped)
+      const backoffHours = Math.min(24, Math.pow(2, failureCount));
+
+      if (failureAgeHours < backoffHours) {
+        return {
+          blocked: true,
+          reason: `Exponential backoff: ${failureCount} healer failures, next attempt in ${Math.ceil(backoffHours - failureAgeHours)}h`,
+          failures: failureCount,
+          backoffHours
+        };
+      }
+    }
+
+    // Rule 2: Error pattern deduplication - check if last 2 healer actions had identical descriptions
+    if (healerFailures.length >= 2) {
+      const lastTwo = healerFailures.slice(0, 2);
+      const lastTwoDescriptions = lastTwo.map((action: any) => action.description?.trim().toLowerCase()).filter(Boolean);
+
+      if (lastTwoDescriptions.length === 2 && lastTwoDescriptions[0] === lastTwoDescriptions[1]) {
+        // Check if any other agent succeeded on this company since the last healer failure
+        const [lastSuccessfulAction] = await sql`
+          SELECT finished_at FROM agent_actions
+          WHERE company_id = ${companyId}
+            AND agent != 'healer'
+            AND status = 'success'
+            AND finished_at > ${lastTwo[0].finished_at}
+          ORDER BY finished_at DESC
+          LIMIT 1
+        `;
+
+        if (!lastSuccessfulAction) {
+          return {
+            blocked: true,
+            reason: `Error pattern deduplication: last 2 healer dispatches had identical error patterns, awaiting other agent success`,
+            failures: failureCount,
+            lastErrorPattern: lastTwoDescriptions[0]
+          };
+        }
+      }
+    }
+
+    return {
+      blocked: false,
+      failures: failureCount
+    };
+  } catch (error) {
+    console.warn(`[checkHealerCompanyCircuitBreaker] Error for company ${companyId}:`, error);
+    // On error, be conservative and allow healer dispatch
+    return { blocked: false };
+  }
+}
+
+/**
+ * Get all companies that need circuit breaker analysis for healer dispatches.
+ * Returns a Map of companyId -> circuit breaker result to avoid repeated DB queries.
+ */
+export async function batchCheckHealerCircuitBreakers(
+  sql: any,
+  companyIds: string[]
+): Promise<Map<string, { blocked: boolean; reason?: string; failures?: number }>> {
+  const results = new Map();
+
+  // Process companies in parallel for efficiency
+  const promises = companyIds.map(async (companyId) => {
+    const result = await checkHealerCompanyCircuitBreaker(sql, companyId);
+    return [companyId, result];
+  });
+
+  const circuitResults = await Promise.all(promises);
+
+  for (const [companyId, result] of circuitResults) {
+    results.set(companyId, result);
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Text similarity (used by playbook consolidation in janitor)
 // ---------------------------------------------------------------------------
 
