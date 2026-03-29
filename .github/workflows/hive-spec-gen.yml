@@ -100,7 +100,8 @@ jobs:
                node -e "
                  const postgres = require('postgres');
                  const sql = postgres(process.env.DATABASE_URL);
-                 const spec = JSON.parse(process.argv[1]);
+                 let spec = JSON.parse(process.argv[1]);
+                 if (typeof spec === 'string') spec = JSON.parse(spec);
                  sql\`UPDATE hive_backlog SET spec = \${JSON.stringify(spec)}::jsonb, status = 'ready', dispatched_at = NULL WHERE id = '${{ steps.payload.outputs.backlog_id }}'\`
                    .then(() => { console.log('spec written'); return sql.end(); })
                    .catch(e => { console.error(e.message); process.exit(1); });
