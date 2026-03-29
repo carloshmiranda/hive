@@ -241,10 +241,11 @@ async function handleEscalatedPR(
   // Resolves "behind main" CI failures and simple merge conflicts.
   // Only skip for 30 min after a branch-update attempt — short enough that if CI re-fails
   // the Engineer dispatch path runs on the next cycle.
+  // 'skipped' status = branch was updated, waiting for CI re-run (30-min cooldown)
   const [recentBranchUpdate] = await sql`
     SELECT id FROM agent_actions
-    WHERE agent = 'engineer' AND action_type = 'ci_fix' AND status = 'branch_updated'
-    AND description LIKE ${`%PR #${pr.number}%`}
+    WHERE agent = 'engineer' AND action_type = 'ci_fix' AND status = 'skipped'
+    AND description LIKE ${`%branch update%PR #${pr.number}%`}
     AND started_at > NOW() - INTERVAL '30 minutes'
     LIMIT 1
   `.catch(() => []);
@@ -263,8 +264,8 @@ async function handleEscalatedPR(
         // Branch was behind main — merged and CI will re-run. Wait one cycle.
         await sql`
           INSERT INTO agent_actions (agent, action_type, status, description, started_at, finished_at)
-          VALUES ('engineer', 'ci_fix', 'branch_updated',
-            ${`Branch update for PR #${pr.number}: ${pr.title} — merged main, CI will re-run`},
+          VALUES ('engineer', 'ci_fix', 'skipped',
+            ${`branch update PR #${pr.number}: ${pr.title} — merged main, CI will re-run`},
             NOW(), NOW())
         `.catch(() => {});
         console.log(`[backlog] Updated branch for PR #${pr.number} — waiting for CI re-run`);
