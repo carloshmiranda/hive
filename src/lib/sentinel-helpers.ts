@@ -701,6 +701,42 @@ export async function batchCheckHealerCircuitBreakers(
 }
 
 // ---------------------------------------------------------------------------
+// Growth task routing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a company has growth tasks that require repo access (file writes).
+ * Used by Sentinel to decide whether to route Growth to company workflow or Vercel worker.
+ */
+export async function hasFileWriteTasks(
+  baseUrl: string,
+  companySlug: string,
+  ghPat: string | null
+): Promise<boolean> {
+  if (!ghPat) return false;
+
+  try {
+    // Use GitHub App token to query the Growth context API
+    const response = await fetch(`${baseUrl}/api/agents/context?agent=growth&company_slug=${companySlug}`, {
+      headers: {
+        'Authorization': `Bearer ${ghPat}`,
+        'Content-Type': 'application/json'
+      },
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (!response.ok) return false;
+
+    const data = await response.json();
+    return data.data?.has_file_write_tasks === true;
+  } catch (error) {
+    console.warn(`[hasFileWriteTasks] Error checking tasks for ${companySlug}:`, error);
+    // Default to requiring repo access on error to be safe
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Text similarity (used by playbook consolidation in janitor)
 // ---------------------------------------------------------------------------
 
