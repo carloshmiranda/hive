@@ -11,6 +11,7 @@ import { setSentryTags } from "@/lib/sentry-tags";
 import { type CompletionReport } from "@/lib/completion-report";
 import { cachedPlaybook } from "@/lib/redis-cache";
 import { compressResearchForAgent } from "@/app/api/agents/playbook/route";
+import { qstashPublish } from "@/lib/qstash";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -431,6 +432,20 @@ ${capabilitiesSummary(company.capabilities)}`;
         }
       } catch (e: any) { console.warn(`[dispatch] ops escalation chain dispatch for ${company.slug} failed: ${e?.message || e}`); }
     }
+
+    // Chain dispatch: trigger cycle-complete to continue workflow instead of waiting for Sentinel
+    // This fixes the 4-hour latency gap by immediately chaining to next work
+    qstashPublish("/api/dispatch/cycle-complete", {
+      agent: agentName,
+      company: company.slug,
+      status: "success",
+      action_type: "worker_completion",
+    }, {
+      deduplicationId: `worker-complete-${agentName}-${company.slug}-${new Date().toISOString().slice(0, 13)}`,
+      retries: 2,
+    }).catch((e: any) => {
+      console.warn(`[dispatch] worker completion chain dispatch for ${agentName}:${company.slug} failed: ${e?.message || e}`);
+    });
 
     return json({
       ok: true,
