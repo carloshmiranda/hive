@@ -19,6 +19,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  issues: write
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -107,6 +108,62 @@ jobs:
                ```
 
             5. Print a one-line summary: "Spec for '<title>': complexity=<X>, turns=<N>, files=<count>"
+
+      - name: Post spec to GitHub Issue
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm install --no-save postgres 2>/dev/null
+          RESULT=$(node -e "
+            const postgres = require('postgres');
+            const sql = postgres(process.env.DATABASE_URL);
+            sql\`SELECT github_issue_number, spec FROM hive_backlog WHERE id = '${{ steps.payload.outputs.backlog_id }}' LIMIT 1\`
+              .then(r => { console.log(JSON.stringify(r[0] || {})); return sql.end(); })
+              .catch(e => { console.error(e.message); process.exit(1); });
+          ")
+          ISSUE_NUMBER=$(echo "$RESULT" | node -e "
+            process.stdin.setEncoding('utf8');
+            let d = '';
+            process.stdin.on('data', c => d += c);
+            process.stdin.on('end', () => {
+              try { const r = JSON.parse(d); console.log(r.github_issue_number || ''); }
+              catch(e) { console.log(''); }
+            });
+          ")
+          if [ -z "$ISSUE_NUMBER" ] || [ "$ISSUE_NUMBER" = "null" ]; then
+            echo "No GitHub issue linked to this backlog item — skipping"
+            exit 0
+          fi
+          SPEC_BODY=$(echo "$RESULT" | node -e "
+            process.stdin.setEncoding('utf8');
+            let d = '';
+            process.stdin.on('data', c => d += c);
+            process.stdin.on('end', () => {
+              const r = JSON.parse(d);
+              const s = r.spec || {};
+              const lines = [
+                '## Spec Generated',
+                '',
+                \`**Complexity:** \${s.complexity || '?'} | **Est. turns:** \${s.estimated_turns || '?'} | **Specialist:** \${s.specialist || '?'}\`,
+                '',
+                '### Acceptance Criteria',
+                ...(s.acceptance_criteria || []).map(c => \`- \${c}\`),
+                '',
+                '### Approach',
+                ...(s.approach || []).map(a => \`- \${a}\`),
+                '',
+                '### Affected Files',
+                ...(s.affected_files || []).map(f => \`- \\\`\${f}\\\`\`),
+                '',
+                '### Risks',
+                ...(s.risks || []).map(r => \`- \${r}\`),
+              ];
+              console.log(lines.join('\n'));
+            });
+          ")
+          echo "$SPEC_BODY" | gh issue comment "$ISSUE_NUMBER" --repo carloshmiranda/hive --body-file - || true
+          echo "Spec posted to issue #$ISSUE_NUMBER"
 
       - name: Trigger dispatch retry
         if: success()
