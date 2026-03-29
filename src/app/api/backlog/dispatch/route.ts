@@ -651,7 +651,7 @@ export async function POST(req: Request) {
       const [item] = await sql`
         SELECT id, title, description, notes, priority, category, spec FROM hive_backlog WHERE id = ${completed_id}
       `.catch((e: any) => { console.warn(`[backlog] fetch item ${completed_id} for failure handling failed: ${e?.message || e}`); return []; });
-      const prevAttempts = (item?.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+      const prevAttempts = (item?.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g)?.length || 0;
       const attempt = prevAttempts + 1;
       const errorMsg = body.error || "";
       const turnsMatch = errorMsg.match(/\((\d+) turns\)/);
@@ -1252,16 +1252,15 @@ export async function POST(req: Request) {
         OR (status = 'planning' AND dispatched_at < NOW() - INTERVAL '2 minutes')
       )
       AND NOT (
-        notes ILIKE '%[attempt %]%'
+        notes ~ '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)'
         AND dispatched_at IS NOT NULL
         AND dispatched_at > NOW() - CASE
-          WHEN notes ILIKE '%[attempt 3]%' THEN INTERVAL '24 hours'
-          WHEN notes ILIKE '%[attempt 2]%' THEN INTERVAL '6 hours'
+          WHEN notes ~ '\\[attempt 3\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '24 hours'
+          WHEN notes ~ '\\[attempt 2\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '6 hours'
           ELSE INTERVAL '2 hours'
         END
       )
-      AND (array_length(regexp_match(notes, '\\[attempt \\d+\\]'), 1) IS NULL
-           OR (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\]', 'g')) < 3)
+      AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)', 'g')) < 3
       ORDER BY
         CASE WHEN spec IS NOT NULL AND spec->>'approach' IS NOT NULL THEN 0 ELSE 1 END,
         CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
@@ -1283,7 +1282,7 @@ export async function POST(req: Request) {
   // dispatched. This catches that case.
   const MAX_ATTEMPTS = 3;
   for (const item of backlogItems) {
-    const attemptCount = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+    const attemptCount = (item.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g)?.length || 0;
     if (attemptCount >= MAX_ATTEMPTS && item.status !== "blocked") {
       await sql`
         UPDATE hive_backlog
@@ -1294,7 +1293,7 @@ export async function POST(req: Request) {
     }
   }
   backlogItems = backlogItems.filter(item => {
-    const attemptCount = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+    const attemptCount = (item.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g)?.length || 0;
     return attemptCount < MAX_ATTEMPTS;
   });
 
@@ -1566,7 +1565,7 @@ export async function POST(req: Request) {
 
     const blocksAgents = detectBlockedAgents(item.title, item.description);
     const daysSinceCreated = Math.max(0, item.created_at ? (Date.now() - new Date(item.created_at).getTime()) / 86400000 : 0);
-    const previousAttempts = (item.notes || "").match(/\[attempt \d+\]/g)?.length || 0;
+    const previousAttempts = (item.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g)?.length || 0;
 
     const scored = computeBacklogScore(item as BacklogItem, {
       relatedErrors,
@@ -1832,7 +1831,7 @@ export async function POST(req: Request) {
 
   // Check for previous failed attempts — inject error context so Engineer learns
   // (computed after spec loop since topItem may have changed)
-  const attemptMatch = (topItem.notes || "").match(/\[attempt \d+\]/g);
+  const attemptMatch = (topItem.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g);
   const attemptCount = attemptMatch?.length || 0;
   let previousErrors = "";
   if (attemptCount > 0) {

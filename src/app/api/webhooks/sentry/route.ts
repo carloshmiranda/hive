@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getSettingValue } from "@/lib/settings";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { dispatchEvent } from "@/lib/dispatch";
 
 // Sentry webhook endpoint
 // Auth: HMAC-SHA256 signature verification via SENTRY_CLIENT_SECRET
@@ -120,6 +121,25 @@ export async function POST(req: Request) {
             now()
           )
         `;
+
+        // Dispatch Healer for error-level issues on created/triggered events
+        // Only for "error" and "fatal" levels — skip "warning", "info", etc.
+        const level = issue.level || "error";
+        if ((level === "error" || level === "fatal") && body.action === "created") {
+          await dispatchEvent("healer_trigger", {
+            source: "sentry_webhook",
+            scope: companyId ? "company" : "systemic",
+            company_id: companyId,
+            reason: `Sentry ${level}: ${title.slice(0, 200)}`,
+            sentry_issue_id: String(issueId),
+            culprit,
+            level,
+            project: body.data?.project?.name || body.data?.project?.slug,
+            url: issue.permalink || `https://sentry.io/organizations/${body.data?.organization?.slug}/issues/${issueId}/`,
+          }).catch((e: unknown) => {
+            console.warn("[sentry-webhook] Healer dispatch failed:", e instanceof Error ? e.message : String(e));
+          });
+        }
 
       } else if (isMetricAlert) {
         const alert = body.data.metric_alert;
