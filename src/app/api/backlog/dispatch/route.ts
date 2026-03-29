@@ -1618,8 +1618,8 @@ export async function POST(req: Request) {
     const notes = candidate.notes || "";
 
     // Permanently blocked — skip and ensure blocked status
-    // Exception: if [manual_spec] is present in notes, a human has provided a spec — allow dispatch
-    if (notes.includes("[manual_spec_needed]") && !hasManualSpecInNotes) {
+    // Exception: if [manual_spec] is present in notes OR spec field is now populated — allow dispatch
+    if (notes.includes("[manual_spec_needed]") && !hasManualSpecInNotes && !hasSpec) {
       await sql`
         UPDATE hive_backlog
         SET status = 'blocked', dispatched_at = NULL
@@ -1629,8 +1629,8 @@ export async function POST(req: Request) {
     }
 
     // Specless item that already failed once — block permanently
-    // Exception: if [manual_spec] is present in notes, a human has provided a spec — allow dispatch
-    if (notes.includes("[no_spec]") && !hasManualSpecInNotes) {
+    // Exception: if [manual_spec] is present in notes OR spec field is now populated — allow dispatch
+    if (notes.includes("[no_spec]") && !hasManualSpecInNotes && !hasSpec) {
       await sql`
         UPDATE hive_backlog
         SET status = 'blocked', dispatched_at = NULL,
