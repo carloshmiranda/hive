@@ -757,13 +757,14 @@ jobs:
               echo "No backlog_id found — cannot update status"
             fi
 
-            echo "Exiting successfully to prevent burning CI minutes"
-            exit 0
+            echo "skip=true" >> $GITHUB_OUTPUT
           else
+            echo "skip=false" >> $GITHUB_OUTPUT
             echo "✅ Turn budget check passed: estimated_turns=${ESTIMATED_TURNS:-"not specified"}, proceeding with Claude execution"
           fi
 
       - name: Run build agent (Hive-internal only)
+        if: steps.turn_guard.outputs.skip != 'true'
         id: agent
         env:
           GH_PAT: ${{ steps.auth.outputs.gh_pat }}
