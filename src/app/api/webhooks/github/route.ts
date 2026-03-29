@@ -463,6 +463,26 @@ export async function POST(req: Request) {
         INSERT INTO directives (company_id, agent, text, github_issue_number, github_issue_url, status)
         VALUES (${companyId}, ${agent}, ${title + (issueBody ? "\n\n" + issueBody : "")}, ${issueNumber}, ${issueUrl}, 'open')
       `;
+
+      // Immediately dispatch CEO (or the specified agent) to process this directive
+      // Without this, the directive sits until Sentinel next runs (up to 30min)
+      const dispatchAgent = agent === "engineer" ? "engineer_task"
+        : agent === "growth" ? "growth_dispatch"
+        : "ceo_review";
+
+      qstashPublish("/api/dispatch/chain-dispatch", {
+        event_type: dispatchAgent,
+        source: "webhook_directive",
+        company: companySlug || "_portfolio",
+        directive_issue: issueNumber,
+        directive_url: issueUrl,
+        directive_text: title,
+      }, {
+        retries: 2,
+        deduplicationId: `directive-${issueNumber}-${Date.now().toString(36)}`,
+      }).catch((e: unknown) => {
+        console.warn(`[webhook] QStash directive dispatch failed for issue #${issueNumber}: ${e instanceof Error ? e.message : e}`);
+      });
       break;
     }
   }

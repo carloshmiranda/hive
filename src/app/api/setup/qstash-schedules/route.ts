@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
  *
  * 6 schedules (of 10 free tier max):
  * - sentinel-urgent: every 2h — stuck cycles, orphaned companies, deploy drift
- * - sentinel-dispatch: every 4h — agent scheduling, company cycle dispatch
+ * - sentinel-dispatch: every 30min — agent scheduling, company cycle dispatch
  * - sentinel-janitor: daily 2am — maintenance, intelligence, playbook
  * - metrics: 8am + 6pm — scrape Vercel Analytics
  * - digest: daily 8am — portfolio summary email
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  */
 const SCHEDULES = [
   { path: "/api/cron/sentinel-urgent", cron: "0 */2 * * *", id: "sentinel-urgent" },
-  { path: "/api/cron/sentinel-dispatch", cron: "0 */4 * * *", id: "sentinel-dispatch" },
+  { path: "/api/cron/sentinel-dispatch", cron: "*/30 * * * *", id: "sentinel-dispatch" },
   { path: "/api/cron/sentinel-janitor", cron: "0 2 * * *", id: "sentinel-janitor" },
   { path: "/api/cron/metrics", cron: "0 8,18 * * *", id: "metrics" },
   { path: "/api/cron/digest", cron: "0 8 * * *", id: "digest" },
@@ -45,20 +45,25 @@ export async function POST(req: Request) {
     }
   }
 
-  // Create or skip each desired schedule
+  // Create, update (if cron changed), or skip each desired schedule
   const results = [];
   for (const sched of SCHEDULES) {
     const url = `${baseUrl}${sched.path}`;
-    if (existingByDest.has(url)) {
-      results.push({ id: sched.id, status: "exists" });
-      continue;
+    const existing = existingByDest.get(url);
+    if (existing) {
+      if (existing.cron === sched.cron) {
+        results.push({ id: sched.id, status: "exists" });
+        continue;
+      }
+      // Cron changed — delete old and recreate
+      await client.schedules.delete(existing.scheduleId);
     }
     const created = await client.schedules.create({
       destination: url,
       cron: sched.cron,
       retries: 3,
     });
-    results.push({ id: sched.id, scheduleId: created.scheduleId, status: "created" });
+    results.push({ id: sched.id, scheduleId: created.scheduleId, status: existing ? "updated" : "created" });
   }
 
   return Response.json({ ok: true, schedules: results, staleRemoved });
