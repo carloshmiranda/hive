@@ -1575,7 +1575,7 @@ export async function POST(req: Request) {
   // Other agents reading system state will see this as "planned" and avoid conflicts.
   await sql`
     INSERT INTO agent_actions (agent, action_type, status, description, started_at)
-    VALUES ('engineer', 'feature_request', 'planned',
+    VALUES ('engineer', 'feature_request', 'pending',
       ${`[intent] Will dispatch: "${topItem.title}" (${topItem.priority}, attempt ${attemptCount + 1})`},
       NOW())
   `.catch(() => {});

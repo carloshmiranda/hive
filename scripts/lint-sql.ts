@@ -315,10 +315,52 @@ function extractLateralAliases(query: string): Set<string> {
   return aliases;
 }
 
+function extractSubqueryAliases(query: string): Set<string> {
+  // Extract aliases from subqueries: FROM (...) alias pattern with balanced parentheses
+  const aliases = new Set<string>();
+  const queryLower = query.toLowerCase();
+
+  let searchPos = 0;
+  while (searchPos < queryLower.length) {
+    const fromIdx = queryLower.indexOf("from", searchPos);
+    if (fromIdx === -1) break;
+
+    // Skip whitespace after "from"
+    let pos = fromIdx + 4;
+    while (pos < query.length && /\s/.test(query[pos])) pos++;
+
+    // Check if this is a subquery (starts with opening paren)
+    if (pos >= query.length || query[pos] !== "(") {
+      searchPos = pos + 1;
+      continue;
+    }
+
+    // Find the matching closing paren using balanced counting
+    let depth = 1;
+    pos++; // skip opening paren
+    while (pos < query.length && depth > 0) {
+      if (query[pos] === "(") depth++;
+      if (query[pos] === ")") depth--;
+      pos++;
+    }
+
+    // Now pos is right after the closing paren — skip whitespace, capture alias
+    while (pos < query.length && /\s/.test(query[pos])) pos++;
+    const aliasMatch = query.slice(pos).match(/^(\w+)\b/);
+    if (aliasMatch && !SQL_KEYWORDS.has(aliasMatch[1].toLowerCase()) && !SQL_FUNCTIONS.has(aliasMatch[1].toLowerCase())) {
+      aliases.add(aliasMatch[1].toLowerCase());
+    }
+
+    searchPos = pos + 1;
+  }
+  return aliases;
+}
+
 function extractColumnReferences(query: string, aliasMap: Map<string, string>): Array<{ table: string; column: string }> {
   const refs: Array<{ table: string; column: string }> = [];
   const seen = new Set<string>(); // deduplicate
   const lateralAliases = extractLateralAliases(query);
+  const subqueryAliases = extractSubqueryAliases(query);
 
   // Extract alias.column patterns (e.g., c.slug, m.mrr, aa.status)
   const qualifiedPattern = /\b(\w+)\.(\w+)\b/g;
@@ -345,6 +387,9 @@ function extractColumnReferences(query: string, aliasMap: Map<string, string>): 
 
     // Skip lateral aliases (e.g., jsonb_array_elements(...) elem → elem->>'key')
     if (lateralAliases.has(prefix)) continue;
+
+    // Skip subquery aliases (e.g., FROM (...) sub → json_agg(sub))
+    if (subqueryAliases.has(prefix)) continue;
 
     const table = aliasMap.get(prefix)!;
     // Skip CTE references
@@ -402,6 +447,9 @@ function extractColumnReferences(query: string, aliasMap: Map<string, string>): 
 
       // Skip lateral aliases (e.g., jsonb_array_elements() elem)
       if (lateralAliases.has(token)) continue;
+
+      // Skip subquery aliases (e.g., FROM (...) sub)
+      if (subqueryAliases.has(token)) continue;
 
       // Skip tokens that are aliases in our alias map
       if (aliasMap.has(token) && token !== tableName) continue;
