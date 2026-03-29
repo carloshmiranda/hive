@@ -11,6 +11,25 @@ async function getStripe(): Promise<Stripe> {
   return _stripe;
 }
 
+// Get company-scoped Stripe instance (uses restricted key if configured)
+export async function getStripeForCompany(companySlug?: string): Promise<Stripe> {
+  if (!companySlug) return getStripe();
+  const restrictedKey = await getSettingValue(`stripe_restricted_key_${companySlug}`) ||
+                        await getSettingValue("stripe_restricted_key");
+  if (!restrictedKey) return getStripe();
+  return new Stripe(restrictedKey);
+}
+
+// Get available Stripe agent tools as OpenAI-format tool definitions (static list)
+export async function getStripeAgentTools(_companySlug?: string): Promise<any[]> {
+  return [
+    { type: "function", function: { name: "create_payment_link", description: "Create a Stripe payment link for a product", parameters: { type: "object", properties: { company: { type: "string" }, name: { type: "string" }, amount: { type: "number" }, currency: { type: "string" }, description: { type: "string" } }, required: ["company", "name", "amount"] } } },
+    { type: "function", function: { name: "create_subscription", description: "Create a Stripe subscription", parameters: { type: "object", properties: { company: { type: "string" }, customer_email: { type: "string" }, price_id: { type: "string" }, trial_days: { type: "number" } }, required: ["company", "customer_email", "price_id"] } } },
+    { type: "function", function: { name: "issue_refund", description: "Issue a Stripe refund", parameters: { type: "object", properties: { company: { type: "string" }, charge_id: { type: "string" }, amount: { type: "number" }, reason: { type: "string" } }, required: ["company", "charge_id"] } } },
+    { type: "function", function: { name: "apply_coupon", description: "Create a Stripe coupon/discount", parameters: { type: "object", properties: { company: { type: "string" }, coupon_id: { type: "string" }, discount_type: { type: "string" }, discount_value: { type: "number" }, duration: { type: "string" }, duration_in_months: { type: "number" } }, required: ["company", "coupon_id", "discount_type", "discount_value", "duration"] } } },
+  ];
+}
+
 // Create product + price tagged to a company (single Stripe account)
 export async function createProduct(companySlug: string, name: string, priceEur: number, interval: "month" | "year" | "once" = "month") {
   const stripe = await getStripe();

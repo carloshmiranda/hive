@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getDb, json, err } from "@/lib/db";
 import { type HiveToolCall, type HiveToolResult } from "@/lib/hive-tools";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { getStripeForCompany, getStripeAgentTools } from "@/lib/stripe";
 
 // Tool execution endpoint for Hive API functions
 // Called by agents via tool calling to query/update the Hive database
@@ -89,6 +90,21 @@ async function executeTool(sql: any, toolName: string, args: any): Promise<any> 
 
     case "log_agent_action":
       return await logAgentAction(sql, args);
+
+    case "create_payment_link":
+      return await createPaymentLink(sql, args);
+
+    case "create_subscription":
+      return await createSubscription(sql, args);
+
+    case "issue_refund":
+      return await issueRefund(sql, args);
+
+    case "apply_coupon":
+      return await applyCoupon(sql, args);
+
+    case "get_stripe_tools":
+      return await getStripeTools(sql, args);
 
     default:
       throw new Error(`Unknown tool: ${toolName}`);
@@ -270,4 +286,170 @@ async function logAgentAction(sql: any, args: { company: string; agent: string; 
     logged_action: loggedAction,
     company: company,
   };
+}
+
+// Stripe Agent Toolkit tool implementations
+
+async function createPaymentLink(sql: any, args: { company: string; name: string; amount: number; currency?: string; description?: string }): Promise<any> {
+  const { company, name, amount, currency = "EUR", description } = args;
+
+  // Verify company exists
+  const [companyData] = await sql`
+    SELECT id FROM companies WHERE slug = ${company}
+  `;
+  if (!companyData) throw new Error(`Company not found: ${company}`);
+
+  try {
+    const stripe = await getStripeForCompany(company);
+    const product = await stripe.products.create({ name, ...(description ? { description } : {}), metadata: { hive_company: company } });
+    const price = await stripe.prices.create({ product: product.id, unit_amount: Math.round(amount * 100), currency: currency.toLowerCase(), metadata: { hive_company: company } });
+    const link = await stripe.paymentLinks.create({ line_items: [{ price: price.id, quantity: 1 }], metadata: { hive_company: company } });
+    return { company, payment_link: { id: link.id, url: link.url } };
+  } catch (error: any) {
+    throw new Error(`Failed to create payment link: ${error.message}`);
+  }
+}
+
+async function createSubscription(sql: any, args: { company: string; customer_email: string; price_id: string; trial_days?: number }): Promise<any> {
+  const { company, customer_email, price_id, trial_days } = args;
+
+  // Verify company exists
+  const [companyData] = await sql`
+    SELECT id FROM companies WHERE slug = ${company}
+  `;
+  if (!companyData) throw new Error(`Company not found: ${company}`);
+
+  try {
+    const stripe = await getStripeForCompany(company);
+
+    // Find or create customer
+    const customers = await stripe.customers.list({ email: customer_email, limit: 1 });
+    let customerId: string;
+    if (customers.data.length > 0) {
+      customerId = customers.data[0].id;
+    } else {
+      const customer = await stripe.customers.create({ email: customer_email, metadata: { hive_company: company } });
+      customerId = customer.id;
+    }
+
+    const subscriptionParams: any = {
+      customer: customerId,
+      items: [{ price: price_id }],
+      metadata: { hive_company: company },
+    };
+
+    if (trial_days) {
+      subscriptionParams.trial_period_days = trial_days;
+    }
+
+    const subscription = await stripe.subscriptions.create(subscriptionParams);
+
+    return {
+      company,
+      subscription: { id: subscription.id, status: subscription.status, customer: customerId },
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to create subscription: ${error.message}`);
+  }
+}
+
+async function issueRefund(sql: any, args: { company: string; charge_id: string; amount?: number; reason?: string }): Promise<any> {
+  const { company, charge_id, amount, reason } = args;
+
+  // Verify company exists
+  const [companyData] = await sql`
+    SELECT id FROM companies WHERE slug = ${company}
+  `;
+  if (!companyData) throw new Error(`Company not found: ${company}`);
+
+  try {
+    const stripe = await getStripeForCompany(company);
+
+    const refundParams: any = {
+      charge: charge_id,
+      metadata: { hive_company: company },
+    };
+
+    if (amount) {
+      refundParams.amount = Math.round(amount * 100);
+    }
+
+    if (reason) {
+      refundParams.reason = reason;
+    }
+
+    const refund = await stripe.refunds.create(refundParams);
+
+    return {
+      company,
+      refund: { id: refund.id, status: refund.status, amount: refund.amount },
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to issue refund: ${error.message}`);
+  }
+}
+
+async function applyCoupon(sql: any, args: { company: string; coupon_id: string; discount_type: string; discount_value: number; duration: string; duration_in_months?: number }): Promise<any> {
+  const { company, coupon_id, discount_type, discount_value, duration, duration_in_months } = args;
+
+  // Verify company exists
+  const [companyData] = await sql`
+    SELECT id FROM companies WHERE slug = ${company}
+  `;
+  if (!companyData) throw new Error(`Company not found: ${company}`);
+
+  try {
+    const stripe = await getStripeForCompany(company);
+
+    const couponParams: any = {
+      id: coupon_id,
+      duration,
+      metadata: { hive_company: company },
+    };
+
+    if (discount_type === "percent") {
+      couponParams.percent_off = discount_value;
+    } else {
+      couponParams.amount_off = Math.round(discount_value * 100);
+      couponParams.currency = "eur";
+    }
+
+    if (duration === "repeating" && duration_in_months) {
+      couponParams.duration_in_months = duration_in_months;
+    }
+
+    const coupon = await stripe.coupons.create(couponParams);
+
+    return {
+      company,
+      coupon: { id: coupon.id, percent_off: coupon.percent_off, amount_off: coupon.amount_off, duration: coupon.duration },
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to create coupon: ${error.message}`);
+  }
+}
+
+async function getStripeTools(sql: any, args: { company: string }): Promise<any> {
+  const { company } = args;
+
+  // Verify company exists
+  const [companyData] = await sql`
+    SELECT id FROM companies WHERE slug = ${company}
+  `;
+  if (!companyData) throw new Error(`Company not found: ${company}`);
+
+  try {
+    const tools = await getStripeAgentTools(company);
+
+    return {
+      company,
+      available_tools: tools.map(tool => ({
+        name: tool.function.name,
+        description: tool.function.description,
+      })),
+      total_tools: tools.length,
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to get Stripe tools: ${error.message}`);
+  }
 }
