@@ -25,6 +25,8 @@ import {
   dispatchToCompanyWorkflow,
   isCircuitOpen,
   batchCheckCircuits,
+  checkHealerCompanyCircuitBreaker,
+  batchCheckHealerCircuitBreakers,
   MAX_CYCLE_DISPATCHES,
   type SentinelContext,
   type Dispatch,
@@ -902,17 +904,44 @@ async function executeSentinelDispatch(request: Request) {
         SELECT MAX(started_at) as last_run FROM agent_actions
         WHERE agent = 'healer' AND started_at > NOW() - INTERVAL '6 hours'
       `;
-      // Circuit breaker: skip if 3+ healer failures in 48h
-      const [healerFailures7] = await sql`
-        SELECT COUNT(*)::int as cnt FROM agent_actions
-        WHERE agent = 'healer' AND status = 'failed'
-        AND finished_at > NOW() - INTERVAL '48 hours'
-      `.catch(() => [{ cnt: 0 }]);
-      if (!lastHealerRun?.last_run && (healerFailures7?.cnt ?? 0) < 3) {
-        await dispatchToActions(ctx, "healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate", trace_id: traceId });
-        dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "high_failure_rate" } });
-      } else if ((healerFailures7?.cnt ?? 0) >= 3) {
-        console.warn(`[sentinel-dispatch] Healer circuit breaker (check 7): ${healerFailures7.cnt} failures in 48h — skipping`);
+
+      if (!lastHealerRun?.last_run) {
+        // NEW: Get companies with recent failures to check per-company circuit breaker
+        const companiesWithFailures = await sql`
+          SELECT DISTINCT company_id FROM agent_actions
+          WHERE status = 'failed'
+            AND finished_at > NOW() - INTERVAL '48 hours'
+            AND agent NOT IN ('healer', 'sentinel')
+            AND company_id IS NOT NULL
+        `;
+
+        // Check per-company healer circuit breakers
+        let allCompaniesBlocked = true;
+        let totalCompanies = 0;
+        let blockedCompanies = 0;
+
+        for (const row of companiesWithFailures) {
+          totalCompanies++;
+          const circuitCheck = await checkHealerCompanyCircuitBreaker(sql, row.company_id);
+          if (circuitCheck.blocked) {
+            blockedCompanies++;
+            const [company] = await sql`SELECT slug FROM companies WHERE id = ${row.company_id} LIMIT 1`;
+            console.warn(`[sentinel-dispatch] Healer circuit breaker (check 7, ${company?.slug || row.company_id}): ${circuitCheck.reason}`);
+          } else {
+            allCompaniesBlocked = false;
+          }
+        }
+
+        // Only dispatch healer if at least one company is not blocked
+        if (totalCompanies === 0 || !allCompaniesBlocked) {
+          await dispatchToActions(ctx, "healer_trigger", { source: "sentinel", scope: "systemic", reason: "high_failure_rate", trace_id: traceId });
+          dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "high_failure_rate" } });
+          if (blockedCompanies > 0) {
+            console.log(`[sentinel-dispatch] Healer dispatched despite ${blockedCompanies}/${totalCompanies} companies blocked — others still need healing`);
+          }
+        } else {
+          console.warn(`[sentinel-dispatch] Healer skipped (check 7): all ${blockedCompanies} companies with failures are circuit-breaker blocked`);
+        }
       }
     }
 
@@ -922,17 +951,44 @@ async function executeSentinelDispatch(request: Request) {
         SELECT MAX(finished_at) as last_run FROM agent_actions
         WHERE agent = 'healer' AND finished_at > NOW() - INTERVAL '24 hours'
       `;
-      // Circuit breaker: skip if 3+ healer failures in 48h
-      const [healerFailures7b] = await sql`
-        SELECT COUNT(*)::int as cnt FROM agent_actions
-        WHERE agent = 'healer' AND status = 'failed'
-        AND finished_at > NOW() - INTERVAL '48 hours'
-      `.catch(() => [{ cnt: 0 }]);
-      if (!lastHeal?.last_run && (healerFailures7b?.cnt ?? 0) < 3) {
-        await dispatchToActions(ctx, "healer_trigger", { source: "sentinel", scope: "systemic", reason: "errors_detected", trace_id: traceId });
-        dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "errors_detected" } });
-      } else if ((healerFailures7b?.cnt ?? 0) >= 3) {
-        console.warn(`[sentinel-dispatch] Healer circuit breaker (check 7b): ${healerFailures7b.cnt} failures in 48h — skipping`);
+
+      if (!lastHeal?.last_run) {
+        // NEW: Get companies with recent failures to check per-company circuit breaker
+        const companiesWithFailures = await sql`
+          SELECT DISTINCT company_id FROM agent_actions
+          WHERE status = 'failed'
+            AND finished_at > NOW() - INTERVAL '48 hours'
+            AND agent NOT IN ('healer', 'sentinel')
+            AND company_id IS NOT NULL
+        `;
+
+        // Check per-company healer circuit breakers
+        let allCompaniesBlocked = true;
+        let totalCompanies = 0;
+        let blockedCompanies = 0;
+
+        for (const row of companiesWithFailures) {
+          totalCompanies++;
+          const circuitCheck = await checkHealerCompanyCircuitBreaker(sql, row.company_id);
+          if (circuitCheck.blocked) {
+            blockedCompanies++;
+            const [company] = await sql`SELECT slug FROM companies WHERE id = ${row.company_id} LIMIT 1`;
+            console.warn(`[sentinel-dispatch] Healer circuit breaker (check 7b, ${company?.slug || row.company_id}): ${circuitCheck.reason}`);
+          } else {
+            allCompaniesBlocked = false;
+          }
+        }
+
+        // Only dispatch healer if at least one company is not blocked
+        if (totalCompanies === 0 || !allCompaniesBlocked) {
+          await dispatchToActions(ctx, "healer_trigger", { source: "sentinel", scope: "systemic", reason: "errors_detected", trace_id: traceId });
+          dispatches.push({ type: "brain", target: "healer_trigger", payload: { reason: "errors_detected" } });
+          if (blockedCompanies > 0) {
+            console.log(`[sentinel-dispatch] Healer dispatched despite ${blockedCompanies}/${totalCompanies} companies blocked — others still need healing`);
+          }
+        } else {
+          console.warn(`[sentinel-dispatch] Healer skipped (check 7b): all ${blockedCompanies} companies with failures are circuit-breaker blocked`);
+        }
       }
     }
 
