@@ -10,6 +10,7 @@ import { selectEntriesWithMMR, type PlaybookEntry } from "@/lib/mmr";
 import { cachedPlaybook, cachedCompanyList } from "@/lib/redis-cache";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
 import { getCachedCompanyMetrics, getCachedGrowthMetrics } from "@/lib/cached-metrics";
+import { computeUnitEconomics, checkUnitEconomicsKillTrigger, generateUnitEconomicsSummary, type UnitEconomicsInput } from "@/lib/unit-economics";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { extractCompletionReport, type CompletionReport, type AgentSignal } from "@/lib/completion-report";
 
@@ -685,16 +686,37 @@ async function ceoContext(sql: any, company: any) {
   // Add portfolio context with current company highlighted
   const portfolioContext = await enrichPortfolioWithContext(sql, portfolioData, company.id);
 
+  // Compute unit economics (LTV/CAC)
+  const unitEconomicsInput: UnitEconomicsInput[] = metrics.map(m => ({
+    date: m.date,
+    revenue: m.revenue || 0,
+    mrr: m.mrr || 0,
+    customers: m.customers || 0,
+    churn_rate: m.churn_rate || 0,
+    cac: m.cac || 0,
+    ad_spend: m.ad_spend || 0,
+    signups: m.signups || 0,
+  }));
+  const unitEconomics = computeUnitEconomics(unitEconomicsInput);
+  const unitEconomicsSummary = generateUnitEconomicsSummary(unitEconomics);
+
   // Check for CEO score kill evaluation trigger
   const ceoScoreKillTrigger = checkCEOScoreKillTrigger(recentCycles.map((c: { cycle_number: number; score: string }) => ({
     cycle_number: c.cycle_number,
     score: c.score
   })));
 
+  // Check unit economics kill trigger
+  const daysSinceCreation = Math.floor((Date.now() - new Date(company.created_at).getTime()) / 86400000);
+  const unitEconomicsKillTrigger = checkUnitEconomicsKillTrigger(unitEconomics, daysSinceCreation);
+
   // Combine all kill evaluation triggers
   const allKillEvaluationTriggers = [...validation.kill_evaluation_triggers];
   if (ceoScoreKillTrigger) {
     allKillEvaluationTriggers.push(ceoScoreKillTrigger);
+  }
+  if (unitEconomicsKillTrigger) {
+    allKillEvaluationTriggers.push(unitEconomicsKillTrigger);
   }
 
   return {
@@ -727,6 +749,8 @@ async function ceoContext(sql: any, company: any) {
     metrics: metrics.slice(0, 7),
     growth_rates: growthRates,
     growth_summary: growthSummary,
+    unit_economics: unitEconomics,
+    unit_economics_summary: unitEconomicsSummary,
     portfolio_summary: portfolioContext,
     hive_capabilities: getCapabilitySummary(),
   };

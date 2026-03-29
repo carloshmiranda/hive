@@ -17,6 +17,9 @@ export interface MetricsRow {
   revenue?: number;
   mrr?: number;
   customers?: number;
+  churn_rate?: number;
+  cac?: number;
+  ad_spend?: number;
   pricing_cta_clicks?: number;
   pricing_page_views?: number;
   affiliate_clicks?: number;

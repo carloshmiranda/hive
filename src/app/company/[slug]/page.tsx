@@ -21,6 +21,7 @@ type Action = {
 type Metric = {
   date: string; revenue: number; mrr: number; customers: number;
   page_views: number; signups: number; churn_rate: number;
+  cac: number; ad_spend: number;
 };
 type Approval = {
   id: string; gate_type: string; title: string; description: string; status: string; created_at: string;
@@ -231,6 +232,69 @@ export default function CompanyDetailPage() {
           })()}
         </div>
       )}
+
+      {/* Unit Economics */}
+      {(() => {
+        if (latestMetrics.length < 7) return null;
+        const hasRevenue = latestMetrics.some(m => m.mrr > 0 || m.revenue > 0);
+        if (!hasRevenue) return null;
+
+        const latest = latestMetrics[0];
+        const totalCustomers = Math.max(...latestMetrics.map(m => m.customers));
+        const arpu = totalCustomers > 0 ? latest.mrr / totalCustomers : 0;
+
+        const churnDays = latestMetrics.filter(m => m.churn_rate > 0);
+        const avgDailyChurn = churnDays.length > 0
+          ? churnDays.reduce((s, m) => s + m.churn_rate, 0) / churnDays.length : 0;
+        const monthlyChurn = Math.min(avgDailyChurn * 30, 1);
+        const avgLifetime = monthlyChurn > 0 ? 1 / monthlyChurn : null;
+        const ltv = arpu > 0 && avgLifetime ? arpu * avgLifetime : null;
+
+        const totalAdSpend = latestMetrics.reduce((s, m) => s + (m.ad_spend || 0), 0);
+        const explicitCACs = latestMetrics.filter(m => m.cac > 0);
+        const totalNewCustomers = latestMetrics.reduce((s, m) => s + (m.signups || 0), 0);
+        const cac = explicitCACs.length > 0
+          ? explicitCACs.reduce((s, m) => s + m.cac, 0) / explicitCACs.length
+          : totalNewCustomers > 0 ? totalAdSpend / totalNewCustomers : null;
+
+        const ratio = ltv && cac && cac > 0 ? ltv / cac : null;
+        const payback = cac && arpu > 0 ? cac / arpu : null;
+
+        const healthColor = ratio === null ? "var(--hive-text-secondary)"
+          : ratio >= 3 ? "var(--hive-green)" : ratio >= 1 ? "var(--hive-amber)" : "var(--hive-red)";
+
+        const econItems = [
+          { label: "LTV", value: ltv ? `€${ltv.toFixed(0)}` : "—", highlight: ltv !== null && ltv > 0 },
+          { label: "CAC", value: cac ? `€${cac.toFixed(0)}` : "—", highlight: false },
+          { label: "LTV/CAC", value: ratio ? `${ratio.toFixed(1)}x` : "—", highlight: ratio !== null && ratio >= 3 },
+          { label: "Payback", value: payback ? `${payback.toFixed(0)}mo` : "—", highlight: payback !== null && payback <= 12 },
+          { label: "ARPU", value: arpu > 0 ? `€${arpu.toFixed(0)}/mo` : "—", highlight: false },
+          { label: "Ad spend", value: `€${totalAdSpend.toFixed(0)}`, highlight: false },
+        ];
+
+        return (
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <h3 style={{ fontSize: 14, color: "var(--hive-text)", margin: 0, fontWeight: 500 }}>Unit Economics</h3>
+              {ratio !== null && (
+                <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                  padding: "2px 8px", borderRadius: 4, color: healthColor,
+                  background: healthColor + "14", border: `1px solid ${healthColor}2a` }}>
+                  {ratio >= 3 ? "HEALTHY" : ratio >= 1 ? "WARNING" : "CRITICAL"}
+                </span>
+              )}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
+              {econItems.map((m, i) => (
+                <div key={i} style={{ padding: "12px 14px", background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
+                  <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
+                  <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginTop: 2 }}>{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Latest CEO Briefing */}
       {(() => {

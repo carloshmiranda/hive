@@ -20,7 +20,8 @@ export async function getCachedCompanyMetrics(
   return cachedCompanyMetrics(companySlug, async () => {
     const metrics = await sql`
       SELECT date, page_views, signups, waitlist_signups, waitlist_total,
-        revenue, mrr, customers, pricing_page_views, pricing_cta_clicks,
+        revenue, mrr, customers, churn_rate, cac, ad_spend,
+        pricing_page_views, pricing_cta_clicks,
         affiliate_clicks, affiliate_revenue
       FROM metrics WHERE company_id = ${companyId}
       ORDER BY date DESC LIMIT 14
@@ -36,6 +37,9 @@ export async function getCachedCompanyMetrics(
       revenue: m.revenue || 0,
       mrr: m.mrr || 0,
       customers: m.customers || 0,
+      churn_rate: parseFloat(m.churn_rate) || 0,
+      cac: parseFloat(m.cac) || 0,
+      ad_spend: parseFloat(m.ad_spend) || 0,
       pricing_page_views: m.pricing_page_views || 0,
       pricing_cta_clicks: m.pricing_cta_clicks || 0,
       affiliate_clicks: m.affiliate_clicks || 0,
@@ -56,7 +60,8 @@ export async function getCachedGrowthMetrics(
 ): Promise<MetricsRow[]> {
   return cachedCompanyMetrics(`${companySlug}:growth`, async () => {
     const metrics = await sql`
-      SELECT date, mrr, customers, page_views, signups, waitlist_total, waitlist_signups
+      SELECT date, mrr, customers, page_views, signups, waitlist_total, waitlist_signups,
+        churn_rate, cac, ad_spend
       FROM metrics WHERE company_id = ${companyId}
         AND date >= CURRENT_DATE - INTERVAL '7 days'
       ORDER BY date DESC LIMIT 14
@@ -72,6 +77,9 @@ export async function getCachedGrowthMetrics(
       revenue: m.revenue || 0,
       mrr: m.mrr || 0,
       customers: m.customers || 0,
+      churn_rate: parseFloat(m.churn_rate) || 0,
+      cac: parseFloat(m.cac) || 0,
+      ad_spend: parseFloat(m.ad_spend) || 0,
       pricing_page_views: m.pricing_page_views || 0,
       pricing_cta_clicks: m.pricing_cta_clicks || 0,
       affiliate_clicks: m.affiliate_clicks || 0,
