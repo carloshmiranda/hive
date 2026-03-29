@@ -18,7 +18,7 @@ function getAgentDomains(agent: string): string[] | null {
   switch (agent) {
     case 'build':
     case 'fix':
-      return ['engineering', 'infrastructure', 'payments', 'auth', 'deployment'];
+      return ['engineering', 'infrastructure', 'operations', 'payments', 'auth', 'deployment'];
     case 'growth':
       return ['growth', 'seo', 'email_marketing', 'content', 'social'];
     case 'ceo':
@@ -349,7 +349,7 @@ async function buildContext(sql: any, company: any) {
         WHERE confidence >= 0.6
           AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
           AND (relevant_agents @> ARRAY['build'] OR relevant_agents = '{}')
-          AND domain = ANY(${['engineering', 'infrastructure', 'payments', 'auth', 'deployment']})
+          AND domain = ANY(${['engineering', 'infrastructure', 'operations', 'payments', 'auth', 'deployment']})
         ORDER BY confidence DESC LIMIT 5
       `.catch(() => [])
     ),

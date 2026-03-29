@@ -48,6 +48,7 @@ import {
   type Dispatch,
 } from "@/lib/sentinel-helpers";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { normalizePlaybookDomain } from "@/lib/playbook-domains";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -1219,6 +1220,24 @@ export async function GET(request: Request) {
         ORDER BY domain, confidence DESC
       `;
 
+      // Normalize aliased domains in the DB (e.g. ops → operations)
+      const aliasedIds: string[] = [];
+      const aliasUpdates: Map<string, string> = new Map();
+      for (const e of consolidationEntries) {
+        const canonical = normalizePlaybookDomain(e.domain as string);
+        if (canonical !== (e.domain as string)) {
+          aliasedIds.push(e.id as string);
+          aliasUpdates.set(e.id as string, canonical);
+          e.domain = canonical;
+        }
+      }
+      if (aliasedIds.length > 0) {
+        await sql`
+          UPDATE playbook SET domain = 'operations'
+          WHERE id = ANY(${aliasedIds}) AND domain != 'operations'
+        `;
+      }
+
       const byDomain: Record<string, typeof consolidationEntries> = {};
       for (const e of consolidationEntries) {
         const d = e.domain as string;
@@ -1329,11 +1348,15 @@ export async function GET(request: Request) {
         }
       }
 
-      if (playbookMerged > 0 || playbookComposites > 0) {
+      if (playbookMerged > 0 || playbookComposites > 0 || aliasedIds.length > 0) {
+        const parts = [];
+        if (aliasedIds.length > 0) parts.push(`${aliasedIds.length} domains normalized`);
+        if (playbookMerged > 0) parts.push(`${playbookMerged} duplicates merged`);
+        if (playbookComposites > 0) parts.push(`${playbookComposites} cross-company composites created`);
         await sql`
           INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
           VALUES ('sentinel', 'playbook_consolidation',
-            ${`Playbook consolidation: ${playbookMerged} duplicates merged, ${playbookComposites} cross-company composites created`},
+            ${`Playbook consolidation: ${parts.join(", ")}`},
             'success', NOW(), NOW())
         `.catch(() => {});
       }

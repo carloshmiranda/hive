@@ -273,6 +273,10 @@ export interface PlaybookEntry {
 export async function upsertPlaybookEntry(entry: PlaybookEntry): Promise<string> {
   const sql = getDb();
 
+  // Normalize domain to prevent fragmentation (e.g. ops → operations)
+  const { normalizePlaybookDomain } = await import("@/lib/playbook-domains");
+  entry = { ...entry, domain: normalizePlaybookDomain(entry.domain) };
+
   // First, find existing entries with same domain
   const existingEntries = await sql`
     SELECT id, insight, confidence, superseded_by
