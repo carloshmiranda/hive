@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { invalidatePlaybook } from "@/lib/redis-cache";
+import { normalizePlaybookDomain } from "@/lib/playbook-domains";
 
 // Research summary compression: extract only relevant sections for the current task type
 export function compressResearchForAgent(
@@ -82,6 +83,7 @@ function deriveAgentsFromDomain(domain: string): string[] {
   const domainToAgents: Record<string, string[]> = {
     engineering: ['build', 'fix'],
     infrastructure: ['build', 'fix'],
+    operations: ['build', 'fix'],
     payments: ['build', 'fix'],
     auth: ['build', 'fix'],
     deployment: ['build', 'fix'],
@@ -109,10 +111,12 @@ export async function POST(req: NextRequest) {
     return err("Invalid JSON body", 400);
   }
 
-  const { source_company_id, domain, insight, evidence, confidence, content_language, relevant_agents } = body;
-  if (!domain || !insight) {
+  const { source_company_id, domain: rawDomain, insight, evidence, confidence, content_language, relevant_agents } = body;
+  if (!rawDomain || !insight) {
     return err("Missing required fields: domain, insight", 400);
   }
+
+  const domain = normalizePlaybookDomain(rawDomain);
 
   // Use provided relevant_agents or auto-derive from domain
   const agents: string[] = Array.isArray(relevant_agents) && relevant_agents.length > 0

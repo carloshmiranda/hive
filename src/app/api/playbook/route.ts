@@ -2,13 +2,15 @@ import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { upsertPlaybookEntry } from "@/lib/convergent";
 import { invalidatePlaybook } from "@/lib/redis-cache";
+import { normalizePlaybookDomain } from "@/lib/playbook-domains";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
 
   const { searchParams } = new URL(req.url);
-  const domain = searchParams.get("domain");
+  const rawDomain = searchParams.get("domain");
+  const domain = rawDomain ? normalizePlaybookDomain(rawDomain) : null;
 
   const sql = getDb();
   const playbook = domain
