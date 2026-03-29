@@ -523,6 +523,61 @@ export async function batchCheckCircuits(
 }
 
 // ---------------------------------------------------------------------------
+// Agent action logging with circuit breaker cache invalidation
+// ---------------------------------------------------------------------------
+
+/**
+ * Log an agent action to the database and invalidate circuit breaker cache if it's a failure.
+ * This ensures that circuit breaker state stays accurate when new failures occur.
+ */
+export async function logAgentAction(
+  sql: any,
+  action: {
+    agent: string;
+    company_id?: string | null;
+    cycle_id?: string | null;
+    action_type: string;
+    description: string;
+    status: 'started' | 'success' | 'failed';
+    error?: string | null;
+    output?: string | null;
+    started_at?: Date;
+    finished_at?: Date;
+  }
+): Promise<void> {
+  // Insert the agent action
+  await sql`
+    INSERT INTO agent_actions (
+      agent, company_id, cycle_id, action_type, description,
+      status, error, output, started_at, finished_at
+    ) VALUES (
+      ${action.agent},
+      ${action.company_id || null},
+      ${action.cycle_id || null},
+      ${action.action_type},
+      ${action.description},
+      ${action.status},
+      ${action.error || null},
+      ${action.output || null},
+      ${action.started_at || new Date()},
+      ${action.finished_at || (action.status !== 'started' ? new Date() : null)}
+    )
+  `;
+
+  // If this is a failed action with a company_id, invalidate the circuit breaker cache
+  // for this specific agent+company pair to ensure the cache reflects the new failure
+  if (action.status === 'failed' && action.company_id) {
+    try {
+      await import("@/lib/redis-cache").then(({ invalidateCircuitBreaker }) =>
+        invalidateCircuitBreaker(action.company_id!, action.agent)
+      );
+    } catch {
+      // Cache invalidation failure is non-fatal
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Text similarity (used by playbook consolidation in janitor)
 // ---------------------------------------------------------------------------
 

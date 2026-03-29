@@ -264,7 +264,18 @@ export async function batchSetCircuitStates(
 }
 
 /**
- * Invalidate circuit breaker cache for a specific company.
+ * Invalidate circuit breaker cache for a specific agent+company pair.
+ */
+export async function invalidateCircuitBreaker(
+  companyId: string,
+  agent: string
+): Promise<void> {
+  const cacheKey = `${CIRCUIT_BREAKER_PREFIX}${companyId}:${agent}`;
+  await cacheDel(cacheKey);
+}
+
+/**
+ * Invalidate circuit breaker cache for a specific company (all agents).
  */
 export async function invalidateCircuitBreakers(companyId?: string): Promise<void> {
   if (companyId) {
