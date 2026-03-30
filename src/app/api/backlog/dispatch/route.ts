@@ -11,6 +11,7 @@ import { setSentryTags } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
 import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 import { markTaskAsStealable, claimStealableTask, type WorkStealingResult } from "@/lib/work-stealing";
+import { computeLineageFailures, blockLineageForManualSpec } from "@/lib/backlog-lineage";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -1895,6 +1896,30 @@ export async function POST(req: Request) {
     };
     console.log(`[backlog] Using manual spec from notes for "${topItem.title}" (spec text: ${manualSpecText.length} chars)`);
   }
+
+  // LINEAGE FAILURE CAP: Prevent death loops from decomposed items
+  // Check if this item's lineage (parent + all descendants) has exceeded the failure threshold.
+  // When too many failures accumulate across the parent_id chain, mark the entire lineage
+  // as needing manual intervention to stop mechanical decomposition loops.
+  const lineageCheck = await computeLineageFailures(topItem.id, 5);
+  if (lineageCheck.exceedsThreshold) {
+    console.log(`[backlog] Lineage failure cap triggered for "${topItem.title}": ${lineageCheck.totalFailures} failures across ${lineageCheck.lineageIds.length} lineage items`);
+
+    // Block entire lineage to prevent further dispatch attempts
+    await blockLineageForManualSpec(
+      lineageCheck.lineageIds,
+      `Lineage failure cap exceeded (${lineageCheck.totalFailures} failures > 5 threshold)`
+    );
+
+    return json({
+      dispatched: false,
+      reason: "lineage_failure_cap_exceeded",
+      lineage_failures: lineageCheck.totalFailures,
+      lineage_size: lineageCheck.lineageIds.length,
+      blocked_item: topItem.title
+    });
+  }
+
   // If item has no spec, dispatch to GitHub Actions for Claude Max spec generation.
   // This replaces the old inline OpenRouter spec gen — Claude writes far better specs.
   // The item stays in 'planning' status until the hive-spec-gen workflow writes the spec
