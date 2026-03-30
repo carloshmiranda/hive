@@ -38,7 +38,8 @@ CREATE TABLE companies (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   killed_at     TIMESTAMPTZ,
   kill_reason   TEXT,
-  resend_audience_id TEXT        -- Resend Audiences API audience ID for this company's leads
+  resend_audience_id TEXT,       -- Resend Audiences API audience ID for this company's leads
+  healer_blocked     BOOLEAN DEFAULT false  -- Circuit breaker flag to suppress Healer dispatch until manually cleared
 );
 
 -- Agent cycles: one row per nightly orchestrator run per company

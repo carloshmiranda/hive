@@ -582,10 +582,94 @@ export async function logAgentAction(
 // ---------------------------------------------------------------------------
 
 /**
+ * Create an escalation approval for a company that has persistent Healer failures.
+ * This prevents the feedback loop by requiring manual intervention instead of re-dispatching.
+ */
+export async function createHealerEscalation(
+  sql: any,
+  companyId: string,
+  context: {
+    failureCount: number;
+    consecutiveFailures: number;
+    successRate: number;
+    recentErrors: string[];
+    company_slug?: string;
+  }
+): Promise<{ created: boolean; approvalId?: string }> {
+  try {
+    const companyName = context.company_slug || `company-${companyId.slice(0, 8)}`;
+
+    // Check if there's already a pending escalation for this company
+    const [existingEscalation] = await sql`
+      SELECT id FROM approvals
+      WHERE gate_type = 'escalation'
+        AND company_id = ${companyId}
+        AND status = 'pending'
+        AND context->>'escalation_type' = 'healer_blocked'
+      LIMIT 1
+    `;
+
+    if (existingEscalation) {
+      console.log(`[createHealerEscalation] Escalation already exists for ${companyName}: ${existingEscalation.id}`);
+      return { created: false };
+    }
+
+    const title = `Healer blocked for ${companyName} - Manual intervention required`;
+    const description = `Healer has failed ${context.failureCount} times for ${companyName} with ${context.consecutiveFailures} consecutive failures (${Math.round(context.successRate * 100)}% success rate). Circuit breaker activated to prevent feedback loop.`;
+
+    const escalationContext = {
+      escalation_type: 'healer_blocked',
+      company_id: companyId,
+      company_slug: companyName,
+      failure_count: context.failureCount,
+      consecutive_failures: context.consecutiveFailures,
+      success_rate: context.successRate,
+      recent_errors: context.recentErrors.slice(0, 5), // Limit to 5 most recent
+      created_by: 'sentinel_healer_circuit_breaker',
+      actions_available: [
+        'Clear healer_blocked flag and retry',
+        'Investigate root cause manually',
+        'Mark company for provisioning review',
+        'Escalate to infrastructure team'
+      ]
+    };
+
+    const [approval] = await sql`
+      INSERT INTO approvals (
+        company_id, gate_type, title, description, context, status
+      ) VALUES (
+        ${companyId},
+        'escalation',
+        ${title},
+        ${description},
+        ${JSON.stringify(escalationContext)},
+        'pending'
+      ) RETURNING id
+    `;
+
+    // Set the healer_blocked flag to prevent future dispatch
+    await sql`
+      UPDATE companies
+      SET healer_blocked = true, updated_at = NOW()
+      WHERE id = ${companyId}
+    `;
+
+    console.log(`[createHealerEscalation] Created escalation ${approval.id} for ${companyName}, set healer_blocked=true`);
+
+    return { created: true, approvalId: approval.id };
+  } catch (error) {
+    console.error(`[createHealerEscalation] Error creating escalation for company ${companyId}:`, error);
+    return { created: false };
+  }
+}
+
+/**
  * Check if healer should be blocked for a specific company based on:
- * 1. Per-company failure count (not global)
- * 2. Error pattern deduplication (same error description)
- * 3. Exponential backoff (2h → 4h → 8h → 24h)
+ * 1. healer_blocked flag (manual escalation state)
+ * 2. Per-company failure count (not global)
+ * 3. Error pattern deduplication (same error description)
+ * 4. Exponential backoff (2h → 4h → 8h → 24h)
+ * 5. Escalation thresholds (3+ consecutive failures, success rate < 30%)
  */
 export async function checkHealerCompanyCircuitBreaker(
   sql: any,
@@ -596,10 +680,25 @@ export async function checkHealerCompanyCircuitBreaker(
   failures?: number;
   lastErrorPattern?: string;
   backoffHours?: number;
+  needsEscalation?: boolean;
+  successRate?: number;
+  consecutiveFailures?: number;
 }> {
   try {
-    // Get recent healer failures for this company
-    const healerFailures = await sql`
+    // Check if company has healer_blocked flag set (manual escalation state)
+    const [company] = await sql`
+      SELECT healer_blocked, slug FROM companies WHERE id = ${companyId} LIMIT 1
+    `;
+
+    if (company?.healer_blocked) {
+      return {
+        blocked: true,
+        reason: `Healer blocked flag set for ${company.slug} - awaiting manual intervention (escalation approval)`
+      };
+    }
+
+    // Get recent healer actions for this company (extended window for success rate calculation)
+    const healerActions = await sql`
       SELECT
         status,
         description,
@@ -608,15 +707,51 @@ export async function checkHealerCompanyCircuitBreaker(
       FROM agent_actions
       WHERE agent = 'healer'
         AND company_id = ${companyId}
-        AND finished_at > NOW() - INTERVAL '48 hours'
+        AND finished_at > NOW() - INTERVAL '7 days'
       ORDER BY finished_at DESC
-      LIMIT 10
+      LIMIT 20
     `;
 
-    const failedActions = healerFailures.filter((action: any) => action.status === 'failed');
+    const recentHealerActions = healerActions.filter((action: any) =>
+      action.finished_at && new Date(action.finished_at) > new Date(Date.now() - 48 * 60 * 60 * 1000)
+    );
+
+    const failedActions = recentHealerActions.filter((action: any) => action.status === 'failed');
+    const successfulActions = recentHealerActions.filter((action: any) => action.status === 'success');
+    const totalActions = recentHealerActions.length;
     const failureCount = failedActions.length;
 
-    // Rule 1: If 2+ healer failures for this company in 24h, calculate backoff
+    // Calculate success rate
+    const successRate = totalActions > 0 ? successfulActions.length / totalActions : 1.0;
+
+    // Check for consecutive failures
+    let consecutiveFailures = 0;
+    for (const action of recentHealerActions) {
+      if (action.status === 'failed') {
+        consecutiveFailures++;
+      } else if (action.status === 'success') {
+        break;
+      }
+    }
+
+    // Rule 0: Escalation threshold check (3+ consecutive failures OR success rate < 30% with 5+ attempts)
+    const shouldEscalate = (
+      consecutiveFailures >= 3 ||
+      (successRate < 0.30 && totalActions >= 5)
+    );
+
+    if (shouldEscalate) {
+      return {
+        blocked: true,
+        reason: `Escalation threshold reached: ${consecutiveFailures} consecutive failures, ${Math.round(successRate * 100)}% success rate (${successfulActions.length}/${totalActions})`,
+        failures: failureCount,
+        needsEscalation: true,
+        successRate,
+        consecutiveFailures
+      };
+    }
+
+    // Rule 1: If 2+ healer failures for this company in 48h, calculate backoff
     if (failureCount >= 2) {
       const mostRecentFailure = failedActions[0];
       const failureAgeHours = mostRecentFailure?.finished_at
@@ -631,14 +766,16 @@ export async function checkHealerCompanyCircuitBreaker(
           blocked: true,
           reason: `Exponential backoff: ${failureCount} healer failures, next attempt in ${Math.ceil(backoffHours - failureAgeHours)}h`,
           failures: failureCount,
-          backoffHours
+          backoffHours,
+          successRate,
+          consecutiveFailures
         };
       }
     }
 
     // Rule 2: Error pattern deduplication - check if last 2 healer actions had identical descriptions
-    if (healerFailures.length >= 2) {
-      const lastTwo = healerFailures.slice(0, 2);
+    if (recentHealerActions.length >= 2) {
+      const lastTwo = recentHealerActions.slice(0, 2);
       const lastTwoDescriptions = lastTwo.map((action: any) => action.description?.trim().toLowerCase()).filter(Boolean);
 
       if (lastTwoDescriptions.length === 2 && lastTwoDescriptions[0] === lastTwoDescriptions[1]) {
@@ -658,7 +795,9 @@ export async function checkHealerCompanyCircuitBreaker(
             blocked: true,
             reason: `Error pattern deduplication: last 2 healer dispatches had identical error patterns, awaiting other agent success`,
             failures: failureCount,
-            lastErrorPattern: lastTwoDescriptions[0]
+            lastErrorPattern: lastTwoDescriptions[0],
+            successRate,
+            consecutiveFailures
           };
         }
       }
@@ -666,7 +805,9 @@ export async function checkHealerCompanyCircuitBreaker(
 
     return {
       blocked: false,
-      failures: failureCount
+      failures: failureCount,
+      successRate,
+      consecutiveFailures
     };
   } catch (error) {
     console.warn(`[checkHealerCompanyCircuitBreaker] Error for company ${companyId}:`, error);

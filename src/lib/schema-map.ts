@@ -142,6 +142,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "type": "TEXT",
         "nullable": true,
         "hasDefault": false
+      },
+      "healer_blocked": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "hasDefault": true
       }
     },
     "checks": [
