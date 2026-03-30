@@ -528,3 +528,48 @@ CREATE INDEX idx_decision_log_company ON decision_log(company_id);
 CREATE INDEX idx_decision_log_type ON decision_log(decision_type);
 CREATE INDEX idx_decision_log_validation ON decision_log(was_correct) WHERE was_correct IS NOT NULL;
 CREATE INDEX idx_decision_log_pending_validation ON decision_log(created_at) WHERE was_correct IS NULL;
+
+-- ============================================================================
+-- QA Testing Tables (webapp-testing skill integration)
+-- ============================================================================
+
+-- QA test runs: high-level run metadata
+CREATE TABLE qa_runs (
+  id                TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id        TEXT NOT NULL REFERENCES companies(id),
+  deployment_url    TEXT NOT NULL,           -- URL that was tested
+  workflow_run_id   TEXT,                   -- GitHub Actions run ID (if available)
+  commit_sha        TEXT,                   -- Git commit that was tested
+  branch            TEXT,                   -- Git branch
+  pr_number         INTEGER,                -- Pull request number (if from PR)
+  status            TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'error')),
+  total_tests       INTEGER NOT NULL DEFAULT 0,
+  passed_tests      INTEGER NOT NULL DEFAULT 0,
+  failed_tests      INTEGER NOT NULL DEFAULT 0,
+  skipped_tests     INTEGER NOT NULL DEFAULT 0,
+  duration_ms       INTEGER,               -- Total test run duration
+  started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- QA test results: individual test case results
+CREATE TABLE qa_test_results (
+  id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  qa_run_id       TEXT NOT NULL REFERENCES qa_runs(id) ON DELETE CASCADE,
+  test_suite      TEXT NOT NULL,           -- e.g., 'webapp-qa', 'smoke', 'custom'
+  test_name       TEXT NOT NULL,           -- descriptive test name
+  status          TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'skipped')),
+  duration_ms     INTEGER,                 -- Individual test duration
+  error_message   TEXT,                   -- Failure details
+  screenshot_path TEXT,                   -- Path to failure screenshot
+  console_logs    JSONB,                  -- Captured console logs array
+  browser_logs    JSONB,                  -- Browser-specific logs array
+  metadata        JSONB                   -- Additional test metadata
+);
+
+CREATE INDEX idx_qa_runs_company ON qa_runs(company_id);
+CREATE INDEX idx_qa_runs_status ON qa_runs(status);
+CREATE INDEX idx_qa_runs_started ON qa_runs(started_at);
+CREATE INDEX idx_qa_runs_workflow ON qa_runs(workflow_run_id) WHERE workflow_run_id IS NOT NULL;
+CREATE INDEX idx_qa_test_results_run ON qa_test_results(qa_run_id);
+CREATE INDEX idx_qa_test_results_status ON qa_test_results(status);

@@ -204,6 +204,64 @@ If `text-secondary` in `globals.css` is `#6b7280` (gray-400):
 
 **Application:** Check these rules before starting any UI work. Apply missing fixes silently as part of your normal workflow. Each rule is a one-time check — once applied to a company, it doesn't need checking again until the next major boilerplate update.
 
+## QA Verification and Error Handling
+
+The webapp-testing skill is integrated into the deployment pipeline to automatically verify functionality after each deploy.
+
+### QA Process
+1. **Automated Testing**: After successful feature deployment, Playwright tests run automatically against the live site
+2. **Test Coverage**: Tests verify page loads, interactive elements, forms, and console error absence
+3. **Result Collection**: QA results are automatically submitted to `/api/agents/qa-results` with detailed reports
+4. **Escalation**: Failed QA tests create automatic escalations requiring Engineer investigation
+
+### Handling QA Failures
+When you receive a QA failure escalation (`action_type: 'qa_failure'`):
+
+1. **Review QA Details**: Check the escalation metadata for:
+   - Failed test names and error messages
+   - Screenshots and console logs (if available)
+   - Deployment URL and commit SHA
+
+2. **Reproduce Locally**:
+   ```bash
+   # Run QA tests locally to reproduce the issue
+   npm run test:qa
+
+   # Or run against the deployed site
+   QA_BASE_URL="https://company-slug.vercel.app" npm run test:qa
+   ```
+
+3. **Investigate Root Cause**:
+   - Check console errors in browser dev tools
+   - Verify all features work as expected
+   - Look for JavaScript errors, broken images, or network failures
+   - Test across different viewport sizes
+
+4. **Fix and Verify**:
+   - Implement necessary fixes
+   - Test changes locally: `npm run build && npm run test:qa`
+   - Deploy and verify QA passes on the live site
+
+### QA Test Results Reporting
+Include QA verification in your completion JSON:
+
+```json
+"qa_verification": {
+  "qa_run_checked": true,
+  "qa_status": "passed|failed|not_available",
+  "failed_tests": 0,
+  "issues_found": [],
+  "fixes_applied": ["description of any QA-related fixes made"]
+}
+```
+
+### When QA Tests are Unavailable
+If QA tests don't exist or can't run for a company:
+1. Manually verify key functionality works
+2. Check browser console for JavaScript errors
+3. Test responsive design on mobile viewport
+4. Report `qa_status: "manual_verification"` in your output
+
 ## Output format (JSON):
 
 **IMPORTANT: Always include a `status_code` field to help Sentinel route your completion:**
@@ -235,6 +293,13 @@ If `text-secondary` in `globals.css` is `#6b7280` (gray-400):
       }
     }
   ],
+  "qa_verification": {
+    "qa_run_checked": true,
+    "qa_status": "passed|failed|not_available|manual_verification",
+    "failed_tests": 0,
+    "issues_found": [],
+    "fixes_applied": []
+  },
   "concerns": ["List any non-blocking concerns (only if status_code is DONE_WITH_CONCERNS)"],
   "context_needed": "What clarification is needed (only if status_code is NEEDS_CONTEXT)",
   "blocking_issue": "What is blocking progress (only if status_code is BLOCKED)",

@@ -346,6 +346,131 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"company_slug\":\"${{ github.event.inputs.company_slug }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"$STATUS\",\"description\":\"Build workflow on company repo ($STATUS)\"}" || true
 
+      - name: Run QA tests on deployed site
+        if: steps.agent.outcome == 'success'
+        id: qa_tests
+        env:
+          QA_BASE_URL: "https://${{ github.event.inputs.company_slug }}.vercel.app"
+          QA_RESULTS_DIR: "./qa-results"
+        run: |
+          echo "🔍 Running QA tests on deployed site: $QA_BASE_URL"
+
+          # Install dependencies if not already present
+          if [ ! -d "node_modules" ]; then
+            echo "Installing dependencies..."
+            npm ci
+          fi
+
+          # Install Playwright browsers if not present
+          if [ ! -f "node_modules/.bin/playwright" ]; then
+            echo "Playwright not found, installing..."
+            npm install @playwright/test
+          fi
+
+          # Install Playwright browser binaries
+          npx playwright install chromium
+
+          # Create results directory
+          mkdir -p "$QA_RESULTS_DIR"
+
+          # Run QA tests
+          echo "Running webapp QA tests..."
+          QA_EXIT_CODE=0
+          npm run test:qa -- --reporter=json --output-dir="$QA_RESULTS_DIR" || QA_EXIT_CODE=$?
+
+          echo "QA tests completed with exit code: $QA_EXIT_CODE"
+
+          # Parse test results
+          if [ -f "$QA_RESULTS_DIR/results.json" ]; then
+            RESULTS_JSON=$(cat "$QA_RESULTS_DIR/results.json")
+
+            TOTAL_TESTS=$(echo "$RESULTS_JSON" | jq -r '.stats.expected // 0')
+            PASSED_TESTS=$(echo "$RESULTS_JSON" | jq -r '.stats.passed // 0')
+            FAILED_TESTS=$(echo "$RESULTS_JSON" | jq -r '.stats.failed // 0')
+            SKIPPED_TESTS=$(echo "$RESULTS_JSON" | jq -r '.stats.skipped // 0')
+            DURATION=$(echo "$RESULTS_JSON" | jq -r '.stats.duration // 0')
+
+            echo "📊 QA Results: Total: $TOTAL_TESTS, Passed: $PASSED_TESTS, Failed: $FAILED_TESTS, Skipped: $SKIPPED_TESTS"
+
+            # Set outputs for next steps
+            echo "total_tests=$TOTAL_TESTS" >> $GITHUB_OUTPUT
+            echo "passed_tests=$PASSED_TESTS" >> $GITHUB_OUTPUT
+            echo "failed_tests=$FAILED_TESTS" >> $GITHUB_OUTPUT
+            echo "skipped_tests=$SKIPPED_TESTS" >> $GITHUB_OUTPUT
+            echo "duration_ms=$DURATION" >> $GITHUB_OUTPUT
+            echo "qa_status=$([[ $FAILED_TESTS -eq 0 ]] && echo "passed" || echo "failed")" >> $GITHUB_OUTPUT
+          else
+            echo "❌ No results.json found, marking as error"
+            echo "total_tests=0" >> $GITHUB_OUTPUT
+            echo "passed_tests=0" >> $GITHUB_OUTPUT
+            echo "failed_tests=1" >> $GITHUB_OUTPUT
+            echo "skipped_tests=0" >> $GITHUB_OUTPUT
+            echo "duration_ms=0" >> $GITHUB_OUTPUT
+            echo "qa_status=error" >> $GITHUB_OUTPUT
+          fi
+
+          # Archive QA artifacts
+          if [ -d "$QA_RESULTS_DIR" ]; then
+            echo "📦 Archiving QA results and screenshots..."
+            tar -czf qa-artifacts.tar.gz "$QA_RESULTS_DIR" || true
+          fi
+
+      - name: Submit QA results to Hive
+        if: steps.agent.outcome == 'success'
+        run: |
+          echo "📤 Submitting QA results to Hive API..."
+
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          # Prepare QA results payload
+          QA_PAYLOAD=$(cat <<EOF
+          {
+            "company_slug": "${{ github.event.inputs.company_slug }}",
+            "deployment_url": "${{ env.QA_BASE_URL }}",
+            "workflow_run_id": "${{ github.run_id }}",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "pr_number": null,
+            "results": [
+              {
+                "company_slug": "${{ github.event.inputs.company_slug }}",
+                "test_suite": "webapp-qa",
+                "test_name": "Automated QA Suite",
+                "status": "${{ steps.qa_tests.outputs.qa_status == 'passed' && 'passed' || 'failed' }}",
+                "duration_ms": ${{ steps.qa_tests.outputs.duration_ms }},
+                "error_message": ${{ steps.qa_tests.outputs.failed_tests > 0 && '"QA tests failed"' || 'null' }},
+                "screenshot_path": null,
+                "console_logs": [],
+                "browser_logs": []
+              }
+            ],
+            "summary": {
+              "total": ${{ steps.qa_tests.outputs.total_tests }},
+              "passed": ${{ steps.qa_tests.outputs.passed_tests }},
+              "failed": ${{ steps.qa_tests.outputs.failed_tests }},
+              "skipped": ${{ steps.qa_tests.outputs.skipped_tests }},
+              "duration_ms": ${{ steps.qa_tests.outputs.duration_ms }}
+            }
+          }
+          EOF
+          )
+
+          QA_RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/qa-results" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$QA_PAYLOAD" || echo '{"ok":false,"error":"API call failed"}')
+
+          echo "QA API Response: $QA_RESPONSE"
+
+          QA_SUCCESS=$(echo "$QA_RESPONSE" | jq -r '.ok // false')
+          if [ "$QA_SUCCESS" = "true" ]; then
+            echo "✅ QA results successfully submitted to Hive"
+          else
+            echo "❌ Failed to submit QA results: $(echo "$QA_RESPONSE" | jq -r '.error // "unknown error"')"
+          fi
+
       - name: Mark task completed and dispatch to CEO
         if: always() && steps.agent.outcome == 'success'
         env:
