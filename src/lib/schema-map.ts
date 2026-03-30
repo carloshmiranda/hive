@@ -1820,6 +1820,164 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         ]
       }
     ]
+  },
+  "qa_runs": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "deployment_url": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "workflow_run_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "commit_sha": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "branch": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "pr_number": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "total_tests": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "passed_tests": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "failed_tests": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "skipped_tests": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "duration_ms": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "started_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "finished_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
+    },
+    "checks": [
+      {
+        "column": "status",
+        "allowedValues": [
+          "passed",
+          "failed",
+          "error"
+        ]
+      }
+    ]
+  },
+  "qa_test_results": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "qa_run_id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "test_suite": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "test_name": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "status": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "duration_ms": {
+        "type": "INTEGER",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "error_message": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "screenshot_path": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "console_logs": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "browser_logs": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "metadata": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": false
+      }
+    },
+    "checks": [
+      {
+        "column": "status",
+        "allowedValues": [
+          "passed",
+          "failed",
+          "skipped"
+        ]
+      }
+    ]
   }
 };
 
