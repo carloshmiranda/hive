@@ -28,6 +28,7 @@ import {
   batchCheckCircuits,
   checkHealerCompanyCircuitBreaker,
   batchCheckHealerCircuitBreakers,
+  createHealerEscalation,
   MAX_CYCLE_DISPATCHES,
   type SentinelContext,
   type Dispatch,
@@ -969,18 +970,43 @@ async function executeSentinelDispatch(request: Request) {
             AND company_id IS NOT NULL
         `;
 
-        // Check per-company healer circuit breakers
+        // Check per-company healer circuit breakers and handle escalations
         let allCompaniesBlocked = true;
         let totalCompanies = 0;
         let blockedCompanies = 0;
+        let escalationsCreated = 0;
 
         for (const row of companiesWithFailures) {
           totalCompanies++;
           const circuitCheck = await checkHealerCompanyCircuitBreaker(sql, row.company_id);
+
           if (circuitCheck.blocked) {
             blockedCompanies++;
             const [company] = await sql`SELECT slug FROM companies WHERE id = ${row.company_id} LIMIT 1`;
             console.warn(`[sentinel-dispatch] Healer circuit breaker (check 7, ${company?.slug || row.company_id}): ${circuitCheck.reason}`);
+
+            // Create escalation if needed
+            if (circuitCheck.needsEscalation) {
+              const recentErrors = await sql`
+                SELECT description FROM agent_actions
+                WHERE agent = 'healer' AND company_id = ${row.company_id}
+                AND status = 'failed' AND finished_at > NOW() - INTERVAL '48 hours'
+                ORDER BY finished_at DESC LIMIT 5
+              `;
+
+              const escalationResult = await createHealerEscalation(sql, row.company_id, {
+                failureCount: circuitCheck.failures || 0,
+                consecutiveFailures: circuitCheck.consecutiveFailures || 0,
+                successRate: circuitCheck.successRate || 0,
+                recentErrors: recentErrors.map((e: any) => e.description).filter(Boolean),
+                company_slug: company?.slug
+              });
+
+              if (escalationResult.created) {
+                escalationsCreated++;
+                console.log(`[sentinel-dispatch] Created healer escalation for ${company?.slug || row.company_id}: ${escalationResult.approvalId}`);
+              }
+            }
           } else {
             allCompaniesBlocked = false;
           }
@@ -995,6 +1021,9 @@ async function executeSentinelDispatch(request: Request) {
           }
         } else {
           console.warn(`[sentinel-dispatch] Healer skipped (check 7): all ${blockedCompanies} companies with failures are circuit-breaker blocked`);
+          if (escalationsCreated > 0) {
+            console.log(`[sentinel-dispatch] Created ${escalationsCreated} healer escalation(s) for manual intervention`);
+          }
         }
       }
     }
@@ -1016,18 +1045,43 @@ async function executeSentinelDispatch(request: Request) {
             AND company_id IS NOT NULL
         `;
 
-        // Check per-company healer circuit breakers
+        // Check per-company healer circuit breakers and handle escalations
         let allCompaniesBlocked = true;
         let totalCompanies = 0;
         let blockedCompanies = 0;
+        let escalationsCreated = 0;
 
         for (const row of companiesWithFailures) {
           totalCompanies++;
           const circuitCheck = await checkHealerCompanyCircuitBreaker(sql, row.company_id);
+
           if (circuitCheck.blocked) {
             blockedCompanies++;
             const [company] = await sql`SELECT slug FROM companies WHERE id = ${row.company_id} LIMIT 1`;
             console.warn(`[sentinel-dispatch] Healer circuit breaker (check 7b, ${company?.slug || row.company_id}): ${circuitCheck.reason}`);
+
+            // Create escalation if needed
+            if (circuitCheck.needsEscalation) {
+              const recentErrors = await sql`
+                SELECT description FROM agent_actions
+                WHERE agent = 'healer' AND company_id = ${row.company_id}
+                AND status = 'failed' AND finished_at > NOW() - INTERVAL '48 hours'
+                ORDER BY finished_at DESC LIMIT 5
+              `;
+
+              const escalationResult = await createHealerEscalation(sql, row.company_id, {
+                failureCount: circuitCheck.failures || 0,
+                consecutiveFailures: circuitCheck.consecutiveFailures || 0,
+                successRate: circuitCheck.successRate || 0,
+                recentErrors: recentErrors.map((e: any) => e.description).filter(Boolean),
+                company_slug: company?.slug
+              });
+
+              if (escalationResult.created) {
+                escalationsCreated++;
+                console.log(`[sentinel-dispatch] Created healer escalation for ${company?.slug || row.company_id}: ${escalationResult.approvalId}`);
+              }
+            }
           } else {
             allCompaniesBlocked = false;
           }
@@ -1042,6 +1096,9 @@ async function executeSentinelDispatch(request: Request) {
           }
         } else {
           console.warn(`[sentinel-dispatch] Healer skipped (check 7b): all ${blockedCompanies} companies with failures are circuit-breaker blocked`);
+          if (escalationsCreated > 0) {
+            console.log(`[sentinel-dispatch] Created ${escalationsCreated} healer escalation(s) for manual intervention`);
+          }
         }
       }
     }
