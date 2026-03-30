@@ -15,6 +15,15 @@
 
 ---
 
+### 2026-03-30 jq exits with code 5 when traversing string field — kills pre-execution guard, creates ghost lock
+**What happened:** Engineer workflow (`build-hive` job) crashed on the `Pre-execution guard` step for any backlog item with a stringified spec (i.e., `"spec": "{\"estimated_turns\":25,...}"`). The failure callback step was never reached, leaving `agent_actions` stuck in `running` state. This blocked the dispatch loop: health-gate saw a running brain agent and refused new dispatches.
+**Root cause:** jq `.spec.estimated_turns` when `.spec` is a JSON string (not object) causes jq to exit with code 5 (`string not supported in path expression`). With `set -eo pipefail`, this exits the entire step immediately — before `echo "skip=false"` writes to `$GITHUB_OUTPUT`. The failure callback had `if: always() && steps.agent.outcome == 'failure'` but `steps.agent.outcome` was `skipped` (agent step never ran), so the callback was skipped too, leaving the ghost lock.
+**Fix applied:** Rewrote both jq commands that access spec fields to handle either form: `.spec | if type == "string" then fromjson else . end | .field // empty`, plus `|| echo ""` to prevent pipefail propagation. Also changed failure callback condition to `if: failure()` so it fires on ANY upstream step crash. Commit `962aeec`.
+**Prevention:** Any jq command accessing a field on a value that could be a JSON string MUST use `fromjson` guard or `try`. When payloads come from external dispatchers (GitHub `repository_dispatch` → Sentinel → `dispatch` endpoint), nested objects may arrive serialized. Always use `|| echo ""` after `$(...)` subshells that run jq on untrusted input.
+**Affects:** hive
+
+---
+
 ### 2026-03-29 New GitHub Actions workflow not in OIDC allowlist → 403 on every run
 **What happened:** `hive-spec-gen.yml` was created and deployed but every run failed immediately at "Get tokens via OIDC" with `FATAL: Failed to get claude token: Workflow 'hive-spec-gen.yml' not authorized`.
 **Root cause:** `src/app/api/agents/token/route.ts` has an explicit `ALLOWED_WORKFLOWS` array. New workflows are not added automatically — they must be explicitly whitelisted. The array had 10 workflows; spec-gen was missing.
@@ -74,6 +83,13 @@
 **Root cause:** Sentinel Check 7 dispatches Healer when failure rate >20%. Healer fails → next Sentinel run sees same high failure rate → dispatches again. The per-company circuit breaker (3 failures/48h) exists but resets, and there's no Sentinel-level dedup that remembers *why* the Healer failed or whether the error is fixable.
 **Fix applied:** 5 backlog items created (#257-#261) covering: per-company+error dedup, Healer null logging fix, Engineer max_turns cumulative tracking, Sentinel cooldown after Healer failure, zombie action heartbeat mechanism.
 **Prevention:** Circuit breakers should operate at the granularity of (agent, company, error_pattern), not just (agent, global). Unfixable errors (config, missing deps) should be classified differently from code errors and routed to backlog creation instead of repeated Healer dispatch.
+**Affects:** hive
+
+### 2026-03-29 @stripe/agent-toolkit peer dependency incompatible with ai@^6
+**What happened:** PR #276 (`hive/improvement/stripe-agent-toolkit`) failed CI with `npm error ERESOLVE unable to resolve dependency tree`. The package `@stripe/agent-toolkit@0.9.0` requires `"ai": ">=5.0.89 <6.0.0"` as a peer dependency, but the project uses `ai@^6.0.141`.
+**Root cause:** The toolkit was added when `ai@^5` was the current major version. The project was later upgraded to `ai@^6` (a breaking change in the Vercel AI SDK) but the toolkit dependency was not reviewed for compatibility. No version of `@stripe/agent-toolkit` exists that supports `ai@^6`.
+**Fix applied:** Removed `@stripe/agent-toolkit` from `package.json` entirely. Replaced all `toolkit.mcpClient.callTool("create_subscription", ...)` etc. patterns in `src/app/api/agents/tools/route.ts` with direct `stripe.*` SDK calls (the `stripe` package was already installed). `getStripeAgentTools()` in `stripe.ts` converted to a static hardcoded list of tool definitions.
+**Prevention:** Before adding any package that depends on another major package (especially AI SDKs that release breaking majors frequently), check that the peer dep range is compatible with the installed version. When upgrading AI SDK major versions, run `npm install --dry-run` to catch peer dep conflicts before committing.
 **Affects:** hive
 
 ### 2026-03-29 PR review deadlock — queue gate blocks the only code path that clears the queue
