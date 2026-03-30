@@ -713,7 +713,7 @@ jobs:
 
           # Dynamic max_turns from spec.complexity when no explicit override
           if [ -z "$MAX_TURNS" ]; then
-            COMPLEXITY=$(echo "$PAYLOAD_JSON" | jq -r '.spec.complexity // empty' 2>/dev/null)
+            COMPLEXITY=$(echo "$PAYLOAD_JSON" | jq -r '.spec | if type == "string" then fromjson else . end | .complexity // empty' 2>/dev/null || echo "")
             case "$COMPLEXITY" in
               S)  MAX_TURNS=20 ;;
               M)  MAX_TURNS=35 ;;
@@ -732,7 +732,7 @@ jobs:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
           # Extract estimated_turns from spec (if present)
-          ESTIMATED_TURNS=$(echo "$PAYLOAD_JSON" | jq -r '.spec.estimated_turns // empty' 2>/dev/null)
+          ESTIMATED_TURNS=$(echo "$PAYLOAD_JSON" | jq -r '.spec | if type == "string" then fromjson else . end | .estimated_turns // empty' 2>/dev/null || echo "")
 
           if [ -n "$ESTIMATED_TURNS" ] && [ "$ESTIMATED_TURNS" -gt 28 ]; then
             echo "⚠️  Pre-execution guard: estimated_turns ($ESTIMATED_TURNS) > 28, marking for decomposition"
@@ -1081,7 +1081,7 @@ jobs:
           fi
 
       - name: Log failure to Hive API
-        if: always() && steps.agent.outcome == 'failure'
+        if: failure()
         env:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
