@@ -29,6 +29,7 @@ permissions:
 
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
 
 jobs:
   # ─── Resolve context for all jobs (non-secret outputs only) ───
@@ -166,6 +167,7 @@ jobs:
           GH_PAT: ${{ steps.auth.outputs.gh_pat }}
           GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
           VERCEL_TOKEN: ${{ steps.auth.outputs.vercel_token }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         uses: anthropics/claude-code-action@v1
         with:
           allowed_bots: "hive-orchestrator[bot]"
@@ -371,6 +373,99 @@ jobs:
                    -d '{"visibility":"public"}'
                fi
                ```
+            6d. Add Sentry error monitoring to the scaffolded company repo.
+               Read the skill reference first: `cat .claude/skills/sentry-nextjs-sdk/SKILL.md`
+               Then apply the minimal setup — error monitoring + tracing only (no session replay for new companies):
+
+               In the company repo at `/tmp/<slug>` (or clone it if not present):
+               ```bash
+               cd /tmp/<slug>
+               npm install @sentry/nextjs
+               ```
+
+               Create `sentry.client.config.ts`:
+               ```typescript
+               import * as Sentry from "@sentry/nextjs";
+
+               Sentry.init({
+                 dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+                 tracesSampleRate: 0.1,
+                 debug: false,
+               });
+               ```
+
+               Create `sentry.server.config.ts`:
+               ```typescript
+               import * as Sentry from "@sentry/nextjs";
+
+               Sentry.init({
+                 dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+                 tracesSampleRate: 0.1,
+                 debug: false,
+               });
+               ```
+
+               Create `sentry.edge.config.ts`:
+               ```typescript
+               import * as Sentry from "@sentry/nextjs";
+
+               Sentry.init({
+                 dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+                 tracesSampleRate: 0.1,
+                 debug: false,
+               });
+               ```
+
+               Create `instrumentation.ts` (or merge into existing if present):
+               ```typescript
+               export async function register() {
+                 if (process.env.NEXT_RUNTIME === "nodejs") {
+                   await import("./sentry.server.config");
+                 }
+                 if (process.env.NEXT_RUNTIME === "edge") {
+                   await import("./sentry.edge.config");
+                 }
+               }
+               ```
+
+               Patch `next.config.ts` to wrap the default export with `withSentryConfig`.
+               Read the current file, then rewrite it so the export becomes:
+               ```typescript
+               import { withSentryConfig } from "@sentry/nextjs";
+               // ... existing imports and config ...
+               export default withSentryConfig(nextConfig, {
+                 org: "eidolon",
+                 project: "<slug>",
+                 silent: !process.env.CI,
+                 widenClientFileUpload: true,
+                 hideSourceMaps: true,
+                 disableLogger: true,
+               });
+               ```
+
+               Commit and push Sentry setup:
+               ```bash
+               cd /tmp/<slug>
+               git add -A
+               git commit -m "feat: add Sentry error monitoring"
+               git push
+               ```
+
+               Add Sentry DSN as Vercel env var (use the Hive Sentry DSN from the SENTRY_DSN secret):
+               ```bash
+               echo "$SENTRY_DSN" | vercel env add NEXT_PUBLIC_SENTRY_DSN production --token "$VERCEL_TOKEN" --yes 2>/dev/null || true
+               echo "$SENTRY_DSN" | vercel env add NEXT_PUBLIC_SENTRY_DSN preview --token "$VERCEL_TOKEN" --yes 2>/dev/null || true
+               ```
+
+               Log the Sentry infra record:
+               ```sql
+               INSERT INTO infra (company_id, service, resource_id, config)
+               VALUES ('<id>', 'sentry', 'eidolon/<slug>', '{"project":"<slug>","org":"eidolon"}')
+               ON CONFLICT DO NOTHING
+               ```
+
+               If SENTRY_DSN is not available in the workflow environment, skip this step silently — do not fail provisioning.
+
             7. Log success: `INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at) VALUES ('engineer', '<id>', 'scaffold_company', 'success', 'Provisioned: GitHub repo + Vercel project', NOW(), NOW())`
             8. Generate initial product spec from the Scout proposal:
                Using the approval context you already queried (step 2, proposal + research), construct a product_spec JSON:
@@ -860,10 +955,11 @@ jobs:
             7. Log to agent_actions
 
             ## Skill catalog
-            Before writing frontend code, configuring Tailwind, or deploying, read the relevant skill:
+            Before writing frontend code, configuring Tailwind, deploying, or adding error monitoring, read the relevant skill:
             - Tailwind CSS: `cat .claude/skills/tailwind-4-docs/SKILL.md`
             - React/Next.js components: `cat .claude/skills/vercel-react-best-practices/SKILL.md`
             - Deploying to Vercel: `cat .claude/skills/deploy-to-vercel/SKILL.md`
+            - Sentry error monitoring (add/fix/configure): `cat .claude/skills/sentry-nextjs-sdk/SKILL.md`
 
             ## GitHub Issue routing
             When creating a GitHub Issue, route to the correct repo:
