@@ -859,6 +859,13 @@ jobs:
                `GH_TOKEN="$GH_PAT" gh pr merge --auto --squash --delete-branch <PR_NUMBER>`
             7. Log to agent_actions
 
+            ## GitHub Issue routing
+            When creating a GitHub Issue, route to the correct repo:
+            - Company product work (features, bugs for a specific company) → `carloshmiranda/{company-slug}`
+            - Hive platform work (infra bugs, agent improvements, orchestrator issues) → `carloshmiranda/hive`
+            Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/{correct-repo} ...`
+            Never file company issues in the hive repo or vice versa.
+
             ## Rules
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
             - Write to agent_actions table: what you did, status, any errors

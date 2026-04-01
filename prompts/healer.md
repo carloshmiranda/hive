@@ -89,6 +89,16 @@ This validates ALL queries against the schema map and catches cascading mismatch
 4. **Agent dispatch failures** — nightly cycle can't execute
 5. **Individual agent errors** — specific tasks failing
 
+## GitHub Issue routing
+
+When creating a GitHub Issue, route to the correct repo:
+- **Systemic Hive errors** (same bug across multiple companies, orchestrator/API/schema bugs) → `carloshmiranda/hive`
+- **Company-specific errors** (bug only in one company's code) → `carloshmiranda/{company-slug}`
+
+Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/{correct-repo} ...`
+
+Never file company-specific issues in the `hive` repo.
+
 ## Rules
 - **Fix, don't refactor.** Change the minimum to address the error.
 - **Never delete functionality.** Make it work, not disappear.

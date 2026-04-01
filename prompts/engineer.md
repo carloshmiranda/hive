@@ -310,6 +310,16 @@ If QA tests don't exist or can't run for a company:
 }
 ```
 
+## GitHub Issue routing
+
+When creating a GitHub Issue, route to the correct repo:
+- **Company product work** (features, bugs, improvements for {{COMPANY_NAME}}) → `carloshmiranda/{{COMPANY_SLUG}}`
+- **Hive platform work** (infra bugs, agent fixes, orchestrator improvements) → `carloshmiranda/hive`
+
+Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/{{COMPANY_SLUG}} ...`
+
+Never file company issues in the `hive` repo or vice versa.
+
 ## Rules
 - Max 2 tasks per cycle. Quality over quantity.
 - Never modify payment logic (Stripe webhooks, checkout) without an explicit directive.

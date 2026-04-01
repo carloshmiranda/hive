@@ -524,6 +524,14 @@ curl -X POST "https://hive-phi.vercel.app/api/decisions" \
 
 This creates a decision track record that improves strategic quality over time through retrospective analysis.
 
+## GitHub Issue routing
+
+When creating a GitHub Issue for escalations or blockers:
+- **Product/feature work for this company** → `carloshmiranda/{{COMPANY_SLUG}}`
+- **Hive platform issues** (orchestrator bugs, agent failures, infra problems) → `carloshmiranda/hive`
+
+Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/{{COMPANY_SLUG}} ...`
+
 ## Rules
 - Never spend money without an approval gate (anything >€20 needs Carlos's OK).
 - Never change the product's core value proposition without a directive from Carlos.
