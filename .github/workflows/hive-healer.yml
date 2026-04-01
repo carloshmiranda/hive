@@ -159,8 +159,12 @@ jobs:
         run: |
           EXECUTION_FILE="${{ steps.agent.outputs.execution_file }}"
           TURNS=0
+          SUBTYPE="success"
+          COST=0
           if [ -f "$EXECUTION_FILE" ]; then
-            TURNS=$(jq -r '.num_turns // 0' "$EXECUTION_FILE" 2>/dev/null || echo "0")
+            TURNS=$(jq -r '.[-1].num_turns // 0' "$EXECUTION_FILE" 2>/dev/null || echo "0")
+            SUBTYPE=$(jq -r '.[-1].subtype // "success"' "$EXECUTION_FILE" 2>/dev/null || echo "success")
+            COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXECUTION_FILE" 2>/dev/null || echo "0")
           fi
 
           # Log success to agent_actions via API
@@ -176,14 +180,16 @@ jobs:
           const sql = postgres(process.env.DATABASE_URL);
           async function log() {
             await sql\`
-              INSERT INTO agent_actions (agent, action_type, status, description, tokens_used, started_at, finished_at)
-              VALUES ('healer', 'error_fix', 'success', 'Healer completed successfully (${TURNS} turns)', ${TURNS}, NOW() - INTERVAL '20 minutes', NOW())
+              INSERT INTO agent_actions (agent, action_type, status, description, tokens_used, output, started_at, finished_at)
+              VALUES ('healer', 'error_fix', 'success', 'Healer completed successfully (${TURNS} turns)', ${TURNS},
+                \${JSON.stringify({subtype: '${SUBTYPE}', turns: parseInt('${TURNS}'), cost: parseFloat('${COST}')})}::jsonb,
+                NOW() - INTERVAL '${TURNS} minutes', NOW())
             \`;
             await sql.end();
           }
           log().catch(e => console.error('DB log failed:', e.message));
           "
-          echo "Logged Healer success (${TURNS} turns)"
+          echo "Logged Healer success (${TURNS} turns, subtype=${SUBTYPE}, cost=\$${COST})"
 
       - name: Log failure to DB
         if: always() && steps.agent.outcome == 'failure'
@@ -192,3 +198,4 @@ jobs:
           agent: healer
           trigger: error_fix
           execution_file: ${{ steps.agent.outputs.execution_file }}
+          cron_secret: ${{ secrets.CRON_SECRET }}
