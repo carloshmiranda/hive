@@ -179,9 +179,7 @@ export async function analyzePR(
   // Ensure minimum score of 0
   riskScore = Math.max(0, riskScore);
 
-  // Decision logic — cost-only escalation model
-  // Carlos only reviews changes that impact operational costs.
-  // All quality-risk PRs auto-merge if CI passes (safety gates block, not score).
+  // Decision logic
   let decision: PRAnalysis['decision'];
   if (!hardGatesPassed) {
     // Safety gates failed (secrets, conflicts, CI, destructive SQL, huge diff) — block
@@ -189,8 +187,11 @@ export async function analyzePR(
   } else if (costImpact) {
     // Cost-impacting changes always need Carlos's review
     decision = 'escalate';
+  } else if (riskScore >= 5) {
+    // High risk score (5+) — too many compounding risk factors, escalate for review
+    decision = 'escalate';
   } else {
-    // CI passed + no safety issues + no cost impact → auto-merge regardless of score
+    // CI passed + no safety issues + no cost impact + low risk → auto-merge
     decision = 'auto_merge';
   }
 
