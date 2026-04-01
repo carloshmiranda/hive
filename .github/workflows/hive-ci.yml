@@ -1,0 +1,40 @@
+name: Hive CI
+run-name: "CI: ${{ github.head_ref || github.ref_name }}"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint SQL queries
+        run: npx tsx scripts/lint-sql.ts
+
+      - name: Check schema map is up to date
+        run: npm run schema-map:check
+
+      - name: TypeScript build
+        run: npx next build

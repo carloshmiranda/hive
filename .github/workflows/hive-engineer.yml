@@ -878,8 +878,30 @@ jobs:
             - If the spec has acceptance_criteria, tackle them in priority order. Each completed
               criterion is progress that survives even if you run out of turns.
 
-      - name: Log success to Hive API
+      - name: Verify build passes before marking success
+        id: build_check
         if: steps.agent.outcome == 'success'
+        run: |
+          CHANGED=$(git diff --name-only origin/main 2>/dev/null | wc -l | tr -d ' ')
+          if [ "${CHANGED:-0}" = "0" ]; then
+            echo "No file changes detected — skipping build verification"
+            exit 0
+          fi
+          echo "=== Build verification ($CHANGED changed files) ==="
+          echo "--- SQL lint ---"
+          if ! npx tsx scripts/lint-sql.ts; then
+            echo "::error::SQL lint failed. Engineer submitted invalid column/enum references."
+            exit 1
+          fi
+          echo "--- Next.js build ---"
+          if ! npx next build; then
+            echo "::error::Build failed. Engineer submitted code that does not compile."
+            exit 1
+          fi
+          echo "=== Build verification PASSED ==="
+
+      - name: Log success to Hive API
+        if: steps.agent.outcome == 'success' && (steps.build_check.outcome == 'success' || steps.build_check.outcome == 'skipped')
         env:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
@@ -931,11 +953,22 @@ jobs:
             exit 0
           fi
 
+          # Override outcome if build verification failed (agent succeeded but code doesn't compile)
+          BUILD_FAILED=""
+          if [ "$AGENT_OUTCOME" = "success" ] && [ "${{ steps.build_check.outcome }}" = "failure" ]; then
+            AGENT_OUTCOME="failure"
+            BUILD_FAILED="true"
+            echo "  Build verification failed — reclassifying agent outcome as failure"
+          fi
+
           # Extract error subtype and message for decompose logic + chain propagation
           ERROR_TYPE=""
           ERROR_DETAIL=""
           TURNS="0"
-          if [ "$AGENT_OUTCOME" != "success" ]; then
+          if [ -n "$BUILD_FAILED" ]; then
+            ERROR_TYPE="build_failed"
+            ERROR_DETAIL="Engineer submitted code that fails TypeScript/SQL validation. Build or lint step rejected output."
+          elif [ "$AGENT_OUTCOME" != "success" ]; then
             EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
             if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
               EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"

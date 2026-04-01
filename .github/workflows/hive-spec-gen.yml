@@ -178,13 +178,23 @@ jobs:
       - name: Log failure
         if: failure()
         run: |
-          npm install --no-save postgres 2>/dev/null
+          npm install --no-save @neondatabase/serverless 2>/dev/null
           node -e "
-            const postgres = require('postgres');
-            const sql = postgres(process.env.DATABASE_URL);
-            sql\`UPDATE hive_backlog SET status = 'ready', dispatched_at = NULL WHERE id = '${{ steps.payload.outputs.backlog_id }}' AND status = 'planning'\`
-              .then(() => sql.end())
-              .catch(() => process.exit(0));
+            const { neon } = require('@neondatabase/serverless');
+            const sql = neon(process.env.DATABASE_URL);
+            async function run() {
+              const rows = await sql\`SELECT notes FROM hive_backlog WHERE id = '${{ steps.payload.outputs.backlog_id }}' LIMIT 1\`;
+              const notes = rows[0]?.notes || '';
+              const failCount = (notes.match(/\[spec_fail\]/g) || []).length;
+              if (failCount >= 2) {
+                await sql\`UPDATE hive_backlog SET status = 'blocked', dispatched_at = NULL, notes = COALESCE(notes, '') || ' [no_spec_max_retries]' WHERE id = '${{ steps.payload.outputs.backlog_id }}'\`;
+                console.log('Blocked after 3 spec_gen failures');
+              } else {
+                await sql\`UPDATE hive_backlog SET status = 'ready', dispatched_at = NULL, notes = COALESCE(notes, '') || ' [spec_fail]' WHERE id = '${{ steps.payload.outputs.backlog_id }}' AND status = 'planning'\`;
+                console.log('Reset to ready, fail count now ' + (failCount + 1));
+              }
+            }
+            run().catch(e => { console.error(e.message); process.exit(0); });
           " || true
           curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
