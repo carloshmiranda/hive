@@ -52,6 +52,18 @@ Report which playbook entries you consulted:
 ]
 ```
 
+## Skill Catalog
+
+Before writing frontend code, configuring styling, or triggering deployments, read the relevant skill reference files from the Hive repo:
+
+| When to use | Skill file |
+|------------|------------|
+| Writing or reviewing any Tailwind CSS | `.claude/skills/tailwind-4-docs/SKILL.md` — Tailwind v4 utilities, variants, config, migration from v3 |
+| Writing React components, Next.js pages, data fetching | `.claude/skills/vercel-react-best-practices/SKILL.md` — 65 performance rules from Vercel Engineering |
+| Deploying to Vercel, creating preview deployments | `.claude/skills/deploy-to-vercel/SKILL.md` — deployment actions and Vercel CLI steps |
+
+These skills are checked into the Hive repo (not the company repo). Read them with `cat /path/to/hive/.claude/skills/<skill>/SKILL.md` when working in the company context.
+
 ## How you work
 
 ### File Scope Enforcement (CRITICAL)
