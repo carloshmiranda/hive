@@ -12,6 +12,7 @@ import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/
 import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 import { markTaskAsStealable, claimStealableTask, type WorkStealingResult } from "@/lib/work-stealing";
 import { computeLineageFailures, blockLineageForManualSpec } from "@/lib/backlog-lineage";
+import { checkRecentRateLimitFailures } from "@/lib/sentinel-helpers";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -1005,6 +1006,49 @@ export async function POST(req: Request) {
     const minutesRemaining = Math.round(30 - (Date.now() - lastRateLimit!.getTime()) / 60000);
     await scheduleChainRetry("rate_limit_cooldown", minutesRemaining + 1);
     return json({ dispatched: false, reason: "rate_limit_cooldown", cooldown_remaining_minutes: minutesRemaining, free_workers_dispatched: freeWorkers, chain_retry: true });
+  }
+
+  // Hive-specific rate limit check: if recent Hive engineer failures are all rate limits, skip dispatch
+  const recentHiveFailures = await sql`
+    SELECT description, error, finished_at
+    FROM agent_actions
+    WHERE agent = 'engineer'
+      AND company_id IS NULL  -- Hive work only
+      AND status = 'failed'
+      AND finished_at > NOW() - INTERVAL '3 hours'
+    ORDER BY finished_at DESC
+    LIMIT 5
+  `.catch(() => []);
+
+  if (recentHiveFailures.length >= 2) {
+    const rateLimitPatterns = [
+      /rate limit/i, /session limit/i, /usage cap/i, /too many/i, /quota/i,
+      /limit reached/i, /max_tokens/i, /capacity/i, /you've hit your limit/i
+    ];
+
+    let consecutiveRateLimits = 0;
+    for (const failure of recentHiveFailures) {
+      const errorText = `${failure.description || ''} ${failure.error || ''}`.toLowerCase();
+      const isRateLimit = rateLimitPatterns.some(pattern => pattern.test(errorText));
+      if (isRateLimit) {
+        consecutiveRateLimits++;
+      } else {
+        break; // Stop counting if we hit a non-rate-limit failure
+      }
+    }
+
+    if (consecutiveRateLimits >= 2 && consecutiveRateLimits >= Math.min(recentHiveFailures.length, 3)) {
+      const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+      console.log(`[backlog] Rate limit skip: last ${consecutiveRateLimits} Hive engineer failures were Claude API rate limits`);
+      await scheduleChainRetry("hive_rate_limit_skip", 60); // Wait 1 hour
+      return json({
+        dispatched: false,
+        reason: "hive_rate_limit_skip",
+        consecutive_rate_limit_failures: consecutiveRateLimits,
+        free_workers_dispatched: freeWorkers,
+        chain_retry: true
+      });
+    }
   }
 
   // Clean up ghost locks: running engineer actions >30 min old with no completion callback.

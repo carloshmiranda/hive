@@ -29,6 +29,7 @@ import {
   checkHealerCompanyCircuitBreaker,
   batchCheckHealerCircuitBreakers,
   createHealerEscalation,
+  checkRecentRateLimitFailures,
   MAX_CYCLE_DISPATCHES,
   type SentinelContext,
   type Dispatch,
@@ -1191,6 +1192,23 @@ async function executeSentinelDispatch(request: Request) {
         `;
         ctx.circuitBreaks++;
         dispatches.push({ type: "circuit_breaker", target: r.agent as string, payload: { company: r.slug, reason: "3+_failures_24h" } });
+        continue;
+      }
+
+      // Rate limit check: skip retry if recent failures are all rate limit errors
+      const rateLimitCheck = await checkRecentRateLimitFailures(sql, r.agent as string, r.company_id as string);
+      if (rateLimitCheck.isRateLimited) {
+        const resetInfo = rateLimitCheck.resetTime
+          ? ` (API limit resets at ${rateLimitCheck.resetTime.toISOString().slice(11, 16)} UTC)`
+          : "";
+        await sql`
+          INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+          VALUES (${r.agent}, ${r.company_id}, 'rate_limit_skip', 'success',
+            ${"Skipped retry dispatch: last " + rateLimitCheck.consecutiveFailures + " failures were Claude API rate limits" + resetInfo},
+            NOW(), NOW())
+        `;
+        console.log(`[sentinel-dispatch] Rate limit skip: ${r.agent}/${r.slug} - ${rateLimitCheck.consecutiveFailures} consecutive rate limit failures${resetInfo}`);
+        dispatches.push({ type: "rate_limit_skip", target: r.agent as string, payload: { company: r.slug, reason: "consecutive_rate_limit_failures", count: rateLimitCheck.consecutiveFailures } });
         continue;
       }
       if (r.github_repo && r.agent === "engineer") {
