@@ -1,0 +1,200 @@
+name: Hive Skill Intake
+run-name: "Skill Intake: detect new skills and create wiring tasks"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.claude/skills/**'
+
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  skill-intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect new skills
+        id: detect
+        run: |
+          MANIFEST=".claude/skills/INSTALLED.md"
+
+          # All skill directories (sorted)
+          CURRENT=$(find .claude/skills -maxdepth 1 -mindepth 1 -type d -exec basename {} \; | sort)
+
+          if [ ! -f "$MANIFEST" ]; then
+            # First run: write manifest with all current skills, nothing to wire
+            echo "# Installed Skills" > "$MANIFEST"
+            echo "" >> "$MANIFEST"
+            echo "$CURRENT" | sed 's/^/- /' >> "$MANIFEST"
+            git config user.name "Hive Orchestrator"
+            git config user.email "noreply@github.com"
+            git add "$MANIFEST"
+            git commit -m "chore: initialize skill intake manifest"
+            git push
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            echo "Initialized INSTALLED.md — no wiring needed for existing skills"
+            exit 0
+          fi
+
+          # Extract installed skills from manifest
+          INSTALLED=$(grep -oP '(?<=^- ).*' "$MANIFEST" 2>/dev/null | sort || echo "")
+
+          # Skills in CURRENT but not in INSTALLED
+          NEW=$(comm -23 <(echo "$CURRENT") <(echo "$INSTALLED"))
+
+          if [ -z "$NEW" ]; then
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            echo "No new skills detected."
+            exit 0
+          fi
+
+          echo "New skills detected:"
+          echo "$NEW"
+
+          {
+            echo "new_skills<<GHEOF"
+            echo "$NEW"
+            echo "GHEOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "has_new=true" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git
+        if: steps.detect.outputs.has_new == 'true'
+        run: |
+          git config user.name "Hive Orchestrator"
+          git config user.email "noreply@github.com"
+
+      - name: Get tokens via OIDC
+        if: steps.detect.outputs.has_new == 'true'
+        id: auth
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "claude:claude_token:true github_pat:gh_pat:true cron_secret:cron_secret"
+
+      - name: Run skill intake agent
+        if: steps.detect.outputs.has_new == 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
+          GH_PAT: ${{ steps.auth.outputs.gh_pat }}
+          HIVE_URL: https://hive-phi.vercel.app
+          NEW_SKILLS: ${{ steps.detect.outputs.new_skills }}
+          MANIFEST: .claude/skills/INSTALLED.md
+        with:
+          allowed_bots: "hive-orchestrator[bot]"
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
+          claude_args: "--model claude-opus-4-20250514 --max-turns 25 --allowedTools Bash,Read,Write,Edit"
+          prompt: |
+            You are the Hive skill intake agent. New skills have been installed and need to be wired into the relevant agent prompts.
+
+            New skills to process (one per line):
+            $NEW_SKILLS
+
+            ## For EACH new skill, follow this process:
+
+            ### Step 1: Read the skill
+            ```bash
+            cat ".claude/skills/${SKILL_NAME}/SKILL.md"
+            ```
+
+            ### Step 2: Analyze which agents benefit
+            Map the skill's purpose to Hive agents:
+
+            | Agent | Wire when skill helps with... |
+            |-------|-------------------------------|
+            | Engineer | code generation, deployment, provisioning, build tooling, DB queries |
+            | Healer | error diagnosis, stack trace analysis, fix verification |
+            | CEO | product analysis, metrics, market research, strategic evaluation |
+            | Growth | SEO, content, analytics, marketing copy |
+            | Scout | research, competitive analysis, market intelligence |
+            | Evolver | prompt quality, output format analysis |
+
+            Only include agents where the integration has clear, specific value. Skip agents where the connection is vague.
+
+            ### Step 3: Check for existing issues (avoid duplicates)
+            ```bash
+            GH_TOKEN="$GH_PAT" gh issue list --repo carloshmiranda/hive --state open --search "${SKILL_NAME}" --json number,title | head -5
+            ```
+
+            ### Step 4: Create backlog items + GitHub Issues for each relevant agent
+            For each agent that benefits:
+
+            1. Create a backlog item:
+            ```bash
+            curl -s -X POST "$HIVE_URL/api/agents/backlog" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "title": "P2: Wire [skill-name] skill into [Agent] prompt",
+                "description": "Specific: which section of prompts/[agent].md to update, what trigger condition or skill catalog entry to add, and what the agent should do when it reads the skill.",
+                "priority": "P2",
+                "source": "skill-intake"
+              }'
+            ```
+
+            2. Create a GitHub Issue:
+            ```bash
+            GH_TOKEN="$GH_PAT" gh issue create \
+              --repo carloshmiranda/hive \
+              --title "P2: Wire [skill-name] into [Agent] prompt" \
+              --label "hive-directive" \
+              --body "$(cat <<'ISSUE_EOF'
+            Backlog ID: `[id from step above]`
+
+            **Skill:** `.claude/skills/[skill-name]/SKILL.md`
+            **Purpose:** [one sentence: what the skill does]
+
+            **Integration needed:**
+            - Which section of `prompts/[agent].md` to update
+            - Specific wording for the skill catalog row
+            - Any trigger condition (e.g. "when X error type appears", "when deploying to Vercel")
+
+            **Expected outcome:** [Agent] reads the skill when relevant and applies it.
+            ISSUE_EOF
+            )"
+            ```
+
+            ### Step 5: Update INSTALLED.md manifest
+            After processing all skills, add each new skill name to $MANIFEST (sorted, bullet list):
+            ```bash
+            # Read current installed list, add new skill, resort
+            NEW_SKILL_NAME="..."
+            echo "- $NEW_SKILL_NAME" >> "$MANIFEST"
+            # Sort the bullet list in-place (preserve header)
+            python3 -c "
+            import sys
+            with open('$MANIFEST') as f:
+                lines = f.readlines()
+            header = [l for l in lines if not l.startswith('- ')]
+            bullets = sorted([l for l in lines if l.startswith('- ')])
+            with open('$MANIFEST', 'w') as f:
+                f.writelines(header + bullets)
+            "
+            ```
+
+            ### Step 6: Commit the updated manifest
+            ```bash
+            git add "$MANIFEST"
+            git commit -m "chore: skill intake — add [skill names] to manifest"
+            git push
+            ```
+
+            ## Rules
+            - Be specific in backlog descriptions: name the exact section, the exact trigger, the exact text to add
+            - Skip skills with no clear agent integration (pure documentation, standalone utilities)
+            - Max 1 GitHub Issue per skill per agent — do not create duplicates
+            - If a skill is already referenced in a prompt (grep for the skill name), skip creating a wiring issue for that agent
+            - Log to stdout what you found and created for each skill
