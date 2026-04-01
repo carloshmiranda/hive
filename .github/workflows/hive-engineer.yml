@@ -170,7 +170,7 @@ jobs:
         with:
           allowed_bots: "hive-orchestrator[bot]"
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 50 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-20250514 --max-turns 70 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You provision infrastructure for new companies.
 
@@ -715,11 +715,11 @@ jobs:
           if [ -z "$MAX_TURNS" ]; then
             COMPLEXITY=$(echo "$PAYLOAD_JSON" | jq -r '.spec | if type == "string" then fromjson else . end | .complexity // empty' 2>/dev/null || echo "")
             case "$COMPLEXITY" in
-              S)  MAX_TURNS=20 ;;
-              M)  MAX_TURNS=35 ;;
-              L)  MAX_TURNS=50 ;;
-              XL) MAX_TURNS=60 ;;
-              *)  MAX_TURNS=50 ;;
+              S)  MAX_TURNS=25 ;;
+              M)  MAX_TURNS=45 ;;
+              L)  MAX_TURNS=70 ;;
+              XL) MAX_TURNS=80 ;;
+              *)  MAX_TURNS=70 ;;
             esac
           fi
 
