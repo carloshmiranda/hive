@@ -313,11 +313,26 @@ export async function POST(req: Request) {
 
         // Only handle Hive repo PRs for backlog tracking (backlog items are Hive self-improvement)
         if (prRepo === "hive") {
-          // Find backlog items in pr_open status that match this PR
+          // Extract issue numbers referenced in PR body via "Closes #N" / "Fixes #N" / "Resolves #N"
+          const prBody: string = pr.body || "";
+          const closesPattern = /(?:closes?|fixes?|resolves?)\s+#(\d+)/gi;
+          const referencedIssueNumbers: number[] = [];
+          let closesMatch;
+          while ((closesMatch = closesPattern.exec(prBody)) !== null) {
+            referencedIssueNumbers.push(parseInt(closesMatch[1], 10));
+          }
+
+          // Match by pr_number (Engineer-opened PRs) OR by github_issue_number from PR body
+          // Also match non-pr_open statuses (ready, dispatched, in_progress) for manually-opened PRs
           const matchingItems = await sql`
             SELECT id, title FROM hive_backlog
-            WHERE status = 'pr_open'
-            AND pr_number = ${prNumber}
+            WHERE status NOT IN ('done', 'rejected')
+            AND (
+              pr_number = ${prNumber}
+              ${referencedIssueNumbers.length > 0
+                ? sql`OR github_issue_number = ANY(${referencedIssueNumbers})`
+                : sql``}
+            )
           `.catch(() => []);
 
           const itemIds = matchingItems.map((i: Record<string, string>) => i.id);
@@ -331,7 +346,7 @@ export async function POST(req: Request) {
                     pr_number = ${prNumber}, pr_url = ${pr.html_url || ""},
                     notes = COALESCE(notes, '') || ${` PR #${prNumber} merged.`}
                 WHERE id = ANY(${itemIds})
-                AND status = 'pr_open'
+                AND status NOT IN ('done', 'rejected')
               `.catch(() => {});
 
               // Only notify if not already auto-merged (avoid duplicate notifications)
@@ -368,7 +383,7 @@ export async function POST(req: Request) {
                 SET status = 'ready', dispatched_at = NULL,
                     notes = COALESCE(notes, '') || ${` PR #${prNumber} closed without merge — will retry.`}
                 WHERE id = ANY(${itemIds})
-                AND status = 'pr_open'
+                AND status NOT IN ('done', 'rejected')
               `.catch(() => {});
             }
           }
@@ -436,6 +451,26 @@ export async function POST(req: Request) {
     }
 
     case "issues": {
+      const issueNumber = body.issue?.number;
+      const issueRepo = body.repository?.name;
+
+      // Sync backlog item when a GitHub issue is closed (only for Hive repo)
+      if (body.action === "closed" && issueRepo === "hive" && issueNumber) {
+        // state_reason: "completed" = closed via merge/manual close, "not_planned" = won't fix
+        const stateReason = body.issue?.state_reason;
+        const newStatus = stateReason === "not_planned" ? "rejected" : "done";
+
+        await sql`
+          UPDATE hive_backlog
+          SET status = ${newStatus}, completed_at = NOW(),
+              notes = COALESCE(notes, '') || ${` GitHub issue #${issueNumber} closed (${stateReason || "completed"}).`}
+          WHERE github_issue_number = ${issueNumber}
+          AND status NOT IN ('done', 'rejected')
+        `.catch(() => {});
+
+        break;
+      }
+
       // Detect new hive-directive issues created directly on GitHub
       if (body.action !== "opened") break;
       const labels = (body.issue?.labels || []).map((l: any) => l.name);
@@ -443,7 +478,7 @@ export async function POST(req: Request) {
 
       const title = body.issue?.title || "";
       const issueBody = body.issue?.body || "";
-      const issueNumber = body.issue?.number;
+      const directiveIssueNumber = body.issue?.number;
       const issueUrl = body.issue?.html_url;
 
       // Extract company from labels
@@ -461,7 +496,7 @@ export async function POST(req: Request) {
       // Store as a directive — the orchestrator picks it up
       await sql`
         INSERT INTO directives (company_id, agent, text, github_issue_number, github_issue_url, status)
-        VALUES (${companyId}, ${agent}, ${title + (issueBody ? "\n\n" + issueBody : "")}, ${issueNumber}, ${issueUrl}, 'open')
+        VALUES (${companyId}, ${agent}, ${title + (issueBody ? "\n\n" + issueBody : "")}, ${directiveIssueNumber}, ${issueUrl}, 'open')
       `;
 
       // Immediately dispatch CEO (or the specified agent) to process this directive
@@ -474,14 +509,14 @@ export async function POST(req: Request) {
         event_type: dispatchAgent,
         source: "webhook_directive",
         company: companySlug || "_portfolio",
-        directive_issue: issueNumber,
+        directive_issue: directiveIssueNumber,
         directive_url: issueUrl,
         directive_text: title,
       }, {
         retries: 2,
-        deduplicationId: `directive-${issueNumber}-${Date.now().toString(36)}`,
+        deduplicationId: `directive-${directiveIssueNumber}-${Date.now().toString(36)}`,
       }).catch((e: unknown) => {
-        console.warn(`[webhook] QStash directive dispatch failed for issue #${issueNumber}: ${e instanceof Error ? e.message : e}`);
+        console.warn(`[webhook] QStash directive dispatch failed for issue #${directiveIssueNumber}: ${e instanceof Error ? e.message : e}`);
       });
       break;
     }
