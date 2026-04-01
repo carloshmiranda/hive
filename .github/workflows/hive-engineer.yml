@@ -859,6 +859,12 @@ jobs:
                `GH_TOKEN="$GH_PAT" gh pr merge --auto --squash --delete-branch <PR_NUMBER>`
             7. Log to agent_actions
 
+            ## Skill catalog
+            Before writing frontend code, configuring Tailwind, or deploying, read the relevant skill:
+            - Tailwind CSS: `cat .claude/skills/tailwind-4-docs/SKILL.md`
+            - React/Next.js components: `cat .claude/skills/vercel-react-best-practices/SKILL.md`
+            - Deploying to Vercel: `cat .claude/skills/deploy-to-vercel/SKILL.md`
+
             ## GitHub Issue routing
             When creating a GitHub Issue, route to the correct repo:
             - Company product work (features, bugs for a specific company) → `carloshmiranda/{company-slug}`
