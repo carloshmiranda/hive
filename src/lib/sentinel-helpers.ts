@@ -904,3 +904,106 @@ export function jaccardSimilarity(a: string, b: string): number {
   const union = new Set([...wordsA, ...wordsB]).size;
   return union === 0 ? 0 : intersection / union;
 }
+
+// ---------------------------------------------------------------------------
+// Rate limit detection for retry dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if recent failures for a specific agent/company combo are all rate limit errors.
+ * Used to skip retry dispatch when the failures are due to Claude API rate limits
+ * rather than actual implementation problems.
+ *
+ * @param sql Database connection
+ * @param agent Agent name (e.g., 'engineer', 'growth')
+ * @param companyId Company ID
+ * @param lookbackHours How far back to check for failures (default: 6 hours)
+ * @returns Object with isRateLimited flag and reset time if available
+ */
+export async function checkRecentRateLimitFailures(
+  sql: ReturnType<typeof getDb>,
+  agent: string,
+  companyId: string,
+  lookbackHours: number = 6
+): Promise<{ isRateLimited: boolean; resetTime?: Date; consecutiveFailures: number }> {
+  try {
+    // Get recent failures for this agent/company combo
+    const recentFailures = await sql`
+      SELECT description, error, finished_at
+      FROM agent_actions
+      WHERE agent = ${agent}
+        AND company_id = ${companyId}
+        AND status = 'failed'
+        AND finished_at > NOW() - INTERVAL '${lookbackHours} hours'
+      ORDER BY finished_at DESC
+      LIMIT 10
+    `;
+
+    if (recentFailures.length === 0) {
+      return { isRateLimited: false, consecutiveFailures: 0 };
+    }
+
+    const rateLimitPatterns = [
+      /rate limit/i,
+      /session limit/i,
+      /usage cap/i,
+      /too many/i,
+      /quota/i,
+      /limit reached/i,
+      /max_tokens/i,
+      /capacity/i,
+      /you've hit your limit/i,
+      /resets \d+[ap]m utc/i,
+    ];
+
+    let consecutiveRateLimitFailures = 0;
+    let resetTime: Date | undefined;
+
+    // Check if failures match rate limit patterns
+    for (const failure of recentFailures) {
+      const errorText = `${failure.description || ''} ${failure.error || ''}`.toLowerCase();
+      const isRateLimit = rateLimitPatterns.some(pattern => pattern.test(errorText));
+
+      if (isRateLimit) {
+        consecutiveRateLimitFailures++;
+
+        // Try to extract reset time from patterns like "resets 1pm UTC"
+        if (!resetTime) {
+          const resetMatch = errorText.match(/resets (\d+[ap]m) utc/i);
+          if (resetMatch) {
+            const timeStr = resetMatch[1];
+            const hour = parseInt(timeStr);
+            const isPm = timeStr.toLowerCase().includes('pm');
+            const resetHour = isPm && hour !== 12 ? hour + 12 : (!isPm && hour === 12 ? 0 : hour);
+
+            // Set reset time to the next occurrence of that hour UTC
+            const now = new Date();
+            resetTime = new Date(now);
+            resetTime.setUTCHours(resetHour, 0, 0, 0);
+            if (resetTime <= now) {
+              resetTime.setUTCDate(resetTime.getUTCDate() + 1);
+            }
+          }
+        }
+      } else {
+        // If we hit a non-rate-limit failure, stop counting consecutive rate limits
+        break;
+      }
+    }
+
+    // Consider it rate limited if:
+    // 1. We have at least 2 recent failures, AND
+    // 2. All recent failures (up to the first 5) are rate limit errors
+    const isRateLimited = consecutiveRateLimitFailures >= 2 &&
+                          consecutiveRateLimitFailures >= Math.min(recentFailures.length, 5);
+
+    return {
+      isRateLimited,
+      resetTime,
+      consecutiveFailures: consecutiveRateLimitFailures
+    };
+  } catch (error) {
+    console.warn(`[checkRecentRateLimitFailures] Error checking rate limits for ${agent}/${companyId}:`, error);
+    return { isRateLimited: false, consecutiveFailures: 0 };
+  }
+}
