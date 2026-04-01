@@ -386,6 +386,15 @@ export async function POST(req: Request) {
   }
 
   const sql = getDb();
+
+  // Global kill switch — check before ANY dispatch logic
+  const [pauseSetting] = await sql`
+    SELECT value FROM settings WHERE key = 'dispatch_paused' LIMIT 1
+  `.catch(() => []);
+  if (pauseSetting?.value === 'true') {
+    return json({ dispatched: false, reason: "dispatch_paused", message: "All dispatches halted by kill switch" });
+  }
+
   const body = await req.json().catch(() => ({}));
   let { completed_id, completed_status, pr_number, branch, changed_files } = body;
 

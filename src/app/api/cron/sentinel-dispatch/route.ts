@@ -98,6 +98,12 @@ async function executeSentinelDispatch(request: Request) {
     const vercelToken = await getSettingValue("vercel_token").catch(() => null);
     const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
     const cronSecret = process.env.CRON_SECRET || "";
+
+    // Global kill switch — bail before any dispatch logic
+    const [pauseSetting] = await sql`SELECT value FROM settings WHERE key = 'dispatch_paused' LIMIT 1`.catch(() => []);
+    if (pauseSetting?.value === 'true') {
+      return Response.json({ ok: true, paused: true, message: "All dispatches halted by kill switch" });
+    }
     const traceId = `sentinel-dispatch-${Date.now().toString(36)}`;
 
     // Import getActiveClaims from helpers
