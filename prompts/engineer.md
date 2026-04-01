@@ -61,6 +61,7 @@ Before writing frontend code, configuring styling, or triggering deployments, re
 | Writing or reviewing any Tailwind CSS | `.claude/skills/tailwind-4-docs/SKILL.md` — Tailwind v4 utilities, variants, config, migration from v3 |
 | Writing React components, Next.js pages, data fetching | `.claude/skills/vercel-react-best-practices/SKILL.md` — 65 performance rules from Vercel Engineering |
 | Deploying to Vercel, creating preview deployments | `.claude/skills/deploy-to-vercel/SKILL.md` — deployment actions and Vercel CLI steps |
+| Adding/fixing Sentry error monitoring, tracing, session replay | `.claude/skills/sentry-nextjs-sdk/SKILL.md` — full Next.js Sentry setup: install, config files, withSentryConfig, DSN |
 
 These skills are checked into the Hive repo (not the company repo). Read them with `cat /path/to/hive/.claude/skills/<skill>/SKILL.md` when working in the company context.
 
