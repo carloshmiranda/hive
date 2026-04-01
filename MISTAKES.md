@@ -867,3 +867,12 @@
 **Fix applied:** Added `qstashPublish("/api/backlog/dispatch", { trigger: "done_chain", completed_id }, { deduplicationId, delay: 10 })` to the `done` path, matching the `pr_open` pattern. Commit `3b5e085`.
 **Prevention:** When adding a new code path that handles completion/success, always verify it continues any chain/loop mechanism. Both success paths (with PR and without) must schedule the next step. Test completion callbacks with AND without PR creation.
 **Affects:** hive
+
+---
+
+### 2026-04-01 hive-orchestrator files company escalation issues in the Hive repo instead of the company repo
+**What happened:** Engineer/orchestrator filed a VerdeDesk infrastructure escalation (hive#283) in the Hive repo. Company-specific issues should go in the company's own repo (e.g., `carloshmiranda/verdedesk`), not in Hive's issue tracker.
+**Root cause:** The agent prompt for creating GitHub Issues didn't specify which repo to target. It defaulted to the Hive repo for all issues regardless of whether the work is Hive-platform or company-product.
+**Fix applied:** Manually closed hive#283, re-filed as verdedesk#22. Added routing rule to MISTAKES.md.
+**Prevention:** When an agent creates a GitHub Issue, the repo must be determined by context: (1) Hive infrastructure/agent work → `carloshmiranda/hive`, (2) Company product work → `carloshmiranda/{company-slug}`. Agent prompts that create issues must include this routing rule explicitly.
+**Affects:** hive, all companies
