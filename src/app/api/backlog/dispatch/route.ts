@@ -1040,7 +1040,7 @@ export async function POST(req: Request) {
   // Brain agents: 3/hr, Workers: 8/hr (defense-in-depth on top of specific dedup guards)
   const agentToDispatch = 'engineer'; // This route dispatches engineer for Hive work
   const isWorkerAgent = ['growth', 'outreach', 'ops'].includes(agentToDispatch);
-  const hourlyThreshold = isWorkerAgent ? 8 : 3; // Workers: 8/hr, Brain agents: 3/hr
+  const hourlyThreshold = isWorkerAgent ? 8 : 10; // Workers: 8/hr, Brain agents: 10/hr (raised from 3 to drain Hive backlog)
 
   const [hourlyCount] = await sql`
     SELECT COUNT(*)::int as dispatch_count FROM agent_actions

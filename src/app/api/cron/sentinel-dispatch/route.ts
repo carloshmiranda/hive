@@ -1528,6 +1528,9 @@ async function executeSentinelDispatch(request: Request) {
       console.warn("[sentinel-dispatch] Check 13b (backlog dispatch) failed:", e instanceof Error ? e.message : String(e));
     }
 
+    // HIVE_ONLY mode: zero out remaining slots so no company cycles run until backlog is drained
+    remainingSlots = 0;
+
     // ========================================================================
     // CHECK 13c: Company cycle dispatch — remaining budget after Hive fixes + backlog
     // ========================================================================
