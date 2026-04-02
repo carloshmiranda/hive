@@ -191,6 +191,53 @@ jobs:
           "
           echo "Logged Healer success (${TURNS} turns, subtype=${SUBTYPE}, cost=\$${COST})"
 
+      - name: Schedule post-fix verification
+        if: steps.agent.outcome == 'success'
+        env:
+          SCOPE: ${{ github.event.client_payload.scope || github.event.inputs.scope || 'systemic' }}
+          HIVE_URL: ${{ secrets.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          QSTASH_TOKEN: ${{ secrets.QSTASH_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Only schedule verification for company-specific heals (not systemic)
+          if [ -z "$SCOPE" ] || [ "$SCOPE" = "systemic" ] || [ "$SCOPE" = "null" ]; then
+            echo "Systemic heal — skipping per-company verification"
+            exit 0
+          fi
+
+          # Look up company_id for the scope slug
+          npm install --no-save postgres 2>/dev/null
+          COMPANY_ID=$(node -e "
+          const postgres = require('postgres');
+          const sql = postgres(process.env.DATABASE_URL);
+          sql\`SELECT id FROM companies WHERE slug = '${SCOPE}' LIMIT 1\`
+            .then(r => { console.log(r[0]?.id || ''); sql.end(); })
+            .catch(() => { console.log(''); process.exit(0); });
+          " 2>/dev/null)
+
+          if [ -z "$COMPANY_ID" ]; then
+            echo "Could not resolve company_id for scope=${SCOPE} — skipping verification"
+            exit 0
+          fi
+
+          HEALED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          if [ -n "$QSTASH_TOKEN" ]; then
+            # Schedule via QStash with 30-minute delay
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+              "https://qstash.upstash.io/v2/publish/${HIVE_URL}/api/healer/verify" \
+              -H "Authorization: Bearer ${QSTASH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "Upstash-Delay: 1800s" \
+              -H "Upstash-Retries: 2" \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              -d "{\"company_id\":\"${COMPANY_ID}\",\"company_slug\":\"${SCOPE}\",\"healed_at\":\"${HEALED_AT}\"}")
+            echo "QStash verification scheduled (HTTP ${HTTP_STATUS}) for ${SCOPE} in 30 min"
+          else
+            echo "QSTASH_TOKEN not set — verification step skipped (non-fatal)"
+          fi
+
       - name: Chain dispatch after heal
         if: steps.agent.outcome == 'success'
         env:
