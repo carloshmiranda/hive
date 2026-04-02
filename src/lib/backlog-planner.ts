@@ -833,57 +833,65 @@ export async function isCompanySpecific(
 
     const text = `${title} ${description}`.toLowerCase();
 
-    // Skip classification entirely if the text is clearly about Hive infrastructure
-    // (dispatch loops, sentinel, circuit breakers, dedup, agent failures, etc.)
-    const INFRA_CONTEXT = /\b(dispatch|sentinel|circuit.?breaker|dedup|loop|regression|infra_repair|healer|evolver|hive.?backlog|agent_actions|engineer failures|failure rate|backlog.?planner|backlog.?dispatch)\b/i;
+    // 1a. Skip classification if text is clearly about Hive infrastructure.
+    // Covers: agent orchestration, dispatch, scheduling, LLM routing, DB schema,
+    // backlog management, and Hive-specific system components.
+    const INFRA_CONTEXT = /\b(dispatch(ing)?|sentinel|circuit.?breaker|dedup|orchestrat|regression|infra_repair|healer|evolver|hive.?backlog|agent_actions|agent.?prompt|engineer failures|failure rate|backlog.?planner|backlog.?dispatch|openrouter|rate.?limit|llm|neon|schema\.sql|schema.?map|settings table|provisioning|boilerplate|template(s)?|playbook|cron.?job|webhook|github.?actions|repository_dispatch|worker.?agent|brain.?agent|health.?gate|turn.?budget|cooldown|circuit|oidc|qstash|upstash|vercel.?blob|edge.?config|mcp.?server|mcp.?tool)\b/i;
     if (INFRA_CONTEXT.test(text)) {
       return null;
     }
 
-    // 2. Check if title or description mentions a company slug or name (case-insensitive)
-    // Use word boundaries to avoid false positives (e.g. "portfolio" matching "flolio")
+    // 1b. Skip if text references Hive codebase paths or files
+    const HIVE_PATH = /\b(src\/lib\/|src\/app\/api\/|\.github\/workflows\/|schema\.sql|backlog-planner|sentinel-dispatch|agent-schemas|chain-dispatch|llm\.ts|settings\.ts|dispatch\.ts)\b/i;
+    if (HIVE_PATH.test(text)) {
+      return null;
+    }
+
+    // 1c. Skip if text explicitly frames this as Hive-level work
+    const HIVE_FRAMING = /\b(in hive|hive'?s?|for hive|hive codebase|hive repo|hive system|hive agent|hive infra|across companies|cross-company|all companies|portfolio)\b/i;
+    if (HIVE_FRAMING.test(text)) {
+      return null;
+    }
+
+    // 2. Check if title or description mentions a company slug or name as the subject.
+    // Use word boundaries to avoid false positives (e.g. "portfolio" matching "flolio").
+    // Require the company name to appear in a subject/action position — not just incidentally.
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
     for (const company of companies) {
       const slug = company.slug.toLowerCase();
       const name = company.name.toLowerCase();
+      const slugRe = new RegExp(`\\b${esc(slug)}\\b`);
+      const nameRe = new RegExp(`\\b${esc(name)}\\b`);
 
-      // Word-boundary match — avoids substring false positives
-      const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const slugRegex = new RegExp(`\\b${esc(slug)}\\b`);
-      const nameRegex = new RegExp(`\\b${esc(name)}\\b`);
-      if (slugRegex.test(text) || nameRegex.test(text)) {
+      const mentionsCompany = slugRe.test(text) || nameRe.test(text);
+      if (!mentionsCompany) continue;
+
+      // Only return company match if the mention is in a company-work context.
+      // Patterns that indicate the company IS the work target (not just a reference):
+      //   - "for <company>", "in <company>", "<company>'s <site|app|blog>", "<action> <company>"
+      const COMPANY_SUBJECT_PATTERNS = [
+        // "for flolio", "in senhorio"
+        new RegExp(`\\b(for|in|to|at)\\s+${esc(slug)}\\b`, 'i'),
+        new RegExp(`\\b(for|in|to|at)\\s+${esc(name)}\\b`, 'i'),
+        // "flolio's website/blog/app"
+        new RegExp(`\\b${esc(slug)}'s?\\s+(website|homepage|blog|app|landing|product|service|repo|codebase)\\b`, 'i'),
+        new RegExp(`\\b${esc(name)}'s?\\s+(website|homepage|blog|app|landing|product|service|repo|codebase)\\b`, 'i'),
+        // action verbs targeting the company
+        new RegExp(`\\b(deploy|fix|build|launch|create|setup|configure|update|migrate|scaffold)\\s+(the\\s+)?${esc(slug)}\\b`, 'i'),
+        new RegExp(`\\b(deploy|fix|build|launch|create|setup|configure|update|migrate|scaffold)\\s+(the\\s+)?${esc(name)}\\b`, 'i'),
+        // company + product context
+        new RegExp(`\\b${esc(slug)}\\s+(website|homepage|landing|app|service|blog|product|feature|page|route|api)\\b`, 'i'),
+        new RegExp(`\\b${esc(name)}\\s+(website|homepage|landing|app|service|blog|product|feature|page|route|api)\\b`, 'i'),
+      ];
+
+      const isSubjectMatch = COMPANY_SUBJECT_PATTERNS.some(p => p.test(text));
+      if (isSubjectMatch) {
         return company.slug;
       }
     }
 
-    // 3. Check for company-specific patterns
-    for (const company of companies) {
-      const slug = company.slug.toLowerCase();
-      const name = company.name.toLowerCase();
-
-      // Pattern: "landing page for X", "X's homepage", "deploy X", "fix X website", etc.
-      const patterns = [
-        new RegExp(`\\blanding page for\\s+${slug}\\b`, 'i'),
-        new RegExp(`\\b${slug}'s\\s+(homepage|website|landing)\\b`, 'i'),
-        new RegExp(`\\bdeploy\\s+${slug}\\b`, 'i'),
-        new RegExp(`\\b${slug}\\s+(website|homepage|landing|app|service)\\b`, 'i'),
-        new RegExp(`\\bfix\\s+${slug}\\b`, 'i'),
-        new RegExp(`\\bupdate\\s+${slug}\\b`, 'i'),
-        new RegExp(`\\blanding page for\\s+${name}\\b`, 'i'),
-        new RegExp(`\\b${name}'s\\s+(homepage|website|landing)\\b`, 'i'),
-        new RegExp(`\\bdeploy\\s+${name}\\b`, 'i'),
-        new RegExp(`\\b${name}\\s+(website|homepage|landing|app|service)\\b`, 'i'),
-        new RegExp(`\\bfix\\s+${name}\\b`, 'i'),
-        new RegExp(`\\bupdate\\s+${name}\\b`, 'i')
-      ];
-
-      for (const pattern of patterns) {
-        if (pattern.test(text)) {
-          return company.slug;
-        }
-      }
-    }
-
-    // 4. Return null if it's a Hive-level item
+    // 3. Return null if it's a Hive-level item (no strong company signal found)
     return null;
   } catch (error) {
     console.warn('isCompanySpecific failed:', error instanceof Error ? error.message : 'unknown');
