@@ -1,0 +1,89 @@
+name: "DB Migrate"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "migrations/*.sql"
+
+jobs:
+  migrate:
+    name: Run pending migrations
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install postgres driver
+        run: npm install postgres
+
+      - name: Run pending migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          node - <<'EOF'
+          const postgres = require("postgres");
+          const fs = require("fs");
+          const path = require("path");
+
+          async function main() {
+            const sql = postgres(process.env.DATABASE_URL, { ssl: "require" });
+
+            // Ensure tracking table exists (idempotent)
+            await sql`
+              CREATE TABLE IF NOT EXISTS schema_migrations (
+                filename TEXT PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+              )
+            `;
+
+            // Get already-applied migrations
+            const applied = await sql`SELECT filename FROM schema_migrations`;
+            const appliedSet = new Set(applied.map(r => r.filename));
+
+            // Find all migration files, sorted by name
+            const migrationsDir = path.join(process.cwd(), "migrations");
+            const files = fs.readdirSync(migrationsDir)
+              .filter(f => f.endsWith(".sql"))
+              .sort();
+
+            let ran = 0;
+            for (const file of files) {
+              if (appliedSet.has(file)) {
+                console.log(`  skip  ${file} (already applied)`);
+                continue;
+              }
+
+              const filepath = path.join(migrationsDir, file);
+              const content = fs.readFileSync(filepath, "utf-8");
+
+              console.log(`  apply ${file}`);
+              try {
+                await sql.begin(async tx => {
+                  await tx.unsafe(content);
+                  await tx`INSERT INTO schema_migrations (filename) VALUES (${file})`;
+                });
+                console.log(`  done  ${file}`);
+                ran++;
+              } catch (err) {
+                console.error(`  FAIL  ${file}: ${err.message}`);
+                process.exit(1);
+              }
+            }
+
+            if (ran === 0) {
+              console.log("No pending migrations.");
+            } else {
+              console.log(`\nApplied ${ran} migration(s).`);
+            }
+
+            await sql.end();
+          }
+
+          main().catch(err => { console.error(err); process.exit(1); });
+          EOF
