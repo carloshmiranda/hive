@@ -3,6 +3,7 @@ import { getDb, json, err } from "@/lib/db";
 import { type HiveToolCall, type HiveToolResult } from "@/lib/hive-tools";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { getStripeForCompany, getStripeAgentTools } from "@/lib/stripe";
+import { webSearch as executeWebSearch } from "@/lib/web-search";
 
 // Tool execution endpoint for Hive API functions
 // Called by agents via tool calling to query/update the Hive database
@@ -459,40 +460,5 @@ async function getStripeTools(sql: any, args: { company: string }): Promise<any>
 
 async function webSearch(args: { query: string; count?: number }): Promise<any> {
   const { query, count = 5 } = args;
-
-  const apiKey = process.env.BRAVE_SEARCH_API_KEY;
-  if (!apiKey) {
-    return { results: [], warning: "Web search not configured (missing BRAVE_SEARCH_API_KEY)" };
-  }
-
-  const safeCount = Math.min(Math.max(1, count), 10);
-  const searchUrl = new URL("https://api.search.brave.com/res/v1/web/search");
-  searchUrl.searchParams.set("q", query.trim());
-  searchUrl.searchParams.set("count", String(safeCount));
-  searchUrl.searchParams.set("text_decorations", "false");
-  searchUrl.searchParams.set("search_lang", "en");
-
-  const res = await fetch(searchUrl.toString(), {
-    headers: {
-      Accept: "application/json",
-      "Accept-Encoding": "gzip",
-      "X-Subscription-Token": apiKey,
-    },
-  });
-
-  if (!res.ok) {
-    throw new Error(`Brave Search API returned ${res.status}`);
-  }
-
-  const data = await res.json();
-  const webResults = data?.web?.results ?? [];
-
-  return {
-    results: webResults.slice(0, safeCount).map((r: any) => ({
-      title: r.title ?? "",
-      url: r.url ?? "",
-      snippet: r.description ?? "",
-    })),
-    query,
-  };
+  return executeWebSearch(query, count);
 }
