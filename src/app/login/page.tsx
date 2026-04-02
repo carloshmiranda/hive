@@ -4,7 +4,7 @@ import { signIn } from "next-auth/react";
 export default function LoginPage() {
   return (
     <div style={{
-      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center",
       background: "#08080d", fontFamily: "'DM Sans', system-ui, sans-serif"
     }}>
       <div style={{ textAlign: "center" }}>

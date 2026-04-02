@@ -133,6 +133,7 @@ export default function CompanyDetailPage() {
   };
 
   const handleApproval = async (id: string, decision: "approved" | "rejected") => {
+    if (decision === "rejected" && !confirm("Reject this approval?")) return;
     await fetch(`/api/approvals/${id}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -155,7 +156,7 @@ export default function CompanyDetailPage() {
   const status = STATUS_MAP[company.status] || STATUS_MAP.idea;
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 20px", fontFamily: "var(--hive-sans)", color: "var(--hive-text)", background: "var(--hive-bg)", minHeight: "100vh" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 20px", fontFamily: "var(--hive-sans)", color: "var(--hive-text)", background: "var(--hive-bg)", minHeight: "100dvh" }}>
 
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
@@ -253,7 +254,7 @@ export default function CompanyDetailPage() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
                 {metricItems.map((m, i) => (
                   <div key={i} style={{ padding: "12px 14px", background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
-                    <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
+                    <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
                     <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginTop: 2 }}>{m.label}</div>
                     <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>{latest.date}</div>
                   </div>
@@ -298,7 +299,7 @@ export default function CompanyDetailPage() {
               { label: "Ad spend", value: `€${unitEcon.total_ad_spend.toFixed(0)}`, highlight: false },
             ].map((m, i) => (
               <div key={i} style={{ padding: "12px 14px", background: "var(--hive-surface)", borderRadius: 8, border: "1px solid var(--hive-border)" }}>
-                <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
+                <div style={{ fontSize: 18, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums", color: m.highlight ? "var(--hive-green)" : "var(--hive-text)" }}>{m.value}</div>
                 <div style={{ fontSize: 12, color: "var(--hive-text-secondary)", marginTop: 2 }}>{m.label}</div>
               </div>
             ))}
@@ -318,9 +319,9 @@ export default function CompanyDetailPage() {
                   {unitEcon.cohorts.slice(-6).map(c => (
                     <tr key={c.month} style={{ borderBottom: "1px solid var(--hive-border)" }}>
                       <td style={{ padding: "6px 10px", color: "var(--hive-text)" }}>{c.month}</td>
-                      <td style={{ padding: "6px 10px", color: "var(--hive-text)" }}>{c.customers_acquired}</td>
-                      <td style={{ padding: "6px 10px", color: "var(--hive-text)" }}>€{c.cumulative_revenue.toFixed(0)}</td>
-                      <td style={{ padding: "6px 10px", color: c.avg_revenue_per_customer > 0 ? "var(--hive-green)" : "var(--hive-text-dim)" }}>€{c.avg_revenue_per_customer.toFixed(2)}</td>
+                      <td style={{ padding: "6px 10px", fontVariantNumeric: "tabular-nums", color: "var(--hive-text)" }}>{c.customers_acquired}</td>
+                      <td style={{ padding: "6px 10px", fontVariantNumeric: "tabular-nums", color: "var(--hive-text)" }}>€{c.cumulative_revenue.toFixed(0)}</td>
+                      <td style={{ padding: "6px 10px", fontVariantNumeric: "tabular-nums", color: c.avg_revenue_per_customer > 0 ? "var(--hive-green)" : "var(--hive-text-dim)" }}>€{c.avg_revenue_per_customer.toFixed(2)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -486,8 +487,9 @@ export default function CompanyDetailPage() {
           )}
         </div>
         {tasks.length === 0 ? (
-          <div style={{ padding: 20, color: "var(--hive-text-tertiary)", fontSize: 13, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
-            No tasks yet — CEO will propose tasks on next cycle
+          <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ color: "var(--hive-text-tertiary)", fontSize: 13 }}>No tasks yet — CEO will propose tasks on next cycle</span>
+            <button onClick={() => document.querySelector<HTMLInputElement>("[placeholder*='directive']")?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Send directive</button>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -533,6 +535,7 @@ export default function CompanyDetailPage() {
                           Prioritize
                         </button>
                         <button onClick={async () => {
+                          if (!confirm("Dismiss this task?")) return;
                           await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "dismissed" }) });
                           fetchData();
                         }} style={{ padding: "4px 12px", fontSize: 11, fontFamily: "var(--hive-mono)", background: "var(--hive-surface)",
@@ -616,7 +619,10 @@ export default function CompanyDetailPage() {
           Cycles ({cycles.length})
         </h3>
         {cycles.length === 0 ? (
-          <div style={{ padding: 20, color: "var(--hive-text-tertiary)", fontSize: 13, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>No cycles yet</div>
+          <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ color: "var(--hive-text-tertiary)", fontSize: 13 }}>No cycles yet</span>
+            <button onClick={() => document.querySelector<HTMLInputElement>("[placeholder*='directive']")?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Trigger cycle</button>
+          </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {cycles.map(c => {
@@ -698,7 +704,10 @@ export default function CompanyDetailPage() {
             );
           })}
           {actions.length === 0 && (
-            <div style={{ padding: 20, color: "var(--hive-text-tertiary)", fontSize: 13, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>No activity yet</div>
+            <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ color: "var(--hive-text-tertiary)", fontSize: 13 }}>No activity yet</span>
+              <button onClick={() => document.querySelector<HTMLInputElement>("[placeholder*='directive']")?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Send directive</button>
+            </div>
           )}
         </div>
       </div>

@@ -113,7 +113,7 @@ export default function SettingsPage() {
   const totalCount = settings.length;
 
   return (
-    <div style={{ fontFamily: "var(--hive-sans)", background: "var(--hive-bg)", minHeight: "100vh", padding: "24px 28px", maxWidth: 720, margin: "0 auto" }}>
+    <div style={{ fontFamily: "var(--hive-sans)", background: "var(--hive-bg)", minHeight: "100dvh", padding: "24px 28px", maxWidth: 720, margin: "0 auto" }}>
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

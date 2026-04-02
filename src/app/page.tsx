@@ -264,6 +264,7 @@ export default function DashboardPage() {
   };
 
   const dismissTodo = async (todoId: string) => {
+    if (!confirm("Dismiss this item?")) return;
     await fetch("/api/todos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -273,6 +274,7 @@ export default function DashboardPage() {
   };
 
   const handleProposalDecision = async (id: string, decision: "approved" | "rejected" | "deferred") => {
+    if (decision === "rejected" && !confirm("Reject this prompt proposal?")) return;
     const res = await fetch("/api/evolver", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -368,7 +370,7 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div style={{ minHeight: "100vh", background: "var(--hive-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ minHeight: "100dvh", background: "var(--hive-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
           <span style={{ fontFamily: "var(--hive-mono)", fontSize: 11, color: "var(--hive-text-tertiary)", letterSpacing: "0.1em" }}>LOADING</span>
@@ -379,7 +381,7 @@ export default function DashboardPage() {
 
   if (loadError) {
     return (
-      <div style={{ minHeight: "100vh", background: "var(--hive-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ minHeight: "100dvh", background: "var(--hive-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
           <span style={{ fontFamily: "var(--hive-mono)", fontSize: 11, color: "var(--hive-red)", letterSpacing: "0.1em" }}>FAILED TO LOAD</span>
           <span style={{ fontFamily: "var(--hive-mono)", fontSize: 10, color: "var(--hive-text-dim)" }}>/api/dashboard returned an error</span>
@@ -393,7 +395,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div style={{ fontFamily: "var(--hive-sans)", background: "var(--hive-bg)", color: "var(--hive-text)", minHeight: "100vh", padding: "24px 28px" }}>
+    <div style={{ fontFamily: "var(--hive-sans)", background: "var(--hive-bg)", color: "var(--hive-text)", minHeight: "100dvh", padding: "24px 28px" }}>
 
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
@@ -404,11 +406,11 @@ export default function DashboardPage() {
         </div>
         {portfolio && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)" }}>
-            <span>MRR <span style={{ fontWeight: 600, color: portfolio.total_mrr > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(portfolio.total_mrr)}</span></span>
+            <span>MRR <span style={{ fontWeight: 600, color: portfolio.total_mrr > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)", fontVariantNumeric: "tabular-nums" }}>{fmtCurrency(portfolio.total_mrr)}</span></span>
             <span style={{ color: "var(--hive-text-dim)" }}>·</span>
-            <span>Customers <span style={{ fontWeight: 600, color: "var(--hive-text)" }}>{portfolio.total_customers}</span></span>
+            <span>Customers <span style={{ fontWeight: 600, color: "var(--hive-text)", fontVariantNumeric: "tabular-nums" }}>{portfolio.total_customers}</span></span>
             <span style={{ color: "var(--hive-text-dim)" }}>·</span>
-            <span>Companies <span style={{ fontWeight: 600, color: "var(--hive-text)" }}>{portfolio.live_companies}</span></span>
+            <span>Companies <span style={{ fontWeight: 600, color: "var(--hive-text)", fontVariantNumeric: "tabular-nums" }}>{portfolio.live_companies}</span></span>
             <span style={{ color: "var(--hive-text-dim)" }}>·</span>
             <span>Last cycle <span style={{ fontWeight: 600, color: "var(--hive-text)" }}>{portfolio.last_cycle_at ? timeAgo(portfolio.last_cycle_at) : "—"}</span></span>
           </div>
@@ -699,15 +701,15 @@ export default function DashboardPage() {
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
                             <div>
                               <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>MRR</div>
-                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", color: (m?.mrr || 0) > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(m?.mrr || 0)}</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums", color: (m?.mrr || 0) > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(m?.mrr || 0)}</div>
                             </div>
                             <div>
                               <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>{(m?.customers || 0) > 0 ? "Customers" : (m?.waitlist_total || 0) > 0 ? "Waitlist" : "Customers"}</div>
-                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{(m?.customers || 0) > 0 ? m.customers : (m?.waitlist_total || 0) > 0 ? m.waitlist_total : 0}</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums" }}>{(m?.customers || 0) > 0 ? m.customers : (m?.waitlist_total || 0) > 0 ? m.waitlist_total : 0}</div>
                             </div>
                             <div>
                               <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>Views</div>
-                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)" }}>{m?.page_views || 0}</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums" }}>{m?.page_views || 0}</div>
                             </div>
                           </div>
                         )}
