@@ -183,6 +183,90 @@ async function executeSentinelDispatch(request: Request) {
     }
 
     // ========================================================================
+    // OPENROUTER ACCOUNT HEALTH CHECK
+    // ========================================================================
+    // Every 6h: verify OpenRouter API key is valid and credits aren't exhausted.
+    // Creates a spend_approval gate if credits are >80% consumed on a limited
+    // plan so Carlos can top up before agents start failing.
+    try {
+      const [lastOrCheck] = await sql`
+        SELECT value FROM settings WHERE key = 'openrouter_health_check_at'
+      `.catch(() => []);
+      const hoursSinceOrCheck = lastOrCheck?.value
+        ? (Date.now() - new Date(lastOrCheck.value).getTime()) / 3600000
+        : 999;
+
+      if (hoursSinceOrCheck >= 6) {
+        const orApiKey = await getSettingValue("openrouter_api_key").catch(() => null);
+        if (orApiKey) {
+          const orRes = await fetch("https://openrouter.ai/api/v1/auth/key", {
+            headers: { Authorization: `Bearer ${orApiKey}` },
+            signal: AbortSignal.timeout(8000),
+          }).catch(() => null);
+
+          if (orRes?.ok) {
+            const orData = await orRes.json().catch(() => null);
+            const info = orData?.data;
+            if (info) {
+              const usage = Number(info.usage ?? 0);
+              const limit = info.limit != null ? Number(info.limit) : null;
+              const isFree = Boolean(info.is_free_tier);
+              const usagePct = limit && limit > 0 ? usage / limit : 0;
+
+              console.log(
+                `[sentinel-dispatch] OpenRouter account: free=${isFree}, usage=${usage.toFixed(4)}, ` +
+                `limit=${limit ?? "unlimited"}, pct=${(usagePct * 100).toFixed(1)}%`
+              );
+
+              if (limit && usagePct >= 0.8) {
+                const [existing] = await sql`
+                  SELECT id FROM approvals
+                  WHERE gate_type = 'spend_approval'
+                  AND status = 'pending'
+                  AND context->>'reason' = 'openrouter_credits_low'
+                `.catch(() => []);
+
+                if (!existing) {
+                  await sql`
+                    INSERT INTO approvals (gate_type, company_id, context, status, created_at)
+                    VALUES (
+                      'spend_approval',
+                      NULL,
+                      ${JSON.stringify({
+                        reason: "openrouter_credits_low",
+                        usage,
+                        limit,
+                        usage_pct: Math.round(usagePct * 100),
+                        message: `OpenRouter credits at ${Math.round(usagePct * 100)}% — top up to prevent agent failures`,
+                      })},
+                      'pending',
+                      NOW()
+                    )
+                  `.catch((e: any) => console.warn("[sentinel-dispatch] Failed to create OR escalation:", e?.message));
+                  dispatches.push({
+                    type: "escalation",
+                    detail: `OpenRouter credits ${Math.round(usagePct * 100)}% consumed — spend_approval gate created`,
+                  } as any);
+                }
+              }
+            }
+          } else if (orRes?.status === 401) {
+            console.warn("[sentinel-dispatch] OpenRouter API key invalid (401) — check settings");
+          } else {
+            console.warn(`[sentinel-dispatch] OpenRouter health check returned ${orRes?.status ?? "network error"}`);
+          }
+        }
+
+        await sql`
+          INSERT INTO settings (key, value, is_secret) VALUES ('openrouter_health_check_at', ${new Date().toISOString()}, false)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        `.catch(() => {});
+      }
+    } catch (orErr) {
+      console.warn("[sentinel-dispatch] OpenRouter health check failed (non-blocking):", orErr instanceof Error ? orErr.message : "unknown");
+    }
+
+    // ========================================================================
     // SENTRY ERROR SURGE DETECTION
     // ========================================================================
 
