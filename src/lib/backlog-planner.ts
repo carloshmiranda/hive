@@ -1,5 +1,5 @@
-import { callLLM } from "@/lib/llm";
-import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
+import { callLLM, callLLMStructuredResponse } from "@/lib/llm";
+import { BacklogPlannerResponseSchema, DecomposedSubTasksSchema, type DecomposedSubTask } from "@/lib/agent-schemas";
 import { getSettingValue } from "@/lib/settings";
 import { isBacklogItemInCooldown } from "@/lib/dispatch";
 
@@ -415,15 +415,6 @@ export async function regenerateBacklogMd(sql: any): Promise<void> {
   }
 }
 
-export interface DecomposedSubTask {
-  title: string;
-  description: string;
-  acceptance_criteria: string[];
-  affected_files: string[];
-  complexity: "S" | "M";
-  estimated_turns: number;
-}
-
 /**
  * LLM-assisted task decomposition — breaks a large/failed task into
  * independently deliverable sub-tasks, each with its own spec.
@@ -470,63 +461,50 @@ Rules for sub-tasks:
 5. CONCRETE ACCEPTANCE CRITERIA — not "implement X" but "function Y in file Z returns correct results for input W"
 6. NO BUNDLING — if you write "implement X, Y, and Z", that's 3 sub-tasks, not 1
 
-Respond with ONLY valid JSON array (no markdown, no explanation):
-[
-  {
-    "title": "Short imperative title (max 80 chars)",
-    "description": "What to do, which files to modify, and how. 2-4 sentences max.",
-    "acceptance_criteria": ["criterion 1", "criterion 2", "npx next build passes"],
-    "affected_files": ["src/exact/path.ts"],
-    "complexity": "S",
-    "estimated_turns": 15
-  }
-]
+Respond with a JSON object wrapping the array:
+{
+  "sub_tasks": [
+    {
+      "title": "Short imperative title (max 80 chars)",
+      "description": "What to do, which files to modify, and how. 2-4 sentences max.",
+      "acceptance_criteria": ["criterion 1", "criterion 2", "npx next build passes"],
+      "affected_files": ["src/exact/path.ts"],
+      "complexity": "S",
+      "estimated_turns": 15
+    }
+  ]
+}
 
 CRITICAL SIZE CONSTRAINT: Each sub-task MUST be completable in ≤25 turns by a Claude Sonnet agent.
 Complexity: S = 1-3 files, simple logic (10-20 turns). NEVER output M or L — if a sub-task touches 4+ files or needs 20+ turns, split it further.
 A sub-task that modifies more than 3 files or adds more than 150 lines of code is TOO BIG.`;
 
   try {
-    const response = await callLLM("decomposer", prompt, {
+    const response = await callLLMStructuredResponse("decomposer", prompt, {
       maxTokens: 3000,
       temperature: 0.3,
       timeout: 30000,
+      schema: DecomposedSubTasksSchema,
     });
 
-    let jsonStr = response.content.trim();
-    const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) jsonStr = codeBlockMatch[1].trim();
+    const subTasks = response.structured?.sub_tasks;
 
-    const subTasks = JSON.parse(jsonStr) as DecomposedSubTask[];
-
-    // Validate
-    if (!Array.isArray(subTasks) || subTasks.length < 2 || subTasks.length > 6) {
+    if (!Array.isArray(subTasks) || subTasks.length < 2) {
       console.warn(`[decompose] Invalid sub-task count: ${subTasks?.length}`);
       return [];
     }
 
-    // Validate and sanitize each sub-task
-    const valid: DecomposedSubTask[] = [];
+    // Sanitize — enforce clamping rules post-schema-validation
     for (const st of subTasks) {
-      if (!st.title || !st.description || !Array.isArray(st.acceptance_criteria)) continue;
-      // Ensure build check
-      if (!st.acceptance_criteria.some(c => c.toLowerCase().includes("build"))) {
+      if (!st.acceptance_criteria.some((c: string) => c.toLowerCase().includes("build"))) {
         st.acceptance_criteria.push("npx next build passes");
       }
-      // Clamp — sub-tasks MUST fit within Engineer's 35-turn budget (80% = 28 turns max)
-      // If decomposition produces M-complexity items, they'll just hit max_turns again
       st.complexity = "S";
-      st.estimated_turns = Math.max(8, Math.min(25, st.estimated_turns || 15));
-      valid.push(st);
+      st.estimated_turns = Math.max(8, Math.min(25, st.estimated_turns));
     }
 
-    if (valid.length < 2) {
-      console.warn(`[decompose] Only ${valid.length} valid sub-tasks after validation`);
-      return [];
-    }
-
-    console.log(`[decompose] "${item.title}" → ${valid.length} sub-tasks: ${valid.map(s => s.title).join(", ")}`);
-    return valid;
+    console.log(`[decompose] "${item.title}" → ${subTasks.length} sub-tasks: ${subTasks.map(s => s.title).join(", ")}`);
+    return subTasks;
   } catch (error) {
     console.warn("Task decomposition failed:", error instanceof Error ? error.message : "unknown");
     return [];
@@ -635,14 +613,13 @@ Analyze this task and provide:
 The response will be automatically parsed as structured JSON.`;
 
   try {
-    const responseFormat = getResponseFormat("backlog-planner");
-    let response = await callLLM("planner", prompt, {
+    let response = await callLLMStructuredResponse("planner", prompt, {
       maxTokens: 2048,
       temperature: 0.3,
       timeout: 45000,
-      responseFormat,
+      schema: BacklogPlannerResponseSchema,
     }).catch(async (firstErr: any) => {
-      // Retry once with a faster model (no structured format — parse raw JSON)
+      // Retry once with a faster model (no schema — parse raw JSON as fallback)
       console.warn("[backlog-planner] First spec attempt failed, retrying with fallback model:", firstErr?.message || firstErr);
       return callLLM("ops", prompt, {
         maxTokens: 2048,
@@ -651,8 +628,8 @@ The response will be automatically parsed as structured JSON.`;
       });
     });
 
-    // Parse the structured JSON response directly
-    const plannerResponse = JSON.parse(response.content);
+    // Use structured output when available, fall back to JSON.parse for the retry path
+    const plannerResponse = ("structured" in response && response.structured) ? response.structured : JSON.parse(response.content);
 
     // Extract the spec from the structured response
     const spec: BacklogSpec = {

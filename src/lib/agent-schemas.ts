@@ -60,6 +60,21 @@ export const OpsResponseSchema = z.object({
   recommendations: z.array(z.string()).max(10),
 });
 
+// Decomposed sub-task - single item from LLM decomposition
+export const DecomposedSubTaskSchema = z.object({
+  title: z.string().min(1).max(80),
+  description: z.string().min(10).max(500),
+  acceptance_criteria: z.array(z.string().min(5)).min(1).max(8),
+  affected_files: z.array(z.string().min(1)).min(1).max(10),
+  complexity: z.enum(["S", "M"]),
+  estimated_turns: z.number().int().min(5).max(35),
+});
+
+// Wrapper for decomposer array output — generateObject requires object root
+export const DecomposedSubTasksSchema = z.object({
+  sub_tasks: z.array(DecomposedSubTaskSchema).min(2).max(6),
+});
+
 // Backlog planner - task analysis with complexity/turns/spec fields
 export const BacklogPlannerResponseSchema = z.object({
   task_analysis: z.object({
@@ -124,6 +139,8 @@ export type OutreachResponse = z.infer<typeof OutreachResponseSchema>;
 export type OpsResponse = z.infer<typeof OpsResponseSchema>;
 export type BacklogPlannerResponse = z.infer<typeof BacklogPlannerResponseSchema>;
 export type EngineerResponse = z.infer<typeof EngineerResponseSchema>;
+export type DecomposedSubTask = z.infer<typeof DecomposedSubTaskSchema>;
+export type DecomposedSubTasksResponse = z.infer<typeof DecomposedSubTasksSchema>;
 
 // Simplified JSON schema definitions for our agent responses
 // Using manual definitions since zod-to-json-schema conversion is complex
