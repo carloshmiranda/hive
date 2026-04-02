@@ -38,7 +38,13 @@ function getReceiver(): Receiver | null {
 export async function qstashPublish(
   path: string,
   body: Record<string, unknown>,
-  options?: { retries?: number; deduplicationId?: string; delay?: number }
+  options?: {
+    retries?: number;
+    deduplicationId?: string;
+    delay?: number;
+    /** If true, QStash will POST to /api/dispatch/qstash-failure when all retries are exhausted. */
+    failureCallback?: boolean;
+  }
 ): Promise<{ messageId: string } | null> {
   const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
   const cronSecret = process.env.CRON_SECRET;
@@ -68,6 +74,9 @@ export async function qstashPublish(
     },
     ...(options?.deduplicationId && { deduplicationId: options.deduplicationId }),
     ...(options?.delay && { delay: options.delay }),
+    ...(options?.failureCallback && {
+      failureCallback: `${baseUrl}/api/dispatch/qstash-failure`,
+    }),
   });
 
   return { messageId: result.messageId };

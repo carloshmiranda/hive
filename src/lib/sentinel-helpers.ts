@@ -220,6 +220,7 @@ export async function dispatchToWorker(
     { company_slug: companySlug, agent, trigger },
     {
       deduplicationId: `sentinel-worker-${agent}-${companySlug}-${new Date().toISOString().slice(0, 13)}`,
+      failureCallback: true,
     }
   ).catch((e: any) => {
     console.warn(
