@@ -2350,14 +2350,20 @@ export async function POST(req: Request) {
       spec: spec || undefined,
       max_turns: attemptCount >= 2
         ? 60
-        : Math.max(50, spec?.estimated_turns || 50),
+        : topItem.parent_id && spec?.complexity
+          ? (spec.complexity === "S" ? 25 : spec.complexity === "M" ? 45 : 70)
+          : Math.max(50, spec?.estimated_turns || 50),
       // Pack secondary fields into metadata to stay within 10-property limit
       meta: {
         title: topItem.title,
         priority_score: topItem.priority_score,
         attempt: attemptCount + 1,
         github_issue: topItem.github_issue_number || undefined,
-        ...(attemptCount >= 2 ? { model: "claude-opus-4-20250514" } : {}),
+        ...(attemptCount >= 2
+          ? { model: "claude-opus-4-20250514" }
+          : topItem.parent_id && spec?.complexity === "S"
+            ? { model: "claude-haiku-4-5-20251001" }
+            : {}),
         // Handoff context: what's happening in the system right now
         system_state: {
           recent_activity: recentActivity?.activity || [],
