@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
+import { AGENT_DISPLAY } from "@/lib/agent-display";
 
 // === TYPES ===
 type Company = {
@@ -51,14 +52,10 @@ type EvolverProposal = {
 };
 
 // === HELPERS ===
-const AGENT_MAP: Record<string, { label: string; color: string }> = {
-  ceo: { label: "CEO", color: "#f0b944" },
-  scout: { label: "Scout", color: "#60a5fa" },
-  engineer: { label: "Engineer", color: "#34d399" },
-  growth: { label: "Growth", color: "#a78bfa" },
-  ops: { label: "Ops", color: "#f472b6" },
-  outreach: { label: "Outreach", color: "#fb923c" },
-  evolver: { label: "Evolver", color: "#38bdf8" },
+const AGENT_COLOR: Record<string, string> = {
+  ceo: "#f0b944", scout: "#60a5fa", engineer: "#34d399",
+  growth: "#a78bfa", ops: "#f472b6", outreach: "#fb923c",
+  evolver: "#38bdf8", sentinel: "#e879f9", healer: "#4ade80", backlog: "#94a3b8",
 };
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   idea: { label: "IDEA", color: "#9d9da8" },
@@ -119,11 +116,12 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function AgentBadge({ agent }: { agent: string }) {
-  const a = AGENT_MAP[agent] || { label: agent.slice(0, 3).toUpperCase(), color: "#9d9da8" };
+  const display = AGENT_DISPLAY[agent] || { name: agent, icon: "🤖" };
+  const color = AGENT_COLOR[agent] || "#9d9da8";
   return (
     <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500, letterSpacing: "0.06em",
-      padding: "2px 7px", borderRadius: 4, color: a.color, background: a.color + "14", border: `1px solid ${a.color}2a` }}>
-      {a.label}
+      padding: "2px 7px", borderRadius: 4, color, background: color + "14", border: `1px solid ${color}2a` }}>
+      {display.icon} {display.name}
     </span>
   );
 }
