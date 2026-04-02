@@ -191,6 +191,7 @@ export interface LLMOptions {
   maxRetries?: number;
   timeout?: number;
   verbosity?: "low" | "medium" | "high" | "max";
+  companySlug?: string;  // Used to populate OpenRouter `user` field for per-agent per-company tracking
   responseFormat?: {
     type: "json_schema";
     json_schema: {
@@ -522,7 +523,8 @@ async function fetchWithRetry(
 async function callOpenRouter(
   prompt: string,
   models: string[],
-  options: LLMOptions = {}
+  options: LLMOptions = {},
+  agent?: string
 ): Promise<{ content: string; model: string; toolCalls?: any[] }> {
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
@@ -547,6 +549,11 @@ async function callOpenRouter(
 
   if (failingProviders.length > 0) {
     console.warn(`[provider-health] Excluding ${failingProviders.length} failing provider(s): ${failingProviders.join(", ")}`);
+  }
+
+  // Populate user field for per-agent per-company tracking in OpenRouter dashboard
+  if (agent) {
+    requestBody.user = options.companySlug ? `${agent}:${options.companySlug}` : agent;
   }
 
   // Add verbosity config for OpenRouter (maps to output_config.effort for Anthropic models)
@@ -859,7 +866,7 @@ export async function callLLM(
 
   try {
     // Single request — OpenRouter handles fallback server-side
-    const result = await callOpenRouter(prompt, availableModels, llmOptions);
+    const result = await callOpenRouter(prompt, availableModels, llmOptions, agent);
 
     // Record success for the model that actually responded
     const circuitKey = getCircuitBreakerKey(result.model);
