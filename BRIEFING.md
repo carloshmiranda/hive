@@ -10,7 +10,7 @@
 - **Architecture:** 7 agents, event-driven, QStash as sole scheduler (5 schedules: sentinel-urgent 2h, sentinel-dispatch 4h, sentinel-janitor daily, metrics 2x/day, digest daily) + chain dispatch via QStash guaranteed delivery + 1 delegated (company-health fired by sentinel). Vercel crons removed. Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
-  - VerdeDesk — status: mvp, 26 cycles, last CEO score 2/10, waitlist + IRS guide (April 1 deadline)
+  - VerdeDesk — status: mvp, 39 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, waitlist unverified, IRS season open until June 30
   - Senhorio — status: mvp, 11 cycles, built tax calculator at /calculadora
   - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
   - CiberPME — status: mvp, 4 cycles, blog (converted from SaaS), Portuguese market, cybersecurity for SMBs
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-02: **VerdeDesk cycle 38 completed (score 3/10), cycle 39 started** — Cycle 38: engineer created PR #24 (dependency updates, off-task) and growth CLI failed (printed help text). Both PRs closed. Score 3. Cycle 39 plan: verify waitlist form e2e (strict scope, dependencies forbidden) + directory submissions for distribution. Both engineer and growth dispatched. 20 days old, zero traffic, content foundation strong, IRS season open until June 30.
 
 - `[code]` 2026-04-02: **Sentry breadcrumbs in dispatch chain (issue #135)** — Added `addDispatchBreadcrumb()` helper to `src/lib/sentry-tags.ts`. Added breadcrumbs at 5 checkpoints in `agents/dispatch/route.ts` (dispatch start, rate limit hit, LLM call start, LLM complete with provider/model/duration/cost, DB log success, QStash chain dispatch). Added breadcrumbs at 5 checkpoints in `backlog/dispatch/route.ts` (dispatch start, item selected with id/priority/spec status, spec_request GitHub dispatch, final GitHub dispatch with payload size, dispatch success). Breadcrumbs appear in Sentry event timeline for any error captured downstream. TypeScript clean.
 
