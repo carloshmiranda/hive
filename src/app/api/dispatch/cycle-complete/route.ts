@@ -2,6 +2,7 @@ import { getDb, json } from "@/lib/db";
 import { getGitHubToken } from "@/lib/github-app";
 import { invalidateCompanyCache } from "@/lib/cache";
 import { qstashPublish } from "@/lib/qstash";
+import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
 
 const REPO = "carloshmiranda/hive";
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -88,6 +89,13 @@ export async function POST(req: Request) {
   const { agent, company, status, action_type } = body;
   const callbackStatus = status === "failed" ? "failed" : "success";
 
+  setSentryTags({ agent: agent || "dispatch", action_type: action_type || "cycle_callback", route: "/api/dispatch/cycle-complete" });
+  addDispatchBreadcrumb({
+    category: "dispatch",
+    message: "Cycle complete callback received",
+    data: { agent, company, status: callbackStatus },
+  });
+
   // Log the completion (skip for chain retries)
   if (agent && company && agent !== "chain_retry") {
     const [companyRecord] = await sql`
@@ -171,6 +179,12 @@ export async function POST(req: Request) {
 
   const healthRaw = await healthRes.json();
   const health = healthRaw.data || healthRaw;
+
+  addDispatchBreadcrumb({
+    category: "dispatch",
+    message: "Health gate checked",
+    data: { recommendation: health.recommendation, claude_pct: health.budget?.claude_pct },
+  });
 
   if (health.recommendation === "stop") {
     // Claude is blocked — dispatch free workers and retry when budget resets
@@ -349,6 +363,11 @@ export async function POST(req: Request) {
   }
 
   if (dispatched.length > 0) {
+    addDispatchBreadcrumb({
+      category: "dispatch",
+      message: "Chaining to next companies",
+      data: { count: dispatched.length, slugs: dispatched.map(d => d.slug), completed_company: company },
+    });
     const summary = dispatched.map(d => `${d.slug} (${d.priority_score})`).join(", ");
     await qstashPublish("/api/notify", {
       agent: "dispatch",
