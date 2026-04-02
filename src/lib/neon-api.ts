@@ -50,3 +50,20 @@ export async function getProject(projectId: string) {
 export async function listProjects() {
   return neonApi("/projects");
 }
+
+export async function getProjectsConsumption(): Promise<Array<{
+  id: string;
+  name: string;
+  storage_bytes: number;
+  compute_seconds: number;
+}>> {
+  const data = await neonApi("/projects");
+  const projects: any[] = data.projects ?? [];
+  return projects.map((p: any) => ({
+    id: p.id,
+    name: p.name,
+    // synthetic_storage_size_bytes is the actual DB size at rest
+    storage_bytes: p.synthetic_storage_size_bytes ?? 0,
+    compute_seconds: p.compute_time_seconds ?? 0,
+  }));
+}
