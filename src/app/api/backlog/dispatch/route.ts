@@ -397,7 +397,7 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => ({}));
-  let { completed_id, completed_status, pr_number, branch, changed_files } = body;
+  let { completed_id, completed_status, pr_number, branch, changed_files, force_respec } = body;
 
   // Handle structured status codes from Engineer callbacks (ADR-032)
   const { status_code, concerns, context_needed, blocking_issue } = body;
@@ -1811,13 +1811,29 @@ export async function POST(req: Request) {
 
     // Permanently blocked — skip and ensure blocked status
     // Exception: if [manual_spec] is present in notes OR spec field is now populated — allow dispatch
+    // Exception: if force_respec=true — strip the block tag and allow a fresh spec attempt
     if (notes.includes("[manual_spec_needed]") && !hasManualSpecInNotes && !hasSpec) {
-      await sql`
-        UPDATE hive_backlog
-        SET status = 'blocked', dispatched_at = NULL
-        WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
-      `.catch(() => {});
-      continue;
+      if (force_respec) {
+        // Strip [manual_spec_needed] and [no_spec] tags so spec generation runs fresh
+        const cleanedNotes = notes
+          .replace(/\[manual_spec_needed\][^\n]*/g, "")
+          .replace(/\[no_spec\]/g, "")
+          .trim();
+        await sql`
+          UPDATE hive_backlog
+          SET notes = ${cleanedNotes || null}, status = 'ready', dispatched_at = NULL
+          WHERE id = ${candidate.id}
+        `.catch(() => {});
+        candidate.notes = cleanedNotes || null;
+        // Fall through — treat as specless candidate for fresh spec generation
+      } else {
+        await sql`
+          UPDATE hive_backlog
+          SET status = 'blocked', dispatched_at = NULL
+          WHERE id = ${candidate.id} AND status IN ('ready', 'approved', 'planning')
+        `.catch(() => {});
+        continue;
+      }
     }
 
     // Specless item that already failed once — block permanently

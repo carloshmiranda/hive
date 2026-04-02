@@ -634,11 +634,19 @@ The response will be automatically parsed as structured JSON.`;
 
   try {
     const responseFormat = getResponseFormat("backlog-planner");
-    const response = await callLLM("planner", prompt, {
+    let response = await callLLM("planner", prompt, {
       maxTokens: 2048,
       temperature: 0.3,
-      timeout: 25000,
+      timeout: 45000,
       responseFormat,
+    }).catch(async (firstErr: any) => {
+      // Retry once with a faster model (no structured format — parse raw JSON)
+      console.warn("[backlog-planner] First spec attempt failed, retrying with fallback model:", firstErr?.message || firstErr);
+      return callLLM("ops", prompt, {
+        maxTokens: 2048,
+        temperature: 0.3,
+        timeout: 30000,
+      });
     });
 
     // Parse the structured JSON response directly
@@ -784,7 +792,14 @@ Respond with ONLY valid JSON (no markdown):
     const response = await callLLM("planner", prompt, {
       maxTokens: 1500,
       temperature: 0.3,
-      timeout: 20000,
+      timeout: 30000,
+    }).catch(async (firstErr: any) => {
+      console.warn("[backlog-planner] Company task spec first attempt failed, retrying:", firstErr?.message || firstErr);
+      return callLLM("ops", prompt, {
+        maxTokens: 1500,
+        temperature: 0.3,
+        timeout: 20000,
+      });
     });
 
     let jsonStr = response.content.trim();
