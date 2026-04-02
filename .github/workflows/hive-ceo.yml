@@ -129,174 +129,22 @@ jobs:
           cron_secret: ${{ steps.auth.outputs.cron_secret }}
           context_payload: ${{ steps.context.outputs.payload }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
       - name: Chain dispatch
         if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
           CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
           HIVE_URL: https://hive-phi.vercel.app
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+          TRIGGER: ${{ steps.context.outputs.trigger }}
           DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
-        run: |
-          set +e  # Prevent grep/jq exit codes from crashing the step
-          RESULT=$(jq -r '[.[] | select(.type == "assistant")] | last | [.message.content[] | select(.type == "text") | .text] | join("\n")' "${{ steps.agent.outputs.execution_file }}" 2>/dev/null || echo "{}")
-          REPO="${{ github.repository }}"
-          TRIGGER="${{ steps.context.outputs.trigger }}"
-          TRACE_ID=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.trace_id // empty' 2>/dev/null || echo "")
-          echo "Chain dispatch parsing last assistant output (${#RESULT} chars)"
-          echo "Trigger: $TRIGGER"
-          echo "Trace ID: $TRACE_ID"
-
-          dispatch() {
-            curl -s -X POST "https://api.github.com/repos/$REPO/dispatches" \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3+json" \
-              -d "{\"event_type\":\"$1\",\"client_payload\":$2}"
-            echo "  Dispatched: $1"
-          }
-
-          # Extract company: try output first, then input payload (multiple fallbacks)
-          COMPANY=$(echo "$RESULT" | grep -oP '"company"\s*:\s*"\K[^"]+' | head -1 || echo "")
-          if [ -z "$COMPANY" ]; then
-            COMPANY=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company // ""' 2>/dev/null || echo "")
-          fi
-          # Also extract company_id for downstream agents
-          COMPANY_ID=$(echo "$RESULT" | grep -oP '"company_id"\s*:\s*"\K[^"]+' | head -1 || echo "")
-          if [ -z "$COMPANY_ID" ]; then
-            COMPANY_ID=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company_id // ""' 2>/dev/null || echo "")
-          fi
-          GITHUB_REPO=""
-          echo "Company: $COMPANY | Company ID: $COMPANY_ID"
-
-          # Guard: if no company found, skip all dispatches
-          if [ -z "$COMPANY" ]; then
-            echo "WARNING: No company slug found in output or payload — skipping dispatches"
-            echo "Chain dispatch complete (no company)"
-            exit 0
-          fi
-
-          # Detect signals: strict JSON-only matching (no prose matching to avoid false positives)
-          check_signal() {
-            echo "$RESULT" | grep -qP "\"${1}\"\s*:\s*true" && return 0
-            return 1
-          }
-
-          # Build reusable payload with company + company_id + trace_id
-          BASE_PAYLOAD="\"company\":\"$COMPANY\",\"company_id\":\"$COMPANY_ID\""
-          if [ -n "$TRACE_ID" ]; then
-            BASE_PAYLOAD="$BASE_PAYLOAD,\"trace_id\":\"$TRACE_ID\""
-          fi
-
-          # Only dispatch downstream agents for cycle_start (not cycle_complete — avoids infinite loop)
-          IS_CYCLE_START=false
-          echo "$TRIGGER" | grep -q "cycle_start" && IS_CYCLE_START=true
-
-          if [ "$IS_CYCLE_START" = "true" ]; then
-            # Chain to Engineer for provisioning (only if explicitly flagged)
-            if check_signal "needs_provisioning"; then
-              dispatch "new_company" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-            fi
-
-            # Chain to Scout if research needed
-            if check_signal "needs_research"; then
-              dispatch "research_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-            fi
-
-            # Define dispatch helpers (must be before first call)
-            dispatch_worker() {
-              local WORKER_PAYLOAD="{\"company_slug\":\"$COMPANY\",\"agent\":\"$1\",\"trigger\":\"ceo_plan\""
-              if [ -n "$TRACE_ID" ]; then
-                WORKER_PAYLOAD="$WORKER_PAYLOAD,\"trace_id\":\"$TRACE_ID\""
-              fi
-              WORKER_PAYLOAD="$WORKER_PAYLOAD}"
-              curl -s -X POST "$HIVE_URL/api/agents/dispatch" \
-                -H "Authorization: Bearer $CRON_SECRET" \
-                -H "Content-Type: application/json" \
-                -d "$WORKER_PAYLOAD" \
-                -o /dev/null -w "  Worker $1: HTTP %{http_code}\n" || true
-            }
-            dispatch_to_company_repo() {
-              local WORKFLOW="$1" SUMMARY="$2"
-              # Get company's github_repo from DB (cached after first call)
-              if [ -z "$GITHUB_REPO" ]; then
-                GITHUB_REPO=$(node -e "
-                  const postgres = require('postgres');
-                  const sql = postgres(process.env.DATABASE_URL);
-                  sql\`SELECT github_repo FROM companies WHERE slug = '${COMPANY}' LIMIT 1\`
-                    .then(r => { console.log(r[0]?.github_repo || ''); sql.end(); })
-                    .catch(() => { console.log(''); process.exit(0); });
-                " 2>/dev/null)
-              fi
-              if [ -n "$GITHUB_REPO" ]; then
-                curl -s -X POST "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${WORKFLOW}/dispatches" \
-                  -H "Authorization: token $GH_TOKEN" \
-                  -H "Accept: application/vnd.github.v3+json" \
-                  -H "Content-Type: application/json" \
-                  -d "{\"ref\":\"main\",\"inputs\":{\"company_slug\":\"$COMPANY\",\"trigger\":\"ceo_plan\",\"task_summary\":\"$SUMMARY\"}}" \
-                  -o /dev/null -w "  Company $WORKFLOW: HTTP %{http_code}\n" || dispatch_worker "$3"
-              else
-                dispatch_worker "$3"
-              fi
-            }
-
-            # Chain to Engineer → dispatch directly to company repo (free Actions)
-            # Falls back to Hive Engineer only if no company repo exists
-            dispatch_to_company_repo "hive-build.yml" "Feature build for $COMPANY" ""
-            if [ -z "$GITHUB_REPO" ]; then
-              dispatch "feature_request" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-            fi
-
-            # Parallel worker dispatch — Growth/Outreach run on free models (OpenRouter/Gemini),
-            # no Claude budget cost, so fire them concurrently with Engineer (not sequentially)
-            {
-              check_signal "dispatch_growth" && \
-                dispatch_to_company_repo "hive-growth.yml" "Growth cycle for $COMPANY" "growth"
-            } &
-            {
-              check_signal "dispatch_outreach" && \
-                dispatch_worker "outreach"
-            } &
-            # Wait for background worker dispatches (non-blocking, max 10s)
-            wait
-
-            # Dispatch cycle_complete ONCE (for review/reflection after agents finish)
-            dispatch "cycle_complete" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-          fi
-
-          # For gate_approved: only dispatch the specific action needed
-          if echo "$TRIGGER" | grep -q "gate_approved"; then
-            if check_signal "needs_provisioning"; then
-              dispatch "new_company" "{\"source\":\"ceo\",$BASE_PAYLOAD}"
-            fi
-          fi
-
-          # cycle_complete / ceo_review: trigger post-cycle consolidation + chain next company
-          # This feeds CEO review outcomes back into the playbook (learning loop)
-          if echo "$TRIGGER" | grep -qE "cycle_complete|ceo_review"; then
-            echo "Triggering post-cycle consolidation..."
-            curl -s -X POST "$HIVE_URL/api/agents/consolidate" \
-              -H "Authorization: Bearer $CRON_SECRET" \
-              -H "Content-Type: application/json" \
-              -d "{\"company_slug\":\"$COMPANY\"}" \
-              -o /dev/null -w "  Consolidation: HTTP %{http_code}\n" || true
-
-            # Chain dispatch: cycle done → health gate → next company
-            echo "Chaining to next company cycle..."
-            CHAIN_RESULT=$(curl -s -X POST "$HIVE_URL/api/dispatch/cycle-complete" \
-              -H "Authorization: Bearer $CRON_SECRET" \
-              -H "Content-Type: application/json" \
-              -d "{\"agent\":\"ceo\",\"company\":\"$COMPANY\",\"status\":\"cycle_complete\",\"action_type\":\"cycle_review\"}")
-            echo "  Chain result: $CHAIN_RESULT"
-          fi
-
-          # Notify success via Telegram
-          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
-          if [ -z "$EXEC_FILE" ]; then EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"; fi
-          CEO_TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
-          CEO_COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -s -X POST "$HIVE_URL/api/notify" \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -H "Content-Type: application/json" \
-            -d "{\"agent\":\"ceo\",\"action\":\"$TRIGGER\",\"company\":\"$COMPANY\",\"status\":\"success\",\"summary\":\"Completed in ${CEO_TURNS} turns (\$${CEO_COST})\",\"run_url\":\"$RUN_URL\",\"duration_s\":$((CEO_TURNS * 60))}" || true
-
-          echo "Chain dispatch complete"
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: npx tsx scripts/chain-dispatch.ts
