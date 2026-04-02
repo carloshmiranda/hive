@@ -15,6 +15,24 @@
 
 ---
 
+### 2026-04-02 Sentry had zero client-side coverage despite being "installed"
+**What happened:** `@sentry/nextjs` was installed, `sentry.server.config.ts` existed, but `instrumentation.ts` and `instrumentation-client.ts` were never created. Result: zero browser error tracking, no Session Replay, server errors only partially captured.
+**Root cause:** The old Sentry setup pattern used `sentry.client.config.ts` (deprecated). Modern `@sentry/nextjs` ≥8 requires `instrumentation-client.ts` for client-side init and `instrumentation.ts` (with `register()` + `onRequestError`) for server/edge. The wizard would have created both, but the initial setup was manual/partial.
+**Fix applied:** Created both missing files. Updated `next.config.js` with `org`, `project`, `tunnelRoute`, `widenClientFileUpload`. Added `monitoring` to middleware exclusions.
+**Prevention:** After any `@sentry/nextjs` install or upgrade, verify all 4 files exist: `instrumentation.ts`, `instrumentation-client.ts`, `sentry.server.config.ts`, `sentry.edge.config.ts`. Run `npx @sentry/wizard@latest -i nextjs` to audit existing setup.
+**Affects:** hive
+
+---
+
+### 2026-04-02 `content` column fetched in agent context but never used (egress waste)
+**What happened:** Both `buildContext()` and `growthContext()` in `agents/context/route.ts` included `content` in the `research_reports` SELECT. The code only uses `summary`. `content` can be 100KB+ per row × 5-7 rows = up to 700KB of wasted transfer on every agent dispatch.
+**Root cause:** Copied `SELECT *` pattern when writing the query, never audited what the code actually reads.
+**Fix applied:** Changed both queries to `SELECT report_type, summary FROM research_reports ...` and added LIMIT clauses.
+**Prevention:** After writing any SELECT, cross-reference each column against what the code actually accesses. Prefer explicit column lists over `*`, especially for tables with JSONB/TEXT columns.
+**Affects:** hive
+
+---
+
 ### 2026-04-02 `schema-map.ts` drifts silently when `schema.sql` is edited
 **What happened:** PR #347 failed CI on `schema-map:check`. The `companies` table had a `brand JSONB` column added to `schema.sql`, but `generate-schema-map.ts` was never re-run, so `schema-map.ts` was stale. `lint-sql.ts` reads from `schema-map.ts` and reported "column 'brand' does not exist" — causing a misguided workaround (rewrite SQL to use `capabilities` JSONB path instead).
 **Root cause:** `schema.sql` is the source of truth but `schema-map.ts` is a derived artifact. Any time `schema.sql` changes, the map must be regenerated. No local pre-push hook enforces this.

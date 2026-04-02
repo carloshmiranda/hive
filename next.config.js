@@ -8,22 +8,24 @@ const nextConfig = {
 };
 
 module.exports = withSentryConfig(nextConfig, {
-  // Suppress Sentry CLI logs during build
-  silent: true,
+  org: "eidolon",
+  project: "sentry-coffee-window",
 
-  // Upload source maps for better stack traces
-  // Requires SENTRY_AUTH_TOKEN env var (auto-set by Vercel Marketplace)
+  // Suppress Sentry CLI logs during build (set to false in CI for build output)
+  silent: !process.env.CI,
+
+  // Upload source maps for readable stack traces in production
+  // Requires SENTRY_AUTH_TOKEN env var
   sourcemaps: {
     deleteSourcemapsAfterUpload: true,
   },
 
+  // Upload wider set of client files for better stack trace resolution
+  widenClientFileUpload: true,
+
+  // Create a proxy route to bypass ad-blockers
+  tunnelRoute: "/monitoring",
+
   // Disable Sentry telemetry
   telemetry: false,
-
-  // Don't widen the Next.js bundle with performance monitoring
-  // We use tracesSampleRate for selective monitoring
-  tunnelRoute: undefined,
-
-  // Disable widenClientFileUpload to keep build fast
-  widenClientFileUpload: false,
 });

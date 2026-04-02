@@ -133,10 +133,13 @@ function TabButton({ label, active, count, onClick }: { label: string; active: b
   return (
     <button onClick={onClick} style={{
       fontSize: 13, fontFamily: "var(--hive-sans)", fontWeight: active ? 600 : 400,
-      padding: "8px 16px", borderRadius: 6, cursor: "pointer", border: "none",
-      background: active ? "var(--hive-surface)" : "transparent",
+      padding: "8px 16px", paddingBottom: 10, borderRadius: 0, cursor: "pointer",
+      background: "transparent",
+      borderTop: "none", borderLeft: "none", borderRight: "none",
+      borderBottom: active ? "2px solid var(--hive-amber)" : "2px solid transparent",
+      marginBottom: "-1px",
       color: active ? "var(--hive-text)" : "var(--hive-text-secondary)",
-      display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s",
+      display: "flex", alignItems: "center", gap: 6, transition: "color 0.15s, border-color 0.15s",
     }}>
       {label}
       {count !== undefined && count > 0 && (
@@ -358,7 +361,10 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--hive-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ fontFamily: "var(--hive-mono)", fontSize: 13, color: "var(--hive-text-secondary)" }}>Loading Hive...</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
+          <span style={{ fontFamily: "var(--hive-mono)", fontSize: 11, color: "var(--hive-text-tertiary)", letterSpacing: "0.1em" }}>LOADING</span>
+        </div>
       </div>
     );
   }
@@ -398,7 +404,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 24, padding: 4, background: "var(--hive-bg)", borderRadius: 8, border: "1px solid var(--hive-border-subtle)" }}>
+      <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid var(--hive-border-subtle)" }}>
         <TabButton label="Overview" active={activeTab === "overview"} onClick={() => setActiveTab("overview")} />
         <TabButton label="Inbox" active={activeTab === "inbox"} count={inboxCount} onClick={() => setActiveTab("inbox")} />
         <TabButton label="Activity" active={activeTab === "activity"} onClick={() => setActiveTab("activity")} />
@@ -640,7 +646,10 @@ export default function DashboardPage() {
                     <Link key={c.id} href={`/company/${c.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
                       <div style={{
                         padding: "16px 18px", background: "var(--hive-surface)", borderRadius: 10,
-                        border: "1px solid var(--hive-border)", transition: "background 0.15s", cursor: "pointer",
+                        borderTop: "1px solid var(--hive-border)", borderRight: "1px solid var(--hive-border)",
+                        borderBottom: "1px solid var(--hive-border)",
+                        borderLeft: `3px solid ${STATUS_MAP[c.status]?.color || "#9d9da8"}`,
+                        transition: "background 0.15s", cursor: "pointer",
                       }}
                       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface-hover)"; }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface)"; }}>

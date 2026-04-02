@@ -68,9 +68,12 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
           END,
           c.created_at DESC
       `,
-      // Actions
+      // Actions — exclude large output/input JSONB columns (~50KB each)
       sql`
-        SELECT a.*, c.slug as company_slug FROM agent_actions a
+        SELECT a.id, a.company_id, a.cycle_id, a.agent, a.action_type, a.status,
+          a.error, a.tokens_used, a.started_at, a.completed_at,
+          c.slug as company_slug
+        FROM agent_actions a
         LEFT JOIN companies c ON c.id = a.company_id
         ORDER BY a.started_at DESC LIMIT 50
       `,
@@ -88,15 +91,17 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
         WHERE p.superseded_by IS NULL
         ORDER BY p.confidence DESC LIMIT 50
       `,
-      // Cycles
+      // Cycles — exclude ceo_plan JSONB (not needed for dashboard list view)
       sql`
-        SELECT c.*, co.name as company_name, co.slug as company_slug
+        SELECT c.id, c.company_id, c.cycle_number, c.status, c.started_at, c.completed_at,
+          co.name as company_name, co.slug as company_slug
         FROM cycles c JOIN companies co ON co.id = c.company_id
         ORDER BY c.started_at DESC LIMIT 20
       `,
-      // Evolver proposals (pending)
+      // Evolver proposals (pending) — exclude large prompt columns for list view
       sql`
-        SELECT * FROM evolver_proposals
+        SELECT id, agent, title, rationale, severity, status, created_at
+        FROM evolver_proposals
         WHERE status = 'pending'
         ORDER BY
           CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
@@ -146,7 +151,10 @@ async function companyDetail(sql: ReturnType<typeof getDb>, slug: string) {
   const [cycles, actions, metrics, approvals, research, tasks] = await Promise.all([
     sql`SELECT * FROM cycles WHERE company_id = ${company.id} ORDER BY cycle_number DESC LIMIT 20`,
     sql`
-      SELECT a.*, c.slug as company_slug FROM agent_actions a
+      SELECT a.id, a.company_id, a.cycle_id, a.agent, a.action_type, a.status,
+        a.error, a.tokens_used, a.started_at, a.completed_at,
+        c.slug as company_slug
+      FROM agent_actions a
       LEFT JOIN companies c ON c.id = a.company_id
       WHERE a.company_id = ${company.id}
       ORDER BY a.started_at DESC LIMIT 50

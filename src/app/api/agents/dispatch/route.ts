@@ -222,27 +222,29 @@ export async function POST(req: NextRequest) {
 
     const ceoPlan = latestCycle?.ceo_plan || "No CEO plan yet — use your best judgment.";
 
-    const metrics = await sql`
-      SELECT date, revenue, mrr, customers, page_views, signups, churn_rate, waitlist_signups, waitlist_total FROM metrics
-      WHERE company_id = ${company.id} AND date >= CURRENT_DATE - INTERVAL '7 days'
-      ORDER BY date DESC LIMIT 20
-    `;
-
-    const rawResearchReports = await sql`
-      SELECT report_type, summary, content FROM research_reports
-      WHERE company_id = ${company.id} LIMIT 10
-    `;
+    // Fetch independent data sources in parallel
+    const [metrics, rawResearchReports, playbook, dbPromptRows] = await Promise.all([
+      sql`
+        SELECT date, revenue, mrr, customers, page_views, signups, churn_rate, waitlist_signups, waitlist_total FROM metrics
+        WHERE company_id = ${company.id} AND date >= CURRENT_DATE - INTERVAL '7 days'
+        ORDER BY date DESC LIMIT 20
+      `,
+      sql`
+        SELECT report_type, summary, content FROM research_reports
+        WHERE company_id = ${company.id} LIMIT 10
+      `,
+      getDeduplicatedPlaybook(sql, company, agentName, latestCycle?.id),
+      sql`
+        SELECT prompt_text FROM agent_prompts
+        WHERE agent = ${agentName} AND is_active = true LIMIT 1
+      `,
+    ]);
 
     // Compress research summaries to reduce context size by ~20%
     const researchReports = compressResearchForAgent(rawResearchReports, agentName);
 
-    const playbook = await getDeduplicatedPlaybook(sql, company, agentName, latestCycle?.id);
-
     // 3. Build the agent prompt with full context
-    const [dbPrompt] = await sql`
-      SELECT prompt_text FROM agent_prompts 
-      WHERE agent = ${agentName} AND is_active = true LIMIT 1
-    `;
+    const [dbPrompt] = dbPromptRows;
     let agentPrompt = dbPrompt?.prompt_text || getFilePrompt(agentName) || DEFAULT_PROMPTS[agentName];
     agentPrompt = agentPrompt
       .replace(/\{\{COMPANY_NAME\}\}/g, company.name)
@@ -301,12 +303,10 @@ ${capabilitiesSummary(company.capabilities)}`;
     let fullPrompt = agentPrompt + "\n\n" + contextBlock;
 
     if (agentName === "outreach") {
-      const [leadList] = await sql`
-        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'lead_list'
-      `;
-      const [outreachLog] = await sql`
-        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'outreach_log'
-      `;
+      const [[leadList], [outreachLog]] = await Promise.all([
+        sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'lead_list'`,
+        sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'outreach_log'`,
+      ]);
       fullPrompt += `\n\nEXISTING LEADS: ${leadList ? JSON.stringify(leadList.content) : "None yet"}`;
       fullPrompt += `\nOUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach yet"}`;
     }
@@ -327,21 +327,15 @@ ${capabilitiesSummary(company.capabilities)}`;
         console.log(`Visibility collection failed (non-blocking): ${e}`);
       }
 
-      // Inject visibility context into Growth prompt
-      const [visSnapshot] = await sql`
-        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'visibility_snapshot'
-      `;
-      const [llmVis] = await sql`
-        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'llm_visibility'
-      `;
+      // Inject visibility context into Growth prompt (fetch in parallel)
+      const [[visSnapshot], [llmVis], [contentPerf]] = await Promise.all([
+        sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'visibility_snapshot'`,
+        sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'llm_visibility'`,
+        sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'content_performance'`,
+      ]);
       // Context optimization: truncate large JSONB reports to prevent token bloat
       if (visSnapshot) fullPrompt += `\n\nVISIBILITY DATA (from GSC):\n${truncateJson(visSnapshot.content, 2000)}`;
       if (llmVis) fullPrompt += `\n\nLLM VISIBILITY:\n${truncateJson(llmVis.content, 1500)}`;
-
-      // Content performance report — per-URL trends and refresh recommendations
-      const [contentPerf] = await sql`
-        SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'content_performance'
-      `;
       if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${truncateJson(contentPerf.content, 2000)}`;
     }
 

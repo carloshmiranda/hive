@@ -60,8 +60,10 @@ export async function POST(req: Request) {
   try {
     const company = await sql`SELECT slug FROM companies WHERE id = ${company_id} LIMIT 1`;
     if (company.length > 0) {
-      await invalidateCompanyMetrics(company[0].slug);
-      await invalidateCompanyMetrics(`${company[0].slug}:growth`); // Invalidate growth cache too
+      await Promise.all([
+        invalidateCompanyMetrics(company[0].slug),
+        invalidateCompanyMetrics(`${company[0].slug}:growth`),
+      ]);
     }
   } catch (err) {
     // Cache invalidation failure should not break the metrics update
