@@ -191,6 +191,37 @@ jobs:
           "
           echo "Logged Healer success (${TURNS} turns, subtype=${SUBTYPE}, cost=\$${COST})"
 
+      - name: Chain dispatch after heal
+        if: steps.agent.outcome == 'success'
+        env:
+          GH_PAT: ${{ steps.auth.outputs.gh_pat }}
+          SCOPE: ${{ github.event.client_payload.scope || github.event.inputs.scope || 'systemic' }}
+          HIVE_URL: ${{ secrets.NEXT_PUBLIC_URL || 'https://hive-phi.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          # If Healer fixed a company-specific issue, kick cycle_complete for that company
+          # so the cycle can continue where it left off.
+          if [ -n "$SCOPE" ] && [ "$SCOPE" != "systemic" ] && [ "$SCOPE" != "null" ]; then
+            echo "Dispatching cycle_complete for company: $SCOPE"
+            curl -s -X POST "https://api.github.com/repos/${{ github.repository }}/dispatches" \
+              -H "Authorization: token $GH_PAT" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d "{\"event_type\":\"cycle_complete\",\"client_payload\":{\"source\":\"healer_chain\",\"company\":\"${SCOPE}\",\"reason\":\"healer_fixed\"}}" \
+              && echo "cycle_complete dispatched for $SCOPE" \
+              || echo "cycle_complete dispatch failed (non-fatal)"
+          fi
+
+          # Always kick sentinel_urgent so Sentinel re-evaluates the system state
+          # and re-dispatches any agents whose errors were just fixed.
+          echo "Dispatching sentinel_urgent to re-evaluate after heal"
+          curl -s -X POST "${HIVE_URL}/api/cron/sentinel-urgent" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"source\":\"healer_chain\",\"reason\":\"post_heal_recheck\"}" \
+            && echo "sentinel_urgent kicked" \
+            || echo "sentinel_urgent kick failed (non-fatal)"
+
       - name: Log failure to DB
         if: always() && steps.agent.outcome == 'failure'
         uses: ./.github/actions/log-agent-failure
