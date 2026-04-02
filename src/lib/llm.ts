@@ -736,7 +736,7 @@ async function callClaude(
   }
 
   const requestBody: any = {
-    model: "claude-3-haiku-20240307",  // Use fastest/cheapest Claude model for fallback
+    model: "claude-haiku-4-5-20251001",  // Use fastest/cheapest Claude model for fallback
     max_tokens: options.maxTokens || 8192,
     temperature: options.temperature || 0.7,
     messages: [{ role: "user", content: prompt }],
@@ -791,7 +791,7 @@ async function callClaude(
 
   return {
     content: content.trim(),
-    model: data.model || "claude-3-haiku-20240307",
+    model: data.model || "claude-haiku-4-5-20251001",
     toolCalls
   };
 }

@@ -183,7 +183,7 @@ jobs:
         with:
           allowed_bots: "hive-orchestrator[bot]"
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 70 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-6 --max-turns 70 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You provision infrastructure for new companies.
 
@@ -838,7 +838,7 @@ jobs:
             esac
           fi
 
-          echo "model=${MODEL:-claude-sonnet-4-20250514}" >> $GITHUB_OUTPUT
+          echo "model=${MODEL:-claude-sonnet-4-6}" >> $GITHUB_OUTPUT
           echo "max_turns=${MAX_TURNS}" >> $GITHUB_OUTPUT
 
       - name: Pre-execution guard — check turn budget

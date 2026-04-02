@@ -31,7 +31,7 @@ export async function POST(req: Request) {
   // Fetch all approvals in the batch
   const approvals = await sql`
     SELECT * FROM approvals WHERE id = ANY(${ids})
-  `;
+  ` as Approval[];
 
   // For batch approve: block if any are new_company (needs provisioning side effects)
   if (decision === "approved") {

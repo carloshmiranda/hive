@@ -55,7 +55,7 @@ jobs:
         with:
           allowed_bots: "hive-orchestrator[bot]"
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-opus-4-20250514 --max-turns 25 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-opus-4-6 --max-turns 25 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Evolver agent of Hive. Read prompts/evolver.md for your full role description.
 
