@@ -15,6 +15,15 @@
 
 ---
 
+### 2026-03-29 `exit 0` in a step does NOT prevent downstream steps from running
+**What happened:** PR #202 (turn-budget guard) auto-merged with a showstopper. The guard step called `exit 0` on budget exceeded, but the downstream `Build` step ran anyway — every dispatch was gated by nothing, and Claude ran regardless of the budget check.
+**Root cause:** `exit 0` terminates the current step's shell process with success. GitHub Actions then evaluates the next step's `if` condition; since no explicit `if` was set, it defaulted to `if: success()` which was satisfied. The guard never wrote to `$GITHUB_OUTPUT`, so there was no mechanism to communicate the skip decision.
+**Fix applied:** Changed guard step to write `skip=true` to `$GITHUB_OUTPUT` via `echo "skip=true" >> "$GITHUB_OUTPUT"`. Added `if: steps.turn_guard.outputs.skip != 'true'` on the downstream build step. Commit `8221976`.
+**Prevention:** Conditional step execution in GitHub Actions MUST use `$GITHUB_OUTPUT` + `if` conditions on downstream steps. `exit 0` only ends the current step — it cannot suppress subsequent steps. Pattern: guard step sets `outcome=skip`, build step checks `if: steps.guard.outputs.outcome != 'skip'`.
+**Affects:** hive
+
+---
+
 ### 2026-03-30 jq exits with code 5 when traversing string field — kills pre-execution guard, creates ghost lock
 **What happened:** Engineer workflow (`build-hive` job) crashed on the `Pre-execution guard` step for any backlog item with a stringified spec (i.e., `"spec": "{\"estimated_turns\":25,...}"`). The failure callback step was never reached, leaving `agent_actions` stuck in `running` state. This blocked the dispatch loop: health-gate saw a running brain agent and refused new dispatches.
 **Root cause:** jq `.spec.estimated_turns` when `.spec` is a JSON string (not object) causes jq to exit with code 5 (`string not supported in path expression`). With `set -eo pipefail`, this exits the entire step immediately — before `echo "skip=false"` writes to `$GITHUB_OUTPUT`. The failure callback had `if: always() && steps.agent.outcome == 'failure'` but `steps.agent.outcome` was `skipped` (agent step never ran), so the callback was skipped too, leaving the ghost lock.
