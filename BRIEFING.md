@@ -99,6 +99,10 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+- `[code]` 2026-04-02: **Frontend-design skill integrated into Engineer agent (PR #322)** — Created `.claude/skills/frontend-design/SKILL.md` with structured frontend-design guidance (layout, component patterns, accessibility, Tailwind conventions). Added the skill to `prompts/engineer.md` catalog so Engineer agent loads it automatically when generating UI code. Backlog item `d7bf0094` (P2, theme: zero_intervention) marked done.
+
+- `[code]` 2026-04-02: **Property-based tests for validation and PR risk scoring (PR #321)** — Fixed fast-check v4 API incompatibilities that were breaking the test suite: `fc.float` → `fc.double`, `fc.date` → `fc.integer().map(n => new Date(n))`, and corrected fetch mock URL pattern to match the `.diff` endpoint. Property-based tests for `src/lib/validation.ts` and PR risk scoring logic now pass in CI. Backlog item `b0c5fede` (P2, theme: self_improving) marked done.
+
 - `[code]` 2026-04-01: **Kill switch + 3 stabilization fixes** — Carlos halted all dispatches (`settings.dispatch_paused = 'true'`) after observing wasted Claude budget on broken Engineer loops. Implemented 3 P1 stabilization items in parallel: (1) **Build verification gate** (`hive-engineer.yml`): new `build_check` step runs `lint-sql.ts + next build` after agent completes. If build fails, `Log success` is blocked and `Chain dispatch` reclassifies outcome as `failure` with `ERROR_TYPE=build_failed`. (2) **Spec gen retry cap** (`hive-spec-gen.yml`): `Log failure` now counts `[spec_fail]` markers in `notes` column — resets to `ready` on failure 1-2, blocks with `status=blocked + [no_spec_max_retries]` on failure 3. Switched from broken `postgres` npm to `@neondatabase/serverless`. (3) **CI workflow** (`hive-ci.yml`): new workflow gates every PR to main — `npm ci`, `lint-sql`, `schema-map:check`, `next build`. All 3 backlog items marked done. Commit `5aa9d43`. **Kill switch remains active — dispatch still paused.**
 
 - `[code]` 2026-03-29: **GitHub Issues ↔ DB drift prevention + spec-gen kickoff** — Three-part fix: (1) `syncBacklogStatus()` now handles `rejected` status — was silently skipping because `phase:rejected` not in `PHASE_LABELS`; closes GitHub Issue with "Rejected" comment. (2) sentinel-janitor now closes GitHub Issues when janitor rejects duplicate backlog items (previously DB updated but issue stayed open). (3) Added **Check 51** (ghost `pr_open` recovery): daily scan finds `pr_open` items with `pr_number` that are >2h old, fetches PR state from GitHub API, transitions `merged`→`done` or `closed-without-merge`→`ready` and syncs GitHub Issue. Fixes item #187 (PR #252 was 0-file ghost — never merged, stuck in `pr_open` forever). Manually closed 35 stale GitHub Issues (32 `done` + 3 `rejected` in DB but still open). Reset item #187 to `blocked`. Triggered spec-gen (`hive-spec-gen.yml`) for 10 specless P3 ready items via `spec_request` repository_dispatch. Commit `2f00f63`.
@@ -610,6 +614,12 @@ Added MISTAKES.md entry documenting the PR #202 `exit 0` bug: calling `exit 0` i
 
 ### 2026-04-02 [code] actionlint CI check (PR #314, Issue #232)
 Added `.github/workflows/actionlint.yml` — runs `rhysd/actionlint` on PRs touching `.github/workflows/**` or `.github/actions/**`. First run immediately caught a real bug: `hive-decompose.yml` was passing `max_turns` and `timeout_minutes` as invalid top-level `with:` inputs to `claude-code-action@v1` (should be `claude_args` and step-level `timeout-minutes`). Both bugs fixed in the same PR.
+
+### 2026-04-02 [code] npm caching + teardown fix (PR #324, Issue #150)
+Added `actions/setup-node@v4` with `cache: 'npm'` to healer, spec-gen, and engineer workflows — speeds up repeated `npm install` calls by caching `~/.npm` between runs. Also fixed a latent bug: `hive-engineer.yml` teardown job was missing `actions/checkout@v4` entirely, causing it to fail whenever teardown was triggered.
+
+### 2026-04-02 [code] CEO chain dispatch → TypeScript (PR #325, Issue #151)
+Extracted the 130-line bash chain dispatch block from `hive-ceo.yml` into `scripts/chain-dispatch.ts`. TypeScript version uses `@neondatabase/serverless` for company repo lookup, native `fetch` for all HTTP calls, handles all triggers (`cycle_start`, `gate_approved`, `cycle_complete`/`ceo_review`), dispatches Growth + Outreach concurrently via `Promise.all()`, and sends Telegram notification on completion. Easier to test, type-safe, no bash escaping footguns.
 
 ## What's Next (in priority order)
 

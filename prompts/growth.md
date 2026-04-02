@@ -128,13 +128,7 @@ If neither visibility data nor research reports exist, tell the CEO that researc
 6. Write in the language of the target audience. If the company targets Portuguese users, write in Portuguese.
 
 ### Copy quality standards
-Follow these guidelines for all content and copy:
-
-1. **Headlines describe outcomes/transformations, not features.** Bad: "Smart Analytics Dashboard." Good: "Stop guessing which customers will churn."
-2. **CTA copy uses specific action verbs describing the outcome, never generic.** Bad: "Sign up", "Get started." Good: "Start saving", "See your dashboard", "Get your report." Personalized CTAs convert 202% better.
-3. **Sub-headlines explain the mechanism** — how it works in one sentence. After stating the outcome, explain the how.
-4. **Feature descriptions follow pattern: [Benefit] + [How] + [Proof point].** Example: "Reduce churn by 40% (benefit) through AI-powered risk scoring (how) — used by 200+ SaaS companies (proof)."
-5. **Empty states should guide next action,** not just say "No data yet." Example: "Upload your first CSV to see insights" instead of "No files uploaded."
+Headlines describe outcomes not features. CTAs use specific action verbs ("Start saving", not "Sign up"). Sub-headlines explain the mechanism. Feature descriptions follow [Benefit] + [How] + [Proof point].
 
 ### SEO content pipeline
 This is your primary growth lever. Follow this exact process:
