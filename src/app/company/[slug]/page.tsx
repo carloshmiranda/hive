@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
@@ -71,6 +71,7 @@ export default function CompanyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [directive, setDirective] = useState("");
   const [sending, setSending] = useState(false);
+  const directiveInputRef = useRef<HTMLInputElement>(null);
   const [directiveSent, setDirectiveSent] = useState<string | null>(null);
   const [taskCategoryFilter, setTaskCategoryFilter] = useState("all");
   const [unitEcon, setUnitEcon] = useState<{
@@ -179,7 +180,7 @@ export default function CompanyDetailPage() {
       {/* Directive input */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", gap: 8 }}>
-          <input value={directive} onChange={e => setDirective(e.target.value)}
+          <input ref={directiveInputRef} value={directive} onChange={e => setDirective(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") sendDirective(); }}
             aria-label={`Send directive to ${company.name}`}
             placeholder={`Send directive to ${company.name}...`}
@@ -489,7 +490,7 @@ export default function CompanyDetailPage() {
         {tasks.length === 0 ? (
           <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ color: "var(--hive-text-tertiary)", fontSize: 13 }}>No tasks yet — CEO will propose tasks on next cycle</span>
-            <button onClick={() => document.querySelector<HTMLInputElement>("[placeholder*='directive']")?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Send directive</button>
+            <button onClick={() => directiveInputRef.current?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Send directive</button>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -621,7 +622,7 @@ export default function CompanyDetailPage() {
         {cycles.length === 0 ? (
           <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ color: "var(--hive-text-tertiary)", fontSize: 13 }}>No cycles yet</span>
-            <button onClick={() => document.querySelector<HTMLInputElement>("[placeholder*='directive']")?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Trigger cycle</button>
+            <button onClick={() => directiveInputRef.current?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Trigger cycle</button>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -706,7 +707,7 @@ export default function CompanyDetailPage() {
           {actions.length === 0 && (
             <div style={{ padding: 20, background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ color: "var(--hive-text-tertiary)", fontSize: 13 }}>No activity yet</span>
-              <button onClick={() => document.querySelector<HTMLInputElement>("[placeholder*='directive']")?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Send directive</button>
+              <button onClick={() => directiveInputRef.current?.focus()} style={{ padding: "6px 14px", fontSize: 12, fontFamily: "var(--hive-mono)", borderRadius: 6, border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-secondary)", cursor: "pointer" }}>Send directive</button>
             </div>
           )}
         </div>

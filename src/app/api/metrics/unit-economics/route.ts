@@ -25,7 +25,7 @@ export async function GET(req: Request) {
     ORDER BY m.date ASC NULLS LAST
   `;
 
-  if (rows.length === 0) return err("Company not found", 404);
+  if (rows.length === 0 || rows[0].resolved_id === null) return err("Company not found", 404);
   const companyCreatedAt: string = rows[0].company_created_at;
   const metrics = rows.filter((r: Record<string, any>) => r.date !== null);
 

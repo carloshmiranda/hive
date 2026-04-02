@@ -1,6 +1,13 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 
+type Approval = {
+  id: string;
+  gate_type: string;
+  status: string;
+  company_id: string | null;
+};
+
 export async function POST(req: Request) {
   const session = await requireAuth();
   if (!session) return err("Unauthorized", 401);
@@ -36,13 +43,13 @@ export async function POST(req: Request) {
     }
   }
 
-  const pending = approvals.filter((a: Record<string, any>) => a.status === "pending");
+  const pending = approvals.filter((a: Approval) => a.status === "pending");
   const skipped: string[] = approvals
-    .filter((a: Record<string, any>) => a.status !== "pending")
-    .map((a: Record<string, any>) => `${a.id} (already ${a.status})`);
+    .filter((a: Approval) => a.status !== "pending")
+    .map((a: Approval) => `${a.id} (already ${a.status})`);
 
   // Parallel approval status updates
-  await Promise.all(pending.map((approval: Record<string, any>) => sql`
+  await Promise.all(pending.map((approval: Approval) => sql`
     UPDATE approvals SET
       status = ${decision},
       decided_at = now(),
@@ -53,9 +60,9 @@ export async function POST(req: Request) {
   // Parallel side effects for rejections
   if (decision === "rejected") {
     const newCompanyRejections = pending.filter(
-      (a: Record<string, any>) => a.gate_type === "new_company" && a.company_id
+      (a: Approval) => a.gate_type === "new_company" && a.company_id
     );
-    await Promise.all(newCompanyRejections.map((approval: Record<string, any>) => sql`
+    await Promise.all(newCompanyRejections.map((approval: Approval) => sql`
       UPDATE companies SET
         status = 'killed',
         killed_at = now(),
@@ -66,7 +73,7 @@ export async function POST(req: Request) {
   }
 
   // Check for IDs that weren't found in the database
-  const foundIds = new Set(approvals.map((a: Record<string, any>) => a.id as string));
+  const foundIds = new Set(approvals.map((a: Approval) => a.id as string));
   for (const id of ids) {
     if (!foundIds.has(id)) {
       skipped.push(`${id} (not found)`);
