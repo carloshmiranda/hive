@@ -10,6 +10,7 @@
  *   - High failure rate → Healer dispatch
  *   - Chain dispatch gap detection
  *   - Stalled companies
+ *   - Periodic egress audit (every 14 cycles per company)
  *   - Priority-ranked cycle dispatch (budget-gated)
  *   - Hive-first triage (auto-approve critical proposals, backlog dispatch, systemic healer)
  *   - Backlog dispatch (P0/P1 before company cycles)
@@ -1243,6 +1244,56 @@ async function executeSentinelDispatch(request: Request) {
           ${"Sentinel re-dispatched " + r.agent + " for " + r.slug + " after failed task (plan work preserved in cycles table)"},
           NOW(), NOW())
       `;
+    }
+
+    // ========================================================================
+    // CHECK 12b: Periodic egress audit — every 14 cycles per company
+    // ========================================================================
+    try {
+      const egressAuditTargets = await sql`
+        WITH cycle_counts AS (
+          SELECT company_id, COUNT(*)::int AS total_cycles
+          FROM cycles
+          WHERE status = 'completed'
+          GROUP BY company_id
+        )
+        SELECT c.slug, c.id AS company_id, c.github_repo, cc.total_cycles
+        FROM companies c
+        JOIN cycle_counts cc ON cc.company_id = c.id
+        WHERE c.status IN ('mvp', 'active')
+        AND c.github_repo IS NOT NULL
+        AND cc.total_cycles > 0
+        AND cc.total_cycles % 14 = 0
+        AND NOT EXISTS (
+          SELECT 1 FROM agent_actions aa
+          WHERE aa.company_id = c.id
+          AND aa.action_type = 'egress_audit'
+          AND aa.started_at > NOW() - INTERVAL '7 days'
+        )
+      `;
+
+      for (const r of egressAuditTargets) {
+        if (openCircuits.has(`engineer:${r.company_id}`)) {
+          console.log(`[sentinel-dispatch] Egress audit skipped for ${r.slug}: engineer circuit open`);
+          continue;
+        }
+        const taskSummary = `Periodic egress audit at cycle ${r.total_cycles} — read .claude/skills/neon-postgres-egress-optimizer/SKILL.md and follow its steps to diagnose and fix Neon query overfetch patterns in this codebase. Focus on SELECT *, missing pagination, and queries that return more data than the caller uses.`;
+        await dispatchToCompanyWorkflow(ctx, r.github_repo as string, "hive-build.yml", {
+          company_slug: r.slug as string,
+          trigger: "feature_request",
+          task_summary: taskSummary,
+        });
+        await sql`
+          INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+          VALUES ('sentinel', ${r.company_id}, 'egress_audit', 'success',
+            ${"Egress audit dispatched for " + r.slug + " at cycle " + r.total_cycles + " (every-14-cycle periodic check)"},
+            NOW(), NOW())
+        `;
+        dispatches.push({ type: "company_actions", target: "egress_audit", payload: { company: r.slug, cycle: r.total_cycles } });
+        console.log(`[sentinel-dispatch] Egress audit dispatched for ${r.slug} at cycle ${r.total_cycles}`);
+      }
+    } catch (e: unknown) {
+      console.warn("[sentinel-dispatch] Check 12b (egress audit) failed:", e instanceof Error ? e.message : String(e));
     }
 
     // ========================================================================
