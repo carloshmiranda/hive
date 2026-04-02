@@ -1348,3 +1348,21 @@ jobs:
               -H "Content-Type: application/json" \
               -d "{\"agent\":\"engineer\",\"action\":\"feature_request\",\"company\":\"${{ needs.context.outputs.company }}\",\"status\":\"failed\",\"summary\":\"${SUBTYPE} after ${TURNS} turns\",\"error\":\"${ERROR_ESCAPED:0:200}\",\"run_url\":\"$RUN_URL\",\"task_title\":\"${TASK_ESCAPED:0:100}\",\"duration_s\":$((TURNS * 60))}" || true
           fi
+
+          # Job summary
+          STATUS_ICON="✅"
+          [ "$LOG_STATUS" = "failed" ] && STATUS_ICON="❌"
+          [ "$LOG_STATUS" = "skipped" ] && STATUS_ICON="⏭️"
+          COMPANY="${{ needs.context.outputs.company }}"
+          TASK_SHORT="${TASK_ESCAPED:0:120}"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # ${STATUS_ICON} Engineer — ${SUBTYPE} (${COMPANY})
+
+          | Field | Value |
+          |-------|-------|
+          | Task | ${TASK_SHORT} |
+          | Subtype | \`${SUBTYPE}\` |
+          | Company | \`${COMPANY}\` |
+          | Outcome | ${LOG_STATUS} (${TURNS} turns) |
+          | Run | [View logs](${RUN_URL}) |
+          EOF
