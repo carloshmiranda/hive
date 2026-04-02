@@ -47,12 +47,12 @@ jobs:
 
       - name: Decompose with Claude
         id: decompose
+        timeout-minutes: 5
         uses: anthropics/claude-code-action@v1
         with:
           allowed_bots: "hive-orchestrator[bot]"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          max_turns: 10
-          timeout_minutes: 5
+          claude_args: "--max-turns 10"
           prompt: |
             You are decomposing a Hive backlog task that is too large for a single Engineer session (max 50 turns).
 
