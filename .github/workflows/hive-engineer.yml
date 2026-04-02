@@ -104,6 +104,12 @@ jobs:
       - name: Checkout Hive (for templates)
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
       - name: Get tokens via OIDC
         id: auth
         uses: ./.github/actions/get-hive-tokens
@@ -571,6 +577,15 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Checkout Hive
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
       - name: Get tokens via OIDC
         id: auth
         uses: ./.github/actions/get-hive-tokens
