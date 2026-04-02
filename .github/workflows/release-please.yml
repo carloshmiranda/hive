@@ -1,0 +1,22 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # Uses conventional commits (feat:, fix:, chore:, etc.) to determine version bumps
+          # feat: → minor bump, fix: → patch bump, feat!:/fix!: → major bump
+          release-type: node
+          # Token with write access to create/update PRs and tags
+          token: ${{ secrets.GITHUB_TOKEN }}
