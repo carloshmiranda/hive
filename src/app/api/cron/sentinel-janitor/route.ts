@@ -49,6 +49,7 @@ import {
 } from "@/lib/sentinel-helpers";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { normalizePlaybookDomain } from "@/lib/playbook-domains";
+import { isCompanySpecific } from "@/lib/backlog-planner";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -822,6 +823,8 @@ export async function GET(request: Request) {
 
       const priority = imp.severity === "critical" ? "P0" : imp.severity === "high" ? "P1" : "P2";
       const impDescription = `Diagnosis: ${imp.diagnosis}\n\nProposed fix: ${typeof imp.proposed_fix === 'string' ? imp.proposed_fix : JSON.stringify(imp.proposed_fix)}`;
+      // Skip company-specific proposals — they belong in the company's task backlog, not hive_backlog
+      if (await isCompanySpecific(imp.title as string, impDescription, sql).catch(() => false)) continue;
       await sql`
         INSERT INTO hive_backlog (title, description, priority, category, status)
         VALUES (
@@ -899,6 +902,9 @@ export async function GET(request: Request) {
       const priority = (proposalType === 'setup_action' || proposal.severity === 'critical') ? 'P1' : 'P2';
       const category = proposalType === 'setup_action' ? 'infra' : 'improvement';
       const proposalDescription = `Diagnosis: ${proposal.diagnosis}\n\nProposed fix: ${typeof proposal.proposed_fix === 'string' ? proposal.proposed_fix : JSON.stringify(proposal.proposed_fix)}`;
+
+      // Skip company-specific proposals — they belong in the company's task backlog, not hive_backlog
+      if (await isCompanySpecific(proposal.title as string, proposalDescription, sql).catch(() => false)) continue;
 
       await sql`
         INSERT INTO hive_backlog (title, description, priority, category, status, source)

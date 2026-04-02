@@ -836,19 +836,19 @@ export async function isCompanySpecific(
     // 1a. Skip classification if text is clearly about Hive infrastructure.
     // Covers: agent orchestration, dispatch, scheduling, LLM routing, DB schema,
     // backlog management, and Hive-specific system components.
-    const INFRA_CONTEXT = /\b(dispatch(ing)?|sentinel|circuit.?breaker|dedup|orchestrat|regression|infra_repair|healer|evolver|hive.?backlog|agent_actions|agent.?prompt|engineer failures|failure rate|backlog.?planner|backlog.?dispatch|openrouter|rate.?limit|llm|neon|schema\.sql|schema.?map|settings table|provisioning|boilerplate|template(s)?|playbook|cron.?job|webhook|github.?actions|repository_dispatch|worker.?agent|brain.?agent|health.?gate|turn.?budget|cooldown|circuit|oidc|qstash|upstash|vercel.?blob|edge.?config|mcp.?server|mcp.?tool)\b/i;
+    const INFRA_CONTEXT = /\b(dispatch(ing)?|sentinel|circuit.?breaker|dedup|orchestrat|regression|infra_repair|healer|evolver|hive.?backlog|agent_actions|agent.?prompt|engineer failures|failure rate|backlog.?planner|backlog.?dispatch|openrouter|rate.?limit|llm|neon|schema\.sql|schema.?map|settings table|provisioning|boilerplate|template(s)?|playbook|cron.?job|webhook|github.?actions|repository_dispatch|worker.?agent|brain.?agent|health.?gate|turn.?budget|cooldown|circuit|oidc|qstash|upstash|vercel.?blob|edge.?config|mcp.?server|mcp.?tool|isCompanySpecific|company.?specific|classification|backlog.?item|backlog.?routing|spec.?generation|decomposition|redis.?cache|context.?cache|json.?schema|structured.?output|rate.?limit.?header|capability.?awareness|vulnerability.?scan|cve|rename.?agent|job.?summary|github.?mcp)\b/i;
     if (INFRA_CONTEXT.test(text)) {
       return null;
     }
 
     // 1b. Skip if text references Hive codebase paths or files
-    const HIVE_PATH = /\b(src\/lib\/|src\/app\/api\/|\.github\/workflows\/|schema\.sql|backlog-planner|sentinel-dispatch|agent-schemas|chain-dispatch|llm\.ts|settings\.ts|dispatch\.ts)\b/i;
+    const HIVE_PATH = /\b(src\/lib\/|src\/app\/api\/|\.github\/workflows\/|schema\.sql|backlog-planner|sentinel-dispatch|agent-schemas|chain-dispatch|llm\.ts|settings\.ts|dispatch\.ts|redis-cache\.ts|cache\.ts|sentinel-helpers\.ts|sentinel-janitor|sentinel-dispatch)\b/i;
     if (HIVE_PATH.test(text)) {
       return null;
     }
 
     // 1c. Skip if text explicitly frames this as Hive-level work
-    const HIVE_FRAMING = /\b(in hive|hive'?s?|for hive|hive codebase|hive repo|hive system|hive agent|hive infra|across companies|cross-company|all companies|portfolio)\b/i;
+    const HIVE_FRAMING = /\b(in hive|hive'?s?|for hive|hive codebase|hive repo|hive system|hive agent|hive infra|across companies|cross-company|all companies|portfolio|backlog item|hive_backlog)\b/i;
     if (HIVE_FRAMING.test(text)) {
       return null;
     }
