@@ -39,7 +39,8 @@ CREATE TABLE companies (
   killed_at     TIMESTAMPTZ,
   kill_reason   TEXT,
   resend_audience_id TEXT,       -- Resend Audiences API audience ID for this company's leads
-  healer_blocked     BOOLEAN DEFAULT false  -- Circuit breaker flag to suppress Healer dispatch until manually cleared
+  healer_blocked     BOOLEAN DEFAULT false, -- Circuit breaker flag to suppress Healer dispatch until manually cleared
+  brand              JSONB DEFAULT NULL     -- { tagline, tone, colors: {primary, secondary, accent}, personality, voice }
 );
 
 -- Agent cycles: one row per nightly orchestrator run per company

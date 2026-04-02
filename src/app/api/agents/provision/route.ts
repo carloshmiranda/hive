@@ -6,6 +6,7 @@ import { createProject as createVercelProject, setEnvVars, addDomain, provisionN
 import { getSettingValue } from "@/lib/settings";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { getFramework, recommendFramework } from "@/lib/frameworks";
+import { generateBrand } from "@/lib/brand";
 
 // POST /api/agents/provision — one-call infrastructure provisioning
 // Creates Neon DB + runs schema, creates Vercel project + enables Web Analytics,
@@ -215,6 +216,14 @@ export async function POST(req: NextRequest) {
       updated_at = NOW()
     WHERE id = ${company_id}
   `.catch(() => {});
+
+  // ── Step 5: Generate brand identity ──
+  try {
+    const brand = await generateBrand(sql, company_id);
+    results.brand = brand;
+  } catch (e: any) {
+    results.brand = { error: e.message };
+  }
 
   return json(results);
 }
