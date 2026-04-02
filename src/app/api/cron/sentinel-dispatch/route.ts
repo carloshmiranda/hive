@@ -228,7 +228,7 @@ async function executeSentinelDispatch(request: Request) {
 
                 if (!existing) {
                   await sql`
-                    INSERT INTO approvals (gate_type, company_id, context, status, created_at, updated_at)
+                    INSERT INTO approvals (gate_type, company_id, context, status, created_at)
                     VALUES (
                       'spend_approval',
                       NULL,
@@ -240,7 +240,7 @@ async function executeSentinelDispatch(request: Request) {
                         message: `OpenRouter credits at ${Math.round(usagePct * 100)}% — top up to prevent agent failures`,
                       })},
                       'pending',
-                      NOW(), NOW()
+                      NOW()
                     )
                   `.catch((e: any) => console.warn("[sentinel-dispatch] Failed to create OR escalation:", e?.message));
                   dispatches.push({
