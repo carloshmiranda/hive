@@ -565,6 +565,32 @@ async function executeSentinelDispatch(request: Request) {
     `;
 
     // ========================================================================
+    // CHECK 3b: Stale competitive analysis (>30 days) → Research Analyst
+    // ========================================================================
+
+    const staleCompetitiveResearch = await sql`
+      SELECT c.slug, c.id as company_id FROM companies c
+      WHERE c.status IN ('mvp','active') AND c.github_repo IS NOT NULL
+      AND (
+        NOT EXISTS (
+          SELECT 1 FROM research_reports rr
+          WHERE rr.company_id = c.id AND rr.report_type = 'competitive_analysis'
+        )
+        OR EXISTS (
+          SELECT 1 FROM research_reports rr
+          WHERE rr.company_id = c.id AND rr.report_type = 'competitive_analysis'
+          AND rr.updated_at < NOW() - INTERVAL '30 days'
+        )
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_actions aa
+        WHERE aa.company_id = c.id AND aa.agent IN ('scout', 'research')
+        AND aa.action_type = 'competitive_analysis'
+        AND aa.status = 'success' AND aa.finished_at > NOW() - INTERVAL '30 days'
+      )
+    `;
+
+    // ========================================================================
     // CHECK 4: No CEO review in 48h
     // ========================================================================
 
@@ -1072,6 +1098,18 @@ async function executeSentinelDispatch(request: Request) {
       if (i < staleLeads.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
+    }
+
+    // 3b. Stale competitive analysis → Research Analyst (brain)
+    for (const r of staleCompetitiveResearch) {
+      await dispatchToActions(ctx, "research_request", {
+        source: "sentinel_competitive_refresh",
+        company: r.slug,
+        company_id: r.company_id,
+        research_type: "competitive_analysis",
+        trace_id: traceId,
+      });
+      dispatches.push({ type: "brain", target: "research_request", payload: { company: r.slug, reason: "competitive_refresh_30d" } });
     }
 
     // 4. No CEO review → CEO brain
