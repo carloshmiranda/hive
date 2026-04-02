@@ -416,10 +416,12 @@ export default function DashboardPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <Link href="/settings" style={{ fontSize: 13, color: "var(--hive-text-secondary)", fontFamily: "var(--hive-sans)", textDecoration: "none" }}>Settings</Link>
           {lastRefresh && (
-            <span onClick={() => fetchAll()} style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", cursor: "pointer" }}
-              title="Click to refresh. Auto-refreshes every 2m (pauses when tab hidden).">
+            <button onClick={() => fetchAll()} aria-label="Refresh dashboard"
+              title="Auto-refreshes every 2m (pauses when tab hidden)."
+              style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", cursor: "pointer",
+                background: "none", border: "none", padding: 0 }}>
               ↻ {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-            </span>
+            </button>
           )}
           <button onClick={() => signOut()} style={{ fontSize: 13, color: "var(--hive-text-tertiary)", fontFamily: "var(--hive-sans)",
             background: "none", border: "none", cursor: "pointer" }}>Sign out</button>
@@ -493,12 +495,12 @@ export default function DashboardPage() {
                           </Link>
                         )}
                         {todo.dismissable && (
-                          <button onClick={() => dismissTodo(todo.id)} style={{
+                          <button onClick={() => dismissTodo(todo.id)} aria-label="Dismiss" style={{
                             width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
                             fontSize: 16, fontFamily: "var(--hive-mono)", borderRadius: 6, cursor: "pointer",
                             border: "1px solid var(--hive-border)", background: "transparent",
                             color: "var(--hive-text-tertiary)", lineHeight: 1,
-                          }} title="Dismiss">×</button>
+                          }}>×</button>
                         )}
                       </div>
                     </div>
@@ -522,6 +524,7 @@ export default function DashboardPage() {
                   value={cmdInput}
                   onChange={e => setCmdInput(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendDirective(); } }}
+                  aria-label="Send a directive to the orchestrator"
                   placeholder='Send a directive — e.g. keyvault: add dark mode toggle'
                   disabled={cmdSending}
                   style={{
@@ -550,16 +553,17 @@ export default function DashboardPage() {
 
           {/* Scout proposals banner */}
           {ideas.length > 0 && (
-            <div onClick={() => setActiveTab("inbox")} style={{
+            <button onClick={() => setActiveTab("inbox")} aria-label={`${ideas.length} new idea${ideas.length > 1 ? "s" : ""} from Scout — go to Inbox to review`} style={{
               padding: "12px 16px", marginBottom: 20, borderRadius: 10, cursor: "pointer",
               background: "var(--hive-amber-bg)", border: "1px solid var(--hive-amber-border)",
               display: "flex", alignItems: "center", gap: 8, transition: "background 0.15s",
+              width: "100%", textAlign: "left",
             }}>
-              <span style={{ fontSize: 14 }}>🐝</span>
+              <span style={{ fontSize: 14 }} aria-hidden="true">🐝</span>
               <span style={{ fontSize: 13, color: "var(--hive-amber)" }}>
                 {ideas.length} new idea{ideas.length > 1 ? "s" : ""} from Scout — {ideas.map(a => a.title).join(", ")} — tap to review
               </span>
-            </div>
+            </button>
           )}
 
           {/* Scout cleanup warning when too many proposals */}
@@ -1244,7 +1248,7 @@ export default function DashboardPage() {
             {[{ key: "all", label: "All" }, { key: "failed", label: "Failures" },
               ...liveCompanies.map(c => ({ key: c.slug, label: c.name }))
             ].map(t => (
-              <button key={t.key} onClick={() => setActivityFilter(t.key)} style={{
+              <button key={t.key} onClick={() => setActivityFilter(t.key)} aria-pressed={activityFilter === t.key} style={{
                 fontSize: 12, fontFamily: "var(--hive-sans)", padding: "5px 12px", borderRadius: 6, cursor: "pointer",
                 border: `1px solid ${activityFilter === t.key ? "var(--hive-amber-border)" : "var(--hive-border)"}`,
                 background: activityFilter === t.key ? "var(--hive-amber-bg)" : "transparent",

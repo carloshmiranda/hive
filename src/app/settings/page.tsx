@@ -153,7 +153,7 @@ export default function SettingsPage() {
                     display: "flex", alignItems: "flex-start", gap: 16
                   }}>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 500, color: "var(--hive-text)", marginBottom: 2 }}>
+                      <div id={`label-${key}`} style={{ fontSize: 14, fontWeight: 500, color: "var(--hive-text)", marginBottom: 2 }}>
                         {meta.label}
                         {setting?.is_set && (
                           <span style={{
@@ -167,6 +167,7 @@ export default function SettingsPage() {
 
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <input
+                          aria-labelledby={`label-${key}`}
                           type={setting?.is_secret ? "password" : "text"}
                           placeholder={setting?.is_set ? setting.value : meta.placeholder}
                           value={edits[key] ?? ""}
@@ -185,6 +186,7 @@ export default function SettingsPage() {
                           <button
                             onClick={() => saveSetting(key)}
                             disabled={isSaving}
+                            aria-label={isSaving ? `Saving ${meta.label}` : `Save ${meta.label}`}
                             style={{
                               padding: "8px 16px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
                               borderRadius: 6, border: "1px solid var(--hive-green-border)",
@@ -193,7 +195,7 @@ export default function SettingsPage() {
                               letterSpacing: "0.04em", transition: "all 0.15s"
                             }}
                           >
-                            {isSaving ? "..." : "SAVE"}
+                            {isSaving ? "Saving…" : "SAVE"}
                           </button>
                         )}
                         {isSaved && (
@@ -222,7 +224,7 @@ export default function SettingsPage() {
                 Import an existing project into Hive. For GitHub repos, Hive scans the codebase, detects tech stack, and creates an onboarding plan.
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-                <input value={importName} onChange={e => {
+                <input aria-label="Company name" value={importName} onChange={e => {
                   setImportName(e.target.value);
                   if (!importSlug || importSlug === importName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")) {
                     setImportSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
@@ -231,12 +233,12 @@ export default function SettingsPage() {
                   padding: "8px 12px", fontSize: 13, fontFamily: "var(--hive-mono)", background: "var(--hive-bg)",
                   border: "1px solid var(--hive-border)", borderRadius: 6, color: "var(--hive-text)", outline: "none",
                 }} />
-                <input value={importSlug} onChange={e => setImportSlug(e.target.value)} placeholder="slug (e.g. flolio)" style={{
+                <input aria-label="Company slug" value={importSlug} onChange={e => setImportSlug(e.target.value)} placeholder="slug (e.g. flolio)" style={{
                   padding: "8px 12px", fontSize: 13, fontFamily: "var(--hive-mono)", background: "var(--hive-bg)",
                   border: "1px solid var(--hive-border)", borderRadius: 6, color: "var(--hive-text)", outline: "none",
                 }} />
               </div>
-              <input value={importUrl} onChange={e => setImportUrl(e.target.value)}
+              <input aria-label="GitHub URL (optional)" value={importUrl} onChange={e => setImportUrl(e.target.value)}
                 placeholder="GitHub URL (optional for manual imports)"
                 style={{
                   width: "100%", padding: "8px 12px", fontSize: 13, fontFamily: "var(--hive-mono)", background: "var(--hive-bg)",

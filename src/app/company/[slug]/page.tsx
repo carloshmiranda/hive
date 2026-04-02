@@ -180,6 +180,7 @@ export default function CompanyDetailPage() {
         <div style={{ display: "flex", gap: 8 }}>
           <input value={directive} onChange={e => setDirective(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") sendDirective(); }}
+            aria-label={`Send directive to ${company.name}`}
             placeholder={`Send directive to ${company.name}...`}
             style={{ flex: 1, padding: "10px 14px", background: "var(--hive-surface)", border: "1px solid var(--hive-border)", borderRadius: 8,
               color: "var(--hive-text)", fontSize: 13, fontFamily: "var(--hive-mono)", outline: "none", transition: "border-color 0.15s" }}
@@ -217,11 +218,13 @@ export default function CompanyDetailPage() {
               <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", marginBottom: 10, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{(a.description || '').slice(0, 300)}</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={() => handleApproval(a.id, "approved")}
+                  aria-label={`Approve: ${a.title}`}
                   style={{ padding: "6px 16px", background: "var(--hive-green-bg)", border: "1px solid var(--hive-green-border)",
                     borderRadius: 6, color: "var(--hive-green)", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, cursor: "pointer" }}>
                   Approve
                 </button>
                 <button onClick={() => handleApproval(a.id, "rejected")}
+                  aria-label={`Reject: ${a.title}`}
                   style={{ padding: "6px 16px", background: "var(--hive-red-bg)", border: "1px solid var(--hive-red-border)",
                     borderRadius: 6, color: "var(--hive-red)", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, cursor: "pointer" }}>
                   Reject
@@ -471,6 +474,7 @@ export default function CompanyDetailPage() {
             <div style={{ display: "flex", gap: 6 }}>
               {taskCategories.map(cat => (
                 <button key={cat} onClick={() => setTaskCategoryFilter(cat)}
+                  aria-pressed={taskCategoryFilter === cat}
                   style={{ fontSize: 11, fontFamily: "var(--hive-mono)", padding: "2px 8px", borderRadius: 4, cursor: "pointer",
                     border: `1px solid ${taskCategoryFilter === cat ? "var(--hive-amber-border)" : "var(--hive-border-subtle, var(--hive-border))"}`,
                     background: taskCategoryFilter === cat ? "var(--hive-amber-bg)" : "transparent",
