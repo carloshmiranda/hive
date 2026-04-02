@@ -26,6 +26,11 @@ permissions:
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+# Prevent duplicate CEO runs. cancel-in-progress: false queues rather than kills an in-progress run.
+concurrency:
+  group: hive-ceo-${{ github.event.client_payload.company || 'portfolio' }}
+  cancel-in-progress: false
+
 jobs:
   ceo:
     runs-on: ubuntu-latest
