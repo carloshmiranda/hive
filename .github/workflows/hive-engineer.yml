@@ -921,8 +921,38 @@ jobs:
             echo "estimated_turns=${EST_TURNS}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Run build agent (Hive-internal only)
+      - name: Guard — block company work when company lacks github_repo
+        id: company_guard
         if: steps.turn_guard.outputs.skip != 'true'
+        env:
+          COMPANY: ${{ needs.context.outputs.company }}
+          TRIGGER: ${{ needs.context.outputs.trigger }}
+        run: |
+          # build-hive only runs when company_repo == ''. If COMPANY is a real slug
+          # (not empty and not '_hive'), it means the company exists but has no github_repo
+          # (unprovisioned). Running the Engineer in the Hive repo for company work would
+          # misfile any GitHub Issues to the wrong repo. Block it.
+          if [ -z "$COMPANY" ] || [ "$COMPANY" = "_hive" ]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "✅ Hive self-improvement work — company guard passed"
+            exit 0
+          fi
+
+          echo "::warning::Company '$COMPANY' has no github_repo (unprovisioned). Cannot run Engineer in Hive repo for company work (trigger: $TRIGGER)."
+          echo "Company must be provisioned with a github_repo before Engineer can execute company work."
+          echo "skip=true" >> $GITHUB_OUTPUT
+
+          # Log to agent_actions
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+          curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"company_slug\":\"$COMPANY\",\"agent\":\"engineer\",\"action_type\":\"${TRIGGER:-feature_request}\",\"status\":\"skipped\",\"description\":\"Skipped: company has no github_repo — needs provisioning before Engineer can run\"}" || true
+
+      - name: Run build agent (Hive-internal only)
+        if: steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
         id: agent
         env:
           GH_PAT: ${{ steps.auth.outputs.gh_pat }}
@@ -1027,10 +1057,11 @@ jobs:
 
             ## GitHub Issue routing
             When creating a GitHub Issue, route to the correct repo:
-            - Company product work (features, bugs for a specific company) → `carloshmiranda/{company-slug}`
+            - Company product work (features, bugs for a specific company) → `carloshmiranda/$COMPANY`
             - Hive platform work (infra bugs, agent improvements, orchestrator issues) → `carloshmiranda/hive`
-            Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/{correct-repo} ...`
+            Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/<correct-repo> ...`
             Never file company issues in the hive repo or vice versa.
+            Note: if COMPANY is empty or "_hive", all issues go to `carloshmiranda/hive`.
 
             ## Rules
             - Always use `GH_TOKEN="$GH_PAT"` for gh commands
