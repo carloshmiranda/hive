@@ -735,12 +735,40 @@ async function callClaude(
     throw new Error("Claude fallback not available: ANTHROPIC_API_KEY not configured in settings");
   }
 
+  const model = "claude-haiku-4-5-20251001";  // Use fastest/cheapest Claude model for fallback
+  const messages = [{
+    role: "user" as const,
+    content: [{ type: "text" as const, text: prompt, cache_control: { type: "ephemeral" as const } }],
+  }];
+
   const requestBody: any = {
-    model: "claude-haiku-4-5-20251001",  // Use fastest/cheapest Claude model for fallback
+    model,
     max_tokens: options.maxTokens || 8192,
     temperature: options.temperature || 0.7,
-    messages: [{ role: "user", content: prompt }],
+    messages,
   };
+
+  const anthropicHeaders = {
+    "Authorization": `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": "prompt-caching-2024-07-31",
+  };
+
+  // Token count pre-flight: log context size, skip if count endpoint fails
+  try {
+    const countRes = await fetch("https://api.anthropic.com/v1/messages/count_tokens", {
+      method: "POST",
+      headers: anthropicHeaders,
+      body: JSON.stringify({ model, messages, ...(requestBody.tools ? { tools: requestBody.tools } : {}) }),
+    });
+    if (countRes.ok) {
+      const { input_tokens } = await countRes.json();
+      console.log(`[llm] claude pre-flight: ${input_tokens} input tokens`);
+    }
+  } catch {
+    // Non-blocking — don't fail the real request if count fails
+  }
 
   // Add tool calling support if specified
   if (options.tools && options.tools.length > 0) {
@@ -753,11 +781,7 @@ async function callClaude(
 
   const res = await fetchWithRetry("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-    },
+    headers: anthropicHeaders,
     body: JSON.stringify(requestBody),
   }, 2);
 
@@ -768,6 +792,12 @@ async function callClaude(
 
   const data = await res.json();
   const content = data.content?.[0]?.text || "";
+
+  // Log cache stats
+  const usage = data.usage || {};
+  if (usage.cache_read_input_tokens || usage.cache_creation_input_tokens) {
+    console.log(`[llm] claude cache: read=${usage.cache_read_input_tokens ?? 0} created=${usage.cache_creation_input_tokens ?? 0} uncached=${usage.input_tokens ?? 0}`);
+  }
 
   // Handle tool calls if present
   let toolCalls: any[] | undefined;
@@ -791,7 +821,7 @@ async function callClaude(
 
   return {
     content: content.trim(),
-    model: data.model || "claude-haiku-4-5-20251001",
+    model: data.model || model,
     toolCalls
   };
 }
