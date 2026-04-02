@@ -117,6 +117,42 @@ export async function POST(req: Request) {
     }
   }
 
+  // Minimum cycle duration gate: CEO completing planning does not mean the cycle is done.
+  // If CEO just called us and no non-CEO agent has succeeded yet, the cycle has barely started.
+  // Schedule a retry in 2h so Engineer/Growth have time to run before we chain to the next company.
+  if (agent === "ceo" && company && company !== "_retry") {
+    const [companyGateRec] = await sql`
+      SELECT id FROM companies WHERE slug = ${company} LIMIT 1
+    `.catch((e: any) => { console.warn(`[cycle-complete] gate company lookup failed: ${e?.message || e}`); return []; });
+
+    if (companyGateRec) {
+      const [activeCycle] = await sql`
+        SELECT id, started_at FROM cycles
+        WHERE company_id = ${companyGateRec.id} AND status = 'running'
+        ORDER BY started_at DESC LIMIT 1
+      `.catch((e: any) => { console.warn(`[cycle-complete] gate cycle lookup failed: ${e?.message || e}`); return []; });
+
+      if (activeCycle) {
+        const cycleAgeHours = (Date.now() - new Date(activeCycle.started_at).getTime()) / 3_600_000;
+        if (cycleAgeHours < 4) {
+          const [nonCeoSuccess] = await sql`
+            SELECT id FROM agent_actions
+            WHERE company_id = ${companyGateRec.id}
+            AND agent NOT IN ('ceo', 'dispatch', 'sentinel', 'ops')
+            AND status = 'success'
+            AND started_at > ${activeCycle.started_at}
+            LIMIT 1
+          `.catch((e: any) => { console.warn(`[cycle-complete] gate non-ceo check failed: ${e?.message || e}`); return [null]; });
+
+          if (!nonCeoSuccess) {
+            await scheduleChainRetry("minimum_cycle_duration_not_met", 2 * 60 * 60);
+            return json({ chained: false, reason: "minimum_cycle_duration_not_met", chain_retry: true, company });
+          }
+        }
+      }
+    }
+  }
+
   // Step 1: Health gate check
   const healthRes = await fetch(`${HIVE_URL}/api/dispatch/health-gate`, {
     method: "POST",
