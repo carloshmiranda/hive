@@ -415,6 +415,13 @@ export async function POST(req: Request) {
                   )
                 `.catch(() => {});
 
+                // Schedule metric refresh 15 minutes after merge so new deploy has time to go live
+                qstashPublish("/api/cron/metrics", { company_slug: prRepo }, {
+                  delay: 900,
+                  retries: 2,
+                  deduplicationId: `metrics-${prRepo}-${prNumber}`,
+                }).catch(() => {});
+
                 // Telegram notification
                 import("@/lib/telegram").then(({ notifyHive }) =>
                   notifyHive({
