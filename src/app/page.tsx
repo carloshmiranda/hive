@@ -174,8 +174,10 @@ export default function DashboardPage() {
   const [neonUsage, setNeonUsage] = useState<NeonUsage | null>(null);
 
   const fetchAll = useCallback(async () => {
+    try {
     const res = await fetch("/api/dashboard");
     if (!res.ok) return;
+    if (!res.headers.get("content-type")?.includes("application/json")) return;
     const { data } = await res.json();
     setPortfolio(data.portfolio);
     setCompanies(data.companies);
@@ -192,6 +194,7 @@ export default function DashboardPage() {
       const todoRes = await fetch("/api/todos");
       if (todoRes.ok) setTodos((await todoRes.json()).data || []);
     } catch { /* non-critical */ }
+    } catch { /* session expired or network error — stay on loading state */ }
   }, []);
 
   // Neon usage: fetched once on load (calls external Neon API — no need to poll every 2m)
