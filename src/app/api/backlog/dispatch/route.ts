@@ -7,7 +7,7 @@ import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "
 import { qstashPublish } from "@/lib/qstash";
 import { queuePop, queueRebuild, queueSyncItem } from "@/lib/redis-cache";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
-import { setSentryTags } from "@/lib/sentry-tags";
+import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
 import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 import { markTaskAsStealable, claimStealableTask, type WorkStealingResult } from "@/lib/work-stealing";
@@ -375,6 +375,11 @@ export async function POST(req: Request) {
   setSentryTags({
     action_type: "backlog_dispatch",
     route: "/api/backlog/dispatch"
+  });
+
+  addDispatchBreadcrumb({
+    message: "Backlog dispatch started",
+    category: "dispatch",
   });
 
   const authHeader = req.headers.get("authorization");
@@ -1927,6 +1932,12 @@ export async function POST(req: Request) {
   // may advance to subsequent candidates if spec fails.
   topItem = orderedCandidates[0];
 
+  addDispatchBreadcrumb({
+    message: `Item selected: "${topItem.title}"`,
+    category: "dispatch",
+    data: { id: topItem.id, priority: topItem.priority, category: topItem.category, has_spec: !!topItem.spec },
+  });
+
   // Auto-classify category if item has default category ('feature')
   if (topItem.category === 'feature') {
     try {
@@ -2058,6 +2069,11 @@ export async function POST(req: Request) {
     await queueSyncItem(topItem.id, 'planning').catch(() => {});
 
     if (ghPat) {
+      addDispatchBreadcrumb({
+        message: `Spec request dispatched to GitHub Actions for "${topItem.title}"`,
+        category: "github",
+        data: { backlog_id: topItem.id, priority: topItem.priority },
+      });
       const specRes = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
         method: "POST",
         headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
@@ -2317,6 +2333,11 @@ export async function POST(req: Request) {
 
   const payloadStr = JSON.stringify(dispatchPayload);
   console.log(`[backlog] Dispatch payload size: ${payloadStr.length} bytes`);
+  addDispatchBreadcrumb({
+    message: `GitHub dispatch: repository_dispatch engineer_task for "${topItem.title}"`,
+    category: "github",
+    data: { backlog_id: topItem.id, priority: topItem.priority, attempt: attemptCount + 1, payload_bytes: payloadStr.length },
+  });
   const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
     method: "POST",
     headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
@@ -2355,6 +2376,12 @@ export async function POST(req: Request) {
     // Log successful dispatch
     const dispatchType = isChainDispatch ? "chain" : "manual";
     console.log(`[backlog] ${dispatchType} dispatch: "${topItem.title}" (${topItem.priority}, score: ${topItem.priority_score})${attemptCount > 0 ? ` attempt ${attemptCount + 1}` : ""}`);
+
+    addDispatchBreadcrumb({
+      message: `Dispatch success: "${topItem.title}" → Engineer (${dispatchType})`,
+      category: "dispatch",
+      data: { backlog_id: topItem.id, dispatch_action_id: dispatchAction?.id, attempt: attemptCount + 1 },
+    });
 
     // Notify via Telegram (QStash guarantees delivery)
     const issueRef = topItem.github_issue_number ? ` #${topItem.github_issue_number}` : "";

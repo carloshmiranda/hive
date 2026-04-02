@@ -9,7 +9,7 @@ import { getSuppressedEmails } from "@/lib/outreach-suppression";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { HIVE_TOOLS } from "@/lib/hive-tools";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
-import { setSentryTags } from "@/lib/sentry-tags";
+import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
 import { type CompletionReport } from "@/lib/completion-report";
 import { cachedPlaybook } from "@/lib/redis-cache";
 import { compressResearchForAgent } from "@/lib/research-compression";
@@ -142,6 +142,12 @@ export async function POST(req: NextRequest) {
     // Add company_id to Sentry tags now that we have it
     setSentryTags({ company_id: company.id });
 
+    addDispatchBreadcrumb({
+      message: `Dispatch started: ${agentName} for ${company.slug}`,
+      category: "dispatch",
+      data: { agent: agentName, company: company.slug, trigger: trigger || "scheduled" },
+    });
+
     // Per-agent hourly rate limit: prevent dispatch burst patterns
     // Brain agents: 3/hr, Workers: 8/hr (defense-in-depth on top of specific dedup guards)
     const isWorkerAgent = WORKER_AGENTS.includes(agentName);
@@ -156,6 +162,12 @@ export async function POST(req: NextRequest) {
     `.catch(() => [{ dispatch_count: 0 }]);
 
     if (hourlyCount.dispatch_count >= hourlyThreshold) {
+      addDispatchBreadcrumb({
+        message: `Rate limited: ${agentName} for ${company.slug} (${hourlyCount.dispatch_count}/${hourlyThreshold}/hr)`,
+        category: "rate_limit",
+        level: "warning",
+        data: { agent: agentName, company: company.slug, count: hourlyCount.dispatch_count, threshold: hourlyThreshold },
+      });
       // Log the rate limit hit for debugging
       await sql`
         INSERT INTO agent_actions (company_id, agent, action_type, status, description, started_at, finished_at)
@@ -335,6 +347,11 @@ ${capabilitiesSummary(company.capabilities)}`;
 
     // 5. Call the unified LLM interface with tool calling support
     // Use tools for dynamic context loading instead of pre-loading everything
+    addDispatchBreadcrumb({
+      message: `LLM call starting: ${agentName} for ${company.slug}`,
+      category: "llm",
+      data: { agent: agentName, company: company.slug },
+    });
     const responseFormat = getResponseFormat(agentName as keyof typeof AGENT_SCHEMAS);
     const { response, logData, toolResults } = await callLLMWithTools(agentName, fullPrompt, {
       sql,
@@ -344,6 +361,12 @@ ${capabilitiesSummary(company.capabilities)}`;
       company: company.slug,
     });
     const output = response.content;
+
+    addDispatchBreadcrumb({
+      message: `LLM call complete: ${logData.provider}/${logData.model} in ${logData.duration_s}s`,
+      category: "llm",
+      data: { provider: logData.provider, model: logData.model, duration_s: logData.duration_s, cost_usd: logData.cost_usd, tool_calls: response.toolCalls?.length || 0 },
+    });
 
     // 6. Verify playbook usage before logging
     const playbookUsage = await verifyPlaybookUsage(output, playbook);
@@ -400,6 +423,12 @@ ${capabilitiesSummary(company.capabilities)}`;
         ${new Date(startTime).toISOString()}, ${new Date().toISOString()}
       )
     `;
+
+    addDispatchBreadcrumb({
+      message: `DB logged: agent_actions insert success for ${agentName}/${company.slug}`,
+      category: "db",
+      data: { agent: agentName, company: company.slug },
+    });
 
     // 8. Agent-specific post-processing
     if (agentName === "outreach") {
@@ -483,6 +512,11 @@ ${capabilitiesSummary(company.capabilities)}`;
 
     // Chain dispatch: trigger cycle-complete to continue workflow instead of waiting for Sentinel
     // This fixes the 4-hour latency gap by immediately chaining to next work
+    addDispatchBreadcrumb({
+      message: `QStash chain dispatch: worker-completion for ${agentName}/${company.slug}`,
+      category: "qstash",
+      data: { agent: agentName, company: company.slug },
+    });
     qstashPublish("/api/dispatch/cycle-complete", {
       agent: agentName,
       company: company.slug,
