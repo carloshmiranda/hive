@@ -42,9 +42,10 @@ async function collectMetrics(req: Request, companySlugs?: string[]) {
         WHERE c.status IN ('active', 'mvp')
       `;
 
-  const results: Array<{ slug: string; views: number; pricing_clicks: number; affiliate_clicks: number; smoke_test_pass: boolean | null; source: string }> = [];
+  type MetricResult = { slug: string; views: number; pricing_clicks: number; affiliate_clicks: number; smoke_test_pass: boolean | null; source: string };
 
-  for (const company of companies) {
+  // Process all companies in parallel — each is independent
+  const settled = await Promise.all(companies.map(async (company): Promise<MetricResult | null> => {
     try {
       let views = 0;
       let pricingClicks = 0;
@@ -81,48 +82,50 @@ async function collectMetrics(req: Request, companySlugs?: string[]) {
       // Only write to DB when we got real data from the company API
       if (source !== "company_api") {
         console.warn(`[metrics] ${company.slug}: skipping DB write (source: ${source})`);
-        results.push({ slug: company.slug, views: 0, pricing_clicks: 0, affiliate_clicks: 0, smoke_test_pass: null, source });
-        continue;
+        return { slug: company.slug, views: 0, pricing_clicks: 0, affiliate_clicks: 0, smoke_test_pass: null, source };
       }
 
-      // Use convergent metrics update to handle concurrent writes
-      await updateMetrics({
-        company_id: company.id,
-        date: today,
-        page_views: views,
-        pricing_cta_clicks: pricingClicks,
-        affiliate_clicks: affiliateClicks
-      });
-
-      // Check latest smoke test result via GitHub API
-      let smokeTestPass: boolean | null = null;
-      if (company.slug && ghToken) {
-        try {
-          const ghRes = await fetch(
-            `https://api.github.com/repos/carloshmiranda/${company.slug}/actions/workflows/post-deploy.yml/runs?per_page=1&status=completed`,
-            {
-              headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github+json" },
-              signal: AbortSignal.timeout(5000),
+      // Parallelize: DB write + GitHub smoke test check are independent
+      const [, smokeTestResult] = await Promise.all([
+        updateMetrics({
+          company_id: company.id,
+          date: today,
+          page_views: views,
+          pricing_cta_clicks: pricingClicks,
+          affiliate_clicks: affiliateClicks,
+        }),
+        // Check latest smoke test result via GitHub API
+        (async (): Promise<boolean | null> => {
+          if (!company.slug || !ghToken) return null;
+          try {
+            const ghRes = await fetch(
+              `https://api.github.com/repos/carloshmiranda/${company.slug}/actions/workflows/post-deploy.yml/runs?per_page=1&status=completed`,
+              {
+                headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github+json" },
+                signal: AbortSignal.timeout(5000),
+              }
+            );
+            if (ghRes.ok) {
+              const ghData = await ghRes.json();
+              if (ghData.workflow_runs?.length > 0) {
+                return ghData.workflow_runs[0].conclusion === "success";
+              }
             }
-          );
-          if (ghRes.ok) {
-            const ghData = await ghRes.json();
-            if (ghData.workflow_runs?.length > 0) {
-              const latestRun = ghData.workflow_runs[0];
-              smokeTestPass = latestRun.conclusion === "success";
-            }
+          } catch {
+            // GitHub API not available or workflow doesn't exist — skip
           }
-        } catch {
-          // GitHub API not available or workflow doesn't exist — skip
-        }
-      }
+          return null;
+        })(),
+      ]);
 
-      results.push({ slug: company.slug, views, pricing_clicks: pricingClicks, affiliate_clicks: affiliateClicks, smoke_test_pass: smokeTestPass, source });
+      return { slug: company.slug, views, pricing_clicks: pricingClicks, affiliate_clicks: affiliateClicks, smoke_test_pass: smokeTestResult, source };
     } catch (e) {
       console.error(`Failed to collect metrics for ${company.slug}:`, e);
+      return null;
     }
-  }
+  }));
 
+  const results = settled.filter((r): r is MetricResult => r !== null);
   return Response.json({ ok: true, collected: results.length, results });
 }
 

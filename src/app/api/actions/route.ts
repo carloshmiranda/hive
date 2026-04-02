@@ -22,9 +22,12 @@ export async function GET(req: Request) {
   let actions;
   if (cycleId) {
     actions = await sql`
-      SELECT a.*, c.slug as company_slug FROM agent_actions a 
+      SELECT a.id, a.company_id, a.cycle_id, a.agent, a.action_type, a.status,
+        a.error, a.tokens_used, a.started_at, a.finished_at, a.description,
+        a.reflection, a.retry_count, c.slug as company_slug
+      FROM agent_actions a
       JOIN companies c ON c.id = a.company_id
-      WHERE a.cycle_id = ${cycleId} ORDER BY a.started_at ASC
+      WHERE a.cycle_id = ${cycleId} ORDER BY a.started_at ASC LIMIT 200
     `;
   } else if (companyId && status) {
     actions = await sql`

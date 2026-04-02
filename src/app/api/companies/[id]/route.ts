@@ -12,10 +12,12 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const [company] = await sql`SELECT * FROM companies WHERE id = ${id} OR slug = ${id}`;
   if (!company) return err("Company not found", 404);
 
-  const metrics = await sql`SELECT * FROM metrics WHERE company_id = ${company.id} ORDER BY date DESC LIMIT 30`;
-  const infra = await sql`SELECT * FROM infra WHERE company_id = ${company.id} AND status = 'active'`;
-  const recentActions = await sql`SELECT * FROM agent_actions WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 20`;
-  const cycles = await sql`SELECT * FROM cycles WHERE company_id = ${company.id} ORDER BY cycle_number DESC LIMIT 10`;
+  const [metrics, infra, recentActions, cycles] = await Promise.all([
+    sql`SELECT date, revenue, mrr, customers, page_views, signups, churn_rate, cac, ad_spend, emails_sent, social_posts, social_engagement, waitlist_signups FROM metrics WHERE company_id = ${company.id} ORDER BY date DESC LIMIT 30`,
+    sql`SELECT id, company_id, service, resource_id, config, status, created_at FROM infra WHERE company_id = ${company.id} AND status = 'active'`,
+    sql`SELECT id, company_id, cycle_id, agent, action_type, description, status, error, tokens_used, started_at, finished_at FROM agent_actions WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 20`,
+    sql`SELECT id, company_id, cycle_number, status, started_at, finished_at FROM cycles WHERE company_id = ${company.id} ORDER BY cycle_number DESC LIMIT 10`,
+  ]);
 
   const health = await calculateHealthScore(company.id, sql);
 

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
@@ -141,12 +141,18 @@ export default function CompanyDetailPage() {
     fetchData();
   };
 
+  // Memoized derivations — must be before conditional returns (Rules of Hooks)
+  const pendingApprovals = useMemo(() => approvals.filter(a => a.status === "pending"), [approvals]);
+  const latestMetrics = useMemo(() => metrics.slice(0, 10), [metrics]);
+  const taskCategories = useMemo(
+    () => ["all", ...Array.from(new Set(tasks.map(t => t.category))).sort()],
+    [tasks]
+  );
+
   if (loading) return <div style={{ padding: 40, fontFamily: "var(--hive-sans)", color: "var(--hive-text-secondary)", fontSize: 13 }}>Loading...</div>;
   if (!company) return <div style={{ padding: 40, fontFamily: "var(--hive-sans)", color: "var(--hive-red)", fontSize: 13 }}>Company &quot;{slug}&quot; not found</div>;
 
   const status = STATUS_MAP[company.status] || STATUS_MAP.idea;
-  const pendingApprovals = approvals.filter(a => a.status === "pending");
-  const latestMetrics = metrics.slice(0, 10);
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 20px", fontFamily: "var(--hive-sans)", color: "var(--hive-text)", background: "var(--hive-bg)", minHeight: "100vh" }}>
@@ -463,7 +469,7 @@ export default function CompanyDetailPage() {
           </h3>
           {tasks.length > 0 && (
             <div style={{ display: "flex", gap: 6 }}>
-              {["all", ...Array.from(new Set(tasks.map(t => t.category))).sort()].map(cat => (
+              {taskCategories.map(cat => (
                 <button key={cat} onClick={() => setTaskCategoryFilter(cat)}
                   style={{ fontSize: 11, fontFamily: "var(--hive-mono)", padding: "2px 8px", borderRadius: 4, cursor: "pointer",
                     border: `1px solid ${taskCategoryFilter === cat ? "var(--hive-amber-border)" : "var(--hive-border-subtle, var(--hive-border))"}`,

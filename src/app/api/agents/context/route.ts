@@ -707,10 +707,10 @@ async function ceoContext(sql: any, company: any) {
       ORDER BY started_at DESC LIMIT 1
     `.catch(() => []),
     sql`
-      SELECT report_type, summary FROM research_reports
+      SELECT DISTINCT ON (report_type) report_type, summary FROM research_reports
       WHERE company_id = ${company.id}
         AND report_type IN ('market_research','competitive_analysis','seo_keywords','product_spec')
-      ORDER BY updated_at DESC
+      ORDER BY report_type, updated_at DESC
     `.catch(() => []),
     cachedPlaybook(null, () =>
       sql`

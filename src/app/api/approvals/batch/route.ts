@@ -36,45 +36,33 @@ export async function POST(req: Request) {
     }
   }
 
-  let processed = 0;
-  const skipped: string[] = [];
+  const pending = approvals.filter((a: Record<string, any>) => a.status === "pending");
+  const skipped: string[] = approvals
+    .filter((a: Record<string, any>) => a.status !== "pending")
+    .map((a: Record<string, any>) => `${a.id} (already ${a.status})`);
 
-  for (const approval of approvals) {
-    // Skip if not pending
-    if (approval.status !== "pending") {
-      skipped.push(`${approval.id} (already ${approval.status})`);
-      continue;
-    }
+  // Parallel approval status updates
+  await Promise.all(pending.map((approval: Record<string, any>) => sql`
+    UPDATE approvals SET
+      status = ${decision},
+      decided_at = now(),
+      decision_note = ${note || null}
+    WHERE id = ${approval.id}
+  `));
 
-    // Update the approval status
-    await sql`
-      UPDATE approvals SET
-        status = ${decision},
-        decided_at = now(),
-        decision_note = ${note || null}
-      WHERE id = ${approval.id}
-    `;
-
-    // For batch reject: apply rejection side effects (cleanup)
-    if (decision === "rejected") {
-      switch (approval.gate_type) {
-        case "new_company":
-          // Clean up rejected idea — mark as killed
-          if (approval.company_id) {
-            await sql`
-              UPDATE companies SET
-                status = 'killed',
-                killed_at = now(),
-                kill_reason = ${note || "Idea rejected by Carlos (batch)"},
-                updated_at = now()
-              WHERE id = ${approval.company_id} AND status = 'idea'
-            `;
-          }
-          break;
-      }
-    }
-
-    processed++;
+  // Parallel side effects for rejections
+  if (decision === "rejected") {
+    const newCompanyRejections = pending.filter(
+      (a: Record<string, any>) => a.gate_type === "new_company" && a.company_id
+    );
+    await Promise.all(newCompanyRejections.map((approval: Record<string, any>) => sql`
+      UPDATE companies SET
+        status = 'killed',
+        killed_at = now(),
+        kill_reason = ${note || "Idea rejected by Carlos (batch)"},
+        updated_at = now()
+      WHERE id = ${approval.company_id} AND status = 'idea'
+    `));
   }
 
   // Check for IDs that weren't found in the database
@@ -85,5 +73,5 @@ export async function POST(req: Request) {
     }
   }
 
-  return json({ processed, skipped });
+  return json({ processed: pending.length, skipped });
 }

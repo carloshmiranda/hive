@@ -8,7 +8,7 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const companyId = searchParams.get("company_id");
-  const days = parseInt(searchParams.get("days") || "30");
+  const days = Math.min(parseInt(searchParams.get("days") || "30"), 365);
 
   const sql = getDb();
 

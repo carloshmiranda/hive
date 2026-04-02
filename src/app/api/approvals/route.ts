@@ -31,14 +31,14 @@ export async function GET(req: Request) {
       SELECT a.*, c.name as company_name, c.slug as company_slug
       FROM approvals a LEFT JOIN companies c ON c.id = a.company_id
       WHERE a.status = ${status} AND (a.company_id = ${companyId} OR a.company_id IS NULL)
-      ORDER BY a.created_at ASC
+      ORDER BY a.created_at ASC LIMIT 100
     `;
   } else {
     approvals = await sql`
       SELECT a.*, c.name as company_name, c.slug as company_slug
       FROM approvals a LEFT JOIN companies c ON c.id = a.company_id
       WHERE a.status = ${status}
-      ORDER BY a.created_at ASC
+      ORDER BY a.created_at ASC LIMIT 100
     `;
   }
 
