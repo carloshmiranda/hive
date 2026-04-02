@@ -1,88 +1,51 @@
 import { getGitHubToken } from "./github-app";
+import { cacheGet, cacheSet, cacheDel } from "./redis-cache";
 
-interface FailedBacklogItem {
-  id: string;
-  failedAt: number;
-  cooldownHours: number;
-  attemptCount: number;
-}
-
-// In-memory cache for failed backlog items (2h cooldown by default)
-const failedItemsCache = new Map<string, FailedBacklogItem>();
 const COOLDOWN_HOURS = 2;
-const MAX_CACHE_SIZE = 1000;
+const COOLDOWN_TTL_SECONDS = COOLDOWN_HOURS * 60 * 60;
 
-/**
- * Track a backlog item as recently failed with cooldown period
- */
-export function trackFailedBacklogItem(itemId: string, attemptCount: number = 1): void {
-  const now = Date.now();
-  failedItemsCache.set(itemId, {
-    id: itemId,
-    failedAt: now,
-    cooldownHours: COOLDOWN_HOURS,
-    attemptCount,
-  });
-
-  // Cleanup if cache gets too large
-  if (failedItemsCache.size > MAX_CACHE_SIZE) {
-    cleanupFailedItemsCache();
-  }
+function cooldownKey(itemId: string): string {
+  return `fail:${itemId}`;
 }
 
 /**
- * Check if a backlog item is in cooldown period
+ * Track a backlog item as recently failed with cooldown period.
+ * Stored in Redis with TTL — survives Vercel redeploys.
+ * Falls back to no-op if Redis is unavailable.
  */
-export function isBacklogItemInCooldown(itemId: string): boolean {
-  const failedItem = failedItemsCache.get(itemId);
-  if (!failedItem) return false;
-
-  const now = Date.now();
-  const cooldownMs = failedItem.cooldownHours * 60 * 60 * 1000;
-  return (now - failedItem.failedAt) < cooldownMs;
+export async function trackFailedBacklogItem(itemId: string, attemptCount: number = 1): Promise<void> {
+  await cacheSet(cooldownKey(itemId), { attemptCount, failedAt: Date.now() }, COOLDOWN_TTL_SECONDS);
 }
 
 /**
- * Reset cooldown for a successfully dispatched backlog item
+ * Check if a backlog item is in cooldown period.
+ * Returns false (allow dispatch) if Redis is unavailable.
  */
-export function resetBacklogItemCooldown(itemId: string): void {
-  failedItemsCache.delete(itemId);
+export async function isBacklogItemInCooldown(itemId: string): Promise<boolean> {
+  const entry = await cacheGet<{ attemptCount: number; failedAt: number }>(cooldownKey(itemId));
+  return entry !== null;
 }
 
 /**
- * Get failed items that are still in cooldown
+ * Reset cooldown for a successfully dispatched backlog item.
  */
-export function getFailedItemsInCooldown(): string[] {
-  const now = Date.now();
-  const inCooldown: string[] = [];
-
-  for (const [itemId, failedItem] of failedItemsCache.entries()) {
-    const cooldownMs = failedItem.cooldownHours * 60 * 60 * 1000;
-    if ((now - failedItem.failedAt) < cooldownMs) {
-      inCooldown.push(itemId);
-    }
-  }
-
-  return inCooldown;
+export async function resetBacklogItemCooldown(itemId: string): Promise<void> {
+  await cacheDel(cooldownKey(itemId));
 }
 
 /**
- * Periodically clean up expired entries from failed items cache
+ * @deprecated No-op — TTL-based Redis expiry handles cleanup automatically.
  */
 export function cleanupFailedItemsCache(): void {
-  const now = Date.now();
-  const expiredIds: string[] = [];
+  // Redis TTL handles expiry — nothing to do
+}
 
-  for (const [itemId, failedItem] of failedItemsCache.entries()) {
-    const cooldownMs = failedItem.cooldownHours * 60 * 60 * 1000;
-    if ((now - failedItem.failedAt) >= cooldownMs) {
-      expiredIds.push(itemId);
-    }
-  }
-
-  for (const id of expiredIds) {
-    failedItemsCache.delete(id);
-  }
+/**
+ * @deprecated Returns empty array — Redis doesn't support scanning all keys efficiently on free tier.
+ * Use the dispatch route's per-item cooldown check instead.
+ */
+export async function getFailedItemsInCooldown(): Promise<string[]> {
+  return [];
 }
 
 /**

@@ -1,7 +1,7 @@
 import { callLLM } from "@/lib/llm";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { getSettingValue } from "@/lib/settings";
-import { isBacklogItemInCooldown, cleanupFailedItemsCache } from "@/lib/dispatch";
+import { isBacklogItemInCooldown } from "@/lib/dispatch";
 
 export interface BacklogSpec {
   acceptance_criteria: string[];
@@ -224,15 +224,17 @@ export async function flagProblemStatementsAsNeedingDecomposition(
 }
 
 /**
- * Filter backlog items to exclude those in cooldown period
- * Also performs cleanup of expired cooldown entries
+ * Filter backlog items to exclude those in cooldown period.
+ * Redis TTL handles expiry — no manual cleanup needed.
  */
-export function filterBacklogItemsByCooldown(items: BacklogItem[]): BacklogItem[] {
-  // Clean up expired entries first
-  cleanupFailedItemsCache();
-
-  // Filter out items that are in cooldown
-  return items.filter(item => !isBacklogItemInCooldown(item.id));
+export async function filterBacklogItemsByCooldown(items: BacklogItem[]): Promise<BacklogItem[]> {
+  const results = await Promise.all(
+    items.map(async (item) => ({
+      item,
+      inCooldown: await isBacklogItemInCooldown(item.id),
+    }))
+  );
+  return results.filter((r) => !r.inCooldown).map((r) => r.item);
 }
 
 /**

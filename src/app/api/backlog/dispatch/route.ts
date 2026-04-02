@@ -753,7 +753,7 @@ export async function POST(req: Request) {
       // max_turns = immediate decompose (1 attempt) — retrying same item with same turn budget fails identically
       const maxAttempts = isMaxTurns ? 1 : 3;
       if (item && attempt < maxAttempts && !continued) {
-        trackFailedBacklogItem(item.id, attempt);
+        await trackFailedBacklogItem(item.id, attempt);
       }
 
       // On max_turns failure: LLM-assisted decompose if complexity is M or L
@@ -2293,7 +2293,7 @@ export async function POST(req: Request) {
     }
 
     // Reset cooldown for successfully dispatched item
-    resetBacklogItemCooldown(topItem.id);
+    await resetBacklogItemCooldown(topItem.id);
     syncIssueForBacklog(sql, topItem.id, "dispatched");
 
     // Log successful dispatch
