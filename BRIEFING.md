@@ -590,6 +590,27 @@ Brain agents (CEO, Idea Scout, Research, Venture Brain, Healer, Evolver) on Clau
 ### 2026-03-18 [chat] Full Hive architecture designed and built
 76 files, 21 pages, 9 ADRs. Dashboard, orchestrator, 7 agent prompts, self-healing, provisioning, imports, outreach pipeline. Deployed to Vercel.
 
+### 2026-04-01 [code] Deploy pipeline health check (PR #308, Issue #215)
+Added Check 42 — a deploy pipeline health check that verifies the full production request lifecycle after every Vercel deployment. Fires via `deployment_status` webhook → reads 5 key API endpoints → reports pass/fail to agent_actions. Also added MISTAKES.md entry for the Vercel preview deployments lesson (non-main branch preview URLs are ephemeral and break the engineer workflow).
+
+### 2026-04-01 [code] Sentry uptime + cron monitoring (PR #309, Issue #216)
+Configured Sentry uptime monitor for `/api/health` (60-second check interval) and cron monitor for `sentinel-dispatch` (4-hour expected interval). Both report to the existing Sentry DSN. Completes observability gap: uptime + scheduled job health now tracked alongside error rates.
+
+### 2026-04-01 [code] MCP circuit breaker reset + loop kick tools (PR #310, Issue #217)
+Added two MCP tools: `hive_circuit_reset` (reset a circuit-breaker-blocked company to allow dispatch) and `hive_loop_kick` (manually trigger sentinel-dispatch for immediate re-evaluation). Both callable from Claude Code sessions without needing curl commands. Also fixed a settings encryption bypass bug where MCP settings reads could skip decryption.
+
+### 2026-04-01 [code] workflow_crash fast-retry (PR #311, Issue #269)
+`workflow_crash` errors (GitHub Actions infra failures: OOM kill, runner never started, OIDC failure) now use separate `[infra-crash N]` tracking with 30-minute cooldown instead of the 2-6 hour code-failure cooldown. Capped at 5 infra retries before falling through to normal failure handling.
+
+### 2026-04-01 [code] Zombie action cleanup + cancelled() callback (PR #312, Issue #261)
+Two fixes: (1) Sentinel stale-action sweep threshold reduced from 1 hour to 35 minutes (above the 30-minute max job timeout to avoid false positives). (2) `hive-engineer.yml` log-failure step condition changed from `if: failure()` to `if: failure() || cancelled()` — GitHub Actions cancellations (OOM, manual cancel, runner termination) now send completion callbacks to Hive, preventing zombie `running` rows.
+
+### 2026-04-02 [code] MISTAKES.md: exit 0 step isolation bug (PR #313, Issue #234)
+Added MISTAKES.md entry documenting the PR #202 `exit 0` bug: calling `exit 0` in a GitHub Actions step doesn't suppress downstream steps — must use `$GITHUB_OUTPUT` + `if` conditions. Prevention rule documented.
+
+### 2026-04-02 [code] actionlint CI check (PR #314, Issue #232)
+Added `.github/workflows/actionlint.yml` — runs `rhysd/actionlint` on PRs touching `.github/workflows/**` or `.github/actions/**`. First run immediately caught a real bug: `hive-decompose.yml` was passing `max_turns` and `timeout_minutes` as invalid top-level `with:` inputs to `claude-code-action@v1` (should be `claude_args` and step-level `timeout-minutes`). Both bugs fixed in the same PR.
+
 ## What's Next (in priority order)
 
 1. **Monitor Engineer dispatch with specs** — 11 P1 items now have actionable specs. Next dispatch cycle should pick them up. If Engineer succeeds, the death spiral is broken. If still failing, investigate GitHub Actions startup (0-turn failures).
