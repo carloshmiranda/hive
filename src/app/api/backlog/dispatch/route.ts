@@ -715,6 +715,7 @@ export async function POST(req: Request) {
       const prevAttempts = (item?.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g)?.length || 0;
       const attempt = prevAttempts + 1;
       const errorMsg = body.error || "";
+      const isRateLimitError = /rate limit|session limit|usage cap|too many|quota|limit reached|max_tokens|capacity/i.test(errorMsg);
 
       // Infra crashes (GitHub Actions runner never started — no execution output file, OIDC failure)
       // get a short 30-min retry, not the standard 2–6h cooldown for code failures.
@@ -980,10 +981,15 @@ export async function POST(req: Request) {
           // Back to ready with attempt context.
           // Keep dispatched_at = NOW() so the 2h SQL cooldown filter works
           // even across Vercel restarts (persistent, not in-memory).
+          // Rate-limit failures get a [rate_limit_fail] tag so dispatch skips this item
+          // specifically (per-item skip) without blocking the entire queue.
+          const failNote = isRateLimitError
+            ? ` [attempt ${attempt}] [rate_limit_fail] Claude API rate limited — skipping for 30 min, other items may proceed.`
+            : ` [attempt ${attempt}] Failed — will retry with more context.`;
           await sql`
             UPDATE hive_backlog
             SET status = 'ready', dispatched_at = NOW(),
-                notes = COALESCE(notes, '') || ${` [attempt ${attempt}] Failed — will retry with more context.`}
+                notes = COALESCE(notes, '') || ${failNote}
             WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
           `.catch((e: any) => { console.warn(`[backlog] reset item ${completed_id} to ready after attempt ${attempt} failed: ${e?.message || e}`); });
         }
@@ -1046,9 +1052,10 @@ export async function POST(req: Request) {
     return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
-  // Rate-limit check: if the most recent rate-limit failure was <30 min ago,
-  // pause brain-agent dispatch but still dispatch free workers.
-  // Time-based (not count-based) so we resume as soon as the limit resets.
+  // Rate-limit check: if a rate-limit failure was detected recently, dispatch free workers
+  // but DO NOT block the entire queue. Per-item [rate_limit_fail] tags in notes filter
+  // the specific failed items from selection below — other items can proceed immediately.
+  // The Hive-specific consecutive-failures check below is the safety valve for full throttling.
   const [rateLimitRow] = await sql`
     SELECT MAX(finished_at) as last_rate_limit
     FROM agent_actions
@@ -1063,10 +1070,12 @@ export async function POST(req: Request) {
   const lastRateLimit = rateLimitRow?.last_rate_limit ? new Date(rateLimitRow.last_rate_limit) : null;
   const rateLimitCooldownActive = lastRateLimit && (Date.now() - lastRateLimit.getTime()) < 30 * 60 * 1000;
   if (rateLimitCooldownActive) {
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
-    const minutesRemaining = Math.round(30 - (Date.now() - lastRateLimit!.getTime()) / 60000);
-    await scheduleChainRetry("rate_limit_cooldown", minutesRemaining + 1);
-    return json({ dispatched: false, reason: "rate_limit_cooldown", cooldown_remaining_minutes: minutesRemaining, free_workers_dispatched: freeWorkers, chain_retry: true });
+    // Dispatch free workers (they don't use Claude API) and continue to item selection.
+    // Items tagged [rate_limit_fail] are excluded by the SQL query below.
+    await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
+    const minutesAgo = Math.round((Date.now() - lastRateLimit!.getTime()) / 60000);
+    console.log(`[backlog] Rate limit detected ${minutesAgo}min ago — filtering [rate_limit_fail] items, continuing dispatch with remaining candidates`);
+    // Fall through — per-item filtering in the SELECT query handles skipping
   }
 
   // Hive-specific rate limit check: if recent Hive engineer failures are all rate limits, skip dispatch
@@ -1456,6 +1465,11 @@ export async function POST(req: Request) {
             ELSE INTERVAL '2 hours'
           END
         )
+        AND NOT (
+          notes ~ '\\[rate_limit_fail\\]'
+          AND dispatched_at IS NOT NULL
+          AND dispatched_at > NOW() - INTERVAL '30 minutes'
+        )
         AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)', 'g')) < 3
       `;
 
@@ -1491,6 +1505,11 @@ export async function POST(req: Request) {
             WHEN notes ~ '\\[attempt 2\\] (Failed|Auto-blocked|\\[)' THEN INTERVAL '6 hours'
             ELSE INTERVAL '2 hours'
           END
+        )
+        AND NOT (
+          notes ~ '\\[rate_limit_fail\\]'
+          AND dispatched_at IS NOT NULL
+          AND dispatched_at > NOW() - INTERVAL '30 minutes'
         )
         AND (SELECT count(*) FROM regexp_matches(notes, '\\[attempt \\d+\\] (Failed|Auto-blocked|\\[)', 'g')) < 3
         ORDER BY
