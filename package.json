@@ -21,6 +21,8 @@
     "@stripe/mcp": "^0.3.3",
     "@upstash/qstash": "^2.10.1",
     "@upstash/redis": "^1.37.0",
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "ai": "^6.0.141",
     "jose": "^6.2.2",
     "next": "^15.0.0",
