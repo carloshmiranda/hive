@@ -307,6 +307,7 @@ async function handleEscalatedPR(
   }, {
     retries: 2,
     deduplicationId: `ci-fix-dispatch-${pr.number}-${Date.now().toString(36)}`,
+    failureCallback: true,
   });
 
   await sql`
@@ -570,6 +571,7 @@ export async function POST(req: Request) {
         }, {
           deduplicationId: `pr-open-chain-${completed_id}`,
           delay: 10, // 10 second delay to let Engineer finish cleanup
+          failureCallback: true,
         }).catch((e: any) => { console.warn(`[backlog] chain dispatch after pr_open failed: ${e?.message || e}`); });
       } else {
         // No PR number — Engineer completed via direct commit or the PR info was lost.
@@ -589,6 +591,7 @@ export async function POST(req: Request) {
         }, {
           deduplicationId: `done-chain-${completed_id}`,
           delay: 10,
+          failureCallback: true,
         }).catch((e: any) => { console.warn(`[backlog] chain dispatch after done failed: ${e?.message || e}`); });
       }
 
