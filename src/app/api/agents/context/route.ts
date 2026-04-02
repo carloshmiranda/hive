@@ -12,6 +12,7 @@ import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-met
 import { getCachedCompanyMetrics, getCachedGrowthMetrics } from "@/lib/cached-metrics";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { extractCompletionReport, type CompletionReport, type AgentSignal } from "@/lib/completion-report";
+import { checkHealerCompanyCircuitBreaker } from "@/lib/sentinel-helpers";
 
 // Domain mappings for agent-specific playbook filtering
 function getAgentDomains(agent: string): string[] | null {
@@ -37,7 +38,7 @@ function getAgentDomains(agent: string): string[] | null {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getSystemState(sql: any, currentAgent: string): Promise<Record<string, unknown>> {
-  const [runningAgents, recentCompletions, openPRs, blockedItems, pendingApprovals] = await Promise.all([
+  const [runningAgents, recentCompletions, openPRs, blockedItems, pendingApprovals, rateLimitEvents] = await Promise.all([
     // What agents are running right now?
     sql`
       SELECT agent, company_id, action_type, description,
@@ -86,6 +87,24 @@ async function getSystemState(sql: any, currentAgent: string): Promise<Record<st
       ORDER BY created_at ASC
       LIMIT 5
     `.catch(() => []),
+    // Recent rate limit / quota events (last 4 hours) — signals API health to agents
+    sql`
+      SELECT agent, company_id,
+        EXTRACT(EPOCH FROM (NOW() - finished_at))::int / 60 as minutes_ago,
+        SUBSTRING(error FROM 1 FOR 200) as error_snippet
+      FROM agent_actions
+      WHERE status = 'failed'
+        AND finished_at > NOW() - INTERVAL '4 hours'
+        AND (
+          error ILIKE '%rate_limit%'
+          OR error ILIKE '%rate limit%'
+          OR error ILIKE '%quota%'
+          OR error ILIKE '%429%'
+          OR error ILIKE '%too many requests%'
+        )
+      ORDER BY finished_at DESC
+      LIMIT 10
+    `.catch(() => []),
   ]);
 
   return {
@@ -125,6 +144,16 @@ async function getSystemState(sql: any, currentAgent: string): Promise<Record<st
         title: a.title,
         hours_pending: a.hours_pending,
       })),
+      rate_limit_status: {
+        events_last_4h: rateLimitEvents.length,
+        healthy: rateLimitEvents.length === 0,
+        recent_events: rateLimitEvents.map((e: any) => ({
+          agent: e.agent,
+          company_id: e.company_id,
+          minutes_ago: e.minutes_ago,
+          error: e.error_snippet,
+        })),
+      },
       current_agent: currentAgent,
       timestamp: new Date().toISOString(),
     },
@@ -291,11 +320,15 @@ export async function GET(req: NextRequest) {
 
   const cycleId = currentCycle?.id || null;
 
-  // Fetch recent completion reports relevant to this company + agent signals
-  const recentCompletions = await getRelevantCompletions(sql, agent, company.id).catch(() => []);
+  // Fetch recent completion reports and circuit breaker state in parallel — both must be fresh
+  const [recentCompletions, circuitBreaker] = await Promise.all([
+    getRelevantCompletions(sql, agent, company.id).catch(() => []),
+    checkHealerCompanyCircuitBreaker(sql, company.id).catch(() => null),
+  ]);
   const handoffs = {
     ...(recentCompletions.length > 0 ? { recent_handoffs: recentCompletions } : {}),
     ...(agentSignals.length > 0 ? { signals: agentSignals } : {}),
+    ...(circuitBreaker ? { circuit_breaker: circuitBreaker } : {}),
   };
 
   // Try cache first
