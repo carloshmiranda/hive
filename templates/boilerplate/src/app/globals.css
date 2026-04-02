@@ -93,6 +93,73 @@
    10. White space > decoration. When in doubt, remove elements, don't add them.
 */
 
+/* ─── Visual Hierarchy (for AI agents reading this file) ───
+   Use exactly these heading levels — never skip or repeat a level.
+
+   h1  → Page title only. One per page. font-bold text-4xl md:text-5xl tracking-tight.
+   h2  → Section heading. text-3xl font-bold. One per section.
+   h3  → Sub-section or card heading. text-xl font-semibold. Max 6 per page.
+   p   → Body text. text-base text-gray-500 leading-relaxed.
+   small/span → Labels, captions, badges. text-xs or text-sm text-gray-400.
+
+   Rules:
+   - Every h2 must have a supporting <p> beneath it (no orphan headings).
+   - Never use bold inside body paragraphs — use a new h3 instead.
+   - Never use text-xl or larger for body copy. text-lg is the max for intro paragraphs.
+   - Page sections must follow this scan order: Hero → Preview → Features → How it works → FAQ → CTA.
+*/
+
+/* ─── Layout Patterns (for AI agents reading this file) ───
+   All pages use a single-column layout with consistent section structure.
+
+   SECTION WRAPPER (all non-hero sections):
+     <section className="max-w-5xl mx-auto px-6 py-20">
+       <div className="text-center mb-12">           ← section header
+         <h2>...</h2>
+         <p className="text-gray-500 max-w-lg mx-auto">...</p>
+       </div>
+       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">  ← content grid
+         ...
+       </div>
+     </section>
+
+   HERO WRAPPER (max-w-3xl for text density):
+     <header className="max-w-3xl mx-auto px-6 pt-16 pb-20 text-center">
+       <div>badge</div>
+       <h1>...</h1>
+       <p>...</p>
+       <CTAButtons />
+     </header>
+
+   CARD PATTERN (features, testimonials, steps):
+     <div className="p-6 rounded-xl border border-gray-100 bg-white shadow-sm">
+       <div className="mb-4">icon (24px stroke)</div>
+       <h3 className="text-lg font-semibold text-gray-900 mb-2">Title</h3>
+       <p className="text-sm text-gray-500 leading-relaxed">Description</p>
+     </div>
+
+   NAV PATTERN (top, no sticky):
+     <nav className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+       Logo | Links (text-sm text-gray-600)
+
+   FOOTER PATTERN:
+     <footer className="border-t border-gray-100 mt-20">
+       <div className="max-w-5xl mx-auto px-6 py-10 flex items-center justify-between">
+         Logo + copyright | Legal links (text-sm text-gray-400)
+
+   BUTTON PATTERN:
+     Primary: px-6 py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition
+     Secondary: px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition
+     Ghost: text-sm text-gray-600 hover:text-gray-900 transition (nav links, footer links)
+
+   SPACING RULES:
+     - Between sections: py-20 (80px top + bottom)
+     - Between section header and grid: mb-12
+     - Between cards in a grid: gap-8
+     - Inside a card: p-6, mb-2 between elements
+     - Between stacked text blocks: mb-6
+*/
+
 html {
   scroll-behavior: smooth;
 }
