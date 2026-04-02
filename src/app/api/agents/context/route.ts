@@ -812,29 +812,28 @@ async function maybeCreateRevenueReadinessTask(sql: any, company: any, revenueRe
   // Only trigger if score >= 60 and no revenue yet
   if (revenueReadinessScore < 60 || currentMrr > 0) return false;
 
-  // Check for an existing active task for this company with theme = 'first_revenue'
+  // Check for an existing active task for this company in company_tasks
   const [existing] = await sql`
-    SELECT id FROM hive_backlog
+    SELECT id FROM company_tasks
     WHERE company_id = ${company.id}
-      AND theme = 'first_revenue'
-      AND status NOT IN ('done', 'rejected')
+      AND status NOT IN ('done', 'dismissed')
+      AND title ILIKE 'Add Stripe checkout%'
     LIMIT 1
   `.catch(() => [null]);
 
   if (existing) return false; // Already exists
 
-  // Create the task
+  // Create the task in company_tasks (company-specific work belongs there, not hive_backlog)
   await sql`
-    INSERT INTO hive_backlog (title, description, priority, category, status, source, company_id, theme)
+    INSERT INTO company_tasks (company_id, category, title, description, priority, status, source)
     VALUES (
+      ${company.id},
+      'engineering',
       ${`Add Stripe checkout to ${company.name}`},
       ${`Revenue readiness score is ${revenueReadinessScore}/100 — the company is ready to monetize. Add a Stripe Checkout flow: create product + price via Stripe API, add a /checkout endpoint, add a pricing page with a CTA button, and wire up the checkout.session.completed webhook to unlock access. Use payment_link for the fastest path if a full checkout is overkill.`},
-      'P1',
-      'feature',
-      'ready',
-      'sentinel',
-      ${company.id},
-      'first_revenue'
+      1,
+      'proposed',
+      'sentinel'
     )
   `;
 
