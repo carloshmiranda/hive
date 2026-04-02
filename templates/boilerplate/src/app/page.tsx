@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { WaitlistForm } from "@/components/waitlist-form";
 
@@ -76,7 +77,10 @@ export default function HomePage() {
     <div className="min-h-screen bg-white">
       {/* Navigation */}
       <nav className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-        <span className="text-lg font-bold text-gray-900">{COMPANY_NAME}</span>
+        <div className="flex items-center gap-2">
+          <Image src="/logo.svg" alt={`${COMPANY_NAME} logo`} width={32} height={32} className="text-gray-900" />
+          <span className="text-lg font-bold text-gray-900">{COMPANY_NAME}</span>
+        </div>
         <div className="flex items-center gap-6 text-sm text-gray-600">
           <a href="#preview" className="hover:text-gray-900 transition">Preview</a>
           <a href="#features" className="hover:text-gray-900 transition">Features</a>
@@ -407,7 +411,10 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="border-t border-gray-200 py-12">
         <div className="max-w-4xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
-          <span className="font-bold text-gray-900">{COMPANY_NAME}</span>
+          <div className="flex items-center gap-2">
+            <Image src="/logo.svg" alt="" aria-hidden="true" width={24} height={24} className="text-gray-900" />
+            <span className="font-bold text-gray-900">{COMPANY_NAME}</span>
+          </div>
           <div className="flex gap-6 text-sm text-gray-500">
             <a href="#preview" className="hover:text-gray-900 transition">Preview</a>
             <a href="#features" className="hover:text-gray-900 transition">Features</a>
