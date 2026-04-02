@@ -23,6 +23,11 @@ permissions:
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+# Prevent duplicate Decompose runs per backlog item. cancel-in-progress: false queues rather than kills an in-progress run.
+concurrency:
+  group: hive-decompose-${{ github.event.client_payload.backlog_id || github.event.inputs.backlog_id }}
+  cancel-in-progress: false
+
 jobs:
   decompose:
     runs-on: ubuntu-latest

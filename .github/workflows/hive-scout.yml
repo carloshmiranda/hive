@@ -28,6 +28,11 @@ permissions:
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+# Prevent duplicate Scout runs. cancel-in-progress: false queues rather than kills an in-progress run.
+concurrency:
+  group: hive-scout
+  cancel-in-progress: false
+
 jobs:
   scout:
     runs-on: ubuntu-latest

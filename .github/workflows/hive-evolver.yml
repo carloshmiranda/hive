@@ -26,6 +26,11 @@ permissions:
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+# Prevent duplicate Evolver runs. cancel-in-progress: false queues rather than kills an in-progress run.
+concurrency:
+  group: hive-evolver
+  cancel-in-progress: false
+
 jobs:
   evolver:
     runs-on: ubuntu-latest

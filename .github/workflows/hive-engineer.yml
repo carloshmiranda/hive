@@ -31,6 +31,11 @@ env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
   SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
 
+# Prevent duplicate Engineer runs per company. cancel-in-progress: false queues rather than kills an in-progress run.
+concurrency:
+  group: hive-engineer-${{ github.event.client_payload.company || github.event.inputs.company || 'hive' }}
+  cancel-in-progress: false
+
 jobs:
   # ─── Resolve context for all jobs (non-secret outputs only) ───
   # NOTE: Tokens are NOT passed between jobs — GitHub Actions strips masked secrets from outputs.

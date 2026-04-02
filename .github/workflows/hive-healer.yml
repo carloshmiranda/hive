@@ -21,6 +21,11 @@ permissions:
 env:
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+# Prevent duplicate Healer runs per scope. cancel-in-progress: false queues rather than kills an in-progress run.
+concurrency:
+  group: hive-healer-${{ github.event.client_payload.scope || github.event.inputs.scope || 'systemic' }}
+  cancel-in-progress: false
+
 jobs:
   healer:
     runs-on: ubuntu-latest
