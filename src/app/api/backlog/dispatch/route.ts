@@ -300,7 +300,37 @@ async function handleEscalatedPR(
     } catch { /* fall through to Engineer dispatch */ }
   }
 
-  // Step 2: Branch update failed — dispatch Engineer to fix the PR
+  // Step 2: Fetch failing check runs to classify the CI failure type.
+  // schema-map:check failures are auto-fixed by CI (auto-sync step) — skip Engineer.
+  // lint-sql failures get structured fix instructions so Engineer knows exactly what to do.
+  let failedCheckNames: string[] = [];
+  try {
+    const checksRes = await fetch(
+      `https://api.github.com/repos/carloshmiranda/hive/commits/${pr.head.sha}/check-runs`,
+      { headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github.v3+json" }, signal: AbortSignal.timeout(8000) }
+    );
+    if (checksRes.ok) {
+      const checksData = await checksRes.json();
+      failedCheckNames = (checksData.check_runs || [])
+        .filter((c: any) => c.conclusion === "failure")
+        .map((c: any) => (c.output?.title || c.name) as string);
+    }
+  } catch { /* ignore — fall through with empty names */ }
+
+  // Build structured task with specific fix instructions based on failure type
+  const ciErrorSummary = hardGateIssues.join("; ");
+  let taskDescription = `Fix CI failures on PR #${pr.number}: ${pr.title}`;
+  if (failedCheckNames.length > 0) {
+    taskDescription += `.\nFailing checks: ${failedCheckNames.join(", ")}.`;
+  }
+  if (failedCheckNames.some(n => n.toLowerCase().includes("lint") || n.toLowerCase().includes("sql"))) {
+    taskDescription += `\n\nSQL LINT failures detected. Run 'npx tsx scripts/lint-sql.ts' to see specific errors.\nCommon fixes: (1) Update src/lib/schema-map.ts to add missing table/column, (2) Fix invalid enum values referenced in sql\`\` queries, (3) Correct table/column name typos.`;
+  }
+  if (failedCheckNames.some(n => n.toLowerCase().includes("build"))) {
+    taskDescription += `\n\nBUILD failure detected. Run 'npx next build' locally (with fake env vars) to reproduce.`;
+  }
+
+  // Step 3: Dispatch Engineer to fix the PR
   const [runningEng] = await sql`
     SELECT id FROM agent_actions
     WHERE agent = 'engineer' AND status = 'running'
@@ -310,7 +340,6 @@ async function handleEscalatedPR(
   `.catch(() => []);
   if (runningEng) return false; // Engineer busy — will retry next dispatch cycle
 
-  const ciErrorSummary = hardGateIssues.join("; ");
   const [backlogItem] = await sql`
     SELECT id, title FROM hive_backlog
     WHERE pr_number = ${pr.number} AND status = 'pr_open'
@@ -325,7 +354,7 @@ async function handleEscalatedPR(
     branch: pr.head.ref,
     ci_errors: ciErrorSummary,
     backlog_id: backlogItem?.id || "",
-    task: `Fix CI failures on PR #${pr.number}: ${pr.title}`,
+    task: taskDescription,
   }, {
     retries: 2,
     deduplicationId: `ci-fix-dispatch-${pr.number}-${Date.now().toString(36)}`,
