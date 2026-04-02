@@ -716,7 +716,25 @@ async function executeSentinelDispatch(request: Request) {
           EXISTS(SELECT 1 FROM metrics m
             WHERE m.company_id = c.id AND m.mrr > 0
             AND m.date > NOW() - INTERVAL '30 days') AS has_revenue,
-          COALESCE((c.capabilities->'database'->>'exists')::boolean, false) AS database_exists
+          COALESCE((c.capabilities->'database'->>'exists')::boolean, false) AS database_exists,
+          -- Validation proxy signals: engagement trend from metrics table
+          COALESCE((
+            SELECT SUM(m.page_views) FROM metrics m
+            WHERE m.company_id = c.id AND m.date > NOW() - INTERVAL '7 days'
+          ), 0) AS recent_pageviews,
+          COALESCE((
+            SELECT SUM(m.page_views) FROM metrics m
+            WHERE m.company_id = c.id
+            AND m.date BETWEEN NOW() - INTERVAL '14 days' AND NOW() - INTERVAL '7 days'
+          ), 0) AS prior_pageviews,
+          COALESCE((
+            SELECT SUM(m.signups + m.waitlist_signups) FROM metrics m
+            WHERE m.company_id = c.id AND m.date > NOW() - INTERVAL '14 days'
+          ), 0) AS recent_signups,
+          COALESCE((
+            SELECT MAX(m.mrr) FROM metrics m
+            WHERE m.company_id = c.id AND m.date > NOW() - INTERVAL '30 days'
+          ), 0) AS latest_mrr
         FROM companies c
         WHERE c.status IN ('mvp', 'active')
         AND EXISTS (SELECT 1 FROM infra i WHERE i.company_id = c.id)
@@ -736,6 +754,15 @@ async function executeSentinelDispatch(request: Request) {
           + (CASE WHEN has_directive THEN 15 ELSE 0 END)
           + (CASE WHEN status = 'mvp' AND total_cycles < 3 THEN 8 ELSE 0 END)
           - (LEAST(total_cycles, 20) * 0.5)
+          -- Validation proxy: boost companies showing traction, penalise stalled ones
+          + (CASE WHEN latest_mrr > 0 THEN 5 ELSE 0 END)
+          + (CASE WHEN recent_pageviews > prior_pageviews AND prior_pageviews > 0 THEN 3 ELSE 0 END)
+          + (CASE WHEN recent_signups > 0 THEN 2 ELSE 0 END)
+          - (CASE WHEN total_cycles > 3
+                   AND recent_pageviews = 0
+                   AND latest_mrr = 0
+                   AND recent_signups = 0
+               THEN 5 ELSE 0 END)
         ) AS priority_score
       FROM company_signals
       WHERE database_exists = true
