@@ -7,6 +7,36 @@ export interface SentryTagOptions {
   route?: string;
 }
 
+export type BreadcrumbCategory =
+  | "dispatch"
+  | "llm"
+  | "db"
+  | "qstash"
+  | "github"
+  | "rate_limit";
+
+export interface DispatchBreadcrumbOptions {
+  message: string;
+  category: BreadcrumbCategory;
+  level?: Sentry.SeverityLevel;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Add a structured breadcrumb to the current Sentry scope for dispatch chain tracing.
+ * Breadcrumbs appear in the event timeline for any error captured after this call.
+ */
+export function addDispatchBreadcrumb(options: DispatchBreadcrumbOptions) {
+  Sentry.addBreadcrumb({
+    type: "default",
+    category: `hive.${options.category}`,
+    message: options.message,
+    level: options.level ?? "info",
+    data: options.data,
+    timestamp: Date.now() / 1000,
+  });
+}
+
 /**
  * Set custom Sentry tags for API routes to enable better error triage and filtering
  */

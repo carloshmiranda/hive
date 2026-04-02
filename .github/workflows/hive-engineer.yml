@@ -873,6 +873,49 @@ jobs:
             echo "✅ Turn budget check passed: estimated_turns=${ESTIMATED_TURNS:-"not specified"}, proceeding with Claude execution"
           fi
 
+      - name: Extract spec fields
+        id: spec
+        if: steps.turn_guard.outputs.skip != 'true'
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
+        run: |
+          # Extract spec fields from PAYLOAD for inline injection into prompt
+          SPEC_JSON=$(echo "$PAYLOAD_JSON" | jq -r '.spec | if type == "string" then fromjson else . end // empty' 2>/dev/null || echo "")
+
+          if [ -z "$SPEC_JSON" ] || [ "$SPEC_JSON" = "null" ]; then
+            echo "has_spec=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_spec=true" >> $GITHUB_OUTPUT
+
+            # Extract each field — handle both string and array types
+            APPROACH=$(echo "$SPEC_JSON" | jq -r '.approach // empty' 2>/dev/null || echo "")
+            CRITERIA=$(echo "$SPEC_JSON" | jq -r '.acceptance_criteria | if type == "array" then map("- " + .) | join("\n") elif . == null then "" else . end' 2>/dev/null || echo "")
+            FILES=$(echo "$SPEC_JSON" | jq -r '.affected_files | if type == "array" then join(", ") elif . == null then "" else . end' 2>/dev/null || echo "")
+            RISKS=$(echo "$SPEC_JSON" | jq -r '.risks | if type == "array" then join("; ") elif . == null then "" else . end' 2>/dev/null || echo "")
+            COMPLEXITY=$(echo "$SPEC_JSON" | jq -r '.complexity // empty' 2>/dev/null || echo "")
+            EST_TURNS=$(echo "$SPEC_JSON" | jq -r '.estimated_turns // empty' 2>/dev/null || echo "")
+
+            # Write multi-line outputs using heredoc delimiters
+            echo "approach<<GHEOF" >> $GITHUB_OUTPUT
+            echo "$APPROACH" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+
+            echo "acceptance_criteria<<GHEOF" >> $GITHUB_OUTPUT
+            echo "$CRITERIA" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+
+            echo "affected_files<<GHEOF" >> $GITHUB_OUTPUT
+            echo "$FILES" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+
+            echo "risks<<GHEOF" >> $GITHUB_OUTPUT
+            echo "$RISKS" >> $GITHUB_OUTPUT
+            echo "GHEOF" >> $GITHUB_OUTPUT
+
+            echo "complexity=${COMPLEXITY}" >> $GITHUB_OUTPUT
+            echo "estimated_turns=${EST_TURNS}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run build agent (Hive-internal only)
         if: steps.turn_guard.outputs.skip != 'true'
         id: agent
@@ -900,25 +943,26 @@ jobs:
             The PAYLOAD contains task, description, and optionally proposal_id and branch.
             This is an automated improvement proposal from Sentinel — implement it.
 
+            ${{ steps.spec.outputs.has_spec == 'true' && '## IMPLEMENTATION SPEC (pre-analyzed — follow exactly)' || '' }}
+            ${{ steps.spec.outputs.has_spec == 'true' && format('**Approach:**\n{0}', steps.spec.outputs.approach) || '' }}
+            ${{ steps.spec.outputs.has_spec == 'true' && format('**Acceptance criteria** (verify ALL before committing):\n{0}', steps.spec.outputs.acceptance_criteria) || '' }}
+            ${{ steps.spec.outputs.has_spec == 'true' && format('**Affected files** (read these first — do NOT explore the codebase):\n{0}', steps.spec.outputs.affected_files) || '' }}
+            ${{ steps.spec.outputs.has_spec == 'true' && format('**Risks:** {0}', steps.spec.outputs.risks) || '' }}
+            ${{ steps.spec.outputs.has_spec == 'true' && format('**Complexity:** {0} | **Estimated turns:** {1}', steps.spec.outputs.complexity, steps.spec.outputs.estimated_turns) || '' }}
+            ${{ steps.spec.outputs.has_spec == 'true' && 'A spec is present — go straight to implementation. Do NOT explore or re-plan.' || '' }}
+
             1. Read CLAUDE.md, BRIEFING.md, MISTAKES.md for context
             2. Parse the task description from PAYLOAD to understand what to build
-            3. **Check PAYLOAD for a `spec` field.** If present, this is a pre-analyzed implementation plan:
-               - `spec.acceptance_criteria`: What "done" looks like — verify ALL criteria before committing
-               - `spec.affected_files`: Read THESE files first (pre-identified as relevant). Do NOT spend turns exploring the codebase.
-               - `spec.approach`: Follow these steps in order. They were designed for this codebase.
-               - `spec.risks`: Be aware of these — test accordingly
-               - `spec.complexity` and `spec.estimated_turns`: Budget your turns. S=quick, M=moderate, L=large.
-               If the spec exists, go straight to implementation. Do NOT explore or re-plan.
-            4. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
+            3. Create a feature branch: use the branch name from PAYLOAD if provided, otherwise hive/improvement/short-slug
                `git checkout -b <branch>`
-            5. Implement the change
-            6. Run `npx next build` — fix any errors until it passes
-            7. Commit with conventional commit message (feat/fix/refactor)
-            8. Push the branch and create a PR:
+            4. Implement the change
+            5. Run `npx next build` — fix any errors until it passes
+            6. Commit with conventional commit message (feat/fix/refactor)
+            7. Push the branch and create a PR:
                `GH_TOKEN="$GH_PAT" gh pr create --title "<title>" --body "<diagnosis + what was done>"`
-            9. Enable auto-merge so CI triggers the merge automatically:
+            8. Enable auto-merge so CI triggers the merge automatically:
                `GH_TOKEN="$GH_PAT" gh pr merge --auto --squash --delete-branch <PR_NUMBER>`
-            10. Log success to agent_actions via the Hive API
+            9. Log success to agent_actions via the Hive API
 
             IMPORTANT: ALL self-improvement changes go through a PR — no direct pushes to main.
             main is branch-protected and requires CI to pass. Auto-merge handles the merge the
