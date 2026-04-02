@@ -594,9 +594,9 @@ export async function POST(req: Request) {
           WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
         `.catch((e: any) => { console.warn(`[backlog] update item ${completed_id} to pr_open failed: ${e?.message || e}`); });
         syncIssueForBacklog(sql, completed_id, "pr_open");
-        // Chain dispatch: don't wait for PR to merge — continue with next backlog item.
-        // PRs are merged asynchronously by company-health Check 38. This prevents the
-        // loop from stalling when PRs are open but there's more work to do.
+        // Chain dispatch: fire pr_open_chain which runs reviewAndMergeOpenPRs first.
+        // If CI is still running the PR gate (>= 1 open PR) will block and retry in 3 min.
+        // This ensures each PR is green/merged before the next item is dispatched.
         await qstashPublish("/api/backlog/dispatch", {
           trigger: "pr_open_chain",
           completed_id,
@@ -1267,25 +1267,19 @@ export async function POST(req: Request) {
     AND dispatched_at < NOW() - INTERVAL '30 minutes'
   `.catch(() => {});
 
-  // PR queue gate: don't pile up PRs that increase merge conflict risk.
-  // If 3+ PRs are still open after review, force the system to clear its queue first.
+  // PR queue gate: block next dispatch until the current PR is green/merged.
+  // reviewAndMergeOpenPRs() already ran above and auto-merged any CI-done PRs.
+  // If any PR is still open, CI is still running — retry in 3 min to check again.
   const [prQueue] = await sql`
     SELECT COUNT(*)::int as open_prs FROM hive_backlog
     WHERE status = 'pr_open' AND pr_number IS NOT NULL
   `.catch(() => [{ open_prs: 0 }]);
   const openPRCount = Number(prQueue?.open_prs || 0);
-  if (openPRCount >= 2) {
-    // Actively try to clear the PR queue by triggering a health check (Check 38 merges PRs)
-    await qstashPublish("/api/cron/company-health", {
-      trigger: "pr_queue_flush",
-      open_prs: openPRCount,
-    }, {
-      deduplicationId: `pr-flush-${Date.now().toString(36)}`,
-    }).catch(() => {});
+  if (openPRCount >= 1) {
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
-    await scheduleChainRetry("pr_queue_full", 10);
+    await scheduleChainRetry("pr_queue_full", 3);
     logDispatchCycle("pr_queue_full", { open_prs: openPRCount });
-    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true, pr_flush_triggered: true });
+    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
   // Check for recently dispatched backlog items (covers the race window
