@@ -2290,6 +2290,70 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check 52: Dependency vulnerability scanning (GitHub Dependabot alerts)
+    // -----------------------------------------------------------------------
+    let vulnAlertsFound = 0;
+    try {
+      if (ghPat) {
+        const activeCompanies = await sql`
+          SELECT id, name, slug, github_repo
+          FROM companies
+          WHERE github_repo IS NOT NULL AND status NOT IN ('killed', 'idea')
+          LIMIT 10
+        ` as Array<{ id: string; name: string; slug: string; github_repo: string }>;
+
+        for (const company of activeCompanies) {
+          try {
+            const alertsRes = await fetch(
+              `https://api.github.com/repos/${company.github_repo}/dependabot/alerts?state=open&severity=critical,high&per_page=10`,
+              { headers: { Authorization: `token ${ghPat}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } }
+            );
+
+            if (!alertsRes.ok) continue; // repo may not have Dependabot enabled
+
+            const alerts: Array<{ number: number; security_advisory: { summary: string; severity: string }; dependency: { package: { name: string } } }> = await alertsRes.json();
+            const criticalOrHigh = Array.isArray(alerts) ? alerts.filter(a => ["critical", "high"].includes(a.security_advisory?.severity)) : [];
+
+            if (criticalOrHigh.length > 0) {
+              vulnAlertsFound += criticalOrHigh.length;
+              const summaries = criticalOrHigh.slice(0, 3).map(a =>
+                `${a.security_advisory.severity.toUpperCase()}: ${a.dependency.package.name} — ${a.security_advisory.summary}`
+              ).join("; ");
+
+              // Dedup: don't create if an open vuln task already exists for this company
+              const [existingVulnTask] = await sql`
+                SELECT id FROM company_tasks
+                WHERE company_id = ${company.id}
+                  AND status NOT IN ('done', 'dismissed')
+                  AND title ILIKE ${"Fix dependency vulnerabilities%"}
+                LIMIT 1
+              `;
+
+              if (!existingVulnTask) {
+                await sql`
+                  INSERT INTO company_tasks (company_id, category, title, description, priority, status, source)
+                  VALUES (
+                    ${company.id}, 'engineering',
+                    ${`Fix dependency vulnerabilities in ${company.name}`},
+                    ${`${criticalOrHigh.length} open Dependabot alert(s) — ${summaries}`},
+                    0, 'proposed', 'sentinel'
+                  )
+                `;
+                console.log(`[sentinel-janitor] Check 52: Created vuln task for ${company.slug} (${criticalOrHigh.length} alerts)`);
+              }
+            }
+          } catch { /* per-company non-blocking */ }
+        }
+      }
+
+      if (vulnAlertsFound > 0) {
+        console.log(`[sentinel-janitor] Check 52: Found ${vulnAlertsFound} critical/high CVEs across company repos`);
+      }
+    } catch (check52Err: any) {
+      console.warn(`[sentinel-janitor] Check 52 failed: ${check52Err?.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Regenerate BACKLOG.md from database
     // -----------------------------------------------------------------------
     let backlogRegenerated = false;
@@ -2333,6 +2397,7 @@ export async function GET(request: Request) {
       backlog_duplicates_rejected: duplicatesRejected,
       backlog_stale_deprioritized: staleItemsDeprioritized,
       ghost_pr_fixed: ghostPrFixed,
+      vuln_alerts_found: vulnAlertsFound,
       db_slow_queries_found: slowQueriesFound,
       db_cache_hit_ratio_pct: cacheHitRatioPct,
       db_performance_issues: dbPerformanceIssues.length,
