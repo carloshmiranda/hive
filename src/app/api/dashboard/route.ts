@@ -100,7 +100,7 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
       `,
       // Evolver proposals (pending) — exclude large prompt columns for list view
       sql`
-        SELECT id, agent, title, rationale, severity, status, created_at
+        SELECT id, title, severity, status, created_at
         FROM evolver_proposals
         WHERE status = 'pending'
         ORDER BY
