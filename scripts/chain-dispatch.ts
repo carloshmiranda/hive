@@ -84,8 +84,8 @@ function parseExecutionMeta(execFile: string): { turns: number; cost: number } {
 
 /**
  * Extract the last valid JSON object from agent text output.
- * Handles: markdown code blocks (```json ... ```), bare JSON objects,
- * and nested structures. Returns {} on failure — never throws.
+ * Handles: markdown code blocks (```json ... ```), bare JSON objects
+ * at any nesting depth. Returns {} on failure — never throws.
  */
 function extractJSONFromText(text: string): Record<string, unknown> {
   // 1. Try markdown code block: ```json\n...\n``` or ```\n...\n```
@@ -101,22 +101,38 @@ function extractJSONFromText(text: string): Record<string, unknown> {
     }
   }
 
-  // 2. Find all {...} blocks (handles nesting one level deep) and try each from last to first
-  const jsonCandidates = text.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
-  if (jsonCandidates) {
-    for (let i = jsonCandidates.length - 1; i >= 0; i--) {
-      try {
-        const parsed = JSON.parse(jsonCandidates[i]);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          return parsed as Record<string, unknown>;
-        }
-      } catch {
-        // try next candidate
+  // 2. Balanced-brace extraction — handles arbitrary nesting depth.
+  // Scan for every '{', track depth with a proper parser that respects
+  // string literals and escape sequences, collect all valid JSON objects,
+  // then return the last one (most likely the CEO's final signal output).
+  const candidates: Record<string, unknown>[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let end = -1;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (escape) { escape = false; continue; }
+      if (ch === "\\" && inString) { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") { if (--depth === 0) { end = j; break; } }
+    }
+    if (end === -1) continue;
+    try {
+      const parsed = JSON.parse(text.slice(i, end + 1));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        candidates.push(parsed as Record<string, unknown>);
       }
+    } catch {
+      // not valid JSON — skip
     }
   }
 
-  return {};
+  return candidates[candidates.length - 1] ?? {};
 }
 
 // ─── Signal detection ────────────────────────────────────────────────────────
