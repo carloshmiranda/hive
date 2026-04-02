@@ -312,6 +312,28 @@ export const HIVE_TOOLS: Array<{
         required: ["company"]
       }
     }
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "web_search",
+      description: "Search the web for current information, competitors, market data, SEO keywords, news, or any topic. Returns top results with title, URL, and snippet.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query — be specific for better results (e.g., 'Portuguese tax calculator SaaS competitors 2025')"
+          },
+          count: {
+            type: "number",
+            description: "Number of results to return (1-10, default: 5)",
+            default: 5
+          }
+        },
+        required: ["query"]
+      }
+    }
   }
 ];
 
