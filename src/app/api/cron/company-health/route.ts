@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db";
 import { getSettingValue } from "@/lib/settings";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
+import { fetchRecentErrors, extractErrorPatterns, shouldDispatchHealer, createErrorSummary } from "@/lib/sentry-api";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -10,7 +11,7 @@ export const maxDuration = 60;
 // Sentinel fires this as non-blocking fetch. Each check logs results to agent_actions.
 // Checks: 31 (stats endpoints), 32 (language), 33 (stale records), 36 (tests), 38 (Hive PR merge),
 //         39 (CI fix loop), 30 (broken deploys), 43 (dispatch verification), 44 (stale cycle safety net),
-//         45 (company PR auto-merge with risk scoring)
+//         45 (company PR auto-merge with risk scoring), 46 (Sentry error surge detection)
 
 export async function GET(req: Request) {
   const auth = await verifyCronAuth(req);
@@ -984,6 +985,37 @@ export async function GET(req: Request) {
     console.warn("[company-health] Check 45 failed:", e.message);
   }
 
+  // --- Check 46: Sentry error surge detection ---
+  try {
+    // Look back 4 hours — aligns with sentinel-dispatch schedule
+    const sentryIssues = await fetchRecentErrors(4 * 3600);
+    const patterns = extractErrorPatterns(sentryIssues);
+    const healerNeeded = shouldDispatchHealer(patterns);
+    results.sentry_errors_unresolved = sentryIssues.length;
+    results.sentry_patterns = patterns.length;
+    results.sentry_healer_dispatched = false;
+    if (healerNeeded) {
+      const summary = createErrorSummary(patterns);
+      await qstashPublish("/api/agents/dispatch", {
+        agent: "healer",
+        trigger: "sentry_error_surge",
+        summary,
+        error_count: sentryIssues.length,
+        pattern_count: patterns.length,
+      });
+      results.sentry_healer_dispatched = true;
+      await sql`
+        INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
+        VALUES ('sentinel', 'sentry_error_surge',
+          ${`Sentry error surge: ${patterns.length} distinct patterns, ${sentryIssues.length} unresolved issues`},
+          'success', ${JSON.stringify({ patterns: patterns.length, issues: sentryIssues.length, summary })}::jsonb,
+          NOW(), NOW())
+      `.catch((e: any) => { console.warn(`[company-health] Check 46 log failed: ${e?.message || e}`); });
+    }
+  } catch (e: any) {
+    console.warn("[company-health] Check 46 failed:", e.message);
+  }
+
   // Log overall run
   await sql`
     INSERT INTO agent_actions (agent, action_type, description, status, output, started_at, finished_at)
@@ -1006,6 +1038,7 @@ export async function GET(req: Request) {
     if (results.broken_deploys) parts.push(`${results.broken_deploys} broken deploys`);
     if (results.silent_failures) parts.push(`${results.silent_failures} silent dispatch failures`);
     if (results.stale_cycles_dispatched) parts.push(`${results.stale_cycles_dispatched} stale cycles dispatched`);
+    if (results.sentry_healer_dispatched) parts.push(`Sentry surge: ${results.sentry_patterns} patterns → Healer dispatched`);
     if (parts.length > 0) {
       await notifyHive({
         agent: "sentinel",
