@@ -371,11 +371,19 @@ export async function POST(req: Request) {
               }
 
               // Post-merge verification: check build health after 5 minutes
+              const mergedAt = new Date().toISOString();
               qstashPublish("/api/dispatch/verify-merge", {
                 pr_number: prNumber,
                 backlog_ids: itemIds,
-                merged_at: new Date().toISOString(),
+                merged_at: mergedAt,
               }, { delay: 300, retries: 2 }).catch(() => {});
+
+              // Sentry spike check: 15 minutes after merge (enough time for errors to surface)
+              qstashPublish("/api/dispatch/verify-merge", {
+                pr_number: prNumber,
+                merged_at: mergedAt,
+                check_sentry: true,
+              }, { delay: 900, retries: 2, deduplicationId: `sentry-check-${prNumber}-${mergedAt}` }).catch(() => {});
             } else {
               // Closed without merge — reset to ready
               await sql`
