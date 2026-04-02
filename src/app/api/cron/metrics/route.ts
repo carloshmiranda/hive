@@ -8,11 +8,12 @@ import { setSentryTags } from "@/lib/sentry-tags";
 // Collects page_views from each company's /api/stats endpoint
 // Also checks latest post-deploy smoke test results via GitHub API
 // Each company app tracks its own pageviews via middleware → page_views table
+// Supports company_slug query/body param for targeted single-company refresh (e.g. post-merge)
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET(req: Request) {
+async function collectMetrics(req: Request, companySlugs?: string[]) {
   setSentryTags({
     action_type: "cron",
     route: "/api/cron/metrics",
@@ -27,12 +28,19 @@ export async function GET(req: Request) {
   const today = new Date().toISOString().split("T")[0];
   const ghToken = await getSettingValue("github_token").catch(() => null);
 
-  // Get all active/mvp companies with their URLs
-  const companies = await sql`
-    SELECT c.id, c.slug, COALESCE(c.domain, c.vercel_url) as app_url
-    FROM companies c
-    WHERE c.status IN ('active', 'mvp')
-  `;
+  // Get active/mvp companies — optionally filtered to specific slugs
+  const companies = companySlugs?.length
+    ? await sql`
+        SELECT c.id, c.slug, COALESCE(c.domain, c.vercel_url) as app_url
+        FROM companies c
+        WHERE c.status IN ('active', 'mvp')
+        AND c.slug = ANY(${companySlugs})
+      `
+    : await sql`
+        SELECT c.id, c.slug, COALESCE(c.domain, c.vercel_url) as app_url
+        FROM companies c
+        WHERE c.status IN ('active', 'mvp')
+      `;
 
   const results: Array<{ slug: string; views: number; pricing_clicks: number; affiliate_clicks: number; smoke_test_pass: boolean | null; source: string }> = [];
 
@@ -118,5 +126,21 @@ export async function GET(req: Request) {
   return Response.json({ ok: true, collected: results.length, results });
 }
 
-// QStash sends POST — re-export GET handler for dual-mode auth
-export { GET as POST };
+export async function GET(req: Request) {
+  // Support ?company_slug=X for targeted refresh
+  const { searchParams } = new URL(req.url);
+  const slug = searchParams.get("company_slug");
+  return collectMetrics(req, slug ? [slug] : undefined);
+}
+
+export async function POST(req: Request) {
+  // QStash sends POST with optional JSON body { company_slug: "X" }
+  let slug: string | undefined;
+  try {
+    const body = await req.json().catch(() => ({}));
+    slug = body?.company_slug || undefined;
+  } catch {
+    // no body — full refresh
+  }
+  return collectMetrics(req, slug ? [slug] : undefined);
+}
