@@ -828,6 +828,13 @@ async function executeSentinelDispatch(request: Request) {
           AND cy.status IN ('running', 'completed')
           AND cy.started_at > NOW() - INTERVAL '24 hours'
         )
+        -- Skip companies with per-company dispatch pause or site-down blocker
+        AND NOT EXISTS (
+          SELECT 1 FROM settings s
+          WHERE s.key = 'company_' || c.slug || '_paused'
+          AND s.value = 'true'
+        )
+        AND COALESCE((c.capabilities->'site'->>'status'), 'unknown') != 'down'
       )
       SELECT slug, company_id, database_exists,
         -- Phase classification: derived from proxy signals, used for logging + score
