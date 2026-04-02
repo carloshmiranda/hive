@@ -49,7 +49,7 @@ Colors should suit the company type (e.g. fintech = trustworthy blues, health = 
 
   await sql`
     UPDATE companies
-    SET brand = ${JSON.stringify(brand)}::jsonb,
+    SET capabilities = jsonb_set(COALESCE(capabilities, '{}'), '{brand}', ${JSON.stringify(brand)}::jsonb),
         updated_at = NOW()
     WHERE id = ${company.id}
   `;

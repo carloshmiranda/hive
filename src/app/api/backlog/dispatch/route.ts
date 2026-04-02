@@ -177,7 +177,7 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>): Promise<{ c
             console.log(`[backlog] Auto-merged PR #${pr.number}: ${pr.title}`);
             await sql`
               INSERT INTO agent_actions (agent, action_type, status, description, output, started_at, finished_at)
-              VALUES ('backlog', 'pr_auto_merge', 'success',
+              VALUES ('backlog_dispatch', 'pr_auto_merge', 'success',
                 ${`Auto-merged PR #${pr.number}: ${pr.title}`},
                 ${JSON.stringify({ pr_number: pr.number, risk_score: analysis.riskScore, merged_items: (mergedItems as any[]).map((i: any) => i.id) })}::jsonb,
                 NOW(), NOW())
@@ -186,7 +186,7 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>): Promise<{ c
             console.log(`[backlog] Auto-merge failed for PR #${pr.number}: ${result.message}`);
             await sql`
               INSERT INTO agent_actions (agent, action_type, status, description, output, started_at, finished_at)
-              VALUES ('backlog', 'pr_auto_merge', 'failed',
+              VALUES ('backlog_dispatch', 'pr_auto_merge', 'failed',
                 ${`Auto-merge failed for PR #${pr.number}: ${pr.title}`},
                 ${JSON.stringify({ pr_number: pr.number, reason: result.message })}::jsonb,
                 NOW(), NOW())
@@ -198,7 +198,7 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>): Promise<{ c
           if (dispatched) ciFixDispatched = true;
           await sql`
             INSERT INTO agent_actions (agent, action_type, status, description, output, started_at, finished_at)
-            VALUES ('backlog', 'pr_auto_merge', 'skipped',
+            VALUES ('backlog_dispatch', 'pr_auto_merge', 'skipped',
               ${`PR #${pr.number} escalated (not auto-merged): ${pr.title}`},
               ${JSON.stringify({ pr_number: pr.number, hard_gates: analysis.hardGateIssues, cost_impact: analysis.costImpact, ci_fix_dispatched: dispatched })}::jsonb,
               NOW(), NOW())
@@ -421,7 +421,7 @@ export async function POST(req: Request) {
   const logDispatchCycle = (reason: string, detail?: Record<string, unknown>) => {
     sql`
       INSERT INTO agent_actions (agent, action_type, status, description, output, started_at, finished_at)
-      VALUES ('backlog', 'dispatch_cycle', 'skipped',
+      VALUES ('backlog_dispatch', 'dispatch_cycle', 'skipped',
         ${`Dispatch skipped: ${reason}`},
         ${JSON.stringify({ reason, ...detail })}::jsonb,
         NOW(), NOW())
