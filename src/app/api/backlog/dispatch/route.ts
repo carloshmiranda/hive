@@ -7,7 +7,7 @@ import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "
 import { qstashPublish } from "@/lib/qstash";
 import { queuePop, queueRebuild, queueSyncItem } from "@/lib/redis-cache";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
-import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
+import { setSentryTags, addDispatchBreadcrumb, withSpan } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
 import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 import { markTaskAsStealable, claimStealableTask, type WorkStealingResult } from "@/lib/work-stealing";
@@ -2338,12 +2338,30 @@ export async function POST(req: Request) {
     category: "github",
     data: { backlog_id: topItem.id, priority: topItem.priority, attempt: attemptCount + 1, payload_bytes: payloadStr.length },
   });
-  const res = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
-    body: payloadStr,
-    signal: AbortSignal.timeout(10000),
-  });
+
+  // Sentry performance span: measures GitHub API call duration for tracing
+  const res = await withSpan(
+    "GitHub: repository_dispatch",
+    "http.client",
+    {
+      "http.method": "POST",
+      "http.url": "https://api.github.com/repos/carloshmiranda/hive/dispatches",
+      "backlog.item_id": topItem.id,
+      "backlog.priority": topItem.priority,
+      "backlog.title": topItem.title.slice(0, 100),
+      "backlog.attempt": attemptCount + 1,
+    },
+    async (span) => {
+      const response = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+        body: payloadStr,
+        signal: AbortSignal.timeout(10000),
+      });
+      span?.setAttributes({ "http.status_code": response.status });
+      return response;
+    }
+  );
 
   if (res.ok || res.status === 204) {
     // Log the dispatch as an agent_action and capture its ID for tracing
