@@ -39,6 +39,9 @@ export interface ValidationResult {
   kill_signal: boolean;
   kill_reason: string | null;
   kill_evaluation_triggers: string[];
+  // Venture-studio recommendation: CEO uses this as primary disposition signal
+  recommendation: "double_down" | "continue" | "pivot_evaluate" | "kill_evaluate" | "kill";
+  recommendation_reason: string;
   revenue_readiness_score: number;
   revenue_readiness_message: string | null;
   unit_economics: {
@@ -362,6 +365,12 @@ function checkKillEvaluationTriggers(type: BusinessType, metrics: MetricsRow[], 
     triggers.push(`SUSTAINED DECLINE: ${negativeGrowthWeeks} consecutive weeks of negative growth — systematic issue`);
   }
 
+  // 4b. <5% WoW for 8+ consecutive weeks = stall signal (venture studio benchmark)
+  const flatGrowthWeeks = countConsecutiveFlatGrowthWeeks(metrics, 0.05);
+  if (flatGrowthWeeks >= 8) {
+    triggers.push(`STALLED: ${flatGrowthWeeks} consecutive weeks below 5% WoW growth — channel or positioning not working`);
+  }
+
   // 5. Revenue readiness score <20 after 120 days = kill evaluation
   if (daysSinceCreation > 120 && revenueReadinessScore < 20) {
     triggers.push(`LOW MONETIZATION READINESS: Score ${revenueReadinessScore}/100 after ${daysSinceCreation} days — poor fundamentals`);
@@ -393,24 +402,102 @@ function checkKillEvaluationTriggers(type: BusinessType, metrics: MetricsRow[], 
 
 // Count consecutive weeks of negative WoW growth
 function countConsecutiveNegativeGrowthWeeks(metrics: MetricsRow[]): number {
-  if (metrics.length < 14) return 0; // Need at least 2 weeks of data
+  if (metrics.length < 14) return 0;
 
   const sorted = [...metrics].sort((a, b) => b.date.localeCompare(a.date));
   let consecutiveWeeks = 0;
 
-  // Check each week for negative growth
   for (let i = 0; i < sorted.length - 7; i += 7) {
     const thisWeek = sorted.slice(i, i + 7).reduce((s, m) => s + m.page_views, 0);
     const lastWeek = sorted.slice(i + 7, i + 14).reduce((s, m) => s + m.page_views, 0);
-
     if (lastWeek > 0 && thisWeek < lastWeek) {
       consecutiveWeeks++;
     } else {
-      break; // Stop at first non-negative week
+      break;
     }
   }
 
   return consecutiveWeeks;
+}
+
+// Count consecutive weeks of flat/low WoW growth (< threshold)
+// Venture studio benchmark: <5% for 8+ weeks = stalled, pivot evaluate
+function countConsecutiveFlatGrowthWeeks(metrics: MetricsRow[], threshold = 0.05): number {
+  if (metrics.length < 14) return 0;
+
+  const sorted = [...metrics].sort((a, b) => b.date.localeCompare(a.date));
+  let flatWeeks = 0;
+
+  for (let i = 0; i < sorted.length - 7; i += 7) {
+    const thisWeek = sorted.slice(i, i + 7).reduce((s, m) => s + m.page_views, 0);
+    const lastWeek = sorted.slice(i + 7, i + 14).reduce((s, m) => s + m.page_views, 0);
+    if (lastWeek === 0) break; // No baseline to compare
+    const wowRate = (thisWeek - lastWeek) / lastWeek;
+    if (wowRate < threshold) {
+      flatWeeks++;
+    } else {
+      break;
+    }
+  }
+
+  return flatWeeks;
+}
+
+// Compute venture-studio disposition recommendation
+// Based on Alloy Innovation / Founders Factory RAYG system + YC benchmarks
+function computeRecommendation(
+  type: BusinessType,
+  metrics: MetricsRow[],
+  companyCreatedAt: string,
+  killSignal: boolean,
+  killEvaluationTriggers: string[],
+  revenueReadinessScore: number,
+): { recommendation: ValidationResult["recommendation"]; reason: string } {
+  const latest = metrics[0] || {} as MetricsRow;
+  const hasRevenue = (latest.revenue || 0) > 0 || (latest.mrr || 0) > 0;
+  const wowGrowth = computeWoWGrowth(metrics);
+  const flatWeeks = countConsecutiveFlatGrowthWeeks(metrics, 0.05);
+  const daysSinceCreation = Math.floor((Date.now() - new Date(companyCreatedAt).getTime()) / 86400000);
+
+  // Hard kill — automatic, no CEO deliberation needed
+  if (killSignal) {
+    return { recommendation: "kill", reason: "Hard kill criteria met — validation thresholds exhausted" };
+  }
+
+  // Double down: all signals strongly positive (YC 7%+ WoW + revenue growing)
+  const revenueGrowing = metrics.length >= 2 &&
+    (metrics[0]?.revenue || 0) > (metrics[1]?.revenue || 0);
+  if (hasRevenue && wowGrowth >= 0.07 && revenueGrowing && revenueReadinessScore >= 60) {
+    return { recommendation: "double_down", reason: `WoW growth ${(wowGrowth * 100).toFixed(1)}%, revenue growing — strong PMF signal, double resources` };
+  }
+
+  // Kill evaluate: multiple triggers or sustained flat growth
+  if (killEvaluationTriggers.length >= 2) {
+    return { recommendation: "kill_evaluate", reason: `${killEvaluationTriggers.length} kill evaluation triggers active — CEO should evaluate kill` };
+  }
+
+  // Pivot evaluate: <5% WoW for 8+ weeks without revenue (venture studio stall benchmark)
+  if (flatWeeks >= 8 && !hasRevenue) {
+    return { recommendation: "pivot_evaluate", reason: `${flatWeeks} consecutive weeks <5% WoW growth with no revenue — channel or positioning pivot required` };
+  }
+
+  // Kill evaluate: single strong trigger
+  if (killEvaluationTriggers.length === 1) {
+    return { recommendation: "kill_evaluate", reason: killEvaluationTriggers[0] };
+  }
+
+  // Continue: moderate growth or early stage
+  if (wowGrowth >= 0.03 || daysSinceCreation < 30 || hasRevenue) {
+    const reason = hasRevenue
+      ? "Revenue present — continue and optimize"
+      : wowGrowth >= 0.03
+        ? `WoW growth ${(wowGrowth * 100).toFixed(1)}% — on track, maintain pace`
+        : "Early stage — insufficient data for kill evaluation";
+    return { recommendation: "continue", reason };
+  }
+
+  // Default: continue unless signals say otherwise
+  return { recommendation: "continue", reason: "No kill signals — continue current approach" };
 }
 
 function checkKillSignals(type: BusinessType, metrics: MetricsRow[], companyCreatedAt: string): KillCheck {
@@ -525,6 +612,11 @@ export function computeValidationScore(
   // Kill evaluation triggers (benchmark-based)
   const killEvaluationTriggers = checkKillEvaluationTriggers(type, metrics, companyCreatedAt, revenueReadiness.score);
 
+  // Venture-studio recommendation
+  const { recommendation, reason: recommendationReason } = computeRecommendation(
+    type, metrics, companyCreatedAt, kill.signal, killEvaluationTriggers.triggers, revenueReadiness.score,
+  );
+
   // Unit economics (only compute when ad spend or CAC data exists)
   const hasAcquisitionData = metrics.some(m => (m.ad_spend || 0) > 0 || (m.cac || 0) > 0);
   const unitEcon = hasAcquisitionData ? computeUnitEconomics({
@@ -553,6 +645,8 @@ export function computeValidationScore(
     kill_signal: kill.signal,
     kill_reason: kill.reason,
     kill_evaluation_triggers: killEvaluationTriggers.triggers,
+    recommendation,
+    recommendation_reason: recommendationReason,
     revenue_readiness_score: revenueReadiness.score,
     revenue_readiness_message: revenueReadiness.message,
     unit_economics: unitEcon ? {
