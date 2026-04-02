@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { json, err } from "@/lib/db";
 import { notifyHive } from "@/lib/telegram";
+import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
 
 // POST /api/notify — send a Telegram notification
 // Auth: CRON_SECRET or OIDC
@@ -28,6 +29,13 @@ export async function POST(req: NextRequest) {
   if (!agent || !action || !status || !summary) {
     return err("Missing required fields: agent, action, status, summary", 400);
   }
+
+  setSentryTags({ agent, action_type: action, route: "/api/notify" });
+  addDispatchBreadcrumb({
+    category: "dispatch",
+    message: "Hive notification",
+    data: { agent, action, company, status },
+  });
 
   // Accept any status — agents use various statuses (dispatched, needs_carlos, etc.)
   // Normalize to the closest valid NotificationEvent status for formatting

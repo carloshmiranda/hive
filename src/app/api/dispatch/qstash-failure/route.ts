@@ -1,6 +1,7 @@
 import { json, err, getDb } from "@/lib/db";
 import { verifyCronAuth } from "@/lib/qstash";
 import { qstashPublish } from "@/lib/qstash";
+import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
 
 // POST /api/dispatch/qstash-failure — QStash failure callback endpoint
 // Called by QStash when all delivery retries for a message are exhausted.
@@ -54,6 +55,13 @@ export async function POST(req: Request) {
   ]
     .filter(Boolean)
     .join(", ");
+
+  setSentryTags({ agent: "dispatch", action_type: "qstash_failure", route: "/api/dispatch/qstash-failure" });
+  addDispatchBreadcrumb({
+    category: "qstash",
+    message: "Dead dispatch — all retries exhausted",
+    data: { targetPath, responseStatus, retried, maxRetries, sourceMessageId },
+  });
 
   console.error(`[qstash-failure] Dead dispatch detected — ${errorDetail}`);
 

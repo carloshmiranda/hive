@@ -1,6 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { dispatchEvent } from "@/lib/dispatch";
 import { invalidatePlaybook } from "@/lib/redis-cache";
+import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,8 @@ export async function POST(req: Request) {
   if (!company_slug && !cycle_id) {
     return err("Missing company_slug or cycle_id", 400);
   }
+
+  setSentryTags({ agent: "sentinel", action_type: "cycle_consolidation", route: "/api/agents/consolidate" });
 
   const sql = getDb();
   const results = {
@@ -70,6 +73,12 @@ export async function POST(req: Request) {
   const reviewData = review.review || review;
   const score = reviewData.score;
   results.cycle_score = score;
+
+  addDispatchBreadcrumb({
+    category: "dispatch",
+    message: "Consolidating cycle",
+    data: { company: cycle.slug, cycle_number: cycle.cycle_number, score },
+  });
 
   // --- 1. Extract and write playbook entry from CEO review ---
   const entry = reviewData.playbook_entry;
@@ -145,6 +154,11 @@ export async function POST(req: Request) {
   // Invalidate playbook cache after any new entries or confidence changes
   if (results.playbook_entries_created > 0) {
     await invalidatePlaybook();
+    addDispatchBreadcrumb({
+      category: "db",
+      message: "Playbook entries written",
+      data: { count: results.playbook_entries_created, company: cycle.slug },
+    });
   }
 
   // --- 2 & 3. Confidence boost/decay based on cycle score ---
@@ -259,6 +273,11 @@ export async function POST(req: Request) {
           patterns: autoFixablePatterns,
         });
         results.healer_dispatched = true;
+        addDispatchBreadcrumb({
+          category: "dispatch",
+          message: "Healer dispatched from consolidation",
+          data: { critical_patterns: criticalHighCount, company: cycle.slug },
+        });
       } catch (e) {
         console.warn(`[consolidate] Healer dispatch failed: ${e instanceof Error ? e.message : "unknown"}`);
       }
