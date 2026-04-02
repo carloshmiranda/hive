@@ -46,6 +46,18 @@ interface RateLimitState {
 
 let rateLimitState: RateLimitState | null = null;
 
+/** Expose rate limit state for external monitoring (Sentinel, dispatch status). */
+export function getRateLimitState(): RateLimitState | null {
+  return rateLimitState;
+}
+
+/** Returns true if we should pause dispatching due to low OpenRouter budget. */
+export function isRateLimitNear(): boolean {
+  if (!rateLimitState) return false;
+  const threshold = Math.max(5, Math.floor(rateLimitState.limit * 0.05));
+  return rateLimitState.remaining <= threshold;
+}
+
 /** Parse OpenRouter reset header. Value is either a delay like "1s" or an ISO timestamp. */
 function parseResetDelay(resetHeader: string): number {
   // Format: "1s", "500ms", or ISO 8601 timestamp
@@ -570,11 +582,11 @@ async function callOpenRouter(
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
 
-  // Pre-emptive rate limit backoff: if we're nearly exhausted wait until reset
-  if (rateLimitState && rateLimitState.remaining <= 2) {
-    const waitMs = Math.max(0, rateLimitState.resetAt - Date.now());
+  // Pre-emptive rate limit backoff: if budget is nearly exhausted, wait until reset
+  if (isRateLimitNear()) {
+    const waitMs = Math.max(0, rateLimitState!.resetAt - Date.now());
     if (waitMs > 0) {
-      console.warn(`[llm] Pre-emptive rate limit backoff: ${waitMs}ms (${rateLimitState.remaining}/${rateLimitState.limit} remaining)`);
+      console.warn(`[llm] Pre-emptive rate limit backoff: ${waitMs}ms (${rateLimitState!.remaining}/${rateLimitState!.limit} remaining)`);
       await new Promise(r => setTimeout(r, waitMs));
     }
   }
