@@ -117,31 +117,26 @@ This prevents cross-domain pollution where a simple blog task accidentally break
 - Engineering: ONLY landing page improvements, waitlist mechanics, free tools (calculators, simulators)
 - Growth: ONLY content to drive waitlist signups, SEO for awareness keywords
 - FORBIDDEN: auth systems, dashboards, user management, CRUD features, database schema for product data, login/register links on landing page
-- Success = waitlist growing, conversion rate improving
 
 **SaaS in `test_intent`:**
 - Engineering: ONLY pricing page with click tracking, email capture on "buy" click
 - Growth: Drive traffic to pricing page, A/B test pricing copy
 - FORBIDDEN: building the actual product behind the paywall
-- Success = pricing page CTR > 2%
 
 **SaaS in `build_mvp`:**
 - Engineering: Core product features (the ONE thing users pay for). Max 2 tasks/cycle.
 - Growth: Conversion optimization, onboarding content
 - FORBIDDEN: nice-to-have features (settings, profiles, export, admin panels)
-- Success = core flow works end-to-end, first users onboarded
 
 **Blog/Newsletter in `seed_content`:**
 - Engineering: Blog infrastructure, SEO scaffolding, content templates only
 - Growth: Write and publish articles, submit to search engines, social sharing
 - FORBIDDEN: monetization (ads, affiliate links, sponsorship pages)
-- Success = 10+ quality articles published, Google indexing
 
 **Affiliate in `build_directory`:**
 - Engineering: Listing pages, comparison tables, affiliate link tracking
 - Growth: Initial content for each listing category
 - FORBIDDEN: paid traffic, outreach (no point until directory has content)
-- Success = comprehensive listings with working affiliate links
 
 ## Kill criteria
 

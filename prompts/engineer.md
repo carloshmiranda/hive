@@ -182,42 +182,22 @@ Follow these copy guidelines for all user-facing text:
 **Backward-propagation of boilerplate improvements.** During any normal work cycle, automatically check for and apply these one-time fixes to upgrade existing companies to current standards. Each rule checks if something is missing, applies the fix if needed, then moves on. No dedicated migration cycles required.
 
 ### Rule 1: shadcn/ui Installation
-If the company repo lacks shadcn/ui components:
-1. Run `npx shadcn@latest init` (accept defaults)
-2. Install core components: `npx shadcn@latest add button input card badge`
-3. Add shadcn skills to package.json scripts if not present
-4. This enables consistent component library across all companies
+If the company repo lacks shadcn/ui components: run `npx shadcn@latest init` then `npx shadcn@latest add button input card badge`.
 
 ### Rule 2: Skip-to-content Accessibility
-If `src/app/layout.tsx` is missing the skip-to-content link:
-1. Add before the main content: `<a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-brand focus:text-white focus:rounded">Skip to content</a>`
-2. Wrap main content in: `<main id="main">`
-3. This improves keyboard navigation accessibility
+If `src/app/layout.tsx` is missing the skip-to-content link: add `<a href="#main" className="sr-only focus:not-sr-only ...">Skip to content</a>` before main content and wrap content in `<main id="main">`.
 
 ### Rule 3: Unique Accent Color
-If `src/app/globals.css` still has the default accent color `--color-accent: #2563eb` (blue-600):
-1. Generate a unique accent color from the curated palette
-2. Update the CSS variable with the new color
-3. Use colors like: emerald-600 (#059669), violet-600 (#7c3aed), orange-600 (#ea580c), rose-600 (#e11d48), etc.
-4. This gives each company visual distinctiveness
+If `src/app/globals.css` still has `--color-accent: #2563eb` (default blue): replace with a company-specific color from the curated palette (emerald-600, violet-600, orange-600, rose-600, etc.).
 
 ### Rule 4: Server Component Refactoring
-If `src/app/page.tsx` has `"use client"` at the top level:
-1. Identify which parts actually need interactivity (state, events, browser APIs)
-2. Extract interactive parts into separate client components
-3. Make the main page a Server Component
-4. This improves performance and SEO
+If `src/app/page.tsx` has `"use client"` at the top level: extract interactive parts into separate client components, make the page itself a Server Component.
 
 ### Rule 5: Focus Visibility Ring
-If `src/app/globals.css` is missing `:focus-visible` styles:
-1. Add focus ring styles: `.focus\:focus-visible\:ring { @apply ring-2 ring-brand ring-offset-2; }`
-2. Ensure all interactive elements have proper focus indicators
-3. This improves keyboard accessibility
+If `src/app/globals.css` is missing `:focus-visible` styles: add `ring-2 ring-brand ring-offset-2` focus ring so all interactive elements have visible keyboard focus indicators.
 
 ### Rule 6: Text Secondary Color
-If `text-secondary` in `globals.css` is `#6b7280` (gray-400):
-1. Update to `#4b5563` (gray-600) for better contrast
-2. This meets accessibility contrast requirements
+If `text-secondary` in `globals.css` is `#6b7280` (gray-400): update to `#4b5563` (gray-600) for accessible contrast.
 
 **Application:** Check these rules before starting any UI work. Apply missing fixes silently as part of your normal workflow. Each rule is a one-time check — once applied to a company, it doesn't need checking again until the next major boilerplate update.
 

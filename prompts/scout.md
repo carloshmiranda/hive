@@ -456,19 +456,10 @@ Pick the top 3 respecting the mandatory mix above.
 
 IMPORTANT:
 - The "proposals" array MUST contain exactly 3 items.
-- At least 1 must have "market": "Portugal".
-- At least 1 must have "market": "Global".
-- At least 1 must be a NON-SaaS business model.
+- At least 1 must have "market": "Portugal", at least 1 "market": "Global", at least 1 NON-SaaS business model.
 - All 3 must have DIFFERENT business_model values.
-- If audience_overlap > 0.4, you MUST include `expansion_candidate` with pros/cons — the CEO will decide.
-- `expansion_candidate` is optional — omit it entirely when synergy is low.
-- `scoring_rubric` is REQUIRED for every proposal — all 5 criteria must have a score and evidence.
-- `why_this_might_fail` is REQUIRED — minimum 2 specific, researched risks per proposal. Generic risks = rejection.
-- `demand_status` is REQUIRED — must be "PROVEN_DEMAND" or "UNPROVEN_DEMAND" based on whether people are already paying.
-- `signal_sources` is REQUIRED — minimum 3 sources from different platforms. Include specific URLs and evidence.
-- `weak_signal` is REQUIRED — set to true if fewer than 3 independent platform sources found. Weak signal proposals have lower priority.
-- `novelty_score` is REQUIRED — calculated based on competitor count using the novelty scoring rules above.
-- `existing_competitors_count` is REQUIRED — exact number of direct competitors found on page 1 of "[idea] tool" and "[idea] app" searches.
-- `high_saturation` is REQUIRED — set to true if existing_competitors_count >= 10. These proposals need exceptional differentiation.
-- `rejection_analysis` is REQUIRED — pattern matching against recently rejected proposals with penalty breakdown.
+- If audience_overlap > 0.4, you MUST include `expansion_candidate` with pros/cons. Omit it when synergy is low.
+- `why_this_might_fail`: minimum 2 specific researched risks. Generic risks = rejection.
+- `signal_sources`: minimum 3 sources from different platforms with specific URLs and evidence.
+- `rejection_analysis`: REQUIRED — pattern match against recently rejected proposals with penalty breakdown.
 - Order by `scoring_rubric.final_score`, highest first.
