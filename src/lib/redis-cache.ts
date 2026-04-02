@@ -421,3 +421,69 @@ export async function invalidateCircuitBreakers(companyId?: string): Promise<voi
     await cacheInvalidatePattern(`${CIRCUIT_BREAKER_PREFIX}*`);
   }
 }
+
+// --- Engineer distributed lock ---
+// Prevents concurrent Hive Engineer dispatches without requiring a DB round-trip.
+// Falls back gracefully: if Redis is unavailable, callers should fall back to the DB query.
+//
+// Key: "hive:engineer:lock"
+// Value: JSON { actionId, startedAt, ttl }
+// TTL: 75 minutes (engineer jobs complete in 5-15 min; 75 min catches ghost locks safely)
+
+const ENGINEER_LOCK_KEY = "hive:engineer:lock";
+const ENGINEER_LOCK_TTL = 75 * 60; // 75 minutes in seconds
+
+export interface EngineerLock {
+  actionId: string;
+  startedAt: string;
+}
+
+/**
+ * Try to acquire the engineer lock. Returns true if acquired, false if already held.
+ * Uses Redis SET NX EX — atomic, no race conditions.
+ * Falls back to false (not acquired) if Redis is unavailable.
+ */
+export async function acquireEngineerLock(actionId: string): Promise<boolean> {
+  try {
+    const r = getRedis();
+    if (!r) return false;
+    const value: EngineerLock = { actionId, startedAt: new Date().toISOString() };
+    // SET key value NX EX ttl — returns "OK" if set, null if key already exists
+    const result = await r.set(ENGINEER_LOCK_KEY, JSON.stringify(value), {
+      nx: true,
+      ex: ENGINEER_LOCK_TTL,
+    });
+    return result === "OK";
+  } catch {
+    return false; // Caller falls back to DB check
+  }
+}
+
+/**
+ * Release the engineer lock. Safe to call even if lock isn't held (idempotent).
+ */
+export async function releaseEngineerLock(): Promise<void> {
+  try {
+    const r = getRedis();
+    if (!r) return;
+    await r.del(ENGINEER_LOCK_KEY);
+  } catch {
+    // Non-fatal — lock will expire via TTL
+  }
+}
+
+/**
+ * Get the current engineer lock state without acquiring it.
+ * Returns null if no lock held or Redis unavailable.
+ */
+export async function getEngineerLock(): Promise<EngineerLock | null> {
+  try {
+    const r = getRedis();
+    if (!r) return null;
+    const raw = await r.get<string>(ENGINEER_LOCK_KEY);
+    if (!raw) return null;
+    return typeof raw === "string" ? JSON.parse(raw) : raw as EngineerLock;
+  } catch {
+    return null; // Caller falls back to DB check
+  }
+}

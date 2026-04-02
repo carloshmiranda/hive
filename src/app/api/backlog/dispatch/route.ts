@@ -5,7 +5,7 @@ import type { BacklogItem } from "@/lib/backlog-priority";
 import { trackFailedBacklogItem, resetBacklogItemCooldown } from "@/lib/dispatch";
 import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "@/lib/backlog-planner";
 import { qstashPublish } from "@/lib/qstash";
-import { queuePop, queueRebuild, queueSyncItem } from "@/lib/redis-cache";
+import { queuePop, queueRebuild, queueSyncItem, acquireEngineerLock, releaseEngineerLock, getEngineerLock } from "@/lib/redis-cache";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
 import { setSentryTags, addDispatchBreadcrumb, withSpan } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
@@ -456,6 +456,10 @@ export async function POST(req: Request) {
       const actionStatus = (completed_status === "success" || completed_status === "partial") ? "success" : "failed";
       const errorDetail = body.error || null;
 
+      // Release the Redis engineer lock so the next dispatch cycle doesn't need to wait
+      // for the DB query to confirm the engineer is free. Fire-and-forget — DB close below is the fallback.
+      releaseEngineerLock().catch(() => {});
+
       // Look up the dispatch_id that links this backlog item to its agent_action
       const [backlogItem] = await sql`
         SELECT dispatch_id FROM hive_backlog WHERE id = ${completed_id}
@@ -696,6 +700,8 @@ export async function POST(req: Request) {
                 await sql`
                   UPDATE hive_backlog SET dispatch_id = ${contAction.id} WHERE id = ${completed_id}
                 `.catch(() => {});
+                // Re-acquire Redis lock for this continuation (the lock was released by the callback above)
+                acquireEngineerLock(String(contAction.id)).catch(() => {});
               }
             }
           }
@@ -801,6 +807,8 @@ export async function POST(req: Request) {
                 await sql`
                   UPDATE hive_backlog SET dispatch_id = ${contAction.id} WHERE id = ${completed_id}
                 `.catch(() => {});
+                // Re-acquire Redis lock for this continuation
+                acquireEngineerLock(String(contAction.id)).catch(() => {});
               }
               continued = true;
               console.log(`[backlog] Continuation dispatched for "${item.title}" with ${continuationTurns} turns`);
@@ -1146,17 +1154,34 @@ export async function POST(req: Request) {
 
   // Check for running Hive Engineer jobs (dedup) — includes ci_fix so a running PR fix
   // also blocks new feature work from starting in parallel.
-  const [running] = await sql`
-    SELECT id FROM agent_actions
-    WHERE agent = 'engineer' AND status = 'running'
-    AND action_type IN ('feature_request', 'self_improvement', 'ci_fix')
-    AND company_id IS NULL
-    AND started_at > NOW() - INTERVAL '1 hour'
-    LIMIT 1
-  `.catch(() => []);
-  if (running) {
+  // Redis-first: check the distributed lock for a fast response without a DB round-trip.
+  // Falls back to DB if Redis is unavailable (lock was never set or expired without release).
+  let engineerBusy = false;
+  let engineerBusySource = "none";
+  const redisLock = await getEngineerLock();
+  if (redisLock) {
+    engineerBusy = true;
+    engineerBusySource = "redis";
+    console.log(`[backlog] Engineer busy (Redis lock): action=${redisLock.actionId}, started=${redisLock.startedAt}`);
+  } else {
+    // Redis lock not held — confirm with DB (handles cases where lock was not acquired at dispatch,
+    // e.g. Redis was down, or a pre-Redis-lock deploy left an orphaned running action).
+    const [running] = await sql`
+      SELECT id FROM agent_actions
+      WHERE agent = 'engineer' AND status = 'running'
+      AND action_type IN ('feature_request', 'self_improvement', 'ci_fix')
+      AND company_id IS NULL
+      AND started_at > NOW() - INTERVAL '1 hour'
+      LIMIT 1
+    `.catch(() => []);
+    if (running) {
+      engineerBusy = true;
+      engineerBusySource = "db";
+    }
+  }
+  if (engineerBusy) {
     // Don't retry — the running engineer will chain-dispatch when it finishes
-    return json({ dispatched: false, reason: "engineer_busy", running_id: running.id });
+    return json({ dispatched: false, reason: "engineer_busy", source: engineerBusySource });
   }
 
   // Per-agent hourly rate limit: prevent dispatch burst patterns
@@ -2391,6 +2416,12 @@ export async function POST(req: Request) {
         NOW())
       RETURNING id
     `.catch(() => [{ id: null }]);
+
+    // Acquire Redis engineer lock — fast path for future engineer_busy checks.
+    // If Redis is down, the DB query in the busy check is the fallback (no functionality lost).
+    if (dispatchAction?.id) {
+      acquireEngineerLock(String(dispatchAction.id)).catch(() => {});
+    }
 
     // Mark as dispatched with race condition protection + link dispatch_id
     const updateResult = await sql`
