@@ -415,11 +415,24 @@ export async function POST(req: Request) {
 
   const sql = getDb();
 
+  // Fire-and-forget helper: records dispatch cycle outcomes for observability.
+  // Uses action_type='dispatch_cycle' so dashboards can filter separately from agent work.
+  const logDispatchCycle = (reason: string, detail?: Record<string, unknown>) => {
+    sql`
+      INSERT INTO agent_actions (agent, action_type, status, description, output, started_at, finished_at)
+      VALUES ('backlog', 'dispatch_cycle', 'skipped',
+        ${`Dispatch skipped: ${reason}`},
+        ${JSON.stringify({ reason, ...detail })}::jsonb,
+        NOW(), NOW())
+    `.catch(() => {});
+  };
+
   // Global kill switch — check before ANY dispatch logic
   const [pauseSetting] = await sql`
     SELECT value FROM settings WHERE key = 'dispatch_paused' LIMIT 1
   `.catch(() => []);
   if (pauseSetting?.value === 'true') {
+    logDispatchCycle("dispatch_paused");
     return json({ dispatched: false, reason: "dispatch_paused", message: "All dispatches halted by kill switch" });
   }
 
@@ -1081,6 +1094,7 @@ export async function POST(req: Request) {
   if (budgetUsedPct > 0.85) {
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     await scheduleChainRetry("budget_exhausted", 30);
+    logDispatchCycle("budget_exhausted", { budget_pct: Math.round(budgetUsedPct * 100) });
     return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), free_workers_dispatched: freeWorkers, chain_retry: true });
   }
 
@@ -1172,6 +1186,7 @@ export async function POST(req: Request) {
     const { ciFixDispatched } = await reviewAndMergeOpenPRs(sql);
     if (ciFixDispatched) {
       await scheduleChainRetry("ci_fix_dispatched", 15);
+      logDispatchCycle("ci_fix_dispatched");
       return json({ dispatched: false, reason: "ci_fix_dispatched", chain_retry: true });
     }
   }
@@ -1205,6 +1220,7 @@ export async function POST(req: Request) {
   }
   if (engineerBusy) {
     // Don't retry — the running engineer will chain-dispatch when it finishes
+    logDispatchCycle("engineer_busy", { source: engineerBusySource });
     return json({ dispatched: false, reason: "engineer_busy", source: engineerBusySource });
   }
 
@@ -1269,6 +1285,7 @@ export async function POST(req: Request) {
     }).catch(() => {});
     const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     await scheduleChainRetry("pr_queue_full", 10);
+    logDispatchCycle("pr_queue_full", { open_prs: openPRCount });
     return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true, pr_flush_triggered: true });
   }
 
@@ -1906,6 +1923,7 @@ export async function POST(req: Request) {
   }
 
   if (scoredItems.length === 0) {
+    logDispatchCycle("no_scorable_items");
     return json({ dispatched: false, reason: "no_scorable_items" });
   }
 
@@ -2511,5 +2529,6 @@ export async function POST(req: Request) {
     syncIssueForBacklog(sql, topItem.id, "blocked");
   }
   await scheduleChainRetry("github_dispatch_failed", 5);
+  logDispatchCycle("github_dispatch_failed", { status: res.status, item_title: topItem.title });
   return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
 }
