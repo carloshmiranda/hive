@@ -710,6 +710,29 @@ export async function POST(req: Request) {
       const prevAttempts = (item?.notes || "").match(/\[attempt \d+\] (Failed|Auto-blocked|\[)/g)?.length || 0;
       const attempt = prevAttempts + 1;
       const errorMsg = body.error || "";
+
+      // Infra crashes (GitHub Actions runner never started — no execution output file, OIDC failure)
+      // get a short 30-min retry, not the standard 2–6h cooldown for code failures.
+      // We detect them by the "workflow_crash" prefix set in hive-engineer.yml and track them
+      // separately with [infra-crash N] so they don't increment the code-failure attempt counter.
+      if (errorMsg.startsWith("workflow_crash") && item) {
+        const prevInfraCrashes = ((item.notes || "").match(/\[infra-crash \d+\]/g) || []).length;
+        const infraAttempt = prevInfraCrashes + 1;
+        // Cap at 5 infra retries before treating like a real failure and letting normal cooldown take over
+        if (infraAttempt <= 5) {
+          await sql`
+            UPDATE hive_backlog
+            SET status = 'ready',
+                dispatched_at = NOW() - INTERVAL '90 minutes',
+                notes = COALESCE(notes, '') || ${` [infra-crash ${infraAttempt}] GitHub Actions infra failure — retrying after ~30 min. Error: ${errorMsg.slice(0, 120)}`}
+            WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
+          `.catch((e: any) => { console.warn(`[backlog] infra-crash reset failed: ${e?.message || e}`); });
+          console.log(`[backlog] infra-crash ${infraAttempt} for "${item.title}" — reset to ready with 30-min cooldown`);
+          return json({ dispatched: false, status: "infra_crash_retry_scheduled", item_id: completed_id, infra_attempt: infraAttempt });
+        }
+        console.log(`[backlog] infra-crash ${infraAttempt} for "${item.title}" — exceeded retry cap, falling through to normal failure handling`);
+      }
+
       const turnsMatch = errorMsg.match(/\((\d+) turns\)/);
       const turnsUsed = turnsMatch ? parseInt(turnsMatch[1]) : 0;
       // Detect max_turns failures — use spec.estimated_turns as baseline (80% threshold)
