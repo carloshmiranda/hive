@@ -124,6 +124,133 @@ export const EngineerResponseSchema = z.object({
   notes: z.string().optional(),
 });
 
+// CEO cycle review - structured output from CEO brain agent
+// The review is nested under ceo_review.review in the API payload
+export const CeoReviewSchema = z.object({
+  score: z.number().int().min(1).max(10),
+  validation_score: z.number().min(0).max(100).optional(),
+  validation_phase: z.string().min(1),
+  phase_justification: z.string().optional(),
+  cycle_goal: z.string().optional(),
+  briefing: z.object({
+    what_i_did: z.array(z.string()),
+    key_findings: z.object({
+      product_state: z.string().optional(),
+      critical_gap: z.string().optional(),
+      opportunity: z.string().optional(),
+    }).optional(),
+    product_maturity: z.object({
+      done: z.array(z.string()).optional(),
+      building: z.array(z.string()).optional(),
+      planned: z.array(z.string()).optional(),
+    }).optional(),
+    health: z.object({
+      status: z.enum(["healthy", "degraded", "down"]),
+      errors_24h: z.number().int().min(0).optional(),
+      last_deploy: z.string().optional(),
+    }).optional(),
+    plan_tomorrow: z.string().optional(),
+  }).optional(),
+  wins: z.array(z.string()).optional(),
+  misses: z.array(z.string()).optional(),
+  agent_grades: z.record(z.string(), z.union([
+    z.string(),
+    z.object({ grade: z.enum(["A", "B", "C", "F"]), note: z.string().optional() }),
+  ])),
+  design_review: z.object({
+    ui_changed: z.boolean(),
+    violations: z.array(z.string()).optional(),
+    score_deduction: z.number().optional(),
+    notes: z.string().optional(),
+  }).optional(),
+  playbook_entry: z.object({
+    domain: z.enum(["growth", "engineering", "ops", "strategy"]),
+    insight: z.string().min(5),
+    confidence: z.number().min(0).max(1),
+  }).optional(),
+  kill_flag: z.boolean(),
+  kill_reason: z.string().nullable().optional(),
+  kill_recommendation: z.boolean().optional(),
+  kill_evaluation_response: z.object({
+    triggers_present: z.array(z.string()).optional(),
+    justification: z.string().optional(),
+    resolution_plan: z.string().optional(),
+  }).optional(),
+  next_cycle_priorities: z.array(z.string()).optional(),
+  error_patterns: z.array(z.object({
+    error_text: z.string(),
+    agent: z.string(),
+    fix_summary: z.string(),
+  })).optional(),
+  engineering_tasks: z.array(z.object({
+    id: z.string(),
+    task: z.string(),
+    files_allowed: z.array(z.string()).optional(),
+    files_forbidden: z.array(z.string()).optional(),
+    acceptance_criteria: z.array(z.string()).optional(),
+    specialist: z.string().optional(),
+    complexity: z.enum(["mechanical", "standard", "complex"]).optional(),
+  })).optional(),
+  growth_tasks: z.array(z.object({
+    id: z.string(),
+    task: z.string(),
+    channel: z.string().optional(),
+    hypothesis: z.string().optional(),
+    success_metric: z.string().optional(),
+  })).optional(),
+});
+
+// Scout proposal — written directly to approvals.context by Scout agent
+export const ScoutProposalSchema = z.object({
+  proposal: z.object({
+    name: z.string().min(1).max(100),
+    slug: z.string().min(1).max(50),
+    market: z.string().min(1),
+    problem: z.string().min(10),
+    solution: z.string().min(10),
+    business_model: z.enum(["saas", "blog", "affiliate", "newsletter", "ecommerce", "other"]).optional(),
+    target_audience: z.string().optional(),
+    revenue_model: z.string().optional(),
+    competition: z.array(z.string()).optional(),
+    unique_angle: z.string().optional(),
+    expansion_candidate: z.object({
+      parent_company: z.string(),
+      synergy_score: z.number().min(0).max(1),
+      rationale: z.string(),
+    }).optional(),
+  }),
+  research: z.object({
+    market_size: z.string().optional(),
+    seo_keywords: z.array(z.string()).optional(),
+    competitors: z.array(z.object({
+      name: z.string(),
+      url: z.string().optional(),
+      weakness: z.string().optional(),
+    })).optional(),
+    trend_signal: z.string().optional(),
+    sources: z.array(z.string()).optional(),
+  }).optional(),
+});
+
+// Evolver proposal — written directly to evolver_proposals table by Evolver agent
+export const EvolverProposalSchema = z.object({
+  gap_type: z.enum(["outcome", "capability", "knowledge", "process"]),
+  severity: z.enum(["critical", "high", "medium", "low"]),
+  title: z.string().min(5).max(200),
+  diagnosis: z.string().min(20),
+  signal_source: z.string().min(1),
+  signal_data: z.record(z.string(), z.unknown()).optional(),
+  proposed_fix: z.object({
+    type: z.enum(["prompt_update", "setup_action", "config_change", "process_change"]),
+    target: z.string().optional(),
+    change: z.string().min(10),
+    affected_files: z.array(z.string()).optional(),
+    acceptance_criteria: z.array(z.string()).optional(),
+  }),
+  affected_companies: z.array(z.string()).optional(),
+  cross_company: z.boolean().optional(),
+});
+
 // Schema registry for easy lookup by agent name
 export const AGENT_SCHEMAS = {
   growth: GrowthResponseSchema,
@@ -141,6 +268,9 @@ export type BacklogPlannerResponse = z.infer<typeof BacklogPlannerResponseSchema
 export type EngineerResponse = z.infer<typeof EngineerResponseSchema>;
 export type DecomposedSubTask = z.infer<typeof DecomposedSubTaskSchema>;
 export type DecomposedSubTasksResponse = z.infer<typeof DecomposedSubTasksSchema>;
+export type CeoReview = z.infer<typeof CeoReviewSchema>;
+export type ScoutProposal = z.infer<typeof ScoutProposalSchema>;
+export type EvolverProposal = z.infer<typeof EvolverProposalSchema>;
 
 // Simplified JSON schema definitions for our agent responses
 // Using manual definitions since zod-to-json-schema conversion is complex
