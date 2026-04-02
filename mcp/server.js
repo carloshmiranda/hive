@@ -101,6 +101,47 @@ async function createGitHubIssueForBacklog(item) {
   }
 }
 
+// Sync backlog status change → GitHub Issue (close on done/rejected, update labels otherwise)
+async function syncBacklogIssueStatus(issueNumber, newStatus) {
+  if (!issueNumber) return;
+  try {
+    let token = GH_PAT;
+    if (!token) {
+      const rows = await sql.query(`SELECT value FROM settings WHERE key = 'github_token' LIMIT 1`);
+      token = rows?.[0]?.value;
+    }
+    if (!token) {
+      try {
+        const { execSync } = await import("child_process");
+        token = execSync("gh auth token", { encoding: "utf-8", timeout: 3000 }).trim();
+      } catch { /* gh CLI not available */ }
+    }
+    if (!token) return;
+
+    const PHASE_LABELS = ["phase:ready", "phase:dispatched", "phase:in-progress", "phase:pr-open", "phase:done", "phase:blocked"];
+    const headers = { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" };
+    const base = `https://api.github.com/repos/${HIVE_REPO}/issues/${issueNumber}`;
+
+    if (newStatus === "done" || newStatus === "rejected") {
+      const comment = newStatus === "done" ? "Completed and merged." : "Rejected — no longer needed.";
+      await fetch(`${base}/comments`, { method: "POST", headers, body: JSON.stringify({ body: comment }), signal: AbortSignal.timeout(5000) }).catch(() => {});
+      await fetch(base, { method: "PATCH", headers, body: JSON.stringify({ state: "closed" }), signal: AbortSignal.timeout(5000) }).catch(() => {});
+      console.error(`[mcp] Closed GitHub issue #${issueNumber} (${newStatus})`);
+    } else {
+      const phaseLabel = `phase:${newStatus.replace("_", "-")}`;
+      if (!PHASE_LABELS.includes(phaseLabel)) return;
+      // Remove old phase labels
+      for (const label of PHASE_LABELS.filter(l => l !== phaseLabel)) {
+        await fetch(`${base}/labels/${encodeURIComponent(label)}`, { method: "DELETE", headers, signal: AbortSignal.timeout(5000) }).catch(() => {});
+      }
+      await fetch(`${base}/labels`, { method: "POST", headers, body: JSON.stringify({ labels: [phaseLabel] }), signal: AbortSignal.timeout(5000) }).catch(() => {});
+      console.error(`[mcp] Updated GitHub issue #${issueNumber} label to ${phaseLabel}`);
+    }
+  } catch (e) {
+    console.error(`[mcp] syncBacklogIssueStatus error: ${e?.message || e}`);
+  }
+}
+
 const server = new McpServer({
   name: "hive",
   version: "1.0.0",
@@ -328,7 +369,10 @@ server.registerTool(
     if (status === "done") sets.push(`completed_at = NOW()`);
     if (sets.length === 0) return { content: [{ type: "text", text: "No updates specified" }] };
     params.push(id);
-    const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id, title, status, priority, theme, notes`, params);
+    const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id, title, status, priority, theme, notes, github_issue_number`, params);
+    if (row && status && row.github_issue_number) {
+      syncBacklogIssueStatus(row.github_issue_number, status).catch(() => {});
+    }
     return { content: [{ type: "text", text: row ? JSON.stringify(row, null, 2) : `Item ${id} not found` }] };
   }
 );
@@ -357,8 +401,13 @@ server.registerTool(
       if (status === "done") sets.push(`completed_at = NOW()`);
       if (sets.length === 0) continue;
       params.push(id);
-      const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id, title, status, priority`, params);
-      if (row) results.push(row);
+      const [row] = await sql.query(`UPDATE hive_backlog SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING id, title, status, priority, github_issue_number`, params);
+      if (row) {
+        results.push(row);
+        if (status && row.github_issue_number) {
+          syncBacklogIssueStatus(row.github_issue_number, status).catch(() => {});
+        }
+      }
     }
     return { content: [{ type: "text", text: JSON.stringify({ updated: results.length, items: results }, null, 2) }] };
   }
