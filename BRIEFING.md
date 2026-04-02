@@ -99,6 +99,30 @@
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
 
+- `[code]` 2026-04-02 — **4-step playbook lifecycle — RETRIEVE/JUDGE/DISTILL + CONSOLIDATE (backlog 49d348c1)** — `POST /api/playbook/retrieve`: OIDC-auth agent endpoint; runs pgvector search → judge_score = similarity×confidence → distills to `formatted_context` string for direct prompt injection. `POST /api/playbook/consolidate`: dual-auth (OIDC/session); scans same-domain pairs with vector similarity >0.85, highest-confidence-wins merge with superseded_by. GH #107 closed. Commit 6965dbb.
+
+- `[code]` 2026-04-02 — **Sentinel CHECK 3b: stale competitive analysis auto-refresh (backlog ead69fc5)** — sentinel-dispatch now detects companies missing competitive_analysis reports or where last report >30 days old, dispatches `research_request` with `research_type: "competitive_analysis"`. Dedup via agent_actions lookup. GH #100 closed. Commit 89fdfd1.
+
+- `[code]` 2026-04-02 — **ValidationResult recommendation field with venture-studio benchmarks (backlog b4d0fcdb)** — `computeRecommendation()` in `validation.ts` maps to kill/kill_evaluate/pivot_evaluate/continue/double_down. New `countConsecutiveFlatGrowthWeeks()` function; STALLED trigger added at 8+ consecutive flat-growth weeks (<5% WoW). GH #102 closed. Commit 13c7590.
+
+- `[code]` 2026-04-02 — **Visual hierarchy + layout pattern docs in boilerplate (backlog 8a051be6)** — Extended `globals.css` with two documentation blocks: visual hierarchy (h1→p rules, heading scan order) and layout patterns (section/hero/card/nav/footer/button/spacing templates as CSS comments). Follows existing design-rules comment pattern. Commit 04954ce.
+
+- `[code]` 2026-04-02 — **PR auto-merge observability (backlog bc0a94a4)** — Added `agent_actions` INSERTs to `reviewAndMergeOpenPRs` in `backlog/dispatch/route.ts` for all three outcomes: `success` (merged, with risk score + affected item IDs), `failed` (merge rejected, with reason), `skipped` (escalated, with hard gate details + ci_fix_dispatched flag). Previously only `console.log`. Commit ae39d0d.
+
+- `[code]` 2026-04-02 — **next/font + next/image added to company boilerplate (backlog 8b1247cd)** — Inter font via `next/font/google` with `--font-sans` CSS variable and `display: swap`. Logo image via `next/image` in nav (with `alt` text) and footer (decorative, `aria-hidden`). E2E test TypeScript strict errors fixed (`catch (error: unknown)`, `(error as Error).message`). SVG placeholder logo at `public/logo.svg` with `{{LOGO_LETTER}}` template. Commit b1d99c4.
+
+- `[code]` 2026-04-02 — **shadcn/ui added to company boilerplate (backlog 95d8130e)** — Added 6 deps (radix-ui/react-slot, react-label, cva, clsx, lucide-react, tailwind-merge). Created `src/lib/utils.ts` (cn helper), `components.json` (shadcn config), CSS variable aliases in globals.css (maps shadcn vars to existing design tokens). Added ui/ primitives: Button (CVA variants + asChild), Card, Input, Badge, Label. Extracted WaitlistForm to `src/components/waitlist-form.tsx` with full EAA a11y (sr-only labels, aria-required, aria-describedby, role=alert). page.tsx is now a Server Component. Commit 470835b.
+
+- `[code]` 2026-04-02 — Dashboard AgentBadge unified with AGENT_DISPLAY shared lib. Replaced stale local AGENT_MAP (7 agents, no icons) with AGENT_COLOR map + AGENT_DISPLAY covering all 10 agents including sentinel/healer/backlog. Both dashboard and Telegram now use the same source of truth. Commit afcde6c.
+
+- `[code]` 2026-04-02 — Check 52 added to sentinel-janitor: GitHub Dependabot vulnerability scanning. Queries Dependabot alerts API daily for active companies with github_repo set. Creates P0 company_task when critical/high CVEs found (deduped against existing open vuln tasks). Commit eb53e1e.
+
+- `[code]` 2026-04-02 — Web search capability added for worker agents. New /api/agents/web-search endpoint (Brave Search API, CRON_SECRET auth) + web_search tool in HIVE_TOOLS + handler in /api/agents/tools. Growth/outreach/ops agents can now search the web during tool-calling turns. Graceful degradation when BRAVE_SEARCH_API_KEY not configured. Commit a6814f9.
+
+- `[code]` 2026-04-02: **Job summaries for all brain agent workflows (backlog 535ec38a, PR #345)** — CEO, Scout, Engineer, Evolver, and Healer workflows now append a markdown table to `$GITHUB_STEP_SUMMARY` after each run. Shows trigger, company/scope, outcome, and run link. Visible in GitHub Actions UI without opening logs. All use `if: always()` to surface even on failure.
+
+- `[code]` 2026-04-02: **QStash failure callbacks for dead dispatch detection (backlog de0fa283, PR #344)** — Added `failureCallback` option to `qstashPublish()`. New endpoint `POST /api/dispatch/qstash-failure` logs dead dispatches to `agent_actions` and fires Telegram notification. Wired into sentinel worker dispatch and 3 backlog dispatch paths. Eliminates silent failure when QStash exhausts all retries.
+
 - `[code]` 2026-04-02: **Smart model routing for decomposed sub-tasks (issue #116)** — `backlog/dispatch/route.ts`: `max_turns` now uses complexity-aware logic for sub-tasks (`parent_id` set). S→25, M→45, L→70 turns (aligns with YAML's complexity caps). Previously all sub-tasks were floored at 50, wasting budget on S tasks. S complexity sub-tasks also get `meta.model = claude-haiku-4-5-20251001` on first attempt (cheaper, fast enough for focused 10-25 turn tasks). Retry escalation to Opus still overrides at attempt ≥2. Non-sub-tasks unchanged.
 
 - `[code]` 2026-04-02: **Redis cache hit/miss metrics tracking (issue #133)** — Added atomic `INCR` counters (`metrics:cache:hits`, `metrics:cache:misses`) to `cacheGet()` in `redis-cache.ts`. Fire-and-forget (`.catch(() => {})`) — zero latency impact on hot path. Added `getCacheStats()` via `mget` returning `{ hits, misses, total, hitRate }`. Exposed in `/api/health` response alongside existing Redis latency check (e.g., "12ms latency, 78.3% hit rate (470/600)").
