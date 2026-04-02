@@ -26,7 +26,7 @@ const captureConsoleLogs = (page: Page) => {
   });
 
   page.on('pageerror', (error) => {
-    const errorEntry = `[ERROR] ${error.message}`;
+    const errorEntry = `[ERROR] ${(error as Error).message}`;
     consoleLogs.push(errorEntry);
     console.error(`Page Error: ${errorEntry}`);
   });
@@ -105,8 +105,8 @@ test.describe('Page Load Verification', () => {
         } else {
           results.push({ page: pagePath, status: 'not_found' });
         }
-      } catch (error) {
-        results.push({ page: pagePath, status: 'error', error: error.message });
+      } catch (error: unknown) {
+        results.push({ page: pagePath, status: 'error', error: (error as Error).message });
       }
     }
 
@@ -158,12 +158,12 @@ test.describe('Interactive Elements Verification', () => {
           text: buttonText,
           status: 'clicked_successfully'
         });
-      } catch (error) {
+      } catch (error: unknown) {
         buttonResults.push({
           index: i,
           text: 'unknown',
           status: 'error',
-          error: error.message
+          error: (error as Error).message
         });
       }
     }
@@ -197,11 +197,11 @@ test.describe('Interactive Elements Verification', () => {
         // Go back for next test
         await page.goBack();
         await page.waitForLoadState('networkidle', { timeout: 5000 });
-      } catch (error) {
+      } catch (error: unknown) {
         linkResults.push({
           index: i,
           status: 'error',
-          error: error.message
+          error: (error as Error).message
         });
       }
     }
@@ -277,11 +277,11 @@ test.describe('Form Functionality Verification', () => {
           inputs: inputs.length,
           status: 'form_interaction_successful'
         });
-      } catch (error) {
+      } catch (error: unknown) {
         formResults.push({
           index: i,
           status: 'error',
-          error: error.message
+          error: (error as Error).message
         });
       }
     }
@@ -345,7 +345,7 @@ test.describe('Quality Checks', () => {
         if (naturalWidth === 0) {
           brokenImages++;
         }
-      } catch (error) {
+      } catch (error: unknown) {
         brokenImages++;
       }
     }

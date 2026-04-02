@@ -53,6 +53,33 @@
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
 }
 
+/* ─── shadcn/ui CSS Variable Aliases ───
+   Maps shadcn's expected variable names to our design tokens.
+   This lets shadcn components work without overriding our token system. */
+
+:root {
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --card: var(--color-bg-subtle);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-bg);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--color-bg-subtle);
+  --secondary-foreground: var(--color-text);
+  --muted: var(--color-bg-subtle);
+  --muted-foreground: var(--color-text-secondary);
+  --accent: var(--color-accent-light);
+  --accent-foreground: var(--color-text);
+  --destructive: var(--color-error);
+  --destructive-foreground: #ffffff;
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-accent);
+  --radius: var(--radius-sm);
+}
+
 /* ─── Design Rules (for AI agents reading this file) ───
    1. NO gradients on backgrounds or text. Solid colors only.
    2. NO more than 2 font weights per page (regular + bold).
