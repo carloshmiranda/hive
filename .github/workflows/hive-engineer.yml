@@ -1223,7 +1223,7 @@ jobs:
           fi
 
       - name: Log failure to Hive API
-        if: failure()
+        if: failure() || cancelled()
         env:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |

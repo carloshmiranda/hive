@@ -770,16 +770,18 @@ async function executeSentinelDispatch(request: Request) {
     `;
 
     // ========================================================================
-    // 13b2: Task stealability — stale running agent_actions (stuck >1h)
+    // 13b2: Task stealability — stale running agent_actions (stuck >35 min)
+    // Threshold is set above the longest job timeout (build-hive: 30 min) so we
+    // never false-positive on legitimately running jobs, but catch zombies quickly.
     // ========================================================================
 
     const staleRunning = await sql`
       UPDATE agent_actions
       SET status = 'failed',
-          error = 'Stale: marked failed by Sentinel after 1h+ in running state (likely GitHub Actions crash/timeout)',
+          error = 'Stale: marked failed by Sentinel after 35+ min in running state (likely GitHub Actions crash/timeout)',
           finished_at = NOW()
       WHERE status = 'running'
-      AND started_at < NOW() - INTERVAL '1 hour'
+      AND started_at < NOW() - INTERVAL '35 minutes'
       AND agent IN ('engineer', 'growth', 'ceo', 'scout', 'healer', 'evolver')
       RETURNING id, agent, company_id
     `;
