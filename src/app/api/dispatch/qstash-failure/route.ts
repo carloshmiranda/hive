@@ -61,19 +61,20 @@ export async function POST(req: Request) {
   try {
     const sql = getDb();
     await sql`
-      INSERT INTO agent_actions (agent, action_type, status, error, metadata, created_at)
+      INSERT INTO agent_actions (agent, action_type, status, error, description, output, started_at)
       VALUES (
         'dispatch',
         'qstash_failure',
         'failed',
         ${errorDetail},
+        ${`Dead dispatch: ${targetPath} failed after all retries`},
         ${JSON.stringify({
           source_message_id: sourceMessageId,
           target_path: targetPath,
           response_status: responseStatus,
           retried,
           max_retries: maxRetries,
-        })}::jsonb,
+        })},
         NOW()
       )
     `;
