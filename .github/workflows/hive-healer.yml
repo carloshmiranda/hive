@@ -288,3 +288,21 @@ jobs:
           trigger: error_fix
           execution_file: ${{ steps.agent.outputs.execution_file }}
           cron_secret: ${{ secrets.CRON_SECRET }}
+
+      - name: Job summary
+        if: always()
+        env:
+          SCOPE: ${{ github.event.client_payload.scope || github.event.inputs.scope || 'systemic' }}
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          STATUS_ICON="${{ steps.agent.outcome == 'success' && '✅' || '❌' }}"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # ${STATUS_ICON} Healer — ${SCOPE}
+
+          | Field | Value |
+          |-------|-------|
+          | Scope | \`${SCOPE}\` |
+          | Outcome | ${AGENT_OUTCOME} |
+          | Run | [View logs](${RUN_URL}) |
+          EOF

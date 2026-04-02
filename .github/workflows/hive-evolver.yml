@@ -121,3 +121,20 @@ jobs:
             - If prompt evolution is needed, store new version in agent_prompts (is_active = false).
 
       # Evolver is a terminal node — no chain dispatch needed.
+
+      - name: Job summary
+        if: always()
+        env:
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          STATUS_ICON="${{ steps.agent.outcome == 'success' && '✅' || '❌' }}"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # ${STATUS_ICON} Evolver
+
+          | Field | Value |
+          |-------|-------|
+          | Trigger | scheduled |
+          | Outcome | ${AGENT_OUTCOME} |
+          | Run | [View logs](${RUN_URL}) |
+          EOF
