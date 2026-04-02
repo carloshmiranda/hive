@@ -58,6 +58,7 @@ Before writing frontend code, configuring styling, or triggering deployments, re
 
 | When to use | Skill file |
 |------------|------------|
+| Building or redesigning landing pages, marketing sites, blog layouts | `.claude/skills/frontend-design/SKILL.md` — bold design direction, distinctive typography, memorable aesthetics, anti-slop principles |
 | Writing or reviewing any Tailwind CSS | `.claude/skills/tailwind-4-docs/SKILL.md` — Tailwind v4 utilities, variants, config, migration from v3 |
 | Writing React components, Next.js pages, data fetching | `.claude/skills/vercel-react-best-practices/SKILL.md` — 65 performance rules from Vercel Engineering |
 | Deploying to Vercel, creating preview deployments | `.claude/skills/deploy-to-vercel/SKILL.md` — deployment actions and Vercel CLI steps |
@@ -108,7 +109,10 @@ These skills are checked into the Hive repo (not the company repo). Read them wi
 - No console.log in production code (use structured logging if available).
 
 ### Visual quality standards
-Read `globals.css` before writing ANY UI code. It contains design tokens and rules. Follow them strictly:
+
+**For landing pages, marketing sites, and blog layouts:** Read `.claude/skills/frontend-design/SKILL.md` BEFORE writing any UI code. Commit to a bold aesthetic direction specific to this company. Every company must have a distinct visual identity — no two portfolio companies should share the same font or color palette.
+
+Read `globals.css` before writing ANY UI code. It contains design tokens and rules. Follow them strictly. The frontend-design skill's aesthetic vision must be expressed through (or extend) these tokens — not override the token system itself.
 
 1. **Use design tokens, not raw values.** Use `text-brand`, `bg-accent`, `text-text-secondary`, `border-border` etc. Never write raw hex colors (`#3b82f6`) or arbitrary Tailwind colors (`text-blue-600`) in components.
 2. **No gradients.** No `bg-gradient-to-*`, no `from-*`, no gradient text. Solid colors only.
