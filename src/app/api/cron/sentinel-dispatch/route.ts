@@ -746,6 +746,15 @@ async function executeSentinelDispatch(request: Request) {
         )
       )
       SELECT slug, company_id, database_exists,
+        -- Phase classification: derived from proxy signals, used for logging + score
+        CASE
+          WHEN latest_mrr > 0 AND (recent_pageviews > 0 OR recent_signups > 0) THEN 'growth'
+          WHEN latest_mrr > 0 THEN 'monetising'
+          WHEN total_cycles <= 2 THEN 'validate'
+          WHEN total_cycles > 8 AND recent_pageviews = 0 AND recent_signups = 0 THEN 'stalled'
+          WHEN recent_pageviews > 0 OR recent_signups > 0 THEN 'build'
+          ELSE 'idle'
+        END AS dispatch_phase,
         (
           (pending_tasks * 2)
           + (LEAST(days_since_cycle, 14) * 3)
@@ -754,15 +763,25 @@ async function executeSentinelDispatch(request: Request) {
           + (CASE WHEN has_directive THEN 15 ELSE 0 END)
           + (CASE WHEN status = 'mvp' AND total_cycles < 3 THEN 8 ELSE 0 END)
           - (LEAST(total_cycles, 20) * 0.5)
-          -- Validation proxy: boost companies showing traction, penalise stalled ones
-          + (CASE WHEN latest_mrr > 0 THEN 5 ELSE 0 END)
-          + (CASE WHEN recent_pageviews > prior_pageviews AND prior_pageviews > 0 THEN 3 ELSE 0 END)
+          -- Phase-aware signals: prioritise companies showing traction, deprioritise stalled ones
+          -- Growth phase: revenue + active engagement → double down (research benchmark: has_revenue = +10)
+          + (CASE
+              WHEN latest_mrr > 0 AND (recent_pageviews > 0 OR recent_signups > 0) THEN 12
+              WHEN latest_mrr > 0 THEN 5
+              ELSE 0
+            END)
+          -- Traction momentum: WoW traffic growth (>5% = strong signal per YC benchmarks)
+          + (CASE
+              WHEN prior_pageviews > 0 AND recent_pageviews > (prior_pageviews * 1.05) THEN 8
+              WHEN prior_pageviews > 0 AND recent_pageviews > prior_pageviews THEN 3
+              ELSE 0
+            END)
+          -- Recent signup activity
           + (CASE WHEN recent_signups > 0 THEN 2 ELSE 0 END)
-          - (CASE WHEN total_cycles > 3
-                   AND recent_pageviews = 0
-                   AND latest_mrr = 0
-                   AND recent_signups = 0
-               THEN 5 ELSE 0 END)
+          -- Moderate stall (>3 cycles, no engagement): defer in favour of active companies
+          - (CASE WHEN total_cycles > 3 AND recent_pageviews = 0 AND latest_mrr = 0 AND recent_signups = 0 THEN 5 ELSE 0 END)
+          -- Severe stall (>8 cycles, still zero metrics): needs pivot/kill discussion, not another cycle
+          - (CASE WHEN total_cycles > 8 AND recent_pageviews = 0 AND latest_mrr = 0 AND recent_signups = 0 THEN 10 ELSE 0 END)
         ) AS priority_score
       FROM company_signals
       WHERE database_exists = true
@@ -1651,7 +1670,7 @@ async function executeSentinelDispatch(request: Request) {
       dispatches.push({
         type: "brain",
         target: "cycle_start",
-        payload: { company: r.slug, priority_score: r.priority_score },
+        payload: { company: r.slug, priority_score: r.priority_score, dispatch_phase: r.dispatch_phase },
       });
       cycleDispatches++;
     }
