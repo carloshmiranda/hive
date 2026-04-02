@@ -147,6 +147,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "type": "BOOLEAN",
         "nullable": true,
         "hasDefault": true
+      },
+      "brand": {
+        "type": "JSONB",
+        "nullable": true,
+        "hasDefault": true
       }
     },
     "checks": [

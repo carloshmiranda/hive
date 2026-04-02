@@ -38,7 +38,7 @@ function getAgentDomains(agent: string): string[] | null {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getSystemState(sql: any, currentAgent: string): Promise<Record<string, unknown>> {
-  const [runningAgents, recentCompletions, openPRs, blockedItems, pendingApprovals, rateLimitEvents] = await Promise.all([
+  const [runningAgents, recentCompletions, openPRs, blockedItems, pendingApprovals, rateLimitEvents, activeErrorPatterns] = await Promise.all([
     // What agents are running right now?
     sql`
       SELECT agent, company_id, action_type, description,
@@ -105,6 +105,16 @@ async function getSystemState(sql: any, currentAgent: string): Promise<Record<st
       ORDER BY finished_at DESC
       LIMIT 10
     `.catch(() => []),
+    // Active (unresolved) error patterns — system-wide known issues every agent should avoid triggering
+    sql`
+      SELECT pattern, agent, fix_summary, occurrences, auto_fixable,
+        EXTRACT(EPOCH FROM (NOW() - last_seen_at))::int / 60 as minutes_since_seen
+      FROM error_patterns
+      WHERE resolved = false
+        AND last_seen_at > NOW() - INTERVAL '48 hours'
+      ORDER BY occurrences DESC, last_seen_at DESC
+      LIMIT 8
+    `.catch(() => []),
   ]);
 
   return {
@@ -154,6 +164,18 @@ async function getSystemState(sql: any, currentAgent: string): Promise<Record<st
           error: e.error_snippet,
         })),
       },
+      // Unresolved error patterns seen in last 48h — all agents should be aware of these
+      // to avoid triggering them and to inform their approach if relevant to their task
+      active_error_patterns: activeErrorPatterns.length > 0
+        ? activeErrorPatterns.map((p: any) => ({
+            pattern: p.pattern,
+            agent: p.agent,
+            known_fix: p.fix_summary || null,
+            occurrences: p.occurrences,
+            auto_fixable: p.auto_fixable,
+            minutes_since_seen: p.minutes_since_seen,
+          }))
+        : undefined,
       current_agent: currentAgent,
       timestamp: new Date().toISOString(),
     },
