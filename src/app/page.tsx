@@ -50,6 +50,8 @@ type EvolverProposal = {
   affected_companies: string[]; cross_company: boolean; status: string;
   playbook_entry_id: string | null; created_at: string; notes: string | null;
 };
+type NeonProject = { id: string; name: string; storage_gb: number; storage_pct: number; compute_hours: number; compute_pct: number };
+type NeonUsage = { projects: NeonProject[]; totals: { storage_gb: number; compute_hours: number }; limits: { storage_gb_per_project: number; compute_hours_per_month: number }; error?: string };
 
 // === HELPERS ===
 const AGENT_COLOR: Record<string, string> = {
@@ -169,6 +171,7 @@ export default function DashboardPage() {
   const [showAllTodos, setShowAllTodos] = useState(false);
   const [selectedApprovals, setSelectedApprovals] = useState<Set<string>>(new Set());
   const [batchProcessing, setBatchProcessing] = useState(false);
+  const [neonUsage, setNeonUsage] = useState<NeonUsage | null>(null);
 
   const fetchAll = useCallback(async () => {
     const res = await fetch("/api/dashboard");
@@ -189,6 +192,14 @@ export default function DashboardPage() {
       const todoRes = await fetch("/api/todos");
       if (todoRes.ok) setTodos((await todoRes.json()).data || []);
     } catch { /* non-critical */ }
+  }, []);
+
+  // Neon usage: fetched once on load (calls external Neon API — no need to poll every 2m)
+  useEffect(() => {
+    fetch("/api/infra/neon-usage")
+      .then(r => r.json())
+      .then(d => setNeonUsage(d))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -728,6 +739,49 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+
+          {/* Neon usage */}
+          {neonUsage && !neonUsage.error && neonUsage.projects.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
+                letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Neon DB usage</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {neonUsage.projects.map(p => (
+                  <div key={p.id} style={{ padding: "12px 14px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
+                    <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", marginBottom: 8 }}>{p.name}</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {/* Storage bar */}
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                          <span style={{ fontSize: 11, color: "var(--hive-text-dim)" }}>Storage</span>
+                          <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: p.storage_pct >= 80 ? "var(--hive-red)" : "var(--hive-text-secondary)" }}>
+                            {p.storage_gb.toFixed(3)} GB / {neonUsage.limits.storage_gb_per_project} GB ({p.storage_pct}%)
+                          </span>
+                        </div>
+                        <div style={{ height: 4, borderRadius: 2, background: "var(--hive-border)", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${p.storage_pct}%`, borderRadius: 2,
+                            background: p.storage_pct >= 80 ? "var(--hive-red)" : p.storage_pct >= 60 ? "#f59e0b" : "var(--hive-accent)" }} />
+                        </div>
+                      </div>
+                      {/* Compute bar */}
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                          <span style={{ fontSize: 11, color: "var(--hive-text-dim)" }}>Compute</span>
+                          <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: p.compute_pct >= 80 ? "var(--hive-red)" : "var(--hive-text-secondary)" }}>
+                            {p.compute_hours.toFixed(2)} hrs / {neonUsage.limits.compute_hours_per_month} hrs ({p.compute_pct}%)
+                          </span>
+                        </div>
+                        <div style={{ height: 4, borderRadius: 2, background: "var(--hive-border)", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${p.compute_pct}%`, borderRadius: 2,
+                            background: p.compute_pct >= 80 ? "var(--hive-red)" : p.compute_pct >= 60 ? "#f59e0b" : "var(--hive-accent)" }} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Recent activity preview */}
           {actions.length > 0 && (
