@@ -749,6 +749,12 @@ async function ceoContext(sql: any, company: any) {
     `portfolio-context-${company.id}-${Math.floor(Date.now() / 300000)}`
   );
 
+  // Auto-create revenue readiness task if score >= 60 and no revenue yet
+  const currentMrr = metrics.length > 0 ? (metrics[0].mrr || 0) : 0;
+  const revenueReadinessTaskCreated = await maybeCreateRevenueReadinessTask(
+    sql, company, validation.revenue_readiness_score, currentMrr
+  ).catch(() => false);
+
   // Check for CEO score kill evaluation trigger
   const ceoScoreKillTrigger = checkCEOScoreKillTrigger(recentCycles.map((c: { cycle_number: number; score: string }) => ({
     cycle_number: c.cycle_number,
@@ -793,7 +799,46 @@ async function ceoContext(sql: any, company: any) {
     growth_summary: growthSummary,
     portfolio_summary: portfolioContext,
     hive_capabilities: getCapabilitySummary(),
+    ...(revenueReadinessTaskCreated ? { revenue_readiness_task_created: true } : {}),
   };
+}
+
+// ─── Revenue readiness auto-task creation ───
+// When a company's revenue readiness score crosses 60 and has no revenue yet,
+// automatically create a backlog item for Stripe checkout. Idempotent — checks
+// for an existing active task before inserting. Fire-and-forget (errors swallowed).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function maybeCreateRevenueReadinessTask(sql: any, company: any, revenueReadinessScore: number, currentMrr: number): Promise<boolean> {
+  // Only trigger if score >= 60 and no revenue yet
+  if (revenueReadinessScore < 60 || currentMrr > 0) return false;
+
+  // Check for an existing active task for this company with theme = 'first_revenue'
+  const [existing] = await sql`
+    SELECT id FROM hive_backlog
+    WHERE company_id = ${company.id}
+      AND theme = 'first_revenue'
+      AND status NOT IN ('done', 'rejected')
+    LIMIT 1
+  `.catch(() => [null]);
+
+  if (existing) return false; // Already exists
+
+  // Create the task
+  await sql`
+    INSERT INTO hive_backlog (title, description, priority, category, status, source, company_id, theme)
+    VALUES (
+      ${`Add Stripe checkout to ${company.name}`},
+      ${`Revenue readiness score is ${revenueReadinessScore}/100 — the company is ready to monetize. Add a Stripe Checkout flow: create product + price via Stripe API, add a /checkout endpoint, add a pricing page with a CTA button, and wire up the checkout.session.completed webhook to unlock access. Use payment_link for the fastest path if a full checkout is overkill.`},
+      'P1',
+      'feature',
+      'ready',
+      'sentinel',
+      ${company.id},
+      'first_revenue'
+    )
+  `;
+
+  return true;
 }
 
 // ─── Scout context (portfolio-level, idea generation + research) ───
