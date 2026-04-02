@@ -2,6 +2,7 @@ import { json } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { getSettingValue } from "@/lib/settings";
 import { getQStashClient } from "@/lib/qstash";
+import { getRateLimitState, isRateLimitNear } from "@/lib/llm";
 
 async function runConnectivityTest(servicesToTest: string[] = ['all']) {
 
@@ -141,6 +142,9 @@ async function runConnectivityTest(servicesToTest: string[] = ['all']) {
   const statuses = Object.values(results).map(r => r.status);
   const overall = statuses.includes('error') ? 'failed' : 'passed';
 
+  // Include OpenRouter rate limit state for visibility
+  const rlState = getRateLimitState();
+
   return {
     status: overall,
     timestamp: new Date().toISOString(),
@@ -149,7 +153,13 @@ async function runConnectivityTest(servicesToTest: string[] = ['all']) {
       total: statuses.length,
       passed: statuses.filter(s => s === 'ok').length,
       failed: statuses.filter(s => s === 'error').length,
-    }
+    },
+    openrouter_rate_limit: rlState ? {
+      remaining: rlState.remaining,
+      limit: rlState.limit,
+      reset_at: new Date(rlState.resetAt).toISOString(),
+      near_limit: isRateLimitNear(),
+    } : null,
   };
 }
 
