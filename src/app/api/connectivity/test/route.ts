@@ -138,6 +138,33 @@ async function runConnectivityTest(servicesToTest: string[] = ['all']) {
     });
   }
 
+  // Test web search provider (Brave or Tavily)
+  if (servicesToTest.includes('all') || servicesToTest.includes('web_search')) {
+    await testWithLatency('web_search', async () => {
+      const braveKey = await getSettingValue("brave_api_key");
+      const tavilyKey = await getSettingValue("tavily_api_key");
+
+      if (braveKey) {
+        const res = await fetch("https://api.search.brave.com/res/v1/web/search?q=test&count=1", {
+          headers: {
+            Accept: "application/json",
+            "X-Subscription-Token": braveKey,
+          },
+        });
+        if (!res.ok) throw new Error(`Brave Search API returned ${res.status}`);
+      } else if (tavilyKey) {
+        const res = await fetch("https://api.tavily.com/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: tavilyKey, query: "test", max_results: 1 }),
+        });
+        if (!res.ok) throw new Error(`Tavily API returned ${res.status}`);
+      } else {
+        throw new Error("Web search not configured (set brave_api_key or tavily_api_key in Settings)");
+      }
+    });
+  }
+
   // Overall status
   const statuses = Object.values(results).map(r => r.status);
   const overall = statuses.includes('error') ? 'failed' : 'passed';
