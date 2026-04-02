@@ -7,8 +7,14 @@ jobs:
   lint-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full checkout so we can push the auto-fix commit back to the PR branch
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -16,8 +22,19 @@ jobs:
       - run: npm ci
       - name: Lint SQL queries
         run: npx tsx scripts/lint-sql.ts
-      - name: Check schema-map is up to date
-        run: npm run schema-map:check
+      - name: Auto-sync schema-map.ts
+        # Regenerate the schema map and auto-commit if stale.
+        # Eliminates the entire category of "schema-map out of date" CI failures:
+        # Engineer PRs often forget to run schema-map:generate, so CI fixes it automatically.
+        run: |
+          npm run schema-map:generate
+          if ! git diff --quiet src/lib/schema-map.ts; then
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git add src/lib/schema-map.ts
+            git commit -m "chore: auto-sync schema-map.ts"
+            git push
+          fi
       - name: Build
         run: npx next build
         env:
