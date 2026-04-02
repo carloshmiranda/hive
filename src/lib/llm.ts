@@ -279,7 +279,7 @@ function getCircuitBreakerKey(model: string): string {
 // Recommended preset configurations:
 // - hive-growth: High verbosity models, content-optimized (hermes-405b, llama-70b)
 // - hive-outreach: Medium verbosity, instruction-following models (llama-70b, hermes-405b)
-// - hive-ops: Low verbosity, fast models with throughput sorting (mistral-24b, phi4)
+// - hive-ops: Low verbosity, fast models with latency sorting (mistral-24b, phi4)
 // - hive-planner: Low temperature, large context models (qwen-coder, hermes-405b)
 export const OPENROUTER_MODELS = {
   // Tier 1: Large models (best quality)
@@ -325,7 +325,7 @@ export const AGENT_PRIMARIES: Record<string, { models: string[]; minContext: num
   },
   ops: {
     models: [
-      "@preset/hive-ops",  // Low verbosity, fast models, throughput sort
+      "@preset/hive-ops",  // Low verbosity, fast models, latency sort
       OPENROUTER_MODELS.mistral_24b,
       OPENROUTER_MODELS.phi4,
       OPENROUTER_MODELS.gemma_27b,
@@ -538,7 +538,7 @@ async function callOpenRouter(
     temperature: options.temperature || 0.7,
     provider: {
       allow_fallbacks: true,
-      sort: "throughput",
+      sort: "latency",
       max_price: { prompt: 0, completion: 0 },  // Hard-enforce free-only routing
       require_parameters: true,  // Only route to providers that support all request parameters
       ...(failingProviders.length > 0 && { ignore: failingProviders }),
