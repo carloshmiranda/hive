@@ -248,11 +248,11 @@ jobs:
             # Parallel worker dispatch — Growth/Outreach run on free models (OpenRouter/Gemini),
             # no Claude budget cost, so fire them concurrently with Engineer (not sequentially)
             {
-              echo "$RESULT" | grep -qiP "growth_tasks|growth_strategy|content.?calendar" && \
+              check_signal "dispatch_growth" && \
                 dispatch_to_company_repo "hive-growth.yml" "Growth cycle for $COMPANY" "growth"
             } &
             {
-              echo "$RESULT" | grep -qiP "outreach_tasks|lead.?list|cold.?email" && \
+              check_signal "dispatch_outreach" && \
                 dispatch_worker "outreach"
             } &
             # Wait for background worker dispatches (non-blocking, max 10s)
