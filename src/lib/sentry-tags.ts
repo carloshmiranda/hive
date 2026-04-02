@@ -59,6 +59,27 @@ export function setSentryTags(options: SentryTagOptions) {
 }
 
 /**
+ * Wrap an async function in a Sentry performance span.
+ * Spans appear in Sentry's performance tab and provide duration breakdowns
+ * within a trace. Unlike breadcrumbs (which are chronological events),
+ * spans measure how long each operation takes.
+ *
+ * @param name - Human-readable span name shown in Sentry
+ * @param op - Operation category (ai.run, db.query, http.client, etc.)
+ * @param attributes - Static attributes known before execution
+ * @param fn - The async work to measure
+ * @returns The result of fn, with the span automatically finished
+ */
+export async function withSpan<T>(
+  name: string,
+  op: string,
+  attributes: Record<string, string | number | boolean>,
+  fn: (span: ReturnType<typeof Sentry.startInactiveSpan>) => Promise<T>
+): Promise<T> {
+  return Sentry.startSpan({ name, op, attributes }, (span) => fn(span));
+}
+
+/**
  * Extract action type from route path for consistent tagging
  */
 export function getActionTypeFromRoute(pathname: string): string {

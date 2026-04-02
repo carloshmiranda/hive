@@ -9,7 +9,7 @@ import { getSuppressedEmails } from "@/lib/outreach-suppression";
 import { getResponseFormat, AGENT_SCHEMAS } from "@/lib/agent-schemas";
 import { HIVE_TOOLS } from "@/lib/hive-tools";
 import { sanitizeJSON, validateDispatchPayload, sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
-import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
+import { setSentryTags, addDispatchBreadcrumb, withSpan } from "@/lib/sentry-tags";
 import { type CompletionReport } from "@/lib/completion-report";
 import { cachedPlaybook } from "@/lib/redis-cache";
 import { compressResearchForAgent } from "@/lib/research-compression";
@@ -353,13 +353,31 @@ ${capabilitiesSummary(company.capabilities)}`;
       data: { agent: agentName, company: company.slug },
     });
     const responseFormat = getResponseFormat(agentName as keyof typeof AGENT_SCHEMAS);
-    const { response, logData, toolResults } = await callLLMWithTools(agentName, fullPrompt, {
-      sql,
-      responseFormat,
-      tools: HIVE_TOOLS,
-      parallelToolCalls: true,
-      company: company.slug,
-    });
+
+    // Sentry performance span: measures LLM call duration for tracing in the performance tab
+    const { response, logData, toolResults } = await withSpan(
+      `LLM: ${agentName}`,
+      "ai.run",
+      { "ai.agent": agentName, "ai.company": company.slug },
+      async (span) => {
+        const result = await callLLMWithTools(agentName, fullPrompt, {
+          sql,
+          responseFormat,
+          tools: HIVE_TOOLS,
+          parallelToolCalls: true,
+          company: company.slug,
+        });
+        // Update span with actual provider/model resolved at runtime
+        span?.setAttributes({
+          "ai.provider": result.logData.provider,
+          "ai.model_id": result.logData.model,
+          "ai.duration_s": result.logData.duration_s,
+          "ai.cost_usd": result.logData.cost_usd ?? 0,
+          "ai.tool_calls": result.response.toolCalls?.length ?? 0,
+        });
+        return result;
+      }
+    );
     const output = response.content;
 
     addDispatchBreadcrumb({
