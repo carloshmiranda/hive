@@ -201,7 +201,7 @@ export default function DashboardPage() {
   useEffect(() => {
     fetch("/api/infra/neon-usage")
       .then(r => r.json())
-      .then(d => setNeonUsage(d))
+      .then(d => d?.data && setNeonUsage(d.data))
       .catch(() => {});
   }, []);
 
