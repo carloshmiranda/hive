@@ -80,10 +80,54 @@ function parseExecutionMeta(execFile: string): { turns: number; cost: number } {
   }
 }
 
+// ─── Robust JSON extraction ──────────────────────────────────────────────────
+
+/**
+ * Extract the last valid JSON object from agent text output.
+ * Handles: markdown code blocks (```json ... ```), bare JSON objects,
+ * and nested structures. Returns {} on failure — never throws.
+ */
+function extractJSONFromText(text: string): Record<string, unknown> {
+  // 1. Try markdown code block: ```json\n...\n``` or ```\n...\n```
+  const codeBlockMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+  if (codeBlockMatch) {
+    try {
+      const parsed = JSON.parse(codeBlockMatch[1].trim());
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through to next strategy
+    }
+  }
+
+  // 2. Find all {...} blocks (handles nesting one level deep) and try each from last to first
+  const jsonCandidates = text.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
+  if (jsonCandidates) {
+    for (let i = jsonCandidates.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(jsonCandidates[i]);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+
+  return {};
+}
+
 // ─── Signal detection ────────────────────────────────────────────────────────
 
-function checkSignal(result: string, signal: string): boolean {
-  return new RegExp(`"${signal}"\\s*:\\s*true`).test(result);
+function checkSignal(
+  result: string,
+  signal: string,
+  parsed?: Record<string, unknown>
+): boolean {
+  const obj = parsed ?? extractJSONFromText(result);
+  return obj[signal] === true;
 }
 
 // ─── Company extraction ──────────────────────────────────────────────────────
@@ -91,14 +135,13 @@ function checkSignal(result: string, signal: string): boolean {
 function extractCompany(
   result: string,
   payload: Record<string, unknown>
-): { company: string; companyId: string } {
-  const companyMatch = result.match(/"company"\s*:\s*"([^"]+)"/);
-  const company = companyMatch?.[1] ?? String(payload.company ?? "");
+): { company: string; companyId: string; parsed: Record<string, unknown> } {
+  const parsed = extractJSONFromText(result);
 
-  const idMatch = result.match(/"company_id"\s*:\s*"([^"]+)"/);
-  const companyId = idMatch?.[1] ?? String(payload.company_id ?? "");
+  const company = String(parsed["company"] ?? payload.company ?? "");
+  const companyId = String(parsed["company_id"] ?? payload.company_id ?? "");
 
-  return { company, companyId };
+  return { company, companyId, parsed };
 }
 
 // ─── DB lookup for company repo ──────────────────────────────────────────────
@@ -228,7 +271,7 @@ async function main() {
   console.log(`Trigger: ${trigger}`);
   console.log(`Trace ID: ${traceId}`);
 
-  const { company, companyId } = extractCompany(result, dispatchPayload);
+  const { company, companyId, parsed } = extractCompany(result, dispatchPayload);
   console.log(`Company: ${company} | Company ID: ${companyId}`);
 
   if (!company) {
@@ -249,12 +292,12 @@ async function main() {
 
   if (isCycleStart) {
     // Provision new company if needed
-    if (checkSignal(result, "needs_provisioning")) {
+    if (checkSignal(result, "needs_provisioning", parsed)) {
       await dispatchGithub(repo, "new_company", { source: "ceo", ...basePayload }, ghToken);
     }
 
     // Chain to Scout for research
-    if (checkSignal(result, "needs_research")) {
+    if (checkSignal(result, "needs_research", parsed)) {
       await dispatchGithub(repo, "research_request", { source: "ceo", ...basePayload }, ghToken);
     }
 
@@ -279,7 +322,7 @@ async function main() {
 
     // Parallel worker dispatches (Growth + Outreach) — these use free models, fire concurrently
     await Promise.all([
-      checkSignal(result, "dispatch_growth")
+      checkSignal(result, "dispatch_growth", parsed)
         ? dispatchToCompanyRepo(
             "hive-growth.yml",
             `Growth cycle for ${company}`,
@@ -292,7 +335,7 @@ async function main() {
             cronSecret
           )
         : Promise.resolve(),
-      checkSignal(result, "dispatch_outreach")
+      checkSignal(result, "dispatch_outreach", parsed)
         ? dispatchWorker("outreach", company, traceId, hiveUrl, cronSecret)
         : Promise.resolve(),
     ]);
@@ -302,7 +345,7 @@ async function main() {
   }
 
   if (isGateApproved) {
-    if (checkSignal(result, "needs_provisioning")) {
+    if (checkSignal(result, "needs_provisioning", parsed)) {
       await dispatchGithub(repo, "new_company", { source: "ceo", ...basePayload }, ghToken);
     }
   }
