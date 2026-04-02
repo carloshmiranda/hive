@@ -75,9 +75,22 @@ Your plan MUST include validation context:
       }
     ],
     "reasoning": "Why these priorities. Must reference validation data.",
-    "directives_addressed": ["directive_id1"]
+    "directives_addressed": ["directive_id1"],
+    "dispatch_signals": {
+      "dispatch_growth": true,
+      "dispatch_outreach": false,
+      "needs_provisioning": false,
+      "needs_research": false
+    }
   }
 }
+```
+
+`dispatch_signals` controls which downstream agents run after this cycle:
+- `dispatch_growth`: set `true` if you included any `growth_tasks` in the plan
+- `dispatch_outreach`: set `true` if the company needs lead gen or cold email work this cycle
+- `needs_provisioning`: set `true` only for new companies that haven't been provisioned yet
+- `needs_research`: set `true` if market research is needed before the next cycle
 ```
 
 ### Bounded Context Planning
