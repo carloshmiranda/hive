@@ -3,6 +3,7 @@ import { requireAuth } from "@/lib/auth";
 import { encrypt, decryptAndMigrate, DecryptionError } from "@/lib/crypto";
 import { invalidateSetting } from "@/lib/redis-cache";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { EDGE_CONFIG_FLAGS, syncFlagToEdgeConfig, type EdgeConfigFlag } from "@/lib/edge-config";
 
 // Settings are stored in a simple key-value pattern in Neon.
 // We create the table on first access if it doesn't exist.
@@ -126,6 +127,13 @@ export async function POST(req: Request) {
 
   // Invalidate Redis cache for this setting
   await invalidateSetting(key);
+
+  // Sync to Edge Config if this is a flag-type key (fire-and-forget, non-blocking)
+  if ((EDGE_CONFIG_FLAGS as readonly string[]).includes(key)) {
+    syncFlagToEdgeConfig(key as EdgeConfigFlag, value).catch(e =>
+      console.warn(`[settings] Edge Config sync failed for ${key}:`, e?.message)
+    );
+  }
 
   return json({ key, saved: true });
 }

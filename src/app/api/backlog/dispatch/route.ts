@@ -13,6 +13,7 @@ import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 import { markTaskAsStealable, claimStealableTask, type WorkStealingResult } from "@/lib/work-stealing";
 import { computeLineageFailures, blockLineageForManualSpec } from "@/lib/backlog-lineage";
 import { checkRecentRateLimitFailures } from "@/lib/sentinel-helpers";
+import { isDispatchPaused } from "@/lib/edge-config";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -427,11 +428,9 @@ export async function POST(req: Request) {
     `.catch(() => {});
   };
 
-  // Global kill switch — check before ANY dispatch logic
-  const [pauseSetting] = await sql`
-    SELECT value FROM settings WHERE key = 'dispatch_paused' LIMIT 1
-  `.catch(() => []);
-  if (pauseSetting?.value === 'true') {
+  // Global kill switch — check before ANY dispatch logic.
+  // Reads from Edge Config (<1ms) with automatic fallback to Neon if not configured.
+  if (await isDispatchPaused()) {
     logDispatchCycle("dispatch_paused");
     return json({ dispatched: false, reason: "dispatch_paused", message: "All dispatches halted by kill switch" });
   }

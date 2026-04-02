@@ -42,6 +42,7 @@ import { computeBacklogScore, detectBlockedAgents } from "@/lib/backlog-priority
 import type { BacklogItem } from "@/lib/backlog-priority";
 import { verifyCronAuth, qstashPublish } from "@/lib/qstash";
 import { fetchRecentErrors, extractErrorPatterns, shouldDispatchHealer, createErrorSummary } from "@/lib/sentry-api";
+import { isDispatchPaused } from "@/lib/edge-config";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -101,9 +102,9 @@ async function executeSentinelDispatch(request: Request) {
     const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
     const cronSecret = process.env.CRON_SECRET || "";
 
-    // Global kill switch — bail before any dispatch logic
-    const [pauseSetting] = await sql`SELECT value FROM settings WHERE key = 'dispatch_paused' LIMIT 1`.catch(() => []);
-    if (pauseSetting?.value === 'true') {
+    // Global kill switch — bail before any dispatch logic.
+    // Reads from Edge Config (<1ms) with automatic fallback to Neon if not configured.
+    if (await isDispatchPaused()) {
       return Response.json({ ok: true, paused: true, message: "All dispatches halted by kill switch" });
     }
     const traceId = `sentinel-dispatch-${Date.now().toString(36)}`;
