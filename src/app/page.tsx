@@ -166,6 +166,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence">("overview");
   const [activityFilter, setActivityFilter] = useState("all");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [cmdInput, setCmdInput] = useState("");
   const [cmdSending, setCmdSending] = useState(false);
   const [cmdFeedback, setCmdFeedback] = useState<string | null>(null);
@@ -178,26 +179,33 @@ export default function DashboardPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-    const res = await fetch("/api/dashboard");
-    if (!res.ok) return;
-    if (!res.headers.get("content-type")?.includes("application/json")) return;
-    const { data } = await res.json();
-    setPortfolio(data.portfolio);
-    setCompanies(data.companies);
-    setActions(data.actions);
-    setApprovals(data.approvals);
-    setPlaybook(data.playbook);
-    setCycles(data.cycles);
-    setEvolverProposals(data.evolverProposals || []);
-    setLoading(false);
-    setLastRefresh(new Date());
+      const res = await fetch("/api/dashboard");
+      if (!res.ok || !res.headers.get("content-type")?.includes("application/json")) {
+        setLoadError(true);
+        setLoading(false);
+        return;
+      }
+      const { data } = await res.json();
+      setPortfolio(data.portfolio);
+      setCompanies(data.companies);
+      setActions(data.actions);
+      setApprovals(data.approvals);
+      setPlaybook(data.playbook);
+      setCycles(data.cycles);
+      setEvolverProposals(data.evolverProposals || []);
+      setLoadError(false);
+      setLoading(false);
+      setLastRefresh(new Date());
 
-    // Fetch todos separately (not in consolidated endpoint)
-    try {
-      const todoRes = await fetch("/api/todos");
-      if (todoRes.ok) setTodos((await todoRes.json()).data || []);
-    } catch { /* non-critical */ }
-    } catch { /* session expired or network error — stay on loading state */ }
+      // Fetch todos separately (not in consolidated endpoint)
+      try {
+        const todoRes = await fetch("/api/todos");
+        if (todoRes.ok) setTodos((await todoRes.json()).data || []);
+      } catch { /* non-critical */ }
+    } catch {
+      setLoadError(true);
+      setLoading(false);
+    }
   }, []);
 
   // Neon usage: fetched once on load (calls external Neon API — no need to poll every 2m)
@@ -364,6 +372,21 @@ export default function DashboardPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
           <span style={{ fontFamily: "var(--hive-mono)", fontSize: 11, color: "var(--hive-text-tertiary)", letterSpacing: "0.1em" }}>LOADING</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--hive-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+          <span style={{ fontFamily: "var(--hive-mono)", fontSize: 11, color: "var(--hive-red)", letterSpacing: "0.1em" }}>FAILED TO LOAD</span>
+          <span style={{ fontFamily: "var(--hive-mono)", fontSize: 10, color: "var(--hive-text-dim)" }}>/api/dashboard returned an error</span>
+          <button onClick={() => { setLoadError(false); setLoading(true); fetchAll(); }}
+            style={{ marginTop: 4, fontFamily: "var(--hive-mono)", fontSize: 10, color: "var(--hive-amber)", background: "none", border: "1px solid var(--hive-amber-border)", borderRadius: 4, padding: "4px 12px", cursor: "pointer" }}>
+            RETRY
+          </button>
         </div>
       </div>
     );
