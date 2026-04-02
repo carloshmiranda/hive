@@ -1,7 +1,7 @@
 import { getDb, json } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { decrypt } from "@/lib/crypto";
-import { cacheHealthCheck } from "@/lib/redis-cache";
+import { cacheHealthCheck, getCacheStats } from "@/lib/redis-cache";
 import { setSentryTags } from "@/lib/sentry-tags";
 
 export async function GET(request: Request) {
@@ -88,10 +88,13 @@ export async function GET(request: Request) {
   }
 
   // 4. Redis cache
-  const cacheStatus = await cacheHealthCheck();
+  const [cacheStatus, cacheStats] = await Promise.all([cacheHealthCheck(), getCacheStats()]);
+  const hitRatePct = cacheStats ? `${(cacheStats.hitRate * 100).toFixed(1)}% hit rate (${cacheStats.hits}/${cacheStats.total})` : null;
   checks.redis_cache = {
     status: cacheStatus.ok ? "ok" : "unavailable",
-    detail: cacheStatus.ok ? `${cacheStatus.latencyMs}ms latency` : "Not configured (KV_REST_API_URL/TOKEN missing)",
+    detail: cacheStatus.ok
+      ? [`${cacheStatus.latencyMs}ms latency`, hitRatePct].filter(Boolean).join(", ")
+      : "Not configured (KV_REST_API_URL/TOKEN missing)",
   };
 
   // 5. Secrets decryption — verify all encrypted settings are readable

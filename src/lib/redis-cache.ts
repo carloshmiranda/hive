@@ -24,13 +24,55 @@ function getRedis(): Redis | null {
   return redis;
 }
 
+// --- Cache hit/miss metrics ---
+// Atomic counters in Redis — fire-and-forget increments (non-blocking, never break the hot path).
+// Keys never expire: they accumulate lifetime stats, readable via getCacheStats().
+
+const CACHE_HIT_KEY = "metrics:cache:hits";
+const CACHE_MISS_KEY = "metrics:cache:misses";
+
+export interface CacheStats {
+  hits: number;
+  misses: number;
+  total: number;
+  hitRate: number; // 0–1
+}
+
 // --- Generic cache helpers ---
 
 export async function cacheGet<T>(key: string): Promise<T | null> {
   try {
     const r = getRedis();
     if (!r) return null;
-    return await r.get<T>(key);
+    const value = await r.get<T>(key);
+    // Fire-and-forget hit/miss tracking — non-blocking, failure is non-fatal
+    if (value !== null && value !== undefined) {
+      r.incr(CACHE_HIT_KEY).catch(() => {});
+    } else {
+      r.incr(CACHE_MISS_KEY).catch(() => {});
+    }
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read lifetime cache hit/miss counters.
+ * Returns null if Redis is unavailable.
+ */
+export async function getCacheStats(): Promise<CacheStats | null> {
+  try {
+    const r = getRedis();
+    if (!r) return null;
+    const [rawHits, rawMisses] = await r.mget<[number | null, number | null]>(
+      CACHE_HIT_KEY,
+      CACHE_MISS_KEY,
+    );
+    const hits = rawHits ?? 0;
+    const misses = rawMisses ?? 0;
+    const total = hits + misses;
+    return { hits, misses, total, hitRate: total > 0 ? hits / total : 0 };
   } catch {
     return null;
   }
