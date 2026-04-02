@@ -30,6 +30,10 @@ const MIN_REQUESTS = 3;             // need at least 3 data points before trippi
 
 const healthMap = new Map<string, ProviderHealth>();
 
+// Provider-level health map — keyed by OpenRouter provider name (e.g. "Together AI")
+// Tracked separately from per-model circuit breakers. Used to build provider.ignore.
+const providerHealthMap = new Map<string, ProviderHealth>();
+
 function getOrCreateHealth(key: string): ProviderHealth {
   let h = healthMap.get(key);
   if (!h) {
@@ -108,6 +112,77 @@ export function getProviderHealth(): Record<string, ProviderHealth> {
     out[k] = { ...v };
   });
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Provider-level health tracking
+// Tracks OpenRouter provider names (e.g. "Together AI", "Fireworks") separately
+// from per-model circuit breakers. Used to build provider.ignore on requests.
+// ---------------------------------------------------------------------------
+
+function getOrCreateProviderHealth(provider: string): ProviderHealth {
+  let h = providerHealthMap.get(provider);
+  if (!h) {
+    h = {
+      errorRate: 0,
+      lastError: 0,
+      lastSuccess: 0,
+      state: "closed",
+      openedAt: 0,
+      requestCount: 0,
+    };
+    providerHealthMap.set(provider, h);
+  }
+  return h;
+}
+
+function recordProviderNameSuccess(provider: string): void {
+  const h = getOrCreateProviderHealth(provider);
+  h.requestCount++;
+  h.lastSuccess = Date.now();
+  h.errorRate = h.errorRate * (1 - EMA_ALPHA);
+  if (h.state === "half_open") {
+    h.state = "closed";
+    console.warn(`[provider-health] ${provider}: HALF_OPEN → CLOSED`);
+  }
+}
+
+function recordProviderNameFailure(provider: string): void {
+  const h = getOrCreateProviderHealth(provider);
+  h.requestCount++;
+  h.lastError = Date.now();
+  h.errorRate = h.errorRate * (1 - EMA_ALPHA) + EMA_ALPHA;
+
+  if (h.state === "half_open") {
+    h.state = "open";
+    h.openedAt = Date.now();
+    console.warn(`[provider-health] ${provider}: HALF_OPEN → OPEN`);
+    return;
+  }
+
+  if (h.state === "closed" && h.requestCount >= MIN_REQUESTS && h.errorRate > ERROR_RATE_THRESHOLD) {
+    h.state = "open";
+    h.openedAt = Date.now();
+    console.warn(`[provider-health] ${provider}: CLOSED → OPEN (error rate ${(h.errorRate * 100).toFixed(1)}%)`);
+  }
+}
+
+/** Return provider names whose circuit is currently open (used for provider.ignore). */
+function getFailingProviders(): string[] {
+  const failing: string[] = [];
+  providerHealthMap.forEach((h, provider) => {
+    if (h.state === "open") {
+      // Check if cooldown has elapsed — transition to half_open and exclude from list
+      const elapsed = Date.now() - h.openedAt;
+      if (elapsed >= COOLDOWN_MS) {
+        h.state = "half_open";
+        console.warn(`[provider-health] ${provider}: OPEN → HALF_OPEN`);
+      } else {
+        failing.push(provider);
+      }
+    }
+  });
+  return failing;
 }
 
 export interface LLMOptions {
@@ -452,6 +527,9 @@ async function callOpenRouter(
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
 
+  // Build provider.ignore from providers with open circuit breakers
+  const failingProviders = getFailingProviders();
+
   const requestBody: any = {
     // Native models array: OpenRouter tries each in order server-side
     models,
@@ -463,8 +541,13 @@ async function callOpenRouter(
       sort: "throughput",
       max_price: { prompt: 0, completion: 0 },  // Hard-enforce free-only routing
       require_parameters: true,  // Only route to providers that support all request parameters
+      ...(failingProviders.length > 0 && { ignore: failingProviders }),
     },
   };
+
+  if (failingProviders.length > 0) {
+    console.warn(`[provider-health] Excluding ${failingProviders.length} failing provider(s): ${failingProviders.join(", ")}`);
+  }
 
   // Add verbosity config for OpenRouter (maps to output_config.effort for Anthropic models)
   if (options.verbosity) {
@@ -508,22 +591,37 @@ async function callOpenRouter(
   if (!res.ok) {
     const body = await res.text();
 
-    // Try to parse error response to extract which specific model failed
+    // Try to parse error response to extract which specific model/provider failed
     let failedModel = null;
+    let failedProvider: string | null = null;
     try {
       const errorData = JSON.parse(body);
-      // Check if OpenRouter provides model information in error response
       if (errorData.model) {
         failedModel = errorData.model;
       } else if (errorData.error?.model) {
         failedModel = errorData.error.model;
       }
+      // OpenRouter sometimes includes provider in error metadata
+      if (errorData.error?.metadata?.provider_name) {
+        failedProvider = errorData.error.metadata.provider_name;
+      }
     } catch {
       // If we can't parse the error response, we'll fall back to penalizing all models
     }
 
+    // Also check response header for provider info
+    const headerProvider = res.headers.get("x-openrouter-provider");
+    if (headerProvider && !failedProvider) {
+      failedProvider = headerProvider;
+    }
+
+    if (failedProvider) {
+      recordProviderNameFailure(failedProvider);
+    }
+
     const error = new Error(`OpenRouter HTTP ${res.status}: ${body.slice(0, 300)}`);
     (error as any).failedModel = failedModel;
+    (error as any).failedProvider = failedProvider;
     throw error;
   }
 
@@ -541,6 +639,13 @@ async function callOpenRouter(
 
   // OpenRouter returns which model actually handled the request
   const actualModel = data.model || models[0];
+
+  // Track provider success via response header — OpenRouter sets x-openrouter-provider
+  const successProvider = res.headers.get("x-openrouter-provider");
+  if (successProvider) {
+    recordProviderNameSuccess(successProvider);
+  }
+
   return { content: text.trim(), model: actualModel, toolCalls };
 }
 
