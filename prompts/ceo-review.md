@@ -1,6 +1,8 @@
 # CEO PR Review Process
 
-Review and merge PRs from the Engineer agent. Follow these steps for EACH open PR.
+Review and merge PRs from the Engineer agent. Two-stage review: spec compliance first, quality second. Reject early at either stage.
+
+Follow these steps for EACH open PR.
 
 ## STEP 1 — Gather context
 
@@ -17,13 +19,28 @@ GH_TOKEN="$GH_PAT" gh pr checks <pr_number> --repo carloshmiranda/<company>
 - No destructive DB migrations without rollback plan
 - Diff size reasonable (>1000 lines or >20 files = flag as high-risk)
 
-## STEP 3 — Task alignment
+---
+
+## STAGE 1: Spec compliance (hard gate — stop here if failed)
+
+### STEP 3 — Task alignment
+
+Check the PR against the planned engineering_task that triggered it:
 
 - PR maps to a planned engineering_task from the current cycle plan
-- Acceptance criteria from the task are met
+- Acceptance criteria from the task description are met
 - No scope creep (changes unrelated to the assigned task)
 
-## STEP 4 — Code quality scan (focus on new files + modified API routes)
+**If task alignment fails: REJECT immediately.** Do not proceed to Stage 2.
+Use: `GH_TOKEN="$GH_PAT" gh pr review <pr_number> --repo carloshmiranda/<company> --request-changes --body "STAGE 1 FAIL: <specific alignment issues>"`
+
+Set `stage1_passed: false` in output and stop.
+
+---
+
+## STAGE 2: Quality review (only reached if Stage 1 passes)
+
+### STEP 4 — Code quality scan (focus on new files + modified API routes)
 
 - API routes have error handling (try/catch) and return { ok, data?, error? }
 - SQL uses parameterized queries (no string interpolation)
@@ -31,7 +48,7 @@ GH_TOKEN="$GH_PAT" gh pr checks <pr_number> --repo carloshmiranda/<company>
 - No hardcoded values (URLs, prices, emails should come from config/DB)
 - New API routes call requireAuth() or have documented reason not to
 
-## STEP 4b — Design quality scan (for PRs that touch .tsx/.css files)
+### STEP 4b — Design quality scan (for PRs that touch .tsx/.css files)
 
 - No gradients (bg-gradient-to-*, from-*, via-*) — solid colors only
 - No raw hex colors in components — must use design tokens from globals.css
@@ -41,7 +58,7 @@ GH_TOKEN="$GH_PAT" gh pr checks <pr_number> --repo carloshmiranda/<company>
 - Landing page changes: verify single CTA per viewport, proper section spacing
 - If ANY design violation found: add +2 to risk score and list violations in review summary.
 
-## STEP 5 — Risk score
+### STEP 5 — Risk score
 
 | Factor | Points |
 |--------|--------|
@@ -57,7 +74,7 @@ GH_TOKEN="$GH_PAT" gh pr checks <pr_number> --repo carloshmiranda/<company>
 
 Score 0-3: Auto-merge. Score 4-6: Merge + log detailed summary. Score 7+: Do NOT merge, create approval gate for Carlos.
 
-## STEP 6 — Decision
+### STEP 6 — Decision
 
 - MERGE: `GH_TOKEN="$GH_PAT" gh pr merge <pr_number> --repo carloshmiranda/<company> --merge`
 - REJECT: `GH_TOKEN="$GH_PAT" gh pr review <pr_number> --repo carloshmiranda/<company> --request-changes --body "<issues>"`
@@ -67,7 +84,10 @@ Score 0-3: Auto-merge. Score 4-6: Merge + log detailed summary. Score 7+: Do NOT
 
 ```json
 { "pr_review": { "pr_number": N, "company": "<slug>", "task_id": "<id>",
-  "hard_gates_passed": true, "task_aligned": true, "risk_score": 3,
+  "hard_gates_passed": true,
+  "stage1_passed": true,
+  "task_aligned": true,
+  "stage2_risk_score": 3,
   "decision": "merge|reject|escalate", "summary": "<one line>" },
   "pr_merged": true/false }
 ```
