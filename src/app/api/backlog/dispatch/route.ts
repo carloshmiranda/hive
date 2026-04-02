@@ -628,10 +628,12 @@ export async function POST(req: Request) {
 
       console.log(`[backlog] Partial completion for "${completed_id}" — ${turnsUsed}/${maxTurns} turns, continuing with ${continuationTurns}. Last commit: ${lastCommit}`);
 
-      // Mark as in_progress (not failed) — this is a continuation, not a retry
+      // Mark as in_progress (not failed) — this is a continuation, not a retry.
+      // Use in_progress (not dispatched) so the 30-min stale dispatch cleanup doesn't
+      // reset this item while the continuation is still running.
       await sql`
         UPDATE hive_backlog
-        SET status = 'dispatched', dispatched_at = NOW(),
+        SET status = 'in_progress', dispatched_at = NOW(),
             notes = COALESCE(notes, '') || ${` [partial] Graceful exit at ${turnsUsed}/${maxTurns} turns — progress preserved${branchName ? ` on ${branchName}` : ''}. Last: ${lastCommit.slice(0, 80)}. Continuing with ${continuationTurns} turns.`}
         WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
       `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as partial failed: ${e?.message || e}`); });
@@ -675,6 +677,21 @@ export async function POST(req: Request) {
 
             if (contRes.ok || contRes.status === 204) {
               console.log(`[backlog] Continuation dispatched for "${item.title}" with ${continuationTurns} turns`);
+              // Create an agent_actions record so the engineer_busy gate blocks concurrent
+              // dispatches during the continuation. Without this, the gate sees no running
+              // record and allows a second item to be dispatched in parallel.
+              const [contAction] = await sql`
+                INSERT INTO agent_actions (agent, action_type, status, description, started_at)
+                VALUES ('engineer', 'feature_request', 'running',
+                  ${`Continuation: "${item.title}" (${item.priority}, ${continuationTurns} turns)`},
+                  NOW())
+                RETURNING id
+              `.catch(() => [{ id: null }]);
+              if (contAction?.id) {
+                await sql`
+                  UPDATE hive_backlog SET dispatch_id = ${contAction.id} WHERE id = ${completed_id}
+                `.catch(() => {});
+              }
             }
           }
         } catch (e) {
@@ -734,12 +751,28 @@ export async function POST(req: Request) {
             });
 
             if (contRes.ok || contRes.status === 204) {
+              // Use in_progress (not dispatched) so the 30-min stale dispatch cleanup doesn't
+              // reset this item while the continuation is still running.
               await sql`
                 UPDATE hive_backlog
-                SET status = 'dispatched', dispatched_at = NOW(),
+                SET status = 'in_progress', dispatched_at = NOW(),
                     notes = COALESCE(notes, '') || ${` [continued] Continuation dispatch after partial progress (${turnsUsed} turns → ${continuationTurns} turns). Last: ${lastCommit.slice(0, 80)}`}
                 WHERE id = ${completed_id}
               `.catch((e: any) => { console.warn(`[backlog] mark ${completed_id} as continued failed: ${e?.message || e}`); });
+              // Create an agent_actions record so the engineer_busy gate blocks concurrent
+              // dispatches during the continuation.
+              const [contAction] = await sql`
+                INSERT INTO agent_actions (agent, action_type, status, description, started_at)
+                VALUES ('engineer', 'feature_request', 'running',
+                  ${`Continuation (failed handler): "${item.title}" (${item.priority}, ${continuationTurns} turns)`},
+                  NOW())
+                RETURNING id
+              `.catch(() => [{ id: null }]);
+              if (contAction?.id) {
+                await sql`
+                  UPDATE hive_backlog SET dispatch_id = ${contAction.id} WHERE id = ${completed_id}
+                `.catch(() => {});
+              }
               continued = true;
               console.log(`[backlog] Continuation dispatched for "${item.title}" with ${continuationTurns} turns`);
             }
