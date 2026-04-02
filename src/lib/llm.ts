@@ -34,6 +34,47 @@ const healthMap = new Map<string, ProviderHealth>();
 // Tracked separately from per-model circuit breakers. Used to build provider.ignore.
 const providerHealthMap = new Map<string, ProviderHealth>();
 
+// ---------------------------------------------------------------------------
+// Rate limit state — tracks OpenRouter x-ratelimit-* response headers
+// ---------------------------------------------------------------------------
+
+interface RateLimitState {
+  limit: number;       // x-ratelimit-limit-requests
+  remaining: number;   // x-ratelimit-remaining-requests
+  resetAt: number;     // unix ms when the window resets
+}
+
+let rateLimitState: RateLimitState | null = null;
+
+/** Parse OpenRouter reset header. Value is either a delay like "1s" or an ISO timestamp. */
+function parseResetDelay(resetHeader: string): number {
+  // Format: "1s", "500ms", or ISO 8601 timestamp
+  if (resetHeader.endsWith("s") && !resetHeader.includes("T")) {
+    return parseFloat(resetHeader) * 1000;
+  }
+  if (resetHeader.endsWith("ms")) {
+    return parseFloat(resetHeader);
+  }
+  // ISO timestamp
+  const ts = Date.parse(resetHeader);
+  if (!isNaN(ts)) return Math.max(0, ts - Date.now());
+  return 60_000; // fallback: 60s
+}
+
+/** Update rate limit state from OpenRouter response headers. */
+function updateRateLimitState(headers: Headers): void {
+  const limit = headers.get("x-ratelimit-limit-requests");
+  const remaining = headers.get("x-ratelimit-remaining-requests");
+  const reset = headers.get("x-ratelimit-reset-requests");
+  if (limit && remaining && reset) {
+    rateLimitState = {
+      limit: parseInt(limit, 10),
+      remaining: parseInt(remaining, 10),
+      resetAt: Date.now() + parseResetDelay(reset),
+    };
+  }
+}
+
 function getOrCreateHealth(key: string): ProviderHealth {
   let h = healthMap.get(key);
   if (!h) {
@@ -529,6 +570,15 @@ async function callOpenRouter(
   const apiKey = await getSettingValue("openrouter_api_key");
   if (!apiKey) throw new Error("openrouter_api_key not configured in settings");
 
+  // Pre-emptive rate limit backoff: if we're nearly exhausted wait until reset
+  if (rateLimitState && rateLimitState.remaining <= 2) {
+    const waitMs = Math.max(0, rateLimitState.resetAt - Date.now());
+    if (waitMs > 0) {
+      console.warn(`[llm] Pre-emptive rate limit backoff: ${waitMs}ms (${rateLimitState.remaining}/${rateLimitState.limit} remaining)`);
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+  }
+
   // Build provider.ignore from providers with open circuit breakers
   const failingProviders = getFailingProviders();
 
@@ -622,6 +672,9 @@ async function callOpenRouter(
       failedProvider = headerProvider;
     }
 
+    // Parse rate limit headers even on failure — helps pre-empt the next 429
+    updateRateLimitState(res.headers);
+
     if (failedProvider) {
       recordProviderNameFailure(failedProvider);
     }
@@ -652,6 +705,9 @@ async function callOpenRouter(
   if (successProvider) {
     recordProviderNameSuccess(successProvider);
   }
+
+  // Update rate limit state from response headers for pre-emptive backoff
+  updateRateLimitState(res.headers);
 
   return { content: text.trim(), model: actualModel, toolCalls };
 }
