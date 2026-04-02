@@ -15,6 +15,33 @@
 
 ---
 
+### 2026-04-02 `schema-map.ts` drifts silently when `schema.sql` is edited
+**What happened:** PR #347 failed CI on `schema-map:check`. The `companies` table had a `brand JSONB` column added to `schema.sql`, but `generate-schema-map.ts` was never re-run, so `schema-map.ts` was stale. `lint-sql.ts` reads from `schema-map.ts` and reported "column 'brand' does not exist" — causing a misguided workaround (rewrite SQL to use `capabilities` JSONB path instead).
+**Root cause:** `schema.sql` is the source of truth but `schema-map.ts` is a derived artifact. Any time `schema.sql` changes, the map must be regenerated. No local pre-push hook enforces this.
+**Fix applied:** Ran `npx tsx scripts/generate-schema-map.ts` locally, committed the updated `schema-map.ts`. Reverted the `brand.ts` workaround.
+**Prevention:** Run `npm run schema-map:check` locally before opening any PR that touches `schema.sql`. Ideally add a pre-commit hook. CI already catches this but costs an extra round-trip and can mislead into wrong fixes.
+**Affects:** hive
+
+---
+
+### 2026-04-02 `agent_actions.agent` CHECK constraint: use `backlog_dispatch` not `backlog`
+**What happened:** PR #347 CI failed on `lint-sql.ts` — `backlog/dispatch/route.ts` was inserting `agent='backlog'` into `agent_actions`, but the CHECK constraint only allows `backlog_dispatch`.
+**Root cause:** The agent was named `backlog` at code-time, but the DB schema's `agent_actions.agent` CHECK enumerates specific values. `backlog` was never in the allowed list; `backlog_dispatch` is.
+**Fix applied:** Replaced all 4 occurrences of `'backlog'` with `'backlog_dispatch'` in the INSERT statements.
+**Prevention:** When inserting into `agent_actions`, always check the agent CHECK constraint in `schema.sql` or `schema-map.ts`. The lint-sql script catches violations pre-merge.
+**Affects:** hive
+
+---
+
+### 2026-04-02 `approvals` table has no `updated_at` column
+**What happened:** PR #333 (OpenRouter health check) failed CI on `lint-sql.ts` — the INSERT into `approvals` included `updated_at` in the column list, but the column doesn't exist.
+**Root cause:** Assumed standard pattern (most tables have `updated_at`). The `approvals` table schema is: `id, company_id, gate_type, title, description, context, status, created_at, decided_at, decision_note` — no `updated_at`.
+**Fix applied:** Removed `updated_at` from the INSERT column list and its corresponding `NOW()` from VALUES. Second CI run passed.
+**Prevention:** Always verify column names against schema before writing INSERTs into `approvals`. Run `lint-sql.ts` locally or check `schema.sql` / the schema-map. The CI lint step will catch mismatches, but costs an extra CI round-trip.
+**Affects:** hive
+
+---
+
 ### 2026-03-29 `exit 0` in a step does NOT prevent downstream steps from running
 **What happened:** PR #202 (turn-budget guard) auto-merged with a showstopper. The guard step called `exit 0` on budget exceeded, but the downstream `Build` step ran anyway — every dispatch was gated by nothing, and Claude ran regardless of the budget check.
 **Root cause:** `exit 0` terminates the current step's shell process with success. GitHub Actions then evaluates the next step's `if` condition; since no explicit `if` was set, it defaulted to `if: success()` which was satisfied. The guard never wrote to `$GITHUB_OUTPUT`, so there was no mechanism to communicate the skip decision.
