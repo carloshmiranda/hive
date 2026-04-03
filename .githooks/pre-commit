@@ -1,0 +1,41 @@
+#!/bin/sh
+# Pre-commit hook: enforce schema-map.ts is in sync with schema.sql
+#
+# Runs only if schema.sql or schema-map.ts are staged.
+# Regenerates schema-map.ts and aborts if it changed.
+#
+# Install: git config core.hooksPath .githooks
+# (npm run prepare does this automatically)
+
+SCHEMA_SQL="schema.sql"
+SCHEMA_MAP="src/lib/schema-map.ts"
+
+# Only run if schema.sql is staged (or schema-map.ts itself)
+STAGED=$(git diff --cached --name-only)
+if ! echo "$STAGED" | grep -qE "(schema\.sql|schema-map\.ts)"; then
+  exit 0
+fi
+
+echo "schema.sql or schema-map.ts staged — verifying sync..."
+
+# Regenerate the schema map
+npx tsx scripts/generate-schema-map.ts --quiet 2>/dev/null || {
+  echo ""
+  echo "❌ schema-map generation failed. Run:"
+  echo "   npm run schema-map:generate"
+  exit 1
+}
+
+# Check if schema-map.ts changed after regeneration
+if ! git diff --exit-code "$SCHEMA_MAP" > /dev/null 2>&1; then
+  echo ""
+  echo "❌ schema-map.ts is out of sync with schema.sql."
+  echo "   Stage the updated file and commit again:"
+  echo ""
+  echo "   git add $SCHEMA_MAP"
+  echo "   git commit"
+  exit 1
+fi
+
+echo "✅ schema-map.ts is in sync."
+exit 0
