@@ -684,6 +684,9 @@ Added `.github/workflows/actionlint.yml` — runs `rhysd/actionlint` on PRs touc
 ### 2026-04-02 [code] npm caching + teardown fix (PR #324, Issue #150)
 Added `actions/setup-node@v4` with `cache: 'npm'` to healer, spec-gen, and engineer workflows — speeds up repeated `npm install` calls by caching `~/.npm` between runs. Also fixed a latent bug: `hive-engineer.yml` teardown job was missing `actions/checkout@v4` entirely, causing it to fail whenever teardown was triggered.
 
+### 2026-04-03 [code] Blob storage utility + large-output handling (PR #375)
+Added `src/lib/blob-storage.ts` — a Vercel Blob utility for storing agent outputs that exceed Neon's row size limits. Updated `research/route.ts` and `dispatch/route.ts` to offload large payloads (>50KB) to blob storage and store only the blob URL in the DB. Prevents DB write failures on large Scout research dumps and verbose agent outputs. Items ff83dedd + 25f4741a marked done.
+
 ### 2026-04-02 [code] CEO chain dispatch → TypeScript (PR #325, Issue #151)
 Extracted the 130-line bash chain dispatch block from `hive-ceo.yml` into `scripts/chain-dispatch.ts`. TypeScript version uses `@neondatabase/serverless` for company repo lookup, native `fetch` for all HTTP calls, handles all triggers (`cycle_start`, `gate_approved`, `cycle_complete`/`ceo_review`), dispatches Growth + Outreach concurrently via `Promise.all()`, and sends Telegram notification on completion. Easier to test, type-safe, no bash escaping footguns.
 

@@ -586,6 +586,39 @@ curl -X POST "https://hive-phi.vercel.app/api/decisions" \
 
 This creates a decision track record that improves strategic quality over time through retrospective analysis.
 
+## Architectural Decision Records (ADRs)
+
+When you make a **Hive platform-level architectural decision** — not a company-specific choice, but a decision about how Hive itself works — write it to `DECISIONS.md`. This prevents re-debating settled questions.
+
+**When to write an ADR (all of these apply to Hive infrastructure, not company products):**
+- Choosing a new data storage strategy (e.g., "store X in Blob not Neon")
+- Changing how agents communicate or are dispatched
+- Adopting a new external service or removing an existing one
+- Establishing a new agent or retiring an existing one
+- Making a cross-cutting architecture decision that affects multiple agents
+
+**Do NOT write ADRs for:**
+- Company-specific decisions (use Strategic Decision Logging API instead)
+- Routine planning choices (which tasks to run this cycle)
+- Temporary workarounds (document in MISTAKES.md instead)
+
+**Format (append to the end of DECISIONS.md):**
+```
+### ADR-NNN: Title
+**Date:** YYYY-MM-DD
+**Status:** accepted
+**Context:** What situation prompted this decision?
+**Decision:** What did we decide?
+**Alternatives considered:** What else was on the table?
+**Consequences:** What are the tradeoffs?
+```
+
+**Steps:**
+1. Check the last ADR number in DECISIONS.md: `grep "^### ADR-" DECISIONS.md | tail -1`
+2. Increment by 1 for the new ADR number
+3. Append the ADR using the Edit tool
+4. Also read DECISIONS.md at the start of a cycle if you're about to make an architectural change — it may already be documented
+
 ## GitHub Issue routing
 
 When creating a GitHub Issue for escalations or blockers:
@@ -601,3 +634,4 @@ Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/{{COMPANY_
 - If you don't have enough data to decide, say so and propose how to get the data.
 - NEVER plan work that is in the `forbidden` list for the current validation phase.
 - **ALWAYS log strategic decisions using the decision logging API above.**
+- **Write an ADR to DECISIONS.md for Hive platform-level architectural decisions** (see ADR section above).
