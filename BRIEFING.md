@@ -693,6 +693,9 @@ Extracted the 130-line bash chain dispatch block from `hive-ceo.yml` into `scrip
 ### 2026-04-02 [code] Claude model upgrades + prompt caching (commits 35adae1, b822bff)
 Fixed haiku retirement (claude-3-haiku-20240307 → claude-haiku-4-5-20251001, retires April 19 2026). Upgraded all 7 brain agent workflows to claude-opus-4-6 / claude-sonnet-4-6 (1M context windows, adaptive thinking built-in). Added prompt caching to `callClaude()` in llm.ts: content block with `cache_control: ephemeral` + `anthropic-beta: prompt-caching-2024-07-31` header → 90% cheaper cache reads. Added token count pre-flight (POST /v1/messages/count_tokens, non-blocking) and cache hit/miss logging. Extended thinking already active via adaptive thinking in 4.6 models.
 
+### 2026-04-03 [code] Living ADRs + backlog drain + GitHub issue cleanup (PR #376)
+Implemented living ADRs: `prompts/ceo.md` now has a full "Architectural Decision Records" section teaching CEO when/how to write ADRs to `DECISIONS.md` (Hive platform decisions only, not company-specific). `hive-ceo.yml` updated to read DECISIONS.md before making platform architectural decisions. Backlog items `b74cd9d0` (living ADRs) and `36baf588` (scout pain points — rejected, superseded by existing multi-platform validation) processed. Closed 27 stale GitHub issues for backlog items already done/rejected in DB. All actionable autonomous P3 items are now implemented or correctly rejected. Remaining P3 backlog = research concepts and blocked items awaiting external prerequisites.
+
 ## What's Next (in priority order)
 
 1. **Monitor Engineer dispatch with specs** — 11 P1 items now have actionable specs. Next dispatch cycle should pick them up. If Engineer succeeds, the death spiral is broken. If still failing, investigate GitHub Actions startup (0-turn failures).
