@@ -146,6 +146,45 @@ function calculateSeverity(issue: SentryIssue): 'low' | 'medium' | 'high' {
 }
 
 /**
+ * Fetch recent unresolved errors for a specific company (tagged with company_id).
+ * Used to enrich Engineer context with production bugs relevant to the current company.
+ */
+export async function fetchCompanyErrors(
+  companyId: string,
+  options: { limit?: number; sinceSecs?: number } = {}
+): Promise<SentryIssue[]> {
+  const { limit = 5, sinceSecs = 604800 } = options; // 7-day default window
+  const authToken = await getSettingValue("sentry_auth_token");
+  const sentryOrg = await getSettingValue("sentry_org") || "hive-ventures";
+  const sentryProject = await getSettingValue("sentry_project") || "hive";
+
+  if (!authToken) return [];
+
+  const sinceDate = new Date(Date.now() - sinceSecs * 1000).toISOString();
+  const query = encodeURIComponent(`is:unresolved company_id:${companyId} lastSeen:>=${sinceDate}`);
+  const url = `https://sentry.io/api/0/projects/${sentryOrg}/${sentryProject}/issues/?query=${query}&sort=freq&limit=${limit}`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!response.ok) {
+      console.warn(`[sentry-api] Company errors fetch failed: ${response.status}`);
+      return [];
+    }
+
+    return await response.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Check if error patterns indicate a surge that requires Healer dispatch
  * @param patterns - Error patterns from extractErrorPatterns
  * @param distinctThreshold - Minimum distinct patterns to trigger (default: 3)

@@ -11,6 +11,7 @@ import { cachedPlaybook, cachedCompanyList } from "@/lib/redis-cache";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
 import { getCachedCompanyMetrics, getCachedGrowthMetrics } from "@/lib/cached-metrics";
 import { setSentryTags } from "@/lib/sentry-tags";
+import { fetchCompanyErrors } from "@/lib/sentry-api";
 import { extractCompletionReport, type CompletionReport, type AgentSignal } from "@/lib/completion-report";
 import { checkHealerCompanyCircuitBreaker } from "@/lib/sentinel-helpers";
 
@@ -614,7 +615,7 @@ async function growthContext(sql: any, company: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fixContext(sql: any, company: any) {
-  const [errors, fixes, patterns] = await Promise.all([
+  const [errors, fixes, patterns, sentryIssues] = await Promise.all([
     sql`
       SELECT agent, error, description, action_type, finished_at
       FROM agent_actions WHERE company_id = ${company.id} AND status = 'failed'
@@ -635,6 +636,7 @@ async function fixContext(sql: any, company: any) {
         AND finished_at > NOW() - INTERVAL '60 days'
       ORDER BY finished_at DESC LIMIT 5
     `.catch(() => []),
+    fetchCompanyErrors(company.id).catch(() => []),
   ]);
 
   // Look up known fixes from error_patterns for each recent error
@@ -693,6 +695,17 @@ async function fixContext(sql: any, company: any) {
     previous_fixes: fixes.map((f: { description: string }) => f.description),
     cross_company_patterns: patterns.map((p: { description: string }) => p.description),
     ...(knownFixes.length > 0 ? { known_fixes: knownFixes } : {}),
+    ...(sentryIssues.length > 0 ? {
+      sentry_issues: sentryIssues.map((i) => ({
+        id: i.id,
+        title: i.title,
+        culprit: i.culprit,
+        count: i.count,
+        level: i.level,
+        lastSeen: i.lastSeen,
+        message: i.metadata?.value,
+      })),
+    } : {}),
     hive_capabilities: getCapabilitySummary(),
   };
 }
