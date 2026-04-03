@@ -29,6 +29,21 @@
 **Prevention:** ALWAYS branch first, even for 1-line changes. Never push to `main` directly. The correct flow is: `git checkout -b hive/improvement/<slug>` → commit → `git push origin <branch>` → `gh pr create`.
 **Affects:** hive
 
+### 2026-04-03 Recurring: direct push to main instead of PR workflow (portfolio charts, commit 98d5e77)
+**What happened:** Portfolio snapshot charts were committed and pushed directly to main (`98d5e77`) instead of going through branch → PR → CI → merge. This is the third occurrence of this pattern this session, despite two prior MISTAKES.md entries covering it.
+**Root cause:** Treating "small UI additions" as not requiring the PR workflow. Incorrectly assuming the feature is low-risk. Branch protection rules and CI apply to ALL commits regardless of size or risk.
+**Fix applied:** None (commit already on main). User caught it and raised it as a recurring error.
+**Prevention:** The workflow is NON-NEGOTIABLE and applies to every single change, including 1-line fixes:
+1. `git checkout -b hive/improvement/<slug>`
+2. Make changes + commit
+3. `git push origin <branch>`
+4. `gh pr create --title "..." --body "...\n\nCloses #N"`
+5. Wait for CI to pass
+6. `gh pr merge --squash --delete-branch`
+7. `gh issue close N` (if not auto-closed)
+NEVER use `git push origin main`. NEVER skip the branch step.
+**Affects:** hive
+
 ### 2026-04-02 Sentry had zero client-side coverage despite being "installed"
 **What happened:** `@sentry/nextjs` was installed, `sentry.server.config.ts` existed, but `instrumentation.ts` and `instrumentation-client.ts` were never created. Result: zero browser error tracking, no Session Replay, server errors only partially captured.
 **Root cause:** The old Sentry setup pattern used `sentry.client.config.ts` (deprecated). Modern `@sentry/nextjs` ≥8 requires `instrumentation-client.ts` for client-side init and `instrumentation.ts` (with `register()` + `onRequestError`) for server/edge. The wizard would have created both, but the initial setup was manual/partial.
