@@ -96,6 +96,7 @@ jobs:
             2. Only read `BRIEFING.md` if trigger is cycle_start or cycle_complete (skip for ceo_review)
             3. Fetch CEO context: curl -s "$HIVE_URL/api/agents/context?agent=ceo&company_slug=<slug>" -H "Authorization: Bearer $CRON_SECRET"
                This returns validation phase, cycle info, research summaries, playbook, tasks, directives, metrics, and recent scores — all in one call.
+            4. Before making any Hive platform-level architectural decision, read `DECISIONS.md` to check if it was already decided.
 
             ## Trigger-specific instructions
 
