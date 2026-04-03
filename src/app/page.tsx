@@ -781,6 +781,56 @@ export default function DashboardPage() {
             )}
           </div>
 
+          {/* Portfolio snapshot charts */}
+          {portfolioCompanies.length >= 2 && (
+            <div>
+              <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
+                letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Portfolio snapshot</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {/* MRR by company */}
+                <div style={{ padding: "14px 16px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
+                  <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>MRR</div>
+                  {(() => {
+                    const maxMrr = Math.max(...portfolioCompanies.map(c => c.latest_metrics?.mrr || 0), 1);
+                    return portfolioCompanies.map(c => {
+                      const mrr = c.latest_metrics?.mrr || 0;
+                      const pct = (mrr / maxMrr) * 100;
+                      return (
+                        <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                          <span style={{ width: 72, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: "var(--hive-border)", overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.max(pct, mrr > 0 ? 2 : 0)}%`, borderRadius: 3, background: mrr > 0 ? "var(--hive-green)" : "var(--hive-border-subtle)" }} />
+                          </div>
+                          <span style={{ width: 44, fontSize: 10, fontFamily: "var(--hive-mono)", color: mrr > 0 ? "var(--hive-green)" : "var(--hive-text-dim)", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtCurrency(mrr)}</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+                {/* Cycles by company */}
+                <div style={{ padding: "14px 16px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
+                  <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>Cycles</div>
+                  {(() => {
+                    const maxCycles = Math.max(...portfolioCompanies.map(c => getCycleCount(c.id)), 1);
+                    return portfolioCompanies.map(c => {
+                      const count = getCycleCount(c.id);
+                      const pct = (count / maxCycles) * 100;
+                      return (
+                        <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                          <span style={{ width: 72, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: "var(--hive-border)", overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.max(pct, count > 0 ? 2 : 0)}%`, borderRadius: 3, background: "var(--hive-accent)" }} />
+                          </div>
+                          <span style={{ width: 44, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{count}</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Neon usage */}
           {neonUsage && !neonUsage.error && neonUsage.projects.length > 0 && (
             <div>
