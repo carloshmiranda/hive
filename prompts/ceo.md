@@ -70,8 +70,12 @@ Your plan MUST include validation context:
         "id": "growth-1",
         "task": "Content or distribution task",
         "rationale": "Why this content now",
-        "content_type": "blog|social|email|landing_page",
-        "target_keyword": "keyword if applicable"
+        "content_type": "blog|social|email|landing_page|experiment",
+        "target_keyword": "keyword if applicable",
+        "hypothesis": "If we [do X], then [metric Y] will [change by Z%] within [N days]",
+        "success_metric": "metric name (e.g. ctr, signups_7d, organic_sessions)",
+        "success_threshold": "e.g. '>5%' or '>50 signups'",
+        "time_box_days": 14
       }
     ],
     "reasoning": "Why these priorities. Must reference validation data.",
@@ -92,6 +96,31 @@ Your plan MUST include validation context:
 - `needs_provisioning`: set `true` only for new companies that haven't been provisioned yet
 - `needs_research`: set `true` if market research is needed before the next cycle
 ```
+
+### Growth task types: standard vs. experiment
+
+Use `content_type: "experiment"` when you're testing a hypothesis — you don't yet know if a tactic will work and want measured data back.
+
+**ICE scoring — use experiment when ICE ≥ 6:**
+```
+Impact (1-10): How much will this move the North Star metric if it works?
+Confidence (1-10): How sure are you it will work? (backed by data=8-10, gut=3-5)
+Ease (1-10): How fast/cheap to run? (1 day=10, 1 week=5, 1 month=2)
+ICE = (Impact + Confidence + Ease) / 3
+```
+
+**Experiment fields are REQUIRED when `content_type == "experiment"`:**
+- `hypothesis`: Full statement — "If we [do X], then [metric Y] will [change by Z%] within [N days]"
+- `success_metric`: Single measurable metric (e.g. `organic_sessions`, `signups_7d`, `ctr_pricing`)
+- `success_threshold`: Pass/fail threshold (e.g. `">5%"`, `">50 signups"`, `"<2% bounce"`)
+- `time_box_days`: How many days before declaring success or failure (7–30)
+
+**Use standard `content_type` (blog/social/email/landing_page) when:**
+- You already know this tactic works (playbook entry exists for it)
+- It's a recurring content operation (weekly blog post, social posting)
+- There's no clear measurable hypothesis — it's just execution
+
+The Growth agent will run the experiment, then report actual outcome vs. `success_threshold`. You will review results in the next cycle's Review phase.
 
 ### Bounded Context Planning
 
@@ -338,8 +367,16 @@ For all phases:
     "wins": ["..."],
     "misses": ["..."],
     "agent_grades": {
-      "engineer": { "grade": "A|B|C|F", "note": "Brief assessment" },
-      "growth": { "grade": "A|B|C|F", "note": "Brief assessment" }
+      "engineer": {
+        "grade": "A|B|C|F",
+        "note": "Brief assessment",
+        "blame_source": "prompt_quality|infra_issue|spec_missing|external_dependency|unknown"
+      },
+      "growth": {
+        "grade": "A|B|C|F",
+        "note": "Brief assessment",
+        "blame_source": "prompt_quality|infra_issue|spec_missing|external_dependency|unknown"
+      }
     },
     "design_review": {
       "ui_changed": true,
@@ -373,6 +410,23 @@ For all phases:
   }
 }
 ```
+
+### Agent grading + blame attribution
+
+For each agent active this cycle, populate `agent_grades`:
+- **A** = Delivered what was asked, on time, no rework needed
+- **B** = Delivered with minor issues or partial completion
+- **C** = Significantly underdelivered or required re-run (blame_source required)
+- **F** = Failed entirely or caused regressions (blame_source required)
+
+When grade is C or F, set `blame_source` to identify the root cause:
+- `prompt_quality` — Instructions were ambiguous, incomplete, or conflicting
+- `infra_issue` — External failure: timeout, OOM, GitHub Actions crash, API outage
+- `spec_missing` — Agent had no spec / backlog item lacked acceptance criteria
+- `external_dependency` — Blocked on something outside Hive's control (npm package, API, third-party)
+- `unknown` — Failure cause unclear after reviewing agent_actions and error logs
+
+This feeds the Evolver agent's failure analysis — only attribute blame when grade is C or F, otherwise `blame_source` can be omitted.
 
 ### Error pattern diagnosis
 

@@ -245,6 +245,7 @@ export interface LLMOptions {
   timeout?: number;
   verbosity?: "low" | "medium" | "high" | "max";
   companySlug?: string;  // Used to populate OpenRouter `user` field for per-agent per-company tracking
+  systemMessage?: string; // Stable context (briefing, playbook) — cached separately from dynamic task prompt
   responseFormat?: {
     type: "json_schema";
     json_schema: {
@@ -594,10 +595,19 @@ async function callOpenRouter(
   // Build provider.ignore from providers with open circuit breakers
   const failingProviders = getFailingProviders();
 
+  // Build messages with content block format for prompt caching
+  // OpenRouter passes cache_control through to Anthropic models; non-Claude models ignore it
+  const userMessage = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: prompt, cache_control: { type: "ephemeral" as const } }],
+  };
+
   const requestBody: any = {
     // Native models array: OpenRouter tries each in order server-side
     models,
-    messages: [{ role: "user", content: prompt }],
+    messages: options.systemMessage
+      ? [{ role: "system", content: options.systemMessage }, userMessage]
+      : [userMessage],
     max_tokens: options.maxTokens || 8192,
     temperature: options.temperature || 0.7,
     provider: {
@@ -736,16 +746,21 @@ async function callClaude(
   }
 
   const model = "claude-haiku-4-5-20251001";  // Use fastest/cheapest Claude model for fallback
-  const messages = [{
-    role: "user" as const,
-    content: [{ type: "text" as const, text: prompt, cache_control: { type: "ephemeral" as const } }],
-  }];
+
+  // System/user split: stable context (briefing, playbook) in cached system message,
+  // dynamic task prompt in user message. If no systemMessage, cache the user content instead.
+  const messages = options.systemMessage
+    ? [{ role: "user" as const, content: prompt }]
+    : [{ role: "user" as const, content: [{ type: "text" as const, text: prompt, cache_control: { type: "ephemeral" as const } }] }];
 
   const requestBody: any = {
     model,
     max_tokens: options.maxTokens || 8192,
     temperature: options.temperature || 0.7,
     messages,
+    ...(options.systemMessage && {
+      system: [{ type: "text" as const, text: options.systemMessage, cache_control: { type: "ephemeral" as const } }],
+    }),
   };
 
   const anthropicHeaders = {
@@ -760,7 +775,7 @@ async function callClaude(
     const countRes = await fetch("https://api.anthropic.com/v1/messages/count_tokens", {
       method: "POST",
       headers: anthropicHeaders,
-      body: JSON.stringify({ model, messages, ...(requestBody.tools ? { tools: requestBody.tools } : {}) }),
+      body: JSON.stringify({ model, messages, ...(requestBody.system ? { system: requestBody.system } : {}), ...(requestBody.tools ? { tools: requestBody.tools } : {}) }),
     });
     if (countRes.ok) {
       const { input_tokens } = await countRes.json();
