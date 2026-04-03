@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-04-03 Interactive session PR merges bypass syncIssueForBacklog — GitHub issues left open
+**What happened:** PRs merged via `gh pr merge --admin` in Claude Code sessions leave GitHub issues open. Issues #109 and #118 remained open after their PRs (#370, #371) were merged days earlier.
+**Root cause:** `reviewAndMergeOpenPRs()` in `dispatch/route.ts` is the only place that calls `syncIssueForBacklog`. It also sets `pr_number` on backlog items. When PRs are merged interactively (not via the dispatch route), `pr_number` stays `null` and the issue sync never runs. The dispatch route's `WHERE pr_number = $1` query then can't find those items even if it runs later.
+**Fix applied:** Manually closed issues with `gh issue close <N> --comment "..."`. Two-part fix needed: (1) MISTAKES.md entry so this isn't missed again, (2) post-merge health check (backlog item `6b4cc45a`) to detect regressions quickly.
+**Prevention:** After every `gh pr merge --admin` in an interactive session, immediately run: `gh issue close <N> --comment "Resolved by PR #<M>"` for each linked GitHub issue. Check `hive_backlog WHERE status='done' AND github_issue_number IS NOT NULL AND pr_number IS NULL` to find any items that slipped through.
+**Affects:** hive
+
+### 2026-04-03 Direct push to main bypassed CI required status checks
+**What happened:** Committed `.githooks/pre-commit` and `package.json` changes directly to `main` instead of using a feature branch + PR. GitHub showed "Bypassed rule violations for refs/heads/main: Required status check CI / lint-and-build is expected."
+**Root cause:** Treating a small chore commit as not needing CI review. Branch protection rules exist for all commits to main regardless of size.
+**Fix applied:** Created `hive/improvement/learning-rate-kill-signal` branch for subsequent work. All code changes went through branch → commit → push → PR.
+**Prevention:** ALWAYS branch first, even for 1-line changes. Never push to `main` directly. The correct flow is: `git checkout -b hive/improvement/<slug>` → commit → `git push origin <branch>` → `gh pr create`.
+**Affects:** hive
+
 ### 2026-04-02 Sentry had zero client-side coverage despite being "installed"
 **What happened:** `@sentry/nextjs` was installed, `sentry.server.config.ts` existed, but `instrumentation.ts` and `instrumentation-client.ts` were never created. Result: zero browser error tracking, no Session Replay, server errors only partially captured.
 **Root cause:** The old Sentry setup pattern used `sentry.client.config.ts` (deprecated). Modern `@sentry/nextjs` ≥8 requires `instrumentation-client.ts` for client-side init and `instrumentation.ts` (with `register()` + `onRequestError`) for server/edge. The wizard would have created both, but the initial setup was manual/partial.
@@ -47,6 +61,24 @@
 **Root cause:** The agent was named `backlog` at code-time, but the DB schema's `agent_actions.agent` CHECK enumerates specific values. `backlog` was never in the allowed list; `backlog_dispatch` is.
 **Fix applied:** Replaced all 4 occurrences of `'backlog'` with `'backlog_dispatch'` in the INSERT statements.
 **Prevention:** When inserting into `agent_actions`, always check the agent CHECK constraint in `schema.sql` or `schema-map.ts`. The lint-sql script catches violations pre-merge.
+**Affects:** hive
+
+---
+
+### 2026-04-02 LEFT JOIN returns a row even when the right table has no matching rows
+**What happened:** `/api/metrics/unit-economics` was checking `rows.length === 0` to detect a company-not-found condition. A valid company_id with zero metric rows still produces one row from the LEFT JOIN (with all metric columns NULL and `resolved_id` non-null). The check passed and the handler tried to read `rows[0].company_created_at`, returning garbage data instead of a 404.
+**Root cause:** LEFT JOIN semantics — the query `FROM companies LEFT JOIN metrics ON ...` always emits at least one row per company (with NULLs for the right side when no metrics exist). The original check only tested array length, not whether the company itself was found.
+**Fix applied:** Added a second guard: `if (rows.length === 0 || rows[0].resolved_id === null) return err("Company not found", 404);` The `resolved_id` column is `c.id` aliased in the SELECT, which is always non-null when the company exists. Commit 82c0819.
+**Prevention:** Whenever a route uses a LEFT JOIN to combine an entity with optional child rows, check the entity's own primary key (or a never-null alias like `resolved_id`) is non-null — not just `rows.length`. Pattern: `if (!rows[0]?.resolved_id) return err("Not found", 404);`
+**Affects:** hive
+
+---
+
+### 2026-04-02 `document.querySelector` as React focus trigger is fragile
+**What happened:** `src/app/company/[slug]/page.tsx` used `document.querySelector("[placeholder*='directive']")?.focus()` in 3 places to focus the directive input after user actions. The selector depends on the placeholder string being stable — any copy change would silently break the focus behavior with no error thrown.
+**Root cause:** Direct DOM manipulation with a text-content selector is the anti-pattern. React provides `useRef` precisely for stable, rename-safe references to DOM nodes.
+**Fix applied:** Added `const directiveInputRef = useRef<HTMLInputElement>(null)`, attached `ref={directiveInputRef}` to the `<input>`, and replaced all 3 `document.querySelector(...)?.focus()` calls with `directiveInputRef.current?.focus()`. Commit 82c0819.
+**Prevention:** Never use `document.querySelector` with text-content selectors (placeholder, aria-label, class names) to target React-rendered elements. Always use `useRef` for imperative DOM access. If a selector is needed for testing, use `data-testid`.
 **Affects:** hive
 
 ---

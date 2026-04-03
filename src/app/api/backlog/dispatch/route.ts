@@ -182,6 +182,15 @@ async function reviewAndMergeOpenPRs(sql: ReturnType<typeof getDb>): Promise<{ c
                 ${JSON.stringify({ pr_number: pr.number, risk_score: analysis.riskScore, merged_items: (mergedItems as any[]).map((i: any) => i.id) })}::jsonb,
                 NOW(), NOW())
             `.catch(() => {});
+            // Schedule post-merge health check (5 min delay — wait for Sentry to ingest errors)
+            await qstashPublish("/api/health/post-merge-check", {
+              pr_number: pr.number,
+              pr_title: pr.title,
+              merged_at: new Date().toISOString(),
+            }, {
+              delay: 300,
+              deduplicationId: `post-merge-${pr.number}`,
+            }).catch(() => {});
           } else {
             console.log(`[backlog] Auto-merge failed for PR #${pr.number}: ${result.message}`);
             await sql`
