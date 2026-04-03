@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
-import { computeValidationScore, checkCEOScoreKillTrigger } from '@/lib/validation';
+import { computeValidationScore, checkCEOScoreKillTrigger, checkLearningRateKillTrigger } from '@/lib/validation';
 import type { MetricsRow } from '@/lib/validation';
 
 // ─── Arbitraries ───
@@ -227,5 +227,89 @@ describe('checkCEOScoreKillTrigger', () => {
       ),
       { numRuns: 200 }
     );
+  });
+});
+
+// ─── checkLearningRateKillTrigger tests ───
+
+describe('checkLearningRateKillTrigger', () => {
+  it('returns null when fewer than 4 cycles provided', () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            cycle_number: fc.nat({ max: 100 }),
+            score: fc.double({ min: 0, max: 10, noNaN: true }).map(String),
+          }),
+          { minLength: 0, maxLength: 3 }
+        ),
+        (cycles) => {
+          expect(checkLearningRateKillTrigger(cycles)).toBeNull();
+        }
+      ),
+      { numRuns: 200 }
+    );
+  });
+
+  it('returns a trigger message when avg < 6 and range < 1.5 across 4+ cycles', () => {
+    // All scores tightly clustered around 4 (avg 4, range 0) — clearly stagnant
+    const stagnantCycles = [
+      { cycle_number: 1, score: '4.0' },
+      { cycle_number: 2, score: '4.1' },
+      { cycle_number: 3, score: '3.9' },
+      { cycle_number: 4, score: '4.0' },
+    ];
+    const result = checkLearningRateKillTrigger(stagnantCycles);
+    expect(result).not.toBeNull();
+    expect(result).toContain('LEARNING RATE STAGNANT');
+  });
+
+  it('returns null when avg >= 6 even if range is small', () => {
+    fc.assert(
+      fc.property(
+        // Generate 4+ cycles all with scores between 6 and 7 (avg >= 6, range < 1.5)
+        fc.array(
+          fc.record({
+            cycle_number: fc.nat({ max: 100 }),
+            score: fc.double({ min: 6, max: 7, noNaN: true }).map(String),
+          }),
+          { minLength: 4, maxLength: 8 }
+        ),
+        (cycles) => {
+          expect(checkLearningRateKillTrigger(cycles)).toBeNull();
+        }
+      ),
+      { numRuns: 200 }
+    );
+  });
+
+  it('returns null when avg < 6 but range >= 1.5 (improvement signal present)', () => {
+    // Scores vary widely (e.g. 2 to 8) — range is large enough to show learning
+    const improvingCycles = [
+      { cycle_number: 1, score: '2.0' },
+      { cycle_number: 2, score: '3.5' },
+      { cycle_number: 3, score: '5.0' },
+      { cycle_number: 4, score: '7.0' },
+    ];
+    expect(checkLearningRateKillTrigger(improvingCycles)).toBeNull();
+  });
+
+  it('uses only the 6 most recent cycles by cycle_number', () => {
+    // Older cycles are bad (stagnant), recent cycles are improving
+    const cycles = [
+      { cycle_number: 1, score: '3.0' },
+      { cycle_number: 2, score: '3.1' },
+      { cycle_number: 3, score: '2.9' },
+      { cycle_number: 4, score: '3.0' },
+      // Recent cycles (used): high variance, so no trigger
+      { cycle_number: 10, score: '2.0' },
+      { cycle_number: 11, score: '5.0' },
+      { cycle_number: 12, score: '3.0' },
+      { cycle_number: 13, score: '7.0' },
+      { cycle_number: 14, score: '2.0' },
+      { cycle_number: 15, score: '6.5' },
+    ];
+    // The 6 most recent: cycles 10-15 → range ~5 → no trigger
+    expect(checkLearningRateKillTrigger(cycles)).toBeNull();
   });
 });

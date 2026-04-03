@@ -564,6 +564,31 @@ export function checkCEOScoreKillTrigger(recentCycles: Array<{ cycle_number: num
   return null;
 }
 
+export function checkLearningRateKillTrigger(
+  recentCycles: Array<{ cycle_number: number; score: string }>
+): string | null {
+  if (recentCycles.length < 4) return null;
+
+  const sorted = [...recentCycles]
+    .sort((a, b) => b.cycle_number - a.cycle_number)
+    .slice(0, 6);
+
+  const scores = sorted
+    .map(c => { const s = parseFloat(c.score); return isNaN(s) ? null : s; })
+    .filter((s): s is number => s !== null);
+
+  if (scores.length < 4) return null;
+
+  const avg = scores.reduce((sum, v) => sum + v, 0) / scores.length;
+  const range = Math.max(...scores) - Math.min(...scores);
+
+  if (avg < 6 && range < 1.5) {
+    return `LEARNING RATE STAGNANT: ${scores.length} cycles with CEO scores ${scores.map(s => s.toFixed(1)).join('→')} (avg ${avg.toFixed(1)}/10, no improvement detected)`;
+  }
+
+  return null;
+}
+
 // ─── Main function ───
 
 export function computeValidationScore(

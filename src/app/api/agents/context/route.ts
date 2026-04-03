@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
-import { computeValidationScore, normalizeBusinessType, checkCEOScoreKillTrigger } from "@/lib/validation";
+import { computeValidationScore, normalizeBusinessType, checkCEOScoreKillTrigger, checkLearningRateKillTrigger } from "@/lib/validation";
 import { getCapabilitySummary } from "@/lib/hive-capabilities";
 import { checkForbidden } from "@/lib/phase-gate";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
@@ -778,15 +778,20 @@ async function ceoContext(sql: any, company: any) {
   ).catch(() => false);
 
   // Check for CEO score kill evaluation trigger
-  const ceoScoreKillTrigger = checkCEOScoreKillTrigger(recentCycles.map((c: { cycle_number: number; score: string }) => ({
+  const cyclesMapped = recentCycles.map((c: { cycle_number: number; score: string }) => ({
     cycle_number: c.cycle_number,
     score: c.score
-  })));
+  }));
+  const ceoScoreKillTrigger = checkCEOScoreKillTrigger(cyclesMapped);
+  const learningRateKillTrigger = checkLearningRateKillTrigger(cyclesMapped);
 
   // Combine all kill evaluation triggers
   const allKillEvaluationTriggers = [...validation.kill_evaluation_triggers];
   if (ceoScoreKillTrigger) {
     allKillEvaluationTriggers.push(ceoScoreKillTrigger);
+  }
+  if (learningRateKillTrigger) {
+    allKillEvaluationTriggers.push(learningRateKillTrigger);
   }
 
   return {
