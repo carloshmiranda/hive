@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.
+description: Invoke when the user asks to build or design web components, pages, applications, landing pages, dashboards, React components, HTML/CSS layouts, or visual artifacts. Also invoke when the user asks to improve, restyle, or beautify any web UI, or when design quality is explicitly a concern.
 license: Apache 2.0 — https://github.com/anthropics/skills/blob/main/skills/frontend-design/LICENSE.txt
 source: https://github.com/anthropics/skills/tree/main/skills/frontend-design
 ---

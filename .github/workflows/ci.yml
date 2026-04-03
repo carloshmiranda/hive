@@ -21,7 +21,22 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Lint SQL queries
-        run: npx tsx scripts/lint-sql.ts
+        id: sql_lint
+        continue-on-error: true
+        run: npx tsx scripts/lint-sql.ts 2>&1 | tee /tmp/sql-lint-output.txt
+      - name: Dispatch Engineer on SQL lint failure
+        if: steps.sql_lint.outcome == 'failure'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          ERROR_OUTPUT=$(cat /tmp/sql-lint-output.txt | head -50)
+          curl -s -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_PAT" \
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d "{\"event_type\":\"ci_fix\",\"client_payload\":{\"task\":\"Fix SQL lint failures in CI\",\"branch\":\"${{ github.head_ref }}\",\"pr_number\":${{ github.event.pull_request.number }},\"error_output\":$(echo "$ERROR_OUTPUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}}"
+          echo "Dispatched Engineer to fix SQL lint failures"
+          exit 1
       - name: Auto-sync schema-map.ts
         # Regenerate the schema map and auto-commit if stale.
         # Eliminates the entire category of "schema-map out of date" CI failures:

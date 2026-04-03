@@ -1,6 +1,6 @@
 ---
 name: context
-description: Review session work and update all context files. Run at end of sessions or after major changes.
+description: Invoke when the user says 'save context', 'update memory', '/context', 'run context snapshot', 'end session', or 'wrap up'. Also invoke after completing any significant implementation, architecture change, schema migration, or backlog item — even if the user didn't ask.
 ---
 
 <context-snapshot>
@@ -62,15 +62,31 @@ For EACH file, read the current version, compare against what you know, and upda
 - project_model_routing.md: Agent-to-provider mapping, action versions
 - Other memory files: Update if their domain was touched
 
-## Step 4: Verify completeness
+## Step 4: Check task criteria (if applicable)
+
+Check whether `.claude/scratch/current-task.md` exists.
+
+**If it exists:**
+1. Read the file
+2. For each acceptance criterion (lines starting with `- [ ]`):
+   - Determine if it was verified during this session
+   - If yes: update the line to `- [x]` and note how it was verified
+   - If no: leave as `- [ ]` and flag it explicitly in your Step 5 report
+3. If ALL criteria are checked: append `**Status: COMPLETE**` to the file
+4. If ANY criteria remain unchecked: append `**Status: INCOMPLETE — unverified criteria above**`
+
+**If it does not exist:** note in the report that no task definition was created this session (not an error for general sessions).
+
+## Step 5: Verify completeness
 
 Run: `grep -r 'as of 202' BRIEFING.md` and memory files to find stale date references.
 Check that no "Known Blockers" or "Known Issues" sections contain resolved items.
 
-## Step 5: Report
+## Step 6: Report
 
 Tell the user what you updated and what was already current. Be concise.
 Include a summary of any backlog items synced in Step 2.
+If a current-task.md existed, report the criteria status — pass/fail for each one.
 
 IMPORTANT: Do NOT skip files or steps. The whole point is to prevent context drift and wasted dispatches.
 </context-snapshot>
