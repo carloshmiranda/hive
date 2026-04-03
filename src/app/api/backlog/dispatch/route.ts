@@ -1256,9 +1256,12 @@ export async function POST(req: Request) {
     }
   }
   if (engineerBusy) {
-    // Don't retry — the running engineer will chain-dispatch when it finishes
+    // The running engineer will chain-dispatch when it finishes — but if it crashes before
+    // chaining (GitHub Actions timeout, OOM, network failure), no retry would ever fire.
+    // Schedule a QStash fallback retry so work is never permanently lost on engineer crash.
+    await scheduleChainRetry("engineer_busy", 20);
     logDispatchCycle("engineer_busy", { source: engineerBusySource });
-    return json({ dispatched: false, reason: "engineer_busy", source: engineerBusySource });
+    return json({ dispatched: false, reason: "engineer_busy", source: engineerBusySource, chain_retry: true });
   }
 
   // Per-agent hourly rate limit: prevent dispatch burst patterns
