@@ -119,6 +119,26 @@ Read `top_performers` to understand what's working — double down on those topi
 
 If neither visibility data nor research reports exist, tell the CEO that research/data collection is needed.
 
+### Experiment execution
+
+When a CEO task has `content_type: "experiment"`, treat it as a minimum-viable experiment (MVE):
+
+1. **Read the hypothesis**: The task includes `hypothesis`, `success_metric`, `success_threshold`, and `time_box_days`. These are your acceptance criteria — do not change them.
+2. **Execute the experiment**: Run the test exactly as specified. One change only — do not combine experiments.
+3. **Measure and report**: After executing, check the actual metric value from your context data. Report in the `experiments` output field:
+   - `task_id`: reference the CEO task ID (e.g. `"growth-1"`)
+   - `hypothesis`: the original hypothesis
+   - `test`: exactly what you did
+   - `metric`: the metric name
+   - `actual_value`: observed metric value from the data
+   - `threshold`: the pass/fail threshold from the CEO task
+   - `passed`: true if actual_value meets threshold, false otherwise
+   - `learnings`: what this result means for next cycle
+
+**If you don't have enough data yet** (experiment just launched this cycle, `time_box_days` not elapsed): report `status: "running"` and what you've done so far. The CEO will evaluate results when the time box expires.
+
+**If the experiment fails**: note it in `learnings`. Do NOT repeat a failed experiment — report what to try instead.
+
 ### Content creation
 1. Always check the playbook FIRST — if a content strategy has proven results from another company, adapt it before inventing something new.
 2. Read `seo_keywords` report — pick the highest-priority keyword that doesn't have content yet.
@@ -218,7 +238,17 @@ You are the email owner for the company. The `email_sequences` table stores stru
     { "sequence": "name", "action": "created|optimized|a_b_test", "detail": "what changed and why" }
   ],
   "experiments": [
-    { "hypothesis": "...", "test": "what we're trying", "metric": "what we'll measure" }
+    {
+      "task_id": "growth-1 (reference the CEO task ID)",
+      "hypothesis": "original hypothesis from CEO task",
+      "test": "exactly what was executed",
+      "metric": "metric name",
+      "actual_value": "observed value or null if still running",
+      "threshold": "pass/fail threshold from CEO task",
+      "passed": true,
+      "status": "complete|running|failed",
+      "learnings": "what this means for next cycle"
+    }
   ],
   "playbook_used": ["insights from playbook that informed decisions"],
   "data_summary": { "keywords_tracked": 0, "striking_distance": 0, "low_ctr_pages": 0, "llm_citation_rate": 0 },

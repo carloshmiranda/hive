@@ -10,11 +10,15 @@ echo "1. If you made architecture/infrastructure changes this session, run /cont
 echo "2. If you haven't updated context files yet, do it before any new work"
 echo ""
 echo "Current state snapshot:"
-head -60 "$CLAUDE_PROJECT_DIR/BRIEFING.md" 2>/dev/null || echo "(BRIEFING.md not found)"
+head -100 "$CLAUDE_PROJECT_DIR/BRIEFING.md" 2>/dev/null || echo "(BRIEFING.md not found)"
 echo ""
 echo "---"
-echo "Recent memory:"
-cat "$CLAUDE_PROJECT_DIR/../memory/project_infra.md" 2>/dev/null | head -30 || true
+echo "Recent memory (infra):"
+cat "$CLAUDE_PROJECT_DIR/../memory/project_infra.md" 2>/dev/null | head -40 || true
+echo ""
+echo "---"
+echo "Recent memory (model routing):"
+cat "$CLAUDE_PROJECT_DIR/../memory/project_model_routing.md" 2>/dev/null | head -30 || true
 
 # Re-inject scratch files (user-pasted content saved before compaction)
 SCRATCH_DIR="$CLAUDE_PROJECT_DIR/.claude/scratch"
