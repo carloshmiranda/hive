@@ -15,6 +15,7 @@ import { cachedPlaybook } from "@/lib/redis-cache";
 import { compressResearchForAgent } from "@/lib/research-compression";
 import { qstashPublish } from "@/lib/qstash";
 import { verifyPlaybookUsage } from "@/lib/playbook-verification";
+import { resolveBlobContent, uploadIfLarge } from "@/lib/blob-storage";
 
 // Worker agents use unified LLM provider abstraction (src/lib/llm.ts)
 // Handles provider routing, fallbacks, rate limiting, and response normalization
@@ -307,8 +308,12 @@ ${capabilitiesSummary(company.capabilities)}`;
         sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'lead_list'`,
         sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'outreach_log'`,
       ]);
-      fullPrompt += `\n\nEXISTING LEADS: ${leadList ? JSON.stringify(leadList.content) : "None yet"}`;
-      fullPrompt += `\nOUTREACH LOG: ${outreachLog ? JSON.stringify(outreachLog.content) : "No outreach yet"}`;
+      const [leadContent, outreachContent] = await Promise.all([
+        leadList ? resolveBlobContent(leadList.content) : Promise.resolve(null),
+        outreachLog ? resolveBlobContent(outreachLog.content) : Promise.resolve(null),
+      ]);
+      fullPrompt += `\n\nEXISTING LEADS: ${leadContent ? JSON.stringify(leadContent) : "None yet"}`;
+      fullPrompt += `\nOUTREACH LOG: ${outreachContent ? JSON.stringify(outreachContent) : "No outreach yet"}`;
     }
 
     if (agentName === "growth") {
@@ -333,10 +338,15 @@ ${capabilitiesSummary(company.capabilities)}`;
         sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'llm_visibility'`,
         sql`SELECT content FROM research_reports WHERE company_id = ${company.id} AND report_type = 'content_performance'`,
       ]);
+      const [visContent, llmVisContent, contentPerfContent] = await Promise.all([
+        visSnapshot ? resolveBlobContent(visSnapshot.content) : Promise.resolve(null),
+        llmVis ? resolveBlobContent(llmVis.content) : Promise.resolve(null),
+        contentPerf ? resolveBlobContent(contentPerf.content) : Promise.resolve(null),
+      ]);
       // Context optimization: truncate large JSONB reports to prevent token bloat
-      if (visSnapshot) fullPrompt += `\n\nVISIBILITY DATA (from GSC):\n${truncateJson(visSnapshot.content, 2000)}`;
-      if (llmVis) fullPrompt += `\n\nLLM VISIBILITY:\n${truncateJson(llmVis.content, 1500)}`;
-      if (contentPerf) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${truncateJson(contentPerf.content, 2000)}`;
+      if (visContent) fullPrompt += `\n\nVISIBILITY DATA (from GSC):\n${truncateJson(visContent, 2000)}`;
+      if (llmVisContent) fullPrompt += `\n\nLLM VISIBILITY:\n${truncateJson(llmVisContent, 1500)}`;
+      if (contentPerfContent) fullPrompt += `\n\nCONTENT PERFORMANCE (refresh recommendations):\n${truncateJson(contentPerfContent, 2000)}`;
     }
 
     // 5. Call the unified LLM interface with tool calling support
@@ -616,22 +626,28 @@ async function processOutreachResults(sql: any, company: any, output: string) {
       }
 
       const processedData = { ...parsed, leads: filteredLeads };
+      const processedStr = JSON.stringify(processedData);
+      const leadsBlobUrl = await uploadIfLarge(processedStr, `research/${company.id}/lead_list`);
+      const leadsContent = leadsBlobUrl ? JSON.stringify({ _blob_url: leadsBlobUrl }) : processedStr;
 
       await sql`
         INSERT INTO research_reports (company_id, report_type, content, summary)
-        VALUES (${company.id}, 'lead_list', ${JSON.stringify(processedData)}, ${`${filteredLeads.length} leads tracked (${originalCount - filteredCount} filtered)`})
+        VALUES (${company.id}, 'lead_list', ${leadsContent}::jsonb, ${`${filteredLeads.length} leads tracked (${originalCount - filteredCount} filtered)`})
         ON CONFLICT (company_id, report_type) DO UPDATE SET
-          content = ${JSON.stringify(processedData)}, summary = ${`${filteredLeads.length} leads tracked (${originalCount - filteredCount} filtered)`}, updated_at = now()
+          content = ${leadsContent}::jsonb, summary = ${`${filteredLeads.length} leads tracked (${originalCount - filteredCount} filtered)`}, updated_at = now()
       `;
       leadsUpdated = true;
     }
 
     if (parsed.emails_drafted?.length) {
+      const parsedStr = JSON.stringify(parsed);
+      const outreachBlobUrl = await uploadIfLarge(parsedStr, `research/${company.id}/outreach_log`);
+      const outreachContent = outreachBlobUrl ? JSON.stringify({ _blob_url: outreachBlobUrl }) : parsedStr;
       await sql`
         INSERT INTO research_reports (company_id, report_type, content, summary)
-        VALUES (${company.id}, 'outreach_log', ${JSON.stringify(parsed)}, ${`${parsed.emails_drafted.length} emails drafted`})
+        VALUES (${company.id}, 'outreach_log', ${outreachContent}::jsonb, ${`${parsed.emails_drafted.length} emails drafted`})
         ON CONFLICT (company_id, report_type) DO UPDATE SET
-          content = ${JSON.stringify(parsed)}, summary = ${`${parsed.emails_drafted.length} emails drafted`}, updated_at = now()
+          content = ${outreachContent}::jsonb, summary = ${`${parsed.emails_drafted.length} emails drafted`}, updated_at = now()
       `;
     }
 

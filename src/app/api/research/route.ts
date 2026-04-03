@@ -1,5 +1,6 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
+import { uploadIfLarge, isBlobMarker, deleteBlob } from "@/lib/blob-storage";
 
 export async function GET(req: Request) {
   const session = await requireAuth();
@@ -54,11 +55,24 @@ export async function POST(req: Request) {
   // Content is JSONB — pass stringified JSON so Neon stores it as JSONB, not as a text string
   const contentStr = typeof content === "string" ? content : JSON.stringify(content);
   const sourcesStr = sources ? (typeof sources === "string" ? sources : JSON.stringify(sources)) : null;
+
+  // If content exceeds 100KB, upload to Vercel Blob and store a marker instead
+  const blobUrl = await uploadIfLarge(contentStr, `research/${company_id}/${report_type}`);
+  const storedContent = blobUrl ? JSON.stringify({ _blob_url: blobUrl }) : contentStr;
+
+  // If replacing an existing blob, delete the old one to avoid orphans
+  const [existing] = await sql`
+    SELECT content FROM research_reports WHERE company_id = ${company_id} AND report_type = ${report_type}
+  `;
+  if (existing && isBlobMarker(existing.content) && blobUrl && existing.content._blob_url !== blobUrl) {
+    await deleteBlob(existing.content._blob_url);
+  }
+
   const [report] = await sql`
     INSERT INTO research_reports (company_id, report_type, content, summary, sources)
-    VALUES (${company_id}, ${report_type}, ${contentStr}::jsonb, ${summary || null}, ${sourcesStr}::jsonb)
+    VALUES (${company_id}, ${report_type}, ${storedContent}::jsonb, ${summary || null}, ${sourcesStr}::jsonb)
     ON CONFLICT (company_id, report_type) DO UPDATE SET
-      content = ${contentStr}::jsonb,
+      content = ${storedContent}::jsonb,
       summary = ${summary || null},
       sources = ${sourcesStr}::jsonb,
       updated_at = now()
