@@ -1,7 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { requireAuth } from "@/lib/auth";
 import { upsertPlaybookEntry } from "@/lib/convergent";
-import { invalidatePlaybook } from "@/lib/redis-cache";
+import { invalidatePlaybook, playbookLeaderboardAdd } from "@/lib/redis-cache";
 import { normalizePlaybookDomain } from "@/lib/playbook-domains";
 
 export async function GET(req: Request) {
@@ -52,6 +52,7 @@ export async function POST(req: Request) {
   `;
 
   await invalidatePlaybook();
+  await playbookLeaderboardAdd(entry.domain, entry.id, entry.confidence).catch(() => {});
 
   return json(entry, 201);
 }

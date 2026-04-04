@@ -1,8 +1,9 @@
 import { getDb } from "@/lib/db";
 import { verifyCronAuth } from "@/lib/qstash";
-import { isDispatchPaused } from "@/lib/edge-config";
+import { isDispatchPaused, getThreshold } from "@/lib/edge-config";
 import { dispatchEvent } from "@/lib/dispatch";
 import { qstashPublish } from "@/lib/qstash";
+import { getBacklogClaim } from "@/lib/redis-cache";
 
 const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
 
@@ -28,10 +29,12 @@ interface PriorityScore {
 function computePriorityScore(
   type: WorkType,
   claudePct: number,
-  urgencyBonus: number
+  urgencyBonus: number,
+  stopPct: number,
+  highPct: number
 ): PriorityScore {
   const type_weight = TYPE_WEIGHTS[type];
-  const budget_penalty = claudePct > 90 ? 50 : claudePct > 70 ? 30 : 0;
+  const budget_penalty = claudePct > stopPct ? 50 : claudePct > highPct ? 30 : 0;
   const total = type_weight + urgencyBonus - budget_penalty;
 
   return {
@@ -69,6 +72,12 @@ export async function POST(req: Request) {
 
   const cronSecret = process.env.CRON_SECRET;
   const sql = getDb();
+
+  // Load configurable thresholds from Edge Config (defaults if not configured)
+  const [stopPct, highPct] = await Promise.all([
+    getThreshold("budget_throttle_stop_pct"),
+    getThreshold("budget_throttle_high_pct"),
+  ]);
 
   // 3. Health gate check
   const healthRes = await fetch(`${HIVE_URL}/api/dispatch/health-gate`, {
@@ -131,30 +140,32 @@ export async function POST(req: Request) {
   `.catch(() => [] as any[]);
 
   if (p0Items.length > 0) {
-    const item = p0Items[0];
-    const score = computePriorityScore("p0_backlog", claudePct, callerUrgencyBonus);
+    // Skip items claimed by an interactive Claude Code session
+    let p0Item = null;
+    for (const candidate of p0Items) {
+      const claim = await getBacklogClaim(candidate.id);
+      if (!claim) { p0Item = candidate; break; }
+    }
 
-    await dispatchEvent("feature_request", {
-      source: "unified_dispatcher",
-      backlog_item_id: item.id,
-      backlog_item_slug: item.slug,
-      title: item.title,
-      description: item.description,
-      acceptance_criteria: item.acceptance_criteria,
-      company: item.company_slug || null,
-      priority: "P0",
-      priority_score: score.total,
-    });
-
-    console.log(`[dispatch/work] dispatched P0 backlog: ${item.slug} (score ${score.total})`);
-    return Response.json({
-      ok: true,
-      dispatched: {
-        type: "p0_backlog",
-        target: item.slug,
+    if (p0Item) {
+      const score = computePriorityScore("p0_backlog", claudePct, callerUrgencyBonus, stopPct, highPct);
+      await dispatchEvent("feature_request", {
+        source: "unified_dispatcher",
+        backlog_item_id: p0Item.id,
+        backlog_item_slug: p0Item.slug,
+        title: p0Item.title,
+        description: p0Item.description,
+        acceptance_criteria: p0Item.acceptance_criteria,
+        company: p0Item.company_slug || null,
+        priority: "P0",
         priority_score: score.total,
-      },
-    });
+      });
+      console.log(`[dispatch/work] dispatched P0 backlog: ${p0Item.slug} (score ${score.total})`);
+      return Response.json({
+        ok: true,
+        dispatched: { type: "p0_backlog", target: p0Item.slug, priority_score: score.total },
+      });
+    }
   }
 
   // --- 4b. Healer — companies with recent failures ---
@@ -174,7 +185,7 @@ export async function POST(req: Request) {
 
   if (healerCandidates.length > 0) {
     const candidate = healerCandidates[0];
-    const score = computePriorityScore("healer", claudePct, callerUrgencyBonus + 10);
+    const score = computePriorityScore("healer", claudePct, callerUrgencyBonus + 10, stopPct, highPct);
 
     await dispatchEvent("healer_trigger", {
       source: "unified_dispatcher",
@@ -206,30 +217,35 @@ export async function POST(req: Request) {
   `.catch(() => [] as any[]);
 
   if (p1Items.length > 0) {
-    const item = p1Items[0];
-    const score = computePriorityScore("p1_backlog", claudePct, callerUrgencyBonus);
+    let p1Item = null;
+    for (const candidate of p1Items) {
+      const claim = await getBacklogClaim(candidate.id);
+      if (!claim) { p1Item = candidate; break; }
+    }
 
-    await dispatchEvent("feature_request", {
-      source: "unified_dispatcher",
-      backlog_item_id: item.id,
-      backlog_item_slug: item.slug,
-      title: item.title,
-      description: item.description,
-      acceptance_criteria: item.acceptance_criteria,
-      company: item.company_slug || null,
-      priority: "P1",
-      priority_score: score.total,
-    });
-
-    console.log(`[dispatch/work] dispatched P1 backlog: ${item.slug} (score ${score.total})`);
-    return Response.json({
-      ok: true,
-      dispatched: {
-        type: "p1_backlog",
-        target: item.slug,
+    if (p1Item) {
+      const score = computePriorityScore("p1_backlog", claudePct, callerUrgencyBonus, stopPct, highPct);
+      await dispatchEvent("feature_request", {
+        source: "unified_dispatcher",
+        backlog_item_id: p1Item.id,
+        backlog_item_slug: p1Item.slug,
+        title: p1Item.title,
+        description: p1Item.description,
+        acceptance_criteria: p1Item.acceptance_criteria,
+        company: p1Item.company_slug || null,
+        priority: "P1",
         priority_score: score.total,
-      },
-    });
+      });
+      console.log(`[dispatch/work] dispatched P1 backlog: ${p1Item.slug} (score ${score.total})`);
+      return Response.json({
+        ok: true,
+        dispatched: {
+          type: "p1_backlog",
+          target: p1Item.slug,
+          priority_score: score.total,
+        },
+      });
+    }
   }
 
   // --- 4d. Company cycle — highest-scoring company without active brain agent ---
@@ -312,7 +328,7 @@ export async function POST(req: Request) {
 
     if (scored.length > 0) {
       const next = scored[0];
-      const dispatchScore = computePriorityScore("company_cycle", claudePct, callerUrgencyBonus);
+      const dispatchScore = computePriorityScore("company_cycle", claudePct, callerUrgencyBonus, stopPct, highPct);
 
       await dispatchEvent("cycle_start", {
         source: "unified_dispatcher",
@@ -350,7 +366,7 @@ export async function POST(req: Request) {
 
   if (growthCandidates.length > 0) {
     const growthTarget = growthCandidates[0];
-    const score = computePriorityScore("growth", claudePct, callerUrgencyBonus);
+    const score = computePriorityScore("growth", claudePct, callerUrgencyBonus, stopPct, highPct);
 
     await qstashPublish("/api/agents/dispatch", {
       agent: "growth",

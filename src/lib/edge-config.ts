@@ -24,6 +24,17 @@ import { getDb } from "@/lib/db";
 export const EDGE_CONFIG_FLAGS = ["dispatch_paused", "maintenance_mode"] as const;
 export type EdgeConfigFlag = (typeof EDGE_CONFIG_FLAGS)[number];
 
+// Numeric thresholds in Edge Config — configurable without code deploys.
+// All have hardcoded defaults so the system works with no Edge Config set up.
+export const EDGE_CONFIG_THRESHOLDS = {
+  budget_throttle_high_pct:  70,  // claude_pct above which dispatch is penalized
+  budget_throttle_stop_pct:  90,  // claude_pct above which health-gate returns "stop"
+  max_companies_active:       2,  // max companies running brain agents simultaneously
+  spawn_engineer_threshold:   1,  // min engineering tasks before spawning Engineer
+  playbook_min_score:        40,  // min confidence*100 for playbook entries shown in context
+} as const;
+export type EdgeConfigThreshold = keyof typeof EDGE_CONFIG_THRESHOLDS;
+
 // Lazy singleton — only created if EDGE_CONFIG env var is set
 let client: ReturnType<typeof createClient> | null = null;
 function getEdgeConfigClient() {
@@ -77,6 +88,28 @@ export async function getEdgeFlag(flag: EdgeConfigFlag): Promise<boolean> {
  */
 export async function isDispatchPaused(): Promise<boolean> {
   return getEdgeFlag("dispatch_paused");
+}
+
+/**
+ * Read a numeric threshold from Edge Config.
+ * Falls back to the hardcoded default if Edge Config is unavailable or key is missing.
+ * <1ms when Edge Config is configured; ~50ms fallback to Neon is intentionally avoided.
+ */
+export async function getThreshold(key: EdgeConfigThreshold): Promise<number> {
+  const defaultValue = EDGE_CONFIG_THRESHOLDS[key];
+  const ec = getEdgeConfigClient();
+  if (ec) {
+    try {
+      const value = await ec.get<number | string>(key);
+      if (value !== null && value !== undefined) {
+        const parsed = Number(value);
+        if (!isNaN(parsed)) return parsed;
+      }
+    } catch {
+      // Edge Config unavailable — use default
+    }
+  }
+  return defaultValue;
 }
 
 /**

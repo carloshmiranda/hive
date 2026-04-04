@@ -1,7 +1,7 @@
 import { getDb, json, err } from "@/lib/db";
 import { generatePlaybookEmbedding } from "@/lib/embeddings";
 import { generateText } from "@/lib/llm";
-import { invalidatePlaybook } from "@/lib/redis-cache";
+import { invalidatePlaybook, playbookLeaderboardAdd } from "@/lib/redis-cache";
 
 // POST /api/distill/trajectory
 // Body: { cycle_id: string, action_ids: string[] }
@@ -110,7 +110,7 @@ In exactly 1-3 sentences, state the reusable pattern that made this succeed. Foc
       const embedding = await generatePlaybookEmbedding(insight.trim(), domain, evidence);
       const embeddingVector = `[${embedding.join(",")}]`;
 
-      await sql`
+      const [inserted] = await sql`
         INSERT INTO playbook (
           domain, insight, evidence, confidence,
           evolution_type, source,
@@ -126,7 +126,13 @@ In exactly 1-3 sentences, state the reusable pattern that made this succeed. Foc
           ${[action.agent]},
           ${embeddingVector}::vector
         )
-      `;
+        RETURNING id
+      ` as Array<{ id: string }>;
+
+      // Update playbook leaderboard so next context call can warm-read top entries
+      if (inserted?.id) {
+        await playbookLeaderboardAdd(domain, inserted.id, 0.4).catch(() => {});
+      }
 
       distilledCount++;
       console.log(`[distill] captured pattern for ${action.agent}:${action.action_type} (score=${action.quality_score})`);
