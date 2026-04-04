@@ -529,3 +529,101 @@ export async function getEngineerLock(): Promise<EngineerLock | null> {
     return null; // Caller falls back to DB check
   }
 }
+
+// --- Playbook score leaderboard (Redis sorted sets) ---
+// Tracks highest-confidence playbook entries per domain.
+// Dispatcher and context API read top-N IDs from Redis before fetching full rows from Neon.
+// Key format: playbook:score:{domain} — score = confidence (0.0-1.0)
+
+const PLAYBOOK_LEADERBOARD_PREFIX = "playbook:score:";
+const PLAYBOOK_LEADERBOARD_TTL = 86400; // 24h — refresh on every write
+
+/**
+ * Add or update a playbook entry's confidence score in the domain leaderboard.
+ * Call on every playbook INSERT or confidence UPDATE.
+ */
+export async function playbookLeaderboardAdd(
+  domain: string,
+  id: string,
+  confidence: number
+): Promise<void> {
+  try {
+    const r = getRedis();
+    if (!r) return;
+    const key = PLAYBOOK_LEADERBOARD_PREFIX + domain;
+    await r.zadd(key, { score: confidence, member: id });
+    // Refresh TTL on write so stale domains age out
+    await r.expire(key, PLAYBOOK_LEADERBOARD_TTL);
+  } catch {
+    // Non-fatal
+  }
+}
+
+/**
+ * Get top-N playbook entry IDs for a domain, sorted by confidence descending.
+ * Returns empty array if Redis unavailable — callers fall through to Neon.
+ */
+export async function playbookLeaderboardTop(
+  domain: string,
+  n = 5
+): Promise<string[]> {
+  try {
+    const r = getRedis();
+    if (!r) return [];
+    const key = PLAYBOOK_LEADERBOARD_PREFIX + domain;
+    // ZRANGE with REV + LIMIT — returns top N members by score descending
+    const members = await r.zrange(key, 0, n - 1, { rev: true });
+    return (members as string[]).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// --- Interactive session claim lock ---
+// Prevents the autonomous dispatcher from auto-dispatching backlog items
+// that a human (Carlos via Claude Code) is actively working on in a session.
+// Key format: claim:{backlog_id}
+// Value: "interactive" (or agent name for future use)
+// TTL: 2h — expires automatically if session ends without explicit release
+
+const CLAIM_TTL = 7200; // 2 hours
+
+/**
+ * Claim a backlog item for the current interactive session.
+ * Returns true if the claim was acquired, false if already claimed.
+ * Uses SET NX (only set if not exists) — atomic, no race conditions.
+ */
+export async function claimBacklogItem(backlogId: string): Promise<boolean> {
+  try {
+    const r = getRedis();
+    if (!r) return true; // No Redis → assume unclaimed (don't block work)
+    const key = `claim:${backlogId}`;
+    // SET NX EX: only set if not exists, with TTL
+    const result = await r.set(key, "interactive", { nx: true, ex: CLAIM_TTL });
+    return result === "OK";
+  } catch {
+    return true; // On error, assume unclaimed
+  }
+}
+
+/**
+ * Release a claim when the interactive session finishes.
+ * Safe to call even if the claim doesn't exist.
+ */
+export async function releaseBacklogClaim(backlogId: string): Promise<void> {
+  await cacheDel(`claim:${backlogId}`);
+}
+
+/**
+ * Check if a backlog item is claimed.
+ * Returns the claimant string (e.g. "interactive") or null if unclaimed.
+ */
+export async function getBacklogClaim(backlogId: string): Promise<string | null> {
+  try {
+    const r = getRedis();
+    if (!r) return null;
+    return await r.get<string>(`claim:${backlogId}`);
+  } catch {
+    return null;
+  }
+}

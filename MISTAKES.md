@@ -993,3 +993,31 @@ NEVER use `git push origin main`. NEVER skip the branch step.
 **Fix applied:** Manually closed hive#283, re-filed as verdedesk#22. Added routing rule to MISTAKES.md.
 **Prevention:** When an agent creates a GitHub Issue, the repo must be determined by context: (1) Hive infrastructure/agent work → `carloshmiranda/hive`, (2) Company product work → `carloshmiranda/{company-slug}`. Agent prompts that create issues must include this routing rule explicitly.
 **Affects:** hive, all companies
+
+### 2026-04-04 dispatch_paused required patching 6 files instead of 1
+**What happened:** `dispatch_paused` kill switch was patched individually onto each dispatch consumer (cycle-complete, sentinel-dispatch, backlog/dispatch, etc.). This meant the kill switch was incomplete — any new dispatch path would bypass it by default.
+**Root cause:** Dispatch logic was duplicated across multiple endpoints rather than centralized. Each path had its own budget gate, company scoring, and kill switch check.
+**Fix applied:** ADR-041: created `/api/dispatch/work` as single dispatch authority. Kill switch is now a 2-line check at the top of one file. All entry points funnel through it.
+**Prevention:** Any new dispatch source must call `/api/dispatch/work` — never dispatch GitHub workflows or QStash messages directly from webhook handlers, sentinels, or cron jobs. The unified dispatcher is the only correct entry point.
+**Affects:** hive
+
+### 2026-04-04 Semantic search requires embeddings at write time — not retroactively
+**What happened:** pgvector infrastructure was built (embedding column, HNSW index, retrieve endpoint) but never wired to the main agent path. Playbook entries had no embeddings because `generatePlaybookEmbedding()` was never called at insert time.
+**Root cause:** The semantic search feature was built bottom-up (infra first, wiring last) without enforcing that new entries always get embeddings at write time.
+**Fix applied:** ADR-044: wired vector search into CEO context. Backfill script at `scripts/generate-playbook-embeddings.ts` for existing rows. ADR-045: distillation endpoint generates embedding on every new playbook entry before INSERT.
+**Prevention:** Every `INSERT INTO playbook` must call `generatePlaybookEmbedding()` before writing. The embedding is not optional — without it, the entry is invisible to vector search. Add a check in any new playbook write path.
+**Affects:** hive
+
+### 2026-04-04 Health gate was advisory — callers could ignore "stop" recommendation
+**What happened:** health-gate returned a recommendation field but callers were free to ignore it. Some dispatch paths checked it; others didn't. Budget overruns happened because not all paths respected the gate.
+**Root cause:** The gate was designed as an advisory, not an enforcer. The recommendation was a suggestion, not a block.
+**Fix applied:** ADR-041: `/api/dispatch/work` enforces the gate — `"stop"` → return immediately, `"wait"` → schedule 30m QStash retry and return. No override path exists downstream.
+**Prevention:** Health gate must be enforced at the entry point of dispatch. Any path that bypasses the gate is a bug. The gate is the correct place for budget enforcement, not per-agent if-checks.
+**Affects:** hive
+
+### 2026-04-04 Duplicate SQL ghost-failure exclusion: same condition repeated 4× in one query
+**What happened:** The ghost-failure exclusion in `health-gate/route.ts` (excluding 0-turn failures from failure rate calculation) was repeated 4 times in the same SQL query — in FILTER clauses for rate, failures, and total counts. Each had identical conditions duplicated in NULLIF and WHERE sub-expressions.
+**Root cause:** FILTER/NULLIF pattern for computing rate + numerator + denominator in one query requires repeating conditions. No refactoring was done when conditions were first added.
+**Fix applied:** Refactored to CTE (`WITH relevant AS (...)`) that pre-filters the rows once. Rate/failures/total computed from the CTE — each condition appears exactly once.
+**Prevention:** Any SQL expression repeated 3+ times in the same query is a smell. Extract to CTE or derived table. Tagged template literals can't use JS variables for SQL fragments, but CTEs eliminate the need.
+**Affects:** hive

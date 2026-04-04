@@ -81,6 +81,18 @@ export async function POST(req: Request) {
           )
         `;
       }
+
+      // Trigger dispatch/work to react to revenue event (fire-and-forget)
+      const HIVE_URL_charge = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+      fetch(`${HIVE_URL_charge}/api/dispatch/work`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.CRON_SECRET}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ company_slug: companySlug }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
       break;
     }
 
@@ -118,6 +130,18 @@ export async function POST(req: Request) {
         INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
         VALUES (${company.id}, 'ops', 'stripe_event', ${`New subscriber: +€${mrr.toFixed(2)}/mo MRR`}, 'success', now(), now())
       `;
+
+      // Trigger dispatch/work to react to subscription event (fire-and-forget)
+      const HIVE_URL_sub = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+      fetch(`${HIVE_URL_sub}/api/dispatch/work`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.CRON_SECRET}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ company_slug: companySlug }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
       break;
     }
 

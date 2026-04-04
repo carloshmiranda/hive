@@ -300,6 +300,11 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         "type": "INTEGER",
         "nullable": true,
         "hasDefault": false
+      },
+      "quality_score": {
+        "type": "NUMERIC(4,3)",
+        "nullable": true,
+        "hasDefault": false
       }
     },
     "checks": [
@@ -611,6 +616,16 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
       },
       "embedding": {
         "type": "VECTOR(1536)",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "evolution_type": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "source": {
+        "type": "TEXT",
         "nullable": true,
         "hasDefault": false
       }

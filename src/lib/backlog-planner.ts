@@ -898,3 +898,58 @@ export async function isCompanySpecific(
     return null;
   }
 }
+
+/**
+ * Dedup-safe INSERT for hive_backlog.
+ *
+ * If an active item with the same normalized title already exists
+ * (status NOT IN ('done','rejected')), returns the existing id instead of
+ * inserting a duplicate. This prevents the "70+ duplicate rows" pattern
+ * seen after high-volume Sentinel/Evolver runs.
+ *
+ * Returns: { id, created: true } on insert, { id, created: false } on dedup skip.
+ */
+export async function safeInsertBacklog(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sql: any,
+  item: {
+    title: string;
+    description?: string | null;
+    priority?: string;
+    category?: string;
+    status?: string;
+    source?: string;
+    notes?: string | null;
+    spec?: Record<string, unknown> | null;
+  }
+): Promise<{ id: string; created: boolean }> {
+  const normalizedTitle = item.title.trim().slice(0, 200);
+
+  const [existing] = await sql`
+    SELECT id FROM hive_backlog
+    WHERE title = ${normalizedTitle}
+      AND status NOT IN ('done', 'rejected')
+    LIMIT 1
+  `.catch(() => []);
+
+  if (existing) {
+    return { id: existing.id, created: false };
+  }
+
+  const [inserted] = await sql`
+    INSERT INTO hive_backlog (title, description, priority, category, status, source, notes, spec)
+    VALUES (
+      ${normalizedTitle},
+      ${item.description ?? null},
+      ${item.priority ?? 'P2'},
+      ${item.category ?? 'feature'},
+      ${item.status ?? 'ready'},
+      ${item.source ?? 'system'},
+      ${item.notes ?? null},
+      ${item.spec ? JSON.stringify(item.spec) : null}::jsonb
+    )
+    RETURNING id
+  `;
+
+  return { id: inserted.id, created: true };
+}

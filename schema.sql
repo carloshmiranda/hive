@@ -82,7 +82,8 @@ CREATE TABLE agent_actions (
   reflection    TEXT,            -- self-reflection on failure (Reflexion pattern)
   started_at    TIMESTAMPTZ,
   finished_at   TIMESTAMPTZ,
-  tokens_used   INTEGER          -- track consumption
+  tokens_used   INTEGER,         -- track consumption
+  quality_score NUMERIC(4,3)     -- 0.0-1.0 quality score from CEO post-cycle review (migration 014)
 );
 
 -- Approval gates: items waiting for your decision
@@ -157,7 +158,9 @@ CREATE TABLE playbook (
   last_referenced_at TIMESTAMPTZ,
   reference_count INTEGER DEFAULT 0,
   relevant_agents TEXT[] DEFAULT '{}',  -- agent roles this entry is relevant to (empty = all agents)
-  embedding     vector(1536)     -- semantic embeddings for similarity search
+  embedding     vector(1536),    -- semantic embeddings for similarity search
+  evolution_type TEXT,           -- 'manual', 'captured', 'evolved' (migration 014)
+  source        TEXT             -- 'ceo_review', 'auto_distill', 'operator' (migration 014)
 );
 
 -- Backfill: UPDATE playbook p SET content_language = c.content_language FROM companies c WHERE p.source_company_id = c.id AND p.source_company_id IS NOT NULL AND c.content_language IS NOT NULL;

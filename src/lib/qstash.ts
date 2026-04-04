@@ -44,6 +44,13 @@ export async function qstashPublish(
     delay?: number;
     /** If true, QStash will POST to /api/dispatch/qstash-failure when all retries are exhausted. */
     failureCallback?: boolean;
+    /**
+     * QStash Flow Control: limits concurrent messages delivered for a given key.
+     * Use to enforce at-most-N parallelism for a specific agent or work type
+     * without DB polling. QStash queues excess messages and delivers them as
+     * in-flight messages complete.
+     */
+    flowControl?: { key: string; parallelism: number };
   }
 ): Promise<{ messageId: string } | null> {
   const baseUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
@@ -52,6 +59,7 @@ export async function qstashPublish(
   // If QStash not configured, fall back to direct fetch (fire-and-forget)
   const token = process.env.QSTASH_TOKEN;
   if (!token) {
+    console.warn(`[qstash] QSTASH_TOKEN not set — falling back to direct fetch for ${path}. No retry, no delivery guarantee.`);
     await fetch(`${baseUrl}${path}`, {
       method: "POST",
       headers: {
@@ -77,6 +85,7 @@ export async function qstashPublish(
     ...(options?.failureCallback && {
       failureCallback: `${baseUrl}/api/dispatch/qstash-failure`,
     }),
+    ...(options?.flowControl && { flowControl: options.flowControl }),
   });
 
   return { messageId: result.messageId };

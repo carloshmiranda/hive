@@ -7,6 +7,7 @@ import { checkForbidden } from "@/lib/phase-gate";
 import { normalizeError, errorSimilarity } from "@/lib/error-normalize";
 import { getCachedContext, setCachedContext, type AgentType } from "@/lib/cache";
 import { selectEntriesWithMMR, type PlaybookEntry } from "@/lib/mmr";
+import { generateEmbedding } from "@/lib/embeddings";
 import { cachedPlaybook, cachedCompanyList } from "@/lib/redis-cache";
 import { calculateWoWGrowthRates, generateGrowthSummary } from "@/lib/growth-metrics";
 import { getCachedCompanyMetrics, getCachedGrowthMetrics } from "@/lib/cached-metrics";
@@ -275,6 +276,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const agent = searchParams.get("agent");
   const slug = searchParams.get("company_slug");
+  const taskDescription = searchParams.get("task_description") || undefined;
 
   // Portfolio-level agents (scout, evolver) don't need a company_slug
   const PORTFOLIO_AGENTS = ['scout', 'evolver'];
@@ -369,7 +371,7 @@ export async function GET(req: NextRequest) {
   } else if (agent === "fix") {
     contextData = await fixContext(sql, company);
   } else if (agent === "ceo") {
-    contextData = await ceoContext(sql, company);
+    contextData = await ceoContext(sql, company, taskDescription);
   } else {
     return err(`Unknown agent type: ${agent}`, 400);
   }
@@ -712,7 +714,7 @@ async function fixContext(sql: any, company: any) {
 
 // ─── CEO context (per-company, strategic planning + review) ───
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function ceoContext(sql: any, company: any) {
+async function ceoContext(sql: any, company: any, taskDescription?: string) {
   const [cycle, reports, allPlaybookEntries, engTasks, growthTasks, metrics, directives, recentCycles, portfolioData] = await Promise.all([
     sql`
       SELECT id, cycle_number, ceo_plan, ceo_review FROM cycles
@@ -771,8 +773,39 @@ async function ceoContext(sql: any, company: any) {
   const businessType = normalizeBusinessType(company.company_type);
   const validation = computeValidationScore(businessType, metrics, company.created_at);
 
-  // Apply MMR to select diverse, relevant playbook entries
-  const selectedPlaybook = selectEntriesWithMMR(allPlaybookEntries as PlaybookEntry[], 10, 0.7);
+  // Select playbook entries: semantic vector search when embeddings available, MMR fallback
+  let selectedPlaybook: Array<{ domain: string; insight: string; confidence?: number }> = [];
+  let playbookSearchMethod: "vector" | "mmr" = "mmr";
+
+  const vectorQuery = taskDescription?.trim() || company.description?.trim();
+  if (vectorQuery) {
+    try {
+      const queryEmbedding = await generateEmbedding(vectorQuery);
+      const embeddingVector = `[${queryEmbedding.join(",")}]`;
+      const vectorResults = await sql`
+        SELECT domain, insight, confidence
+        FROM playbook
+        WHERE superseded_by IS NULL
+          AND embedding IS NOT NULL
+          AND (1 - (embedding <=> ${embeddingVector}::vector)) >= 0.5
+          AND (content_language IS NULL OR content_language = ${company.content_language || 'en'})
+          AND confidence >= 0.3
+        ORDER BY embedding <=> ${embeddingVector}::vector
+        LIMIT 10
+      `.catch(() => []);
+
+      if (vectorResults.length >= 3) {
+        selectedPlaybook = vectorResults;
+        playbookSearchMethod = "vector";
+      }
+    } catch {
+      // Embedding failed — fall through to MMR
+    }
+  }
+
+  if (playbookSearchMethod === "mmr") {
+    selectedPlaybook = selectEntriesWithMMR(allPlaybookEntries as PlaybookEntry[], 10, 0.7);
+  }
 
   // Calculate WoW growth rates
   const growthRates = calculateWoWGrowthRates(metrics);
@@ -839,6 +872,7 @@ async function ceoContext(sql: any, company: any) {
     growth_summary: growthSummary,
     portfolio_summary: portfolioContext,
     hive_capabilities: getCapabilitySummary(),
+    playbook_search_method: playbookSearchMethod,
     ...(revenueReadinessTaskCreated ? { revenue_readiness_task_created: true } : {}),
   };
 }
