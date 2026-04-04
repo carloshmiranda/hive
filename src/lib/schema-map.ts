@@ -2006,38 +2006,40 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
   },
   "hive_plugins": {
     "columns": {
-      "id": {
-        "type": "TEXT",
-        "nullable": false,
-        "hasDefault": false
-      },
-      "name": {
-        "type": "TEXT",
-        "nullable": false,
-        "hasDefault": false
-      },
-      "version": {
-        "type": "TEXT",
-        "nullable": false,
-        "hasDefault": true
-      },
-      "enabled": {
-        "type": "BOOLEAN",
-        "nullable": false,
-        "hasDefault": true
-      },
-      "manifest": {
-        "type": "JSONB",
-        "nullable": false,
-        "hasDefault": true
-      },
-      "created_at": {
-        "type": "TIMESTAMPTZ",
-        "nullable": false,
-        "hasDefault": true
-      }
+      "id": { "type": "TEXT", "nullable": false, "hasDefault": false },
+      "name": { "type": "TEXT", "nullable": false, "hasDefault": false },
+      "version": { "type": "TEXT", "nullable": false, "hasDefault": true },
+      "enabled": { "type": "BOOLEAN", "nullable": false, "hasDefault": true },
+      "manifest": { "type": "JSONB", "nullable": false, "hasDefault": true },
+      "created_at": { "type": "TIMESTAMPTZ", "nullable": false, "hasDefault": true }
     },
     "checks": []
+  },
+  "learning_entries": {
+    "columns": {
+      "id": { "type": "TEXT", "nullable": false, "hasDefault": true },
+      "agent": { "type": "TEXT", "nullable": false, "hasDefault": false },
+      "category": { "type": "TEXT", "nullable": false, "hasDefault": false },
+      "title": { "type": "TEXT", "nullable": false, "hasDefault": false },
+      "description": { "type": "TEXT", "nullable": false, "hasDefault": false },
+      "source": { "type": "TEXT", "nullable": false, "hasDefault": false },
+      "company_id": { "type": "TEXT", "nullable": true, "hasDefault": false },
+      "cycle_id": { "type": "TEXT", "nullable": true, "hasDefault": false },
+      "evidence": { "type": "TEXT", "nullable": true, "hasDefault": false },
+      "tags": { "type": "TEXT[]", "nullable": true, "hasDefault": true },
+      "confidence": { "type": "NUMERIC(4,3)", "nullable": false, "hasDefault": true },
+      "validation_count": { "type": "INTEGER", "nullable": false, "hasDefault": true },
+      "contradiction_count": { "type": "INTEGER", "nullable": false, "hasDefault": true },
+      "created_at": { "type": "TIMESTAMPTZ", "nullable": false, "hasDefault": true },
+      "updated_at": { "type": "TIMESTAMPTZ", "nullable": false, "hasDefault": true },
+      "last_validated_at": { "type": "TIMESTAMPTZ", "nullable": true, "hasDefault": false },
+      "is_active": { "type": "BOOLEAN", "nullable": false, "hasDefault": true }
+    },
+    "checks": [
+      { "column": "agent", "allowedValues": ["engineer","growth","outreach","ceo","scout","ops","evolver","healer","any"] },
+      { "column": "category", "allowedValues": ["pattern","anti_pattern","gotcha","optimization"] },
+      { "column": "source", "allowedValues": ["cycle_output","mistake","pr_review","manual"] }
+    ]
   }
 };
 
