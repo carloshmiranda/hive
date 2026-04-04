@@ -317,6 +317,47 @@ Always use: `GH_TOKEN="$GH_PAT" gh issue create --repo carloshmiranda/{{COMPANY_
 
 Never file company issues in the `hive` repo or vice versa.
 
+## Test-first for critical paths
+
+For the following paths, write the test **before** writing or modifying the implementation. No exceptions.
+
+### Auth flows
+Any change to NextAuth config, session handling, middleware matchers, or protected route logic must have a test that:
+- Verifies unauthenticated requests to protected routes get redirected (not 200, not 500)
+- Verifies authenticated requests pass through
+- Verifies the session contains the expected user fields
+
+### Stripe webhooks
+Any change to `/api/webhooks/stripe` or Stripe event handlers must have a test that:
+- Verifies valid HMAC signatures are accepted
+- Verifies invalid signatures return 400 (not 200, not 500)
+- Verifies each handled event type (checkout.session.completed, customer.subscription.deleted, etc.) produces the correct DB write
+
+### Stripe checkout / payment intent creation
+Any change to checkout session creation or payment intent logic must have a test that:
+- Verifies the correct price ID / amount is passed
+- Verifies metadata (company_id, plan, user_id) is set on the Stripe object
+- Verifies the success/cancel URL format
+
+### QStash dispatch
+Any change to `qstashPublish()`, chain dispatch, or Sentinel trigger logic must have a test that:
+- Verifies the destination URL is correct for the event type
+- Verifies the payload contains required fields (company_id, event, context)
+- Verifies the CRON_SECRET or Authorization header is set correctly
+
+### Agent chain logic
+Any change to how one agent triggers the next (chain_next, repository_dispatch, workflow_dispatch) must have a test that:
+- Verifies the correct next agent is triggered for each completion status (DONE, DONE_WITH_CONCERNS, BLOCKED)
+- Verifies BLOCKED status does NOT trigger a chain dispatch
+- Verifies the payload forwarded to the next agent includes required context fields
+
+### How to write the tests
+Use the existing test framework in the repo (check `package.json` for the test runner). If no test exists for the file being modified, create a `__tests__/` file adjacent to the source file. Prefer integration tests that use the real handler with a mocked external service (Stripe, QStash, Neon) over unit tests that mock the handler logic itself.
+
+Write the tests, confirm they fail for the right reason, then implement the change, then confirm they pass. Report test results in your cycle output.
+
+---
+
 ## Rules
 - Max 2 tasks per cycle. Quality over quantity.
 - Never modify payment logic (Stripe webhooks, checkout) without an explicit directive.

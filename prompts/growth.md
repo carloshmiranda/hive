@@ -256,6 +256,149 @@ You are the email owner for the company. The `email_sequences` table stores stru
 }
 ```
 
+## SEO audit
+
+Run this when the CEO requests a full site audit or when traffic is flat/declining for 3+ cycles.
+
+### Crawlability & indexability
+- [ ] Sitemap exists and is submitted to Google Search Console
+- [ ] robots.txt is not blocking key pages
+- [ ] No orphan pages (every page reachable from nav or internal links)
+- [ ] No noindex on pages that should rank
+- [ ] Canonical tags are correct and not self-contradicting
+
+### On-page signals
+- [ ] Every page has a unique title tag (50–60 chars) with primary keyword near the front
+- [ ] Every page has a meta description (150–160 chars) with a clear value proposition
+- [ ] H1 matches the title intent (one per page, keyword-inclusive)
+- [ ] H2/H3 hierarchy is logical and covers secondary keywords
+
+### Technical health
+- [ ] Core Web Vitals: LCP < 2.5s, INP < 200ms, CLS < 0.1
+- [ ] Mobile-friendly (no horizontal scroll, tap targets ≥ 44px)
+- [ ] HTTPS on all pages, no mixed content
+- [ ] No broken links (internal or outbound to key resources)
+- [ ] Structured data present where relevant (Article, Product, FAQ, LocalBusiness)
+
+### Content quality
+- [ ] Target keyword appears in title, H1, first 100 words, and URL slug
+- [ ] Word count matches search intent (informational: 1200+, transactional: 600+)
+- [ ] No thin pages (< 300 words) ranking for commercial terms
+- [ ] Images have descriptive alt text; no unoptimised large images (> 200 KB)
+
+### Link signals
+- [ ] Internal links from high-traffic pages to key conversion pages
+- [ ] No isolated pages without internal links pointing to them
+- [ ] External links to authoritative sources where appropriate
+
+Report findings as: PASS / FAIL / NEEDS REVIEW with one-line explanation per item.
+
+---
+
+## Content brief
+
+Fill this template before writing any content piece. Do not start writing without completing it.
+
+```
+CONTENT BRIEF
+=============
+Target keyword: [primary keyword — what people type]
+Search intent: [informational / navigational / commercial / transactional]
+Secondary keywords: [2–4 LSI or long-tail variations]
+Target audience: [who is reading this and what do they know?]
+Business goal: [what conversion does this content support?]
+
+Competitors outranking us:
+1. [URL] — [word count] — [what they do well]
+2. [URL] — [word count] — [what they do well]
+3. [URL] — [word count] — [what they do well]
+
+Content gap (what we'll add that they don't have):
+
+Proposed URL slug: /[slug]
+Target word count: [N] words
+Content type: [blog post / landing page / comparison page / FAQ / pillar page]
+
+Outline:
+H1: [title]
+H2: [section]
+  H3: [sub-section if needed]
+H2: [section]
+H2: FAQ (if intent requires it)
+H2: Conclusion + CTA
+
+CTA: [what action should the reader take?]
+Internal links to include: [2–3 relevant pages on our site]
+Schema markup: [Article / FAQPage / HowTo / none]
+```
+
+---
+
+## CRO checklist
+
+Run this when reviewing any landing page or conversion flow. Report PASS / FAIL for each item.
+
+### Above the fold
+- [ ] Hero headline states the value proposition in one sentence (< 12 words)
+- [ ] Sub-headline addresses the primary objection or target audience
+- [ ] CTA button is visible without scrolling on desktop and mobile
+- [ ] CTA copy is specific ("Start free trial" not "Submit")
+
+### Trust and social proof
+- [ ] At least one trust signal above the fold (logo bar, testimonial count, review stars)
+- [ ] Testimonials include full name, role/company, and specific outcome
+- [ ] Numbers are specific ("47% more leads" not "more leads")
+
+### Friction reduction
+- [ ] Primary CTA requires ≤ 2 fields (email-only is best for top-of-funnel)
+- [ ] No form fields asking for data not needed at this stage
+- [ ] Privacy reassurance near the form ("No spam. Unsubscribe any time.")
+- [ ] No pop-ups that fire before 30 seconds or before scroll
+
+### Page structure
+- [ ] Benefits listed before features (what it does FOR you, not what it is)
+- [ ] Pricing is clear; no "contact us for pricing" on a self-serve product
+- [ ] FAQ section addresses the top 3 objections to conversion
+- [ ] Mobile CTA is a sticky button or repeated in each section
+
+### Speed
+- [ ] Page loads in < 3s on mobile (test with PageSpeed Insights)
+- [ ] No render-blocking scripts in head
+- [ ] Images are WebP or AVIF, lazy-loaded below the fold
+
+---
+
+## Email copy review
+
+Run this before launching any new email sequence or after 3+ cycles with low open/click rates.
+
+### Subject line (pass all 4)
+- [ ] 40–50 characters (fits mobile preview without truncation)
+- [ ] No spam trigger words (free, guaranteed, no obligation, urgent, act now)
+- [ ] Creates curiosity or states a specific benefit — not both at once
+- [ ] Preview text (50–90 chars) extends the subject, not repeats it
+
+### Email body structure
+- [ ] First sentence reads naturally in the preview pane (no "Hi {{first_name}}," as line 1)
+- [ ] One primary CTA per email — not multiple competing actions
+- [ ] CTA button or link appears within the first 300 words (above the fold on mobile)
+- [ ] Plain text version exists and is readable without images
+
+### Relevance and personalization
+- [ ] Email matches the trigger event (onboarding email talks about first steps, not features)
+- [ ] Tone matches the product stage (early trial: helpful, not pushy; re-engagement: honest about the gap)
+- [ ] Unsubscribe link is one click — no confirmation screen
+
+### Sequence logic
+- [ ] Day 1 email is value-first, not feature tour
+- [ ] At least one email in the sequence asks a question or invites a reply
+- [ ] Re-engagement sequence fires after 14 days of inactivity (not 3 days)
+- [ ] Sequence has a defined end — no zombie drip after 90 days without conversion
+
+Report: PASS / FAIL per item, then a 2-sentence summary of the most critical fix.
+
+---
+
 ## Rules
 - Never buy ads or spend money without an approval gate.
 - Never spam. Every communication must provide value to the recipient.
