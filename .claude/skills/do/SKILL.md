@@ -85,7 +85,19 @@ Deploy an anti-pattern review subagent with:
 If findings are **HIGH severity** (security, data loss risk): block and fix before committing.
 If findings are **LOW/MEDIUM**: note them, continue.
 
-#### Step 5: Code Quality Subagent
+#### Step 3c: Performance Subagent (conditional)
+
+Deploy ONLY when the phase diff includes `.tsx`, `.jsx`, `page.tsx`, `layout.tsx`, `route.ts`, or `src/lib/*.ts` files with fetch/DB calls. Skip entirely if no such files are in scope.
+
+Deploy a performance review subagent with:
+- The diff of all changes in this phase
+- Instruction: "Run the perf-review checklist. Check: (1) sequential awaits on independent operations — suggest Promise.all, (2) missing Suspense boundaries in page files with multiple async fetches, (3) barrel imports in client components or edge routes, (4) N+1 query patterns (loop containing await DB/fetch call), (5) heavy library imports without next/dynamic in client components. Report each finding with file:line and severity (HIGH/MEDIUM/LOW). If none found, say CLEAN."
+
+If findings are **HIGH severity**: block and fix before committing.
+If findings are **LOW/MEDIUM**: note them, continue.
+If no applicable files in diff: skip this step entirely.
+
+#### Step 4: Code Quality Subagent
 
 Deploy a code quality subagent with:
 - The diff of all changes in this phase
