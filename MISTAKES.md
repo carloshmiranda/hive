@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-04-04 MCP hive_backlog_update fails silently with truncated UUID
+**What happened:** Called `mcp__hive__hive_backlog_update` with an 8-char truncated UUID (e.g. `30f77f16`). Tool returned "item not found" with no error — silent failure.
+**Root cause:** The MCP tool uses exact UUID match in SQL. Postgres UUIDs are 36 chars (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). Partial string doesn't match.
+**Fix applied:** Used `mcp__hive__hive_sql` to `SELECT id FROM hive_backlog WHERE title ILIKE '%...'` to retrieve the full UUID (`30f77f16-d7d4-4bcd-90ab-05ac1031ff71`), then retried with the full ID.
+**Prevention:** Always use full 36-char UUIDs with MCP backlog tools. When uncertain, query by title first: `SELECT id, title FROM hive_backlog WHERE title ILIKE '%keyword%' LIMIT 5`.
+**Affects:** hive
+
 ### 2026-04-03 Interactive session PR merges bypass syncIssueForBacklog — GitHub issues left open
 **What happened:** PRs merged via `gh pr merge --admin` in Claude Code sessions leave GitHub issues open. Issues #109 and #118 remained open after their PRs (#370, #371) were merged days earlier.
 **Root cause:** `reviewAndMergeOpenPRs()` in `dispatch/route.ts` is the only place that calls `syncIssueForBacklog`. It also sets `pr_number` on backlog items. When PRs are merged interactively (not via the dispatch route), `pr_number` stays `null` and the issue sync never runs. The dispatch route's `WHERE pr_number = $1` query then can't find those items even if it runs later.
