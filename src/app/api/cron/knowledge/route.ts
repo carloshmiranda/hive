@@ -3,8 +3,8 @@ import { getSettingValue } from "@/lib/settings";
 import { verifyCronAuth } from "@/lib/qstash";
 import { setSentryTags } from "@/lib/sentry-tags";
 
-// Daily cron: fetches RSS feeds, summarizes with Groq/Llama, stores in domain_knowledge
-// Schedule: 0 6 * * * (6am UTC daily) — configured in vercel.json
+// Daily cron: fetches RSS feeds, summarizes with OpenRouter/Llama, stores in domain_knowledge
+// Triggered by QStash daily at 06:00 UTC — add schedule via QStash dashboard or API
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -76,28 +76,29 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-interface GroqInsight {
+interface LlmInsight {
   insight: string;
   relevance_score: number;
 }
 
-async function summarizeWithGroq(
-  groqApiKey: string,
+async function summarizeWithOpenRouter(
+  apiKey: string,
   items: Array<{ title: string; description: string }>,
   domain: string
-): Promise<GroqInsight[]> {
+): Promise<LlmInsight[]> {
   const prompt = items.map((item, i) =>
     `${i + 1}. Title: ${item.title}\nDescription: ${item.description}`
   ).join("\n\n");
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${groqApiKey}`,
+      "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
+      "HTTP-Referer": "https://hive-phi.vercel.app",
     },
     body: JSON.stringify({
-      model: "llama-3.1-8b-instant",
+      model: "meta-llama/llama-3.1-8b-instruct:free",
       messages: [
         {
           role: "system",
@@ -111,27 +112,27 @@ async function summarizeWithGroq(
       temperature: 0.3,
       max_tokens: 512,
     }),
+    signal: AbortSignal.timeout(20000),
   });
 
   if (!response.ok) {
-    throw new Error(`Groq API error: ${response.status} ${response.statusText}`);
+    throw new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
   }
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content || "[]";
 
-  // Parse JSON from response, handling potential markdown code blocks
   const jsonMatch = content.match(/\[[\s\S]*\]/);
   if (!jsonMatch) return [];
 
-  const parsed = JSON.parse(jsonMatch[0]) as GroqInsight[];
-  return parsed.map((p: GroqInsight) => ({
+  const parsed = JSON.parse(jsonMatch[0]) as LlmInsight[];
+  return parsed.map((p: LlmInsight) => ({
     insight: String(p.insight || "").slice(0, 200),
     relevance_score: Math.max(0, Math.min(1, Number(p.relevance_score) || 0)),
   }));
 }
 
-export async function GET(req: Request) {
+export async function POST(req: Request) {
   setSentryTags({ action_type: "cron", route: "/api/cron/knowledge" });
 
   const auth = await verifyCronAuth(req);
@@ -139,9 +140,9 @@ export async function GET(req: Request) {
     return Response.json({ error: auth.error }, { status: 401 });
   }
 
-  const groqApiKey = await getSettingValue("groq_api_key");
-  if (!groqApiKey) {
-    return Response.json({ ok: false, error: "groq_api_key not configured in settings" }, { status: 500 });
+  const apiKey = await getSettingValue("openrouter_api_key");
+  if (!apiKey) {
+    return Response.json({ ok: false, error: "openrouter_api_key not configured in settings" }, { status: 500 });
   }
 
   const sql = getDb();
@@ -177,8 +178,8 @@ export async function GET(req: Request) {
         continue;
       }
 
-      // Summarize with Groq
-      const insights = await summarizeWithGroq(groqApiKey, items, feed.domain);
+      // Summarize with OpenRouter
+      const insights = await summarizeWithOpenRouter(apiKey, items, feed.domain);
 
       // Upsert rows into domain_knowledge
       for (let i = 0; i < items.length; i++) {

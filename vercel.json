@@ -4,11 +4,5 @@
       "main": true,
       "*": false
     }
-  },
-  "crons": [
-    {
-      "path": "/api/cron/knowledge",
-      "schedule": "0 6 * * *"
-    }
-  ]
+  }
 }
