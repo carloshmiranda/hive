@@ -158,6 +158,9 @@ Always invoke relevant skills before starting work. Do not rely on keyword auto-
 | `neon-postgres-egress-optimizer` | High DB bills, slow queries, excessive egress, or N+1 patterns |
 | `hive-agent-authoring` | Writing or editing any agent prompt, wiring a new dispatch event, checking turn budgets |
 | `hive-debugging` | Any agent failure, circuit breaker trip, zombie action, QStash DLQ issue, or dispatch problem |
+| `make-plan` | Any complex implementation touching multiple systems, APIs, or files. Run BEFORE writing code. Deploys subagents for doc discovery, codebase context, and constraint analysis. |
+| `do` | Executing a plan after `/make-plan` or when Carlos says "implement this". Deploys subagents for each phase and enforces verification → anti-pattern → quality → commit gates. |
+| `define-task` | Defining acceptance criteria before starting any new feature or task |
 | `seo` | Any SEO work on a portfolio company: audit, technical SEO, content quality, schema, local SEO, GEO/AI-search, backlinks, hreflang, sitemaps, programmatic SEO, competitor pages |
 | `ads` | Any paid advertising work: Google Ads, Meta, YouTube, LinkedIn, TikTok, Microsoft, Apple Search Ads — audits, campaign planning, brand DNA extraction, creative briefs |
 | `blog` | Full blog lifecycle: write, rewrite, outline, brief, SEO check, schema, cannibalization, taxonomy, strategy, analyze, audit, factcheck, GEO/AI citations, image gen, audio, charts, Google APIs, NotebookLM, persona, repurpose, editorial calendar |
