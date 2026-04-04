@@ -2161,6 +2161,56 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         ]
       }
     ]
+  },
+  "domain_knowledge": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "domain": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "source": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "source_url": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "title": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "insight": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "relevance_score": {
+        "type": "NUMERIC",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "published_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
+    },
+    "checks": []
   }
 };
 

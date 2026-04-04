@@ -647,3 +647,20 @@ CREATE INDEX idx_learning_confidence ON learning_entries(confidence DESC) WHERE 
 CREATE INDEX idx_learning_company ON learning_entries(company_id) WHERE company_id IS NOT NULL;
 CREATE INDEX idx_learning_tags ON learning_entries USING gin(tags);
 CREATE INDEX idx_learning_active ON learning_entries(created_at DESC) WHERE is_active = true;
+
+-- Domain knowledge: industry insights fetched from RSS feeds and summarized by OpenRouter/Llama
+-- Agents query this at task time for recent relevant insights (last 30 days, relevance > 0.7)
+CREATE TABLE IF NOT EXISTS domain_knowledge (
+  id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  domain          TEXT NOT NULL,                    -- 'seo', 'growth', 'engineering', 'strategy'
+  source          TEXT NOT NULL,                    -- human-readable source name
+  source_url      TEXT NOT NULL,                    -- feed URL
+  title           TEXT NOT NULL,                    -- article title
+  insight         TEXT NOT NULL,                    -- LLM-summarized insight (≤200 chars)
+  relevance_score NUMERIC NOT NULL DEFAULT 0,       -- 0-1 relevance score
+  published_at    TIMESTAMPTZ,                      -- original article publish time
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_domain_knowledge_domain_published ON domain_knowledge(domain, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_domain_knowledge_relevance ON domain_knowledge(relevance_score DESC) WHERE relevance_score > 0.7;
