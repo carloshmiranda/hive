@@ -1,0 +1,250 @@
+name: Hive Portfolio Dispatch
+run-name: "Portfolio: ${{ github.event_name }} — parallel cycle_start fan-out"
+
+on:
+  workflow_dispatch:
+    inputs:
+      event_type:
+        description: 'Event type to dispatch (cycle_start or ceo_review)'
+        required: false
+        default: 'cycle_start'
+  repository_dispatch:
+    types:
+      - portfolio_cycle
+
+permissions:
+  contents: read
+  id-token: write
+
+# ─── Job 1: Query active companies from Neon ──────────────────────────────────
+jobs:
+  query-companies:
+    name: Query active companies
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      slugs: ${{ steps.query.outputs.slugs }}
+      count: ${{ steps.query.outputs.count }}
+      skip_matrix: ${{ steps.query.outputs.skip_matrix }}
+      event_type: ${{ steps.query.outputs.event_type }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get tokens via OIDC
+        id: auth
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "github_pat:gh_pat:true"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Neon serverless driver
+        run: npm install --no-save @neondatabase/serverless
+
+      - name: Query active companies
+        id: query
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EVENT_TYPE: ${{ github.event.client_payload.event_type || github.event.inputs.event_type || 'cycle_start' }}
+        run: |
+          node << 'EOF'
+          const { neon } = require('@neondatabase/serverless');
+          const fs = require('fs');
+
+          async function main() {
+            if (!process.env.DATABASE_URL) {
+              console.error('DATABASE_URL is not set');
+              process.exit(1);
+            }
+
+            const sql = neon(process.env.DATABASE_URL);
+            let slugs = [];
+
+            try {
+              const rows = await sql`
+                SELECT slug FROM companies
+                WHERE status = 'active'
+                ORDER BY slug
+              `;
+              slugs = rows.map(r => r.slug);
+            } catch (err) {
+              console.error('Neon query failed:', err.message);
+              process.exit(1);
+            }
+
+            const count = slugs.length;
+            // Gate: matrix fan-out only beneficial at 4+ companies
+            const skipMatrix = count < 4;
+            // Guard: always output valid JSON array (empty array on 0 results)
+            const slugsJson = JSON.stringify(slugs.length > 0 ? slugs : []);
+            const eventType = process.env.EVENT_TYPE || 'cycle_start';
+
+            const outputFile = process.env.GITHUB_OUTPUT;
+            const lines = [
+              `slugs=${slugsJson}`,
+              `count=${count}`,
+              `skip_matrix=${skipMatrix}`,
+              `event_type=${eventType}`,
+            ];
+            fs.appendFileSync(outputFile, lines.join('\n') + '\n');
+
+            console.log(`Active companies (${count}): ${slugs.join(', ') || 'none'}`);
+            console.log(`skip_matrix=${skipMatrix} (threshold: 4+)`);
+            console.log(`event_type=${eventType}`);
+          }
+
+          main().catch(err => {
+            console.error('Fatal:', err.message);
+            process.exit(1);
+          });
+          EOF
+
+  # ─── Job 2: Serial fallback for < 4 companies ─────────────────────────────────
+  serial-dispatch:
+    name: Serial dispatch (< 4 companies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: query-companies
+    if: needs.query-companies.outputs.skip_matrix == 'true' && needs.query-companies.outputs.count != '0'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get tokens via OIDC
+        id: auth
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "github_pat:gh_pat:true"
+
+      - name: Dispatch companies serially
+        env:
+          GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
+          SLUGS: ${{ needs.query-companies.outputs.slugs }}
+          EVENT_TYPE: ${{ needs.query-companies.outputs.event_type }}
+        run: |
+          node << 'EOF'
+          const { execSync } = require('child_process');
+
+          const slugs = JSON.parse(process.env.SLUGS || '[]');
+          const eventType = process.env.EVENT_TYPE || 'cycle_start';
+          const repo = process.env.GITHUB_REPOSITORY;
+
+          console.log(`Serially dispatching ${slugs.length} companies: event=${eventType}`);
+
+          for (const company of slugs) {
+            const payload = JSON.stringify({ company, source: 'portfolio_dispatch' });
+            try {
+              execSync(
+                `gh api repos/${repo}/dispatches -f event_type="${eventType}" -f "client_payload=${payload}"`,
+                { stdio: 'inherit', env: { ...process.env } }
+              );
+              console.log(`Dispatched ${eventType} for ${company}`);
+            } catch (err) {
+              console.error(`Failed to dispatch for ${company}:`, err.message);
+            }
+            // Brief pause to avoid GitHub secondary rate limits
+            execSync('sleep 2');
+          }
+          EOF
+
+  # ─── Job 3: Matrix fan-out for 4+ companies ───────────────────────────────────
+  dispatch-companies:
+    name: Dispatch ${{ matrix.company }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: query-companies
+    if: needs.query-companies.outputs.skip_matrix == 'false'
+    strategy:
+      matrix:
+        company: ${{ fromJSON(needs.query-companies.outputs.slugs) }}
+      max-parallel: 4
+      fail-fast: false
+
+    # Match CEO concurrency group to prevent duplicate CEO runs per company
+    concurrency:
+      group: hive-ceo-${{ matrix.company }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get tokens via OIDC
+        id: auth
+        uses: ./.github/actions/get-hive-tokens
+        with:
+          tokens: "github_pat:gh_pat:true"
+
+      - name: Dispatch ${{ matrix.company }}
+        env:
+          GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
+          COMPANY: ${{ matrix.company }}
+          EVENT_TYPE: ${{ needs.query-companies.outputs.event_type }}
+        run: |
+          PAYLOAD=$(node -e "process.stdout.write(JSON.stringify({ company: process.env.COMPANY, source: 'portfolio_dispatch' }))")
+          gh api "repos/$GITHUB_REPOSITORY/dispatches" \
+            -f event_type="$EVENT_TYPE" \
+            -f "client_payload=$PAYLOAD"
+          echo "Dispatched $EVENT_TYPE for $COMPANY"
+
+      - name: Pause (rate limit mitigation)
+        run: sleep 2
+
+  # ─── Job 4: Summary ───────────────────────────────────────────────────────────
+  summary:
+    name: Portfolio dispatch summary
+    runs-on: ubuntu-latest
+    needs: [query-companies, serial-dispatch, dispatch-companies]
+    if: always()
+
+    steps:
+      - name: Write job summary
+        env:
+          COUNT: ${{ needs.query-companies.outputs.count }}
+          SLUGS: ${{ needs.query-companies.outputs.slugs }}
+          SKIP_MATRIX: ${{ needs.query-companies.outputs.skip_matrix }}
+          EVENT_TYPE: ${{ needs.query-companies.outputs.event_type }}
+          SERIAL_RESULT: ${{ needs.serial-dispatch.result }}
+          MATRIX_RESULT: ${{ needs.dispatch-companies.result }}
+        run: |
+          node << 'EOF'
+          const fs = require('fs');
+
+          const count = parseInt(process.env.COUNT || '0');
+          const slugs = JSON.parse(process.env.SLUGS || '[]');
+          const skipMatrix = process.env.SKIP_MATRIX === 'true';
+          const eventType = process.env.EVENT_TYPE || 'cycle_start';
+          const mode = skipMatrix ? 'serial (< 4 companies)' : 'matrix fan-out';
+          const serialResult = process.env.SERIAL_RESULT || 'skipped';
+          const matrixResult = process.env.MATRIX_RESULT || 'skipped';
+          const failed = serialResult === 'failure' || matrixResult === 'failure';
+          const icon = failed ? '❌' : '✅';
+
+          const companiesList = slugs.length === 0
+            ? '_No active companies found_'
+            : slugs.map(s => `- \`${s}\``).join('\n');
+
+          const md = [
+            `# ${icon} Portfolio Dispatch — ${eventType}`,
+            '',
+            '| Field | Value |',
+            '|-------|-------|',
+            `| Active companies | ${count} |`,
+            `| Dispatch mode | ${mode} |`,
+            `| Event type | \`${eventType}\` |`,
+            `| Serial result | ${serialResult} |`,
+            `| Matrix result | ${matrixResult} |`,
+            '',
+            '## Companies dispatched',
+            companiesList,
+          ].join('\n');
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + '\n');
+          console.log(md);
+          EOF
