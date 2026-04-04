@@ -1,4 +1,4 @@
-import { getDb, json, err } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { getGitHubToken } from "@/lib/github-app";
 import { computeBacklogScore, detectBlockedAgents, isHighPriority } from "@/lib/backlog-priority";
 import type { BacklogItem } from "@/lib/backlog-priority";
@@ -392,40 +392,6 @@ function syncIssueForBacklog(sql: ReturnType<typeof getDb>, itemId: string, newS
     .catch(() => {});
 }
 
-// Dispatch free-tier workers when Claude budget is blocked
-async function dispatchFreeWorkers(cronSecret: string, sql: ReturnType<typeof getDb>) {
-  const workers: { company: string; agent: string }[] = [];
-  const companies = await sql`
-    SELECT slug FROM companies WHERE status IN ('mvp', 'active')
-  `.catch((e: any) => { console.warn(`[backlog] fetch companies for free workers failed: ${e?.message || e}`); return []; });
-
-  for (const c of companies) {
-    for (const agent of ["growth", "ops"] as const) {
-      const [recent] = await sql`
-        SELECT id FROM agent_actions
-        WHERE agent = ${agent} AND status = 'success'
-        AND company_id = (SELECT id FROM companies WHERE slug = ${c.slug})
-        AND started_at > NOW() - INTERVAL '12 hours'
-        LIMIT 1
-      `.catch((e: any) => { console.warn(`[backlog] check recent ${agent} for ${c.slug} failed: ${e?.message || e}`); return []; });
-      if (!recent) workers.push({ company: c.slug, agent });
-    }
-  }
-
-  const dispatched: string[] = [];
-  for (const w of workers) {
-    await qstashPublish("/api/agents/dispatch", {
-      company_slug: w.company,
-      agent: w.agent,
-      trigger: "cascade_free_worker",
-    }, {
-      deduplicationId: `backlog-worker-${w.agent}-${w.company}-${new Date().toISOString().slice(0, 13)}`,
-    }).catch((e: any) => { console.warn(`[backlog] qstash free worker dispatch ${w.agent}:${w.company} failed: ${e?.message || e}`); });
-    dispatched.push(`${w.agent}:${w.company}`);
-  }
-  return dispatched;
-}
-
 // POST /api/backlog/dispatch — score and dispatch the next backlog item
 // Called by: Engineer workflow after completing a Hive fix (chain dispatch)
 //            Sentinel as part of triage (existing flow)
@@ -470,7 +436,7 @@ export async function POST(req: Request) {
   // Reads from Edge Config (<1ms) with automatic fallback to Neon if not configured.
   if (await isDispatchPaused()) {
     logDispatchCycle("dispatch_paused");
-    return json({ dispatched: false, reason: "dispatch_paused", message: "All dispatches halted by kill switch" });
+    return Response.json({ dispatched: false, reason: "dispatch_paused", message: "All dispatches halted by kill switch" });
   }
 
   const body = await req.json().catch(() => ({}));
@@ -785,7 +751,7 @@ export async function POST(req: Request) {
       }
 
       // Don't fall through to normal dispatch — continuation takes the slot
-      return json({ dispatched: true, status: "continued_partial", item_id: completed_id, continuation_turns: continuationTurns });
+      return Response.json({ dispatched: true, status: "continued_partial", item_id: completed_id, continuation_turns: continuationTurns });
 
     } else if (completed_status !== "in_progress" && completed_status !== "success") {
       // Failed: learn from it. Track attempts, decompose if too big.
@@ -814,7 +780,7 @@ export async function POST(req: Request) {
             WHERE id = ${completed_id} AND status IN ('dispatched', 'in_progress')
           `.catch((e: any) => { console.warn(`[backlog] infra-crash reset failed: ${e?.message || e}`); });
           console.log(`[backlog] infra-crash ${infraAttempt} for "${item.title}" — reset to ready with 30-min cooldown`);
-          return json({ dispatched: false, status: "infra_crash_retry_scheduled", item_id: completed_id, infra_attempt: infraAttempt });
+          return Response.json({ dispatched: false, status: "infra_crash_retry_scheduled", item_id: completed_id, infra_attempt: infraAttempt });
         }
         console.log(`[backlog] infra-crash ${infraAttempt} for "${item.title}" — exceeded retry cap, falling through to normal failure handling`);
       }
@@ -1129,10 +1095,9 @@ export async function POST(req: Request) {
   `.catch(() => [{ turns: 0 }]);
   const budgetUsedPct = Number(usage?.turns || 0) / 225;
   if (budgetUsedPct > 0.85) {
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     await scheduleChainRetry("budget_exhausted", 30);
     logDispatchCycle("budget_exhausted", { budget_pct: Math.round(budgetUsedPct * 100) });
-    return json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), free_workers_dispatched: freeWorkers, chain_retry: true });
+    return Response.json({ dispatched: false, reason: "budget_exhausted", budget_pct: Math.round(budgetUsedPct * 100), chain_retry: true });
   }
 
   // Rate-limit check: if a rate-limit failure was detected recently, dispatch free workers
@@ -1153,9 +1118,7 @@ export async function POST(req: Request) {
   const lastRateLimit = rateLimitRow?.last_rate_limit ? new Date(rateLimitRow.last_rate_limit) : null;
   const rateLimitCooldownActive = lastRateLimit && (Date.now() - lastRateLimit.getTime()) < 30 * 60 * 1000;
   if (rateLimitCooldownActive) {
-    // Dispatch free workers (they don't use Claude API) and continue to item selection.
     // Items tagged [rate_limit_fail] are excluded by the SQL query below.
-    await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     const minutesAgo = Math.round((Date.now() - lastRateLimit!.getTime()) / 60000);
     console.log(`[backlog] Rate limit detected ${minutesAgo}min ago — filtering [rate_limit_fail] items, continuing dispatch with remaining candidates`);
     // Fall through — per-item filtering in the SELECT query handles skipping
@@ -1191,14 +1154,12 @@ export async function POST(req: Request) {
     }
 
     if (consecutiveRateLimits >= 2 && consecutiveRateLimits >= Math.min(recentHiveFailures.length, 3)) {
-      const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
       console.log(`[backlog] Rate limit skip: last ${consecutiveRateLimits} Hive engineer failures were Claude API rate limits`);
       await scheduleChainRetry("hive_rate_limit_skip", 60); // Wait 1 hour
-      return json({
+      return Response.json({
         dispatched: false,
         reason: "hive_rate_limit_skip",
         consecutive_rate_limit_failures: consecutiveRateLimits,
-        free_workers_dispatched: freeWorkers,
         chain_retry: true
       });
     }
@@ -1224,7 +1185,7 @@ export async function POST(req: Request) {
     if (ciFixDispatched) {
       await scheduleChainRetry("ci_fix_dispatched", 15);
       logDispatchCycle("ci_fix_dispatched");
-      return json({ dispatched: false, reason: "ci_fix_dispatched", chain_retry: true });
+      return Response.json({ dispatched: false, reason: "ci_fix_dispatched", chain_retry: true });
     }
   }
 
@@ -1261,7 +1222,7 @@ export async function POST(req: Request) {
     // Schedule a QStash fallback retry so work is never permanently lost on engineer crash.
     await scheduleChainRetry("engineer_busy", 20);
     logDispatchCycle("engineer_busy", { source: engineerBusySource });
-    return json({ dispatched: false, reason: "engineer_busy", source: engineerBusySource, chain_retry: true });
+    return Response.json({ dispatched: false, reason: "engineer_busy", source: engineerBusySource, chain_retry: true });
   }
 
   // Per-agent hourly rate limit: prevent dispatch burst patterns
@@ -1288,7 +1249,7 @@ export async function POST(req: Request) {
     `.catch(() => {});
 
     console.log(`[backlog] Rate limit: ${agentToDispatch} blocked - ${hourlyCount.dispatch_count}/${hourlyThreshold} dispatches in last hour`);
-    return json({
+    return Response.json({
       dispatched: false,
       reason: "rate_limited",
       agent: agentToDispatch,
@@ -1317,10 +1278,9 @@ export async function POST(req: Request) {
   `.catch(() => [{ open_prs: 0 }]);
   const openPRCount = Number(prQueue?.open_prs || 0);
   if (openPRCount >= 1) {
-    const freeWorkers = await dispatchFreeWorkers(cronSecret!, sql).catch(() => []);
     await scheduleChainRetry("pr_queue_full", 3);
     logDispatchCycle("pr_queue_full", { open_prs: openPRCount });
-    return json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, free_workers_dispatched: freeWorkers, chain_retry: true });
+    return Response.json({ dispatched: false, reason: "pr_queue_full", open_prs: openPRCount, chain_retry: true });
   }
 
   // Check for recently dispatched backlog items (covers the race window
@@ -1332,7 +1292,7 @@ export async function POST(req: Request) {
     LIMIT 1
   `.catch(() => []);
   if (recentDispatch) {
-    return json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
+    return Response.json({ dispatched: false, reason: "recent_dispatch_pending", item: recentDispatch.title });
   }
 
   // =========================================================================
@@ -1510,7 +1470,7 @@ export async function POST(req: Request) {
 
         if (res.ok) {
           console.log(`[backlog] Work stealing dispatch successful for "${stealableItem.title}"`);
-          return json({
+          return Response.json({
             dispatched: true,
             stolen: true,
             item_id: stealableItem.id,
@@ -1843,7 +1803,7 @@ export async function POST(req: Request) {
       await scheduleChainRetry("backlog_items_blocked", 15);
     }
 
-    return json({
+    return Response.json({
       dispatched: false,
       reason,
       manual_blocked: manualItems.length,
@@ -1958,7 +1918,7 @@ export async function POST(req: Request) {
 
   if (scoredItems.length === 0) {
     logDispatchCycle("no_scorable_items");
-    return json({ dispatched: false, reason: "no_scorable_items" });
+    return Response.json({ dispatched: false, reason: "no_scorable_items" });
   }
 
   // =========================================================================
@@ -1972,7 +1932,7 @@ export async function POST(req: Request) {
   if (filteredItems.length === 0 && weightedItems.length > 0) {
     // All items filtered out due to poor success rates
     const poorCompanies = weightedItems.filter(item => item.success_rate_weight <= 0.2).map(item => item.company_slug).filter(Boolean);
-    return json({ dispatched: false, reason: "agent_success_rate_filtered", poor_companies: poorCompanies.slice(0, 3) });
+    return Response.json({ dispatched: false, reason: "agent_success_rate_filtered", poor_companies: poorCompanies.slice(0, 3) });
   }
 
   const finalItems = filteredItems.length > 0 ? filteredItems : scoredItems;
@@ -2042,7 +2002,7 @@ export async function POST(req: Request) {
   const orderedCandidates = [...speccedCandidates, ...speclessCandidates];
 
   if (orderedCandidates.length === 0) {
-    return json({ dispatched: false, reason: "no_spec_items_only", blocked_count: finalItems.length });
+    return Response.json({ dispatched: false, reason: "no_spec_items_only", blocked_count: finalItems.length });
   }
 
   // Try candidates in order — skip items that fail spec generation
@@ -2105,7 +2065,7 @@ export async function POST(req: Request) {
         body: JSON.stringify({ ...body, recursion_depth: recursionDepth })
       }));
     } else {
-      return json({
+      return Response.json({
         dispatched: false,
         reason: "too_many_company_specific_items",
         blocked_company_item: topItem.title,
@@ -2121,7 +2081,7 @@ export async function POST(req: Request) {
     return null;
   }) || process.env.GH_PAT;
   if (!ghPat) {
-    return json({ dispatched: false, reason: "no_github_token" });
+    return Response.json({ dispatched: false, reason: "no_github_token" });
   }
   const tokenPrefix = ghPat.substring(0, 4);
   console.log(`[backlog] Using GitHub token: ${tokenPrefix}... (length: ${ghPat.length})`);
@@ -2167,7 +2127,7 @@ export async function POST(req: Request) {
       `Lineage failure cap exceeded (${lineageCheck.totalFailures} failures > 5 threshold)`
     );
 
-    return json({
+    return Response.json({
       dispatched: false,
       reason: "lineage_failure_cap_exceeded",
       lineage_failures: lineageCheck.totalFailures,
@@ -2210,7 +2170,7 @@ export async function POST(req: Request) {
 
       if (specRes?.ok || specRes?.status === 204) {
         console.log(`[backlog] No spec for "${topItem.title}" — dispatched spec_request to GitHub Actions`);
-        return json({ dispatched: false, reason: "spec_requested", item_id: topItem.id });
+        return Response.json({ dispatched: false, reason: "spec_requested", item_id: topItem.id });
       }
     }
 
@@ -2222,7 +2182,7 @@ export async function POST(req: Request) {
     // Re-add to dispatch queue when reverted to ready (need to recompute score)
     // For now, just trigger a queue rebuild on next Sentinel cycle
     console.warn(`[backlog] No spec for "${topItem.title}" and spec_request dispatch failed — reverted to ready`);
-    return json({ dispatched: false, reason: "spec_requested_failed", item_id: topItem.id });
+    return Response.json({ dispatched: false, reason: "spec_requested_failed", item_id: topItem.id });
   }
 
   // Check for previous failed attempts — inject error context so Engineer learns
@@ -2293,7 +2253,7 @@ export async function POST(req: Request) {
         `.catch(() => {});
 
         console.log(`[backlog] L-complexity task "${topItem.title}" dispatched to hive-decompose.yml for Claude decomposition`);
-        return json({
+        return Response.json({
           ok: true,
           dispatched: true,
           target: "decompose",
@@ -2516,7 +2476,7 @@ export async function POST(req: Request) {
 
     if (updateResult.length === 0) {
       console.warn(`[backlog] Race condition: item ${topItem.id} was already dispatched by another process`);
-      return json({ dispatched: false, reason: "already_dispatched", item_id: topItem.id });
+      return Response.json({ dispatched: false, reason: "already_dispatched", item_id: topItem.id });
     }
 
     // Reset cooldown for successfully dispatched item
@@ -2543,7 +2503,7 @@ export async function POST(req: Request) {
       summary: `[${topItem.priority}] "${topItem.title}"${issueRef} dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
     }, { retries: 2 }).catch(() => {});
 
-    return json({
+    return Response.json({
       dispatched: true,
       item: { id: topItem.id, title: topItem.title, priority: topItem.priority, priority_score: topItem.priority_score },
       score_breakdown: topItem.score_breakdown,
@@ -2564,5 +2524,5 @@ export async function POST(req: Request) {
   }
   await scheduleChainRetry("github_dispatch_failed", 5);
   logDispatchCycle("github_dispatch_failed", { status: res.status, item_title: topItem.title });
-  return json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
+  return Response.json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
 }
