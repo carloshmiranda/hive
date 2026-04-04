@@ -127,10 +127,10 @@ export async function POST(req: Request) {
       company_slug: body.company,
     }),
     signal: AbortSignal.timeout(30000),
-  }).catch(() => null);
+  }).catch((e: Error) => { console.warn(`[cycle-complete] dispatch/work fetch failed: ${e?.message ?? "unknown"}`); return null; });
 
   if (!workRes || !workRes.ok) {
-    console.warn("[cycle-complete] dispatch/work unreachable");
+    console.warn("[cycle-complete] dispatch/work unreachable — no next dispatch scheduled");
     return Response.json({ ok: true, dispatched: null, reason: "dispatch_work_unreachable" });
   }
 

@@ -60,10 +60,17 @@ export async function POST(req: Request) {
   if (rateLimited >= 2) blockers.push(`claude_rate_limited: ${rateLimited} failures in 2h (weekly/session cap likely hit)`);
 
   // 3. System failure rate (last 6h — short window so old retry storms don't block recovery)
+  // Ghost-failure exclusion: 0-turn failures are workflow/infra noise, not real agent failures.
+  // Extracted to CTE to avoid repeating the same condition 4× in one query.
   const [failRate] = await sql`
-    SELECT COUNT(*) FILTER (WHERE status = 'failed'
+    WITH relevant AS (
+      SELECT status
+      FROM agent_actions
+      WHERE agent NOT IN ('sentinel', 'healer')
+        AND finished_at > NOW() - INTERVAL '6 hours'
+        AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
+        -- Exclude 0-turn ghost failures (workflow file issues, syntax errors, etc.)
         AND NOT (
-          -- Exclude 0-turn ghost failures
           (tokens_used = 0 OR tokens_used IS NULL)
           AND (error ILIKE '%unknown (0 turns)%'
                OR error ILIKE '%exhausted after 0 turns%'
@@ -71,49 +78,13 @@ export async function POST(req: Request) {
                OR error ILIKE '%syntax error%'
                OR description ILIKE '%unknown (0 turns)%')
         )
-        -- Exclude sentinel internal checks
-        AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
-      )::float /
-      NULLIF(COUNT(*) FILTER (WHERE NOT (
-          -- Exclude 0-turn ghost failures
-          (tokens_used = 0 OR tokens_used IS NULL)
-          AND (error ILIKE '%unknown (0 turns)%'
-               OR error ILIKE '%exhausted after 0 turns%'
-               OR error ILIKE '%workflow file issue%'
-               OR error ILIKE '%syntax error%'
-               OR description ILIKE '%unknown (0 turns)%')
-        )
-        -- Exclude sentinel internal checks
-        AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
-      )), 0)::float as rate,
-      COUNT(*) FILTER (WHERE status = 'failed'
-        AND NOT (
-          -- Exclude 0-turn ghost failures
-          (tokens_used = 0 OR tokens_used IS NULL)
-          AND (error ILIKE '%unknown (0 turns)%'
-               OR error ILIKE '%exhausted after 0 turns%'
-               OR error ILIKE '%workflow file issue%'
-               OR error ILIKE '%syntax error%'
-               OR description ILIKE '%unknown (0 turns)%')
-        )
-        -- Exclude sentinel internal checks
-        AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
-      )::int as failures,
-      COUNT(*) FILTER (WHERE NOT (
-          -- Exclude 0-turn ghost failures
-          (tokens_used = 0 OR tokens_used IS NULL)
-          AND (error ILIKE '%unknown (0 turns)%'
-               OR error ILIKE '%exhausted after 0 turns%'
-               OR error ILIKE '%workflow file issue%'
-               OR error ILIKE '%syntax error%'
-               OR description ILIKE '%unknown (0 turns)%')
-        )
-        -- Exclude sentinel internal checks
-        AND action_type NOT IN ('schema_drift_check', 'auto_resolve_escalation')
-      ))::int as total
-    FROM agent_actions
-    WHERE agent NOT IN ('sentinel', 'healer')
-    AND finished_at > NOW() - INTERVAL '6 hours'
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'failed')::float
+        / NULLIF(COUNT(*), 0)::float AS rate,
+      COUNT(*) FILTER (WHERE status = 'failed')::int AS failures,
+      COUNT(*)::int AS total
+    FROM relevant
   `.catch(() => [{ rate: 0, failures: 0, total: 0 }]);
   const sysFailRate = Number(failRate?.rate || 0);
   if (sysFailRate > 0.5) blockers.push(`high_failure_rate: ${Math.round(sysFailRate * 100)}%`);

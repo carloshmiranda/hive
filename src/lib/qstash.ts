@@ -59,6 +59,7 @@ export async function qstashPublish(
   // If QStash not configured, fall back to direct fetch (fire-and-forget)
   const token = process.env.QSTASH_TOKEN;
   if (!token) {
+    console.warn(`[qstash] QSTASH_TOKEN not set — falling back to direct fetch for ${path}. No retry, no delivery guarantee.`);
     await fetch(`${baseUrl}${path}`, {
       method: "POST",
       headers: {

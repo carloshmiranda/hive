@@ -74,65 +74,103 @@ Hive is an autonomous venture orchestrator. It builds, runs, and evaluates digit
 │  social_accounts │ evolver_proposals │ agent_prompts │ context_log       │
 │  hive_backlog │ error_patterns │ routing_weights │ email_log             │
 │  email_sequences │ customers                                             │
-│                                     (21 tables — see schema.sql)         │
+│                                     (25 tables — see schema.sql)         │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Dispatch Chain: How Work Flows
+## Dispatch Chain: How Work Flows (ADR-041, ADR-042)
 
 ```
-                    ┌──────────────┐
-                    │   TRIGGERS   │
-                    └──────┬───────┘
-                           │
-         ┌─────────────────┼─────────────────────────────┐
-         │                 │                              │
-         ▼                 ▼                              ▼
-  Stripe webhook     Sentinel (QStash)           Manual dispatch
-  (payment event)    (3 urgency tiers)           (dashboard/CLI)
-         │                 │                              │
-         └────────┬────────┘──────────────────────────────┘
-                  │
-                  ▼
-         ┌────────────────┐
-         │      CEO       │  Plans the cycle, decides what to build
-         │   (Hive repo)  │
-         └───────┬────────┘
-                 │
-      ┌──────────┼──────────────┬──────────────────┐
-      │          │              │                   │
-      ▼          ▼              ▼                   ▼
- ┌─────────┐ ┌─────────┐ ┌──────────┐      ┌──────────────┐
- │Engineer │ │ Growth  │ │ Outreach │      │    Scout     │
- │(company │ │(Vercel  │ │ (Vercel  │      │  (Hive repo) │
- │  repo)  │ │ worker) │ │ worker)  │      │              │
- └────┬────┘ └────┬────┘ └──────────┘      └──────────────┘
-      │           │
-      │ PR opened │ content created
-      │           │
-      ▼           ▼
- ┌────────────────────┐
- │     CEO Review     │  Scores cycle, grades agents, extracts learnings
- │    (Hive repo)     │
- └─────────┬──────────┘
-           │ chain dispatch
-           ▼
- ┌────────────────────┐
- │ cycle-complete →   │  Health gate → score companies → dispatch next
- │ backlog/dispatch   │
- └────────────────────┘
+                    ┌──────────────────────────────────────────┐
+                    │               TRIGGERS                    │
+                    │  (all routes call /api/dispatch/work)     │
+                    └──────────────────┬───────────────────────┘
+                                       │
+          ┌────────────────────────────┼────────────────────────────────┐
+          │                            │                                 │
+          ▼                            ▼                                 ▼
+  Stripe webhook              Sentinel (QStash)                    Gate approved
+  (payment event)             (heartbeat safety net)               (approval event)
+  PR merge event              Fires only if chain went silent      Sentry error spike
+  Metrics phase crossing      for 5h AND no brain agent running    Budget reset (30m)
+          │                            │                                 │
+          └────────────────────────────┴─────────────────────────────────┘
+                                       │
+                                       ▼
+                          ┌────────────────────────┐
+                          │   /api/dispatch/work   │  ← SINGLE DISPATCH AUTHORITY
+                          │   (ADR-041)            │
+                          │                        │
+                          │ 1. Kill switch check   │
+                          │ 2. Health gate enforce │
+                          │ 3. Priority scoring:   │
+                          │    P0 backlog (100)     │
+                          │    Healer      (90)     │
+                          │    P1 backlog  (70)     │
+                          │    Company     (50)     │
+                          │    Growth      (30)     │
+                          │ 4. Claim lock check    │
+                          │ 5. Dispatch winner     │
+                          └────────────┬───────────┘
+                                       │
+               ┌───────────────────────┼───────────────────────┐
+               │                       │                        │
+               ▼                       ▼                        ▼
+        ┌─────────────┐        ┌──────────────┐        ┌──────────────┐
+        │   Engineer  │        │     CEO      │        │   Growth /   │
+        │  (backlog)  │        │  (company    │        │   Healer     │
+        │ QStash Flow │        │   cycle)     │        │  (QStash)    │
+        │ Control     │        │  GitHub      │        └──────────────┘
+        └──────┬──────┘        │  dispatch    │
+               │               └──────┬───────┘
+               │                      │
+               ▼                      ▼
+        ┌──────────────┐    ┌────────────────────┐
+        │ PR merged →  │    │   CEO Review →     │
+        │ /dispatch/   │    │ quality_score all  │
+        │ work         │    │ actions → update   │
+        │ (event-      │    │ routing_weights →  │
+        │  driven)     │    │ QStash distill     │
+        └──────────────┘    └────────────────────┘
 ```
 
-### Continuous Dispatch (Chain Callbacks)
+### Unified Dispatcher (ADR-041)
 
-Work chains automatically without waiting for Sentinel:
-- **CEO cycle_complete** → `/api/dispatch/cycle-complete` → health gate → score companies → dispatch next
-- **Engineer backlog done** → `/api/backlog/dispatch` → if empty, falls through to cycle-complete
-- **Health gate** (`/api/dispatch/health-gate`): checks Claude budget, concurrent agents, failure rate, Hive backlog priority
-- **Hive-first**: P0/P1 backlog items always dispatched before company cycles
-- **Sentinel remains as safety net** — catches work missed by chain dispatch
+Single entry point `/api/dispatch/work` owns all dispatch decisions:
+- **Kill switch first**: checks `dispatch_paused` from Edge Config (<1ms)
+- **Health gate enforced** (not advisory): `"stop"` → return, `"wait"` → schedule 30m retry, `"dispatch"` → continue
+- **Priority scoring**: type weight + urgency bonus − budget penalty (thresholds from Edge Config)
+- **Claim lock**: skips backlog items claimed by interactive Claude Code sessions
+- All 6 event sources (Sentinel, webhooks, crons, chain callbacks) funnel through one path
+
+### Event-Driven Triggers (ADR-042)
+
+Every external event that implies work immediately calls `/api/dispatch/work`:
+
+| Event | Source | Urgency bonus |
+|-------|--------|---------------|
+| Gate approved | `POST /api/approvals` | +20 |
+| Stripe payment | `POST /api/webhooks/stripe` | +20 |
+| PR merged | `POST /api/webhooks/github` | 0 |
+| Sentry error spike | `POST /api/webhooks/sentry` | +10 |
+| Metrics phase crossing | `POST /api/cron/metrics` | +15 |
+| Budget reset | health-gate `"wait"` | 0 (delayed 30m) |
+
+Replaces up to 4h Sentinel latency with 60-second response.
+
+### Sentinel: Heartbeat Safety Net Only
+
+After ADR-041, `sentinel-dispatch` no longer drives primary dispatch. It only fires when the chain has gone silent:
+
+```
+sentinel-dispatch (every 4h):
+  IF last cycle-complete callback > 5h ago
+  AND no brain agent currently running
+  → call /api/dispatch/work
+  (otherwise: no-op)
+```
 
 ### Decentralized Dispatch (company-scoped work)
 
@@ -140,9 +178,14 @@ Brain agents (CEO, Scout, Evolver, Healer) run on the **Hive private repo**.
 Company-scoped work (build, fix) runs on **company public repos** (free Actions).
 Worker agents (Growth, Outreach, Ops) run on **Vercel serverless** via `/api/agents/dispatch`.
 
+### QStash Flow Control (ADR-043)
+
+Engineer, Scout, and Evolver dispatches include `flowControl: { key: "<agent>", parallelism: 1 }`.
+QStash queues the second message automatically — no DB polling for "is agent busy?".
+
 ---
 
-## Context API (ADR-035)
+## Context API (ADR-035, ADR-044)
 
 All agents fetch pre-computed context from a single endpoint instead of running inline SQL:
 
@@ -151,18 +194,33 @@ Agent workflow step                     Hive Vercel API
 ──────────────────                      ────────────────
 curl "$HIVE_URL/api/agents/context      Computes context for agent:
   ?agent=ceo&company_slug=senhorio"     - Company data + metrics
-  -H "Authorization: Bearer $SECRET"    - Recent cycles + tasks
-                                        - Playbook entries
-Returns JSON blob with everything       - Research reports
-the agent needs for its prompt          - Validation score + phase
-                                        Cached 5min per agent+company
+  &task_description=..."                - Recent cycles + tasks
+  -H "Authorization: Bearer $SECRET"    - Playbook entries (VECTOR SEARCH)
+                                        - Research reports
+Returns JSON blob with everything       - Validation score + phase
+the agent needs for its prompt          Cached 5min per agent+company
 ```
+
+### Semantic Playbook Search (ADR-044)
+
+CEO context uses pgvector cosine similarity search instead of MMR diversification:
+
+```
+1. Generate embedding for task_description (or company.description as fallback)
+2. Query: SELECT domain, insight FROM playbook
+          WHERE embedding <=> $vector >= 0.5
+          ORDER BY embedding <=> $vector LIMIT 10
+3. If < 3 results → fall back to selectEntriesWithMMR() (cold start)
+4. Returns playbook_search_method: "vector" | "mmr" in response
+```
+
+Backfill: `npx tsx scripts/generate-playbook-embeddings.ts` populates embeddings on existing rows.
 
 ### Agent modes
 
 | Mode | Query | Scope |
 |------|-------|-------|
-| `?agent=ceo&company_slug=X` | Single company cycle planning | Company metrics, tasks, directives, validation |
+| `?agent=ceo&company_slug=X[&task_description=...]` | Single company cycle planning | Company metrics, tasks, directives, validation, semantic playbook |
 | `?agent=build&company_slug=X` | Engineer build context | Company stack, open tasks, recent errors |
 | `?agent=fix&company_slug=X` | Healer fix context | Company errors, similar fixes from other companies |
 | `?agent=growth&company_slug=X` | Growth worker context | Company SEO, content strategy, playbook |
@@ -222,15 +280,13 @@ Sentinel is split into 3 endpoints scheduled via QStash (not Vercel crons). Shar
 └── Stuck PRs with green CI (check 45)
 ```
 
-**Sentinel-dispatch** (`/api/cron/sentinel-dispatch`, every 4h):
+**Sentinel-dispatch** (`/api/cron/sentinel-dispatch`, every 4h) — heartbeat only (ADR-041):
 ```
-├── Priority-scored company cycle dispatch (safety net)
-├── Hive backlog item dispatch (P0/P1 first)
-├── Chain gap detection, budget checks
-├── Failed task re-dispatch
-├── Worker agent dispatch (Growth/Outreach/Ops)
-└── Fires company-health (non-blocking delegate)
+└── If no cycle-complete callback in 5h AND no brain agent running
+    → call /api/dispatch/work
+    Otherwise: no-op
 ```
+Primary dispatch is now event-driven. Sentinel-dispatch is the silent-chain safety net.
 
 **Sentinel-janitor** (`/api/cron/sentinel-janitor`, daily 2am):
 ```
@@ -411,38 +467,60 @@ Engineer workflow has a "Resolve model" step checking attempt count:
 
 ---
 
-## Cross-Company Knowledge Flow
+## Cross-Company Knowledge Flow (ADR-044, ADR-045)
 
-All companies share one database. Knowledge flows automatically.
+All companies share one database. Knowledge compounds automatically through a recursive quality loop.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    NEON POSTGRES (shared)                     │
-│                                                              │
-│  ┌────────────┐                                              │
-│  │  playbook  │◄── CEO review writes learnings               │
-│  │            │◄── Healer writes fix patterns                 │
-│  │            │──► Provisioner injects into new company CLAUDEs│
-│  └────────────┘                                              │
-│                                                              │
-│  ┌────────────────┐                                          │
-│  │ agent_actions   │◄── Every agent logs what it did          │
-│  │                 │──► Healer cross-correlates errors        │
-│  │                 │──► "Fixed in CompanyA, apply to CompanyB"│
-│  └────────────────┘                                          │
-│                                                              │
-│  ┌────────────────────┐                                      │
-│  │ research_reports    │◄── Scout writes market research      │
-│  │                     │──► CEO, Engineer, Growth read        │
-│  └────────────────────┘                                      │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                    NEON POSTGRES (shared)                            │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                   RECURSIVE LEARNING LOOP                   │    │
+│  │                                                             │    │
+│  │  Agent executes task                                        │    │
+│  │        │                                                    │    │
+│  │        ▼                                                    │    │
+│  │  CEO Review grades agents (A/B/C/F)                        │    │
+│  │        │                                                    │    │
+│  │        ▼                                                    │    │
+│  │  quality_score written to agent_actions                     │    │
+│  │  routing_weights updated (successes/failures)               │    │
+│  │  Redis routing:{task_type}:{agent} mirrored (TTL 30m)      │    │
+│  │        │                                                    │    │
+│  │        ▼  (QStash, within 60s)                             │    │
+│  │  /api/distill/trajectory                                    │    │
+│  │  actions with quality_score >= 0.7                          │    │
+│  │        │                                                    │    │
+│  │        ▼                                                    │    │
+│  │  LLM: "What pattern made this succeed?" (3 sentences)       │    │
+│  │        │                                                    │    │
+│  │        ▼                                                    │    │
+│  │  playbook INSERT (evolution_type='captured', conf=0.4)      │    │
+│  │  + embedding generated + leaderboard updated                │    │
+│  │        │                                                    │    │
+│  │        ▼  (next CEO context call)                          │    │
+│  │  Vector search returns new entry → better next cycle        │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ┌────────────────┐                                                  │
+│  │ agent_actions   │  quality_score NUMERIC(4,3), retry_count        │
+│  │                 │  Sentry release → -0.3 quality penalty          │
+│  └────────────────┘                                                  │
+│                                                                      │
+│  ┌────────────────────┐                                              │
+│  │ routing_weights     │  task_type × agent → success_rate           │
+│  │                     │  Redis hot cache, 30m TTL                   │
+│  └────────────────────┘                                              │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Three cross-company mechanisms
+### Four cross-company mechanisms
 
-1. **Playbook injection at provisioning** — New companies start with all playbook entries (confidence >= 0.6) and known error patterns.
+1. **Playbook injection at provisioning** — New companies start with playbook entries (confidence >= 0.6) and known error patterns.
 2. **Cross-company error correlation** — Healer queries agent_actions for fixes of similar errors in OTHER companies before dispatching repairs.
 3. **Venture Brain cross-pollination** — Reads recent playbook entries, creates directives when learnings from company A benefit company B.
+4. **Auto-distillation** (ADR-045) — CEO review triggers quality scoring → high-quality actions (score >= 0.7) are distilled into playbook entries within 60s via QStash. Embeddings generated at write time, enabling semantic context injection into all future CEO cycles.
 
 ---
 
@@ -626,7 +704,7 @@ hive/
 ├── DECISIONS.md           ← architectural decision records (ADRs)
 ├── MISTAKES.md            ← production learnings (50+ entries)
 ├── ROADMAP.md             ← strategic phases and milestones
-├── schema.sql             ← Neon schema (21 tables)
+├── schema.sql             ← Neon schema (25 tables)
 ├── src/
 │   ├── middleware.ts       ← auth redirect
 │   ├── app/

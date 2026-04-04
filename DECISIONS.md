@@ -552,3 +552,54 @@ Move ~12 checks to event-driven (no cron):
 - Agent-to-agent direct messaging: Creates coupling; shared state via DB is simpler and auditable
 - Full consensus protocol (Raft/BFT): Only needed when agents make conflicting decisions; Hive agents have non-overlapping scopes
 **Consequences:** Every agent now has visibility into the full system state. Chain dispatches close loop gaps (PR open → next dispatch, PR merge → next dispatch, queue full → flush). Intent registration prevents dispatch collisions. The awareness payload adds ~5 queries per context request but all are fast indexed queries with LIMIT clauses. No schema changes required — uses existing `agent_actions`, `hive_backlog`, and `approvals` tables.
+
+### ADR-041: Unified Work Dispatcher — single dispatch authority
+**Date:** 2026-04-04
+**Status:** accepted
+**Context:** Dispatch logic was duplicated across `cycle-complete`, `sentinel-dispatch`, and `backlog/dispatch`. Each path had its own budget gate, company scoring, and health checks — making the `dispatch_paused` kill switch require patching 6 files, and making the system unpredictable when logic drifted between paths.
+**Decision:** Create `/api/dispatch/work` as the single authority for all dispatch decisions. All entry points (Sentinel, webhooks, cycle callbacks) call this one endpoint. It owns: kill switch check, health gate enforcement (stop on "stop", 30m retry on "wait"), priority scoring (P0→Healer→P1→cycle→growth), claim lock check, and dispatch. Health gate is now enforced, not advisory.
+**Alternatives considered:**
+- Fix each path individually: band-aid approach, doesn't prevent future drift
+- Central queue (Redis): adds infrastructure; the priority scoring is already the queue logic
+**Consequences:** Kill switch is one line in one file. Budget thresholds configurable via Edge Config without deploys. Claim lock prevents dispatching items a human is already working on. Any new trigger source is one `fetch("/api/dispatch/work")` call.
+
+### ADR-042: Event-Driven Dispatch — events call dispatcher immediately
+**Date:** 2026-04-04
+**Status:** accepted
+**Context:** Work discovery was Sentinel-latency-bound: up to 4h from event to dispatch. Gate approvals, Stripe payments, and Sentry errors all waited for the next Sentinel scan.
+**Decision:** Every webhook/cron that implies work calls `/api/dispatch/work` after its DB write. Sentinel-dispatch becomes a heartbeat safety net that only fires when the chain has been silent for 5h. Budget resets use a QStash delayed message (30m) to self-heal without waiting for Sentinel.
+**Alternatives considered:**
+- Reduce Sentinel frequency (e.g. 1h): improves latency but still not event-driven; misses the gate-approval case
+- Per-event dispatchers: duplicates priority logic per event type
+**Consequences:** Gate approval → dispatch within 60s. Stripe payment → CEO cycle within 60s. Sentry error → Healer within 60s. Sentinel-dispatch reduces from a busy active scheduler to a last-resort watchdog.
+
+### ADR-043: QStash Flow Control replacing DB polling for parallelism
+**Date:** 2026-04-04
+**Status:** accepted
+**Context:** Engineer-busy detection used a DB query to check for running engineer actions before dispatching. This created a race condition: two simultaneous dispatch calls could both see "no engineer running" and double-dispatch.
+**Decision:** Add `flowControl: { key: "engineer", parallelism: 1 }` to all QStash publishes that dispatch Engineer. Same for Scout and Evolver. QStash queues excess messages and delivers them as in-flight messages complete — atomic, no DB round-trip.
+**Alternatives considered:**
+- Redis lock: valid alternative, but adds implementation code. QStash FC is zero-code once wired.
+- DB advisory lock: per-agent row lock; works but adds latency and DB load
+**Consequences:** Exact-once Engineer parallelism enforced by QStash. DB engineer-busy check kept as defense-in-depth with a comment noting it's secondary. No race conditions on burst dispatch.
+
+### ADR-044: Semantic Context Injection replacing MMR diversification
+**Date:** 2026-04-04
+**Status:** accepted
+**Context:** CEO context used `selectEntriesWithMMR()` to pick diverse playbook entries from a full table scan. MMR maximizes coverage but ignores relevance — entries returned had topical diversity but not task-specific usefulness. The pgvector infrastructure was built but never wired to the main agent path.
+**Decision:** CEO context now uses pgvector cosine similarity search with `task_description` (or company description as fallback) as the query vector. MMR is kept as cold-start fallback when fewer than 3 vector results exist (e.g. low embedding coverage). Response includes `playbook_search_method: "vector" | "mmr"` for observability. Backfill script at `scripts/generate-playbook-embeddings.ts`.
+**Alternatives considered:**
+- BM25 keyword search: faster, no embeddings needed, but misses semantic equivalents
+- Keep MMR: simple, works, but relevance ceiling is limited by random diversity sampling
+**Consequences:** CEO gets playbook entries that are topically relevant to the current task/company rather than just diverse. Requires embedding coverage > 80% to be effective. Cold start handled by MMR fallback. Quality improves as distillation loop (ADR-045) adds more high-quality entries with embeddings.
+
+### ADR-045: Recursive Quality Loop — distillation closes the learning cycle
+**Date:** 2026-04-04
+**Status:** accepted
+**Context:** CEO review graded agents but grades were never used to improve future dispatch. Playbook entries were written manually by the CEO agent or via Healer — no automated pattern extraction from successful runs. The system had the infra (playbook, pgvector, routing_weights) but the feedback loop was open.
+**Decision:** CEO review now triggers a 3-step learning cycle: (1) Grade actions → write `quality_score` to `agent_actions` (A=1.0, B=0.75, C=0.5, F=0.0, −0.1/retry). (2) Update `routing_weights` (successes/failures per task_type+agent) and mirror success_rate to Redis `routing:{type}:{agent}` TTL 30m. (3) Publish QStash to `/api/distill/trajectory` which extracts 3-sentence patterns from quality >= 0.7 actions and writes playbook entries with embeddings. Sentry errors apply a −0.3 quality penalty to the matching commit's actions. Playbook leaderboard (Redis sorted set per domain) updated on every write.
+**Alternatives considered:**
+- Manual playbook curation only: doesn't scale; CEO has enough to do
+- Full LLM-graded rubric per action: too expensive; using CEO agent_grades is free (already computed)
+- Nightly batch distillation: adds 12h+ latency; QStash within 60s is better
+**Consequences:** Every successful cycle contributes patterns to the playbook within 60s of review. Quality scores create a selection pressure: high-quality task types improve routing_weights → better model routing. Embeddings generated at write time (not retroactively) so vector search immediately finds new entries. The loop compounds: better entries → better CEO context → better planning → higher quality scores → more entries.
