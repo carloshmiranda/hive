@@ -263,6 +263,24 @@ async function getAgentSignals(sql: any, targetAgent: string): Promise<AgentSign
   return [...seen.values()].slice(0, 10);
 }
 
+/**
+ * Fetches recent domain knowledge insights for the given agent domains.
+ * Returns up to 5 entries from the last 30 days with relevance_score > 0.7.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getAgentKnowledge(sql: any, agentDomains: string[]): Promise<Array<{ domain: string; source: string; title: string; insight: string; relevance_score: number; published_at: string }>> {
+  const rows = await sql`
+    SELECT domain, source, title, insight, relevance_score, published_at
+    FROM domain_knowledge
+    WHERE domain = ANY(${agentDomains})
+      AND published_at > NOW() - INTERVAL '30 days'
+      AND relevance_score > 0.7
+    ORDER BY relevance_score DESC
+    LIMIT 5
+  `.catch(() => []);
+  return rows;
+}
+
 // GET /api/agents/context?agent=build|growth|fix&company_slug=X
 export async function GET(req: NextRequest) {
   setSentryTags({
@@ -384,7 +402,7 @@ export async function GET(req: NextRequest) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function buildContext(sql: any, company: any) {
-  const [cycle, reports, proposal, playbook, tasks, metrics] = await Promise.all([
+  const [cycle, reports, proposal, playbook, tasks, metrics, domainKnowledge] = await Promise.all([
     sql`
       SELECT id, cycle_number, ceo_plan FROM cycles
       WHERE company_id = ${company.id} AND status = 'running'
@@ -419,6 +437,7 @@ async function buildContext(sql: any, company: any) {
       ORDER BY priority ASC, created_at ASC LIMIT 5
     `.catch(() => []),
     getCachedCompanyMetrics(sql, company.id, company.slug),
+    getAgentKnowledge(sql, ['engineering', 'infrastructure', 'operations']),
   ]);
 
   // Context optimization: use summaries by default, full content only when requested
@@ -485,12 +504,13 @@ async function buildContext(sql: any, company: any) {
     ...(gatedTasks.length > 0 ? { phase_gated_tasks: gatedTasks } : {}),
     metrics: metrics.slice(0, 7),
     hive_capabilities: getCapabilitySummary(),
+    ...(domainKnowledge.length > 0 ? { recent_domain_insights: domainKnowledge } : {}),
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function growthContext(sql: any, company: any) {
-  const [cycle, reports, metrics, playbook, proposals, tasks] = await Promise.all([
+  const [cycle, reports, metrics, playbook, proposals, tasks, domainKnowledge] = await Promise.all([
     sql`
       SELECT ceo_plan FROM cycles
       WHERE company_id = ${company.id} ORDER BY started_at DESC LIMIT 1
@@ -526,6 +546,7 @@ async function growthContext(sql: any, company: any) {
         AND status IN ('proposed', 'approved')
       ORDER BY priority ASC, created_at ASC LIMIT 5
     `.catch(() => []),
+    getAgentKnowledge(sql, ['growth', 'seo']),
   ]);
 
   // Context optimization: summaries only (saves 20-50KB per Growth context call)
@@ -612,6 +633,7 @@ async function growthContext(sql: any, company: any) {
     has_file_write_tasks: filteredGrowthTasks.some(task => task.task_requires_repo_access),
     ...(gatedGrowthTasks.length > 0 ? { phase_gated_tasks: gatedGrowthTasks } : {}),
     hive_capabilities: getCapabilitySummary(),
+    ...(domainKnowledge.length > 0 ? { recent_domain_insights: domainKnowledge } : {}),
   };
 }
 
