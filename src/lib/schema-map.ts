@@ -2041,45 +2041,176 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
   },
   "learning_entries": {
     "columns": {
-      "id": { "type": "TEXT", "nullable": false, "hasDefault": true },
-      "agent": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "category": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "title": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "description": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "source": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "company_id": { "type": "TEXT", "nullable": true, "hasDefault": false },
-      "cycle_id": { "type": "TEXT", "nullable": true, "hasDefault": false },
-      "evidence": { "type": "TEXT", "nullable": true, "hasDefault": false },
-      "tags": { "type": "TEXT[]", "nullable": true, "hasDefault": true },
-      "confidence": { "type": "NUMERIC(4,3)", "nullable": false, "hasDefault": true },
-      "validation_count": { "type": "INTEGER", "nullable": false, "hasDefault": true },
-      "contradiction_count": { "type": "INTEGER", "nullable": false, "hasDefault": true },
-      "created_at": { "type": "TIMESTAMPTZ", "nullable": false, "hasDefault": true },
-      "updated_at": { "type": "TIMESTAMPTZ", "nullable": false, "hasDefault": true },
-      "last_validated_at": { "type": "TIMESTAMPTZ", "nullable": true, "hasDefault": false },
-      "is_active": { "type": "BOOLEAN", "nullable": false, "hasDefault": true }
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "agent": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "category": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "title": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "description": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "source": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "company_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "cycle_id": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "evidence": {
+        "type": "TEXT",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "tags": {
+        "type": "TEXT[]",
+        "nullable": true,
+        "hasDefault": true
+      },
+      "confidence": {
+        "type": "NUMERIC(4,3)",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "validation_count": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "contradiction_count": {
+        "type": "INTEGER",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "updated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "last_validated_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "is_active": {
+        "type": "BOOLEAN",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
     "checks": [
-      { "column": "agent", "allowedValues": ["engineer","growth","outreach","ceo","scout","ops","evolver","healer","any"] },
-      { "column": "category", "allowedValues": ["pattern","anti_pattern","gotcha","optimization"] },
-      { "column": "source", "allowedValues": ["cycle_output","mistake","pr_review","manual"] }
+      {
+        "column": "agent",
+        "allowedValues": [
+          "engineer",
+          "growth",
+          "outreach",
+          "ceo",
+          "scout",
+          "ops",
+          "evolver",
+          "healer",
+          "any"
+        ]
+      },
+      {
+        "column": "category",
+        "allowedValues": [
+          "pattern",
+          "anti_pattern",
+          "gotcha",
+          "optimization"
+        ]
+      },
+      {
+        "column": "source",
+        "allowedValues": [
+          "cycle_output",
+          "mistake",
+          "pr_review",
+          "manual"
+        ]
+      }
     ]
   },
   "domain_knowledge": {
     "columns": {
-      "id": { "type": "TEXT", "nullable": false, "hasDefault": true },
-      "domain": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "source": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "source_url": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "title": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "insight": { "type": "TEXT", "nullable": false, "hasDefault": false },
-      "relevance_score": { "type": "NUMERIC", "nullable": false, "hasDefault": true },
-      "published_at": { "type": "TIMESTAMPTZ", "nullable": true, "hasDefault": false },
-      "created_at": { "type": "TIMESTAMPTZ", "nullable": false, "hasDefault": true }
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "domain": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "source": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "source_url": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "title": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "insight": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "relevance_score": {
+        "type": "NUMERIC",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "published_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": true,
+        "hasDefault": false
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
     },
-    "checks": [
-      { "column": "domain", "allowedValues": ["seo","growth","engineering","strategy"] }
-    ]
+    "checks": []
   }
 };
 
