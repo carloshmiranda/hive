@@ -2003,6 +2003,41 @@ export const SCHEMA_MAP: Record<string, TableDef> = {
         ]
       }
     ]
+  },
+  "hive_plugins": {
+    "columns": {
+      "id": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "name": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": false
+      },
+      "version": {
+        "type": "TEXT",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "enabled": {
+        "type": "BOOLEAN",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "manifest": {
+        "type": "JSONB",
+        "nullable": false,
+        "hasDefault": true
+      },
+      "created_at": {
+        "type": "TIMESTAMPTZ",
+        "nullable": false,
+        "hasDefault": true
+      }
+    },
+    "checks": []
   }
 };
 

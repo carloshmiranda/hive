@@ -394,17 +394,25 @@ export const HIVE_CAPABILITIES: HiveCapability[] = [
  *
  * Matching is case-insensitive substring search across all triggers.
  * Scores by number of trigger words that appear in the problem.
+ *
+ * Pass a pre-fetched plugins array (from loadEnabledPlugins()) to include
+ * plugin-contributed capabilities. Sync signature preserved for backwards compat.
  */
 export function findCapabilityForProblem(
-  problem: string
+  problem: string,
+  pluginCapabilities?: HiveCapability[]
 ): HiveCapability | null {
   if (!problem) return null;
   const lower = problem.toLowerCase();
 
+  const allCapabilities = pluginCapabilities
+    ? [...HIVE_CAPABILITIES, ...pluginCapabilities]
+    : HIVE_CAPABILITIES;
+
   let bestMatch: HiveCapability | null = null;
   let bestScore = 0;
 
-  for (const cap of HIVE_CAPABILITIES) {
+  for (const cap of allCapabilities) {
     if (cap.triggers.length === 0) continue;
 
     let score = 0;
@@ -434,10 +442,14 @@ export function findCapabilityForProblem(
 }
 
 /**
- * Returns a human-readable summary of all Hive capabilities.
+ * Returns a human-readable summary of all Hive capabilities, including
+ * any plugin-contributed capabilities passed via the optional parameter.
  * Suitable for injection into agent system prompts.
+ *
+ * Pass a pre-fetched plugins array (from loadEnabledPlugins()) to include
+ * plugin-contributed capabilities. Sync signature preserved for backwards compat.
  */
-export function getCapabilitySummary(): string {
+export function getCapabilitySummary(pluginCapabilities?: HiveCapability[]): string {
   const lines: string[] = [
     "HIVE AUTONOMOUS CAPABILITIES vs HUMAN APPROVAL GATES:",
     "",
@@ -491,6 +503,11 @@ export function getCapabilitySummary(): string {
     } else if (["create_stripe_product"].includes(cap.id)) {
       groups["Payments & Auth"].push(cap);
     }
+  }
+
+  // Merge plugin-contributed capabilities into an "Extensions" group
+  if (pluginCapabilities && pluginCapabilities.length > 0) {
+    groups["Extensions"] = pluginCapabilities;
   }
 
   for (const [group, caps] of Object.entries(groups)) {

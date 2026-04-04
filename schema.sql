@@ -578,3 +578,15 @@ CREATE INDEX idx_qa_runs_started ON qa_runs(started_at);
 CREATE INDEX idx_qa_runs_workflow ON qa_runs(workflow_run_id) WHERE workflow_run_id IS NOT NULL;
 CREATE INDEX idx_qa_test_results_run ON qa_test_results(qa_run_id);
 CREATE INDEX idx_qa_test_results_status ON qa_test_results(status);
+
+-- Plugin registry: extensible capability system for agent plugins
+CREATE TABLE IF NOT EXISTS hive_plugins (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  version     TEXT NOT NULL DEFAULT '1.0.0',
+  enabled     BOOLEAN NOT NULL DEFAULT false,
+  manifest    JSONB NOT NULL DEFAULT '{}',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_hive_plugins_enabled ON hive_plugins(enabled);
