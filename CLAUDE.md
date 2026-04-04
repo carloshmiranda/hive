@@ -136,6 +136,31 @@ Format: `[agent] action: result (context)` — consistent for Sentinel parsing.
 - **Color contrast**: Text must meet 7:1 contrast ratio. Use `text-secondary` (gray-600) for secondary text.
 - **Semantic HTML**: Use `<main>`, skip-to-content links, and proper heading hierarchy.
 
+## Skills Reference
+
+Always invoke relevant skills before starting work. Do not rely on keyword auto-triggering alone — check this list at the start of any task that touches these domains.
+
+| Skill | Invoke when... |
+|-------|----------------|
+| `ui-ux-pro-max` | Any UI work: colors, fonts, components, layouts, accessibility audits. **READ the CSV data files** — the skill provides instructions but not the data itself. |
+| `frontend-design` | Building landing pages, marketing sites, or any distinctive visual UI |
+| `baseline-ui` | Starting any UI work — enforces stack, animation, typography, and layout constraints |
+| `fixing-accessibility` | Adding or changing any interactive element (buttons, forms, dialogs, links) |
+| `shadcn-ui` | Adding or modifying shadcn/ui components in a company app |
+| `tailwind-company` | Styling a company app, configuring design tokens in globals.css |
+| `neon-company-db` | Setting up or querying a company's Neon Postgres database |
+| `stripe-integration` | Adding payments, subscriptions, webhooks, or Stripe Checkout to a company |
+| `resend-email` | Adding transactional email or onboarding sequences to a company |
+| `sentry-company` | Adding error monitoring to a portfolio company |
+| `sentry-nextjs-sdk` | Full Sentry setup for any Next.js app |
+| `sentry-fix-issues` | Diagnosing and fixing production errors reported in Sentry |
+| `vercel-react-best-practices` | Writing or reviewing any React/Next.js code — performance, data fetching, bundle size |
+| `neon-postgres-egress-optimizer` | High DB bills, slow queries, excessive egress, or N+1 patterns |
+| `hive-agent-authoring` | Writing or editing any agent prompt, wiring a new dispatch event, checking turn budgets |
+| `hive-debugging` | Any agent failure, circuit breaker trip, zombie action, QStash DLQ issue, or dispatch problem |
+| `seo` | Any SEO work on a portfolio company: audit, technical SEO, content quality, schema, local SEO, GEO/AI-search, backlinks, hreflang, sitemaps, programmatic SEO, competitor pages |
+| `ads` | Any paid advertising work: Google Ads, Meta, YouTube, LinkedIn, TikTok, Microsoft, Apple Search Ads — audits, campaign planning, brand DNA extraction, creative briefs |
+
 ## Architecture Reference
 
 For detailed system design — agent execution flow, model routing, provisioning, teardown, cross-company learning, self-healing, email setup, file structure, and diagrams — see **ARCHITECTURE.md**.
