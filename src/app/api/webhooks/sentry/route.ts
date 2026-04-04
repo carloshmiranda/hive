@@ -121,6 +121,21 @@ export async function POST(req: Request) {
           )
         `;
 
+        // Quality signal: apply penalty to agent_actions that introduced this error.
+        // Match by commit SHA stored in output->>'commit_sha' against the Sentry release.
+        // Fire-and-forget — must not delay Sentry's 1s response window.
+        const releaseRef = issue.metadata?.release || tags.release;
+        if (releaseRef && body.action === "created") {
+          const releasePrefix = String(releaseRef).slice(0, 12);
+          sql`
+            UPDATE agent_actions
+            SET quality_score = GREATEST(0, COALESCE(quality_score, 0.5) - 0.3)
+            WHERE output->>'commit_sha' LIKE ${releasePrefix + '%'}
+              AND status = 'success'
+              AND quality_score IS NOT NULL
+          `.catch(() => {});
+        }
+
         // Route healer trigger through unified dispatcher (has health gate)
         // Fire-and-forget to stay within Sentry's 1s response timeout
         const level = issue.level || "error";
