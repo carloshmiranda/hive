@@ -14,8 +14,12 @@ type Company = {
 };
 type Action = {
   id: string; company_id: string; company_slug: string; agent: string; action_type: string;
-  description: string; status: string; error: string | null; reflection: string | null;
-  tokens_used: number; finished_at: string;
+  cycle_id: string | null; description: string; status: string; error: string | null;
+  reflection: string | null; tokens_used: number; started_at: string | null; finished_at: string;
+};
+type BacklogItem = {
+  id: string; title: string; description: string | null; status: string; priority: number;
+  category: string; created_at: string; github_issue_number: number | null;
 };
 type Approval = {
   id: string; company_id: string | null; company_name: string | null; company_slug: string | null;
@@ -96,6 +100,16 @@ function confidenceLabel(c: number): { text: string; color: string; bg: string; 
   if (c >= 0.5) return { text: "Promising", color: "var(--hive-amber)", bg: "var(--hive-amber-bg)", border: "var(--hive-amber-border)" };
   return { text: "Early", color: "var(--hive-text-tertiary)", bg: "rgba(108,108,120,0.08)", border: "rgba(108,108,120,0.18)" };
 }
+function fmtDuration(start: string | null, end: string | null): string {
+  if (!start || !end) return "";
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (ms < 0) return "";
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return secs + "s";
+  const mins = Math.floor(secs / 60);
+  const rem = secs % 60;
+  return rem > 0 ? `${mins}m ${rem}s` : `${mins}m`;
+}
 function timeGroup(d: string): string {
   const now = new Date();
   const date = new Date(d);
@@ -163,7 +177,8 @@ export default function DashboardPage() {
   const [playbook, setPlaybook] = useState<PlaybookEntry[]>([]);
   const [cycles, setCycles] = useState<Cycle[]>([]);
   const [evolverProposals, setEvolverProposals] = useState<EvolverProposal[]>([]);
-  const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "inbox" | "activity" | "intelligence" | "backlog">("overview");
+  const [backlogItems, setBacklogItems] = useState<BacklogItem[]>([]);
   const [activityFilter, setActivityFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -202,6 +217,12 @@ export default function DashboardPage() {
         const todoRes = await fetch("/api/todos");
         if (todoRes.ok) setTodos((await todoRes.json()).data || []);
       } catch { /* non-critical */ }
+
+      // Fetch backlog
+      try {
+        const backlogRes = await fetch("/api/backlog?status=all&limit=200");
+        if (backlogRes.ok) setBacklogItems((await backlogRes.json()).data || []);
+      } catch { /* non-critical */ }
     } catch {
       setLoadError(true);
       setLoading(false);
@@ -218,12 +239,12 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchAll();
-    let interval = setInterval(fetchAll, 120_000);
+    let interval = setInterval(fetchAll, 30_000);
     const onVisibility = () => {
       clearInterval(interval);
       if (document.visibilityState === "visible") {
         fetchAll();
-        interval = setInterval(fetchAll, 120_000);
+        interval = setInterval(fetchAll, 30_000);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -419,7 +440,7 @@ export default function DashboardPage() {
           <Link href="/settings" style={{ fontSize: 13, color: "var(--hive-text-secondary)", fontFamily: "var(--hive-sans)", textDecoration: "none" }}>Settings</Link>
           {lastRefresh && (
             <button onClick={() => fetchAll()} aria-label="Refresh dashboard"
-              title="Auto-refreshes every 2m (pauses when tab hidden)."
+              title="Auto-refreshes every 30s (pauses when tab hidden)."
               style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", cursor: "pointer",
                 background: "none", border: "none", padding: 0 }}>
               ↻ {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -436,11 +457,195 @@ export default function DashboardPage() {
         <TabButton label="Inbox" active={activeTab === "inbox"} count={inboxCount} onClick={() => setActiveTab("inbox")} />
         <TabButton label="Activity" active={activeTab === "activity"} onClick={() => setActiveTab("activity")} />
         <TabButton label="Intelligence" active={activeTab === "intelligence"} onClick={() => setActiveTab("intelligence")} />
+        <TabButton label="Backlog" active={activeTab === "backlog"} count={backlogItems.filter(i => i.status === "ready" || i.status === "dispatched").length || undefined} onClick={() => setActiveTab("backlog")} />
       </div>
 
       {/* ==================== OVERVIEW TAB ==================== */}
       {activeTab === "overview" && (
         <div className="animate-in">
+          {/* Portfolio */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
+              letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Portfolio</div>
+
+            {portfolioCompanies.length === 0 ? (
+              <div style={{ padding: 48, textAlign: "center", background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>🐝</div>
+                <div style={{ fontSize: 15, fontWeight: 500, color: "var(--hive-text)", marginBottom: 6 }}>No companies yet</div>
+                <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6 }}>
+                  Trigger the Scout agent from GitHub Actions to generate business proposals.
+                  <br />Go to Actions → &quot;Hive Scout&quot; → Run workflow (mode: ideas)
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
+                {portfolioCompanies.map(c => {
+                  const m = c.latest_metrics;
+                  const isLive = ["active", "mvp"].includes(c.status);
+                  const score = getCeoScore(c.id);
+                  const cycleCount = getCycleCount(c.id);
+                  const scoreColor = score !== null ? (score >= 7 ? "var(--hive-green)" : score >= 4 ? "var(--hive-amber)" : "var(--hive-red)") : "var(--hive-text-tertiary)";
+
+                  return (
+                    <Link key={c.id} href={`/company/${c.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
+                      <div style={{
+                        padding: "16px 18px", background: "var(--hive-surface)", borderRadius: 10,
+                        borderTop: "1px solid var(--hive-border)", borderRight: "1px solid var(--hive-border)",
+                        borderBottom: "1px solid var(--hive-border)",
+                        borderLeft: `3px solid ${STATUS_MAP[c.status]?.color || "#9d9da8"}`,
+                        transition: "background 0.15s", cursor: "pointer",
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface-hover)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface)"; }}>
+                        {/* Top line: name + badge | CEO score */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--hive-text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</span>
+                            <StatusBadge status={c.status} />
+                          </div>
+                          {score !== null && (
+                            <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+                              <span style={{ fontSize: 24, fontWeight: 700, fontFamily: "var(--hive-mono)", color: scoreColor, lineHeight: 1 }}>{score}</span>
+                              <span style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>CEO</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Mini metrics row */}
+                        {isLive && (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+                            <div>
+                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>MRR</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums", color: (m?.mrr || 0) > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(m?.mrr || 0)}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>{(m?.customers || 0) > 0 ? "Customers" : (m?.waitlist_total || 0) > 0 ? "Waitlist" : "Customers"}</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums" }}>{(m?.customers || 0) > 0 ? m.customers : (m?.waitlist_total || 0) > 0 ? m.waitlist_total : 0}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>Views</div>
+                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums" }}>{m?.page_views || 0}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {c.status === "provisioning" && (
+                          <div style={{ fontSize: 12, color: "var(--hive-amber)", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
+                            Provisioning...
+                          </div>
+                        )}
+
+                        {/* Task progress */}
+                        {Number(c.tasks_total) > 0 && (
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                              <span style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Tasks</span>
+                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)" }}>
+                                {Number(c.tasks_done)}/{Number(c.tasks_total)}
+                              </span>
+                            </div>
+                            <div style={{ height: 4, borderRadius: 2, background: "var(--hive-border)", overflow: "hidden" }}>
+                              <div style={{
+                                height: "100%", borderRadius: 2, transition: "width 0.3s",
+                                width: `${Math.round((Number(c.tasks_done) / Number(c.tasks_total)) * 100)}%`,
+                                background: Number(c.tasks_done) === Number(c.tasks_total) ? "var(--hive-green)" : "var(--hive-amber)",
+                              }} />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Footer: cycles + pending approvals */}
+                        <div style={{ paddingTop: 10, borderTop: "1px solid var(--hive-border-subtle)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                              {cycleCount} cycle{cycleCount !== 1 ? "s" : ""}
+                            </div>
+                            {(c.pending_approvals || 0) > 0 && (
+                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                                padding: "2px 8px", borderRadius: 8,
+                                background: "var(--hive-amber-bg)", color: "var(--hive-amber)", border: "1px solid var(--hive-amber-border)" }}>
+                                {c.pending_approvals} pending
+                              </span>
+                            )}
+                          </div>
+                          {(c.pending_approval_details?.length || 0) > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+                              {c.pending_approval_details.map((a, i) => (
+                                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                                  <span style={{
+                                    fontSize: 9, fontFamily: "var(--hive-mono)", fontWeight: 600, textTransform: "uppercase",
+                                    padding: "1px 5px", borderRadius: 4, letterSpacing: "0.03em",
+                                    background: a.gate_type === "kill_company" ? "var(--hive-red-bg, rgba(239,68,68,0.1))" : "var(--hive-surface-hover)",
+                                    color: a.gate_type === "kill_company" ? "var(--hive-red)" : "var(--hive-text-secondary)",
+                                    border: `1px solid ${a.gate_type === "kill_company" ? "var(--hive-red-border, rgba(239,68,68,0.2))" : "var(--hive-border)"}`,
+                                  }}>{a.gate_type.replace(/_/g, " ")}</span>
+                                  <span style={{ color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {a.title}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Portfolio snapshot charts */}
+          {portfolioCompanies.length >= 2 && (
+            <div>
+              <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
+                letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Portfolio snapshot</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {/* MRR by company */}
+                <div style={{ padding: "14px 16px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
+                  <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>MRR</div>
+                  {(() => {
+                    const maxMrr = Math.max(...portfolioCompanies.map(c => c.latest_metrics?.mrr || 0), 1);
+                    return portfolioCompanies.map(c => {
+                      const mrr = c.latest_metrics?.mrr || 0;
+                      const pct = (mrr / maxMrr) * 100;
+                      return (
+                        <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                          <span style={{ width: 72, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: "var(--hive-border)", overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.max(pct, mrr > 0 ? 2 : 0)}%`, borderRadius: 3, background: mrr > 0 ? "var(--hive-green)" : "var(--hive-border-subtle)" }} />
+                          </div>
+                          <span style={{ width: 44, fontSize: 10, fontFamily: "var(--hive-mono)", color: mrr > 0 ? "var(--hive-green)" : "var(--hive-text-dim)", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtCurrency(mrr)}</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+                {/* Cycles by company */}
+                <div style={{ padding: "14px 16px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
+                  <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>Cycles</div>
+                  {(() => {
+                    const maxCycles = Math.max(...portfolioCompanies.map(c => getCycleCount(c.id)), 1);
+                    return portfolioCompanies.map(c => {
+                      const count = getCycleCount(c.id);
+                      const pct = (count / maxCycles) * 100;
+                      return (
+                        <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                          <span style={{ width: 72, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: "var(--hive-border)", overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.max(pct, count > 0 ? 2 : 0)}%`, borderRadius: 3, background: "var(--hive-accent)" }} />
+                          </div>
+                          <span style={{ width: 44, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{count}</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Needs your attention */}
           {todos.length > 0 && (
             <div style={{ marginBottom: 24 }}>
@@ -644,189 +849,6 @@ export default function DashboardPage() {
                 >
                   Reset All
                 </button>
-              </div>
-            </div>
-          )}
-
-          {/* Portfolio */}
-          <div style={{ marginBottom: 28 }}>
-            <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
-              letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Portfolio</div>
-
-            {portfolioCompanies.length === 0 ? (
-              <div style={{ padding: 48, textAlign: "center", background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
-                <div style={{ fontSize: 32, marginBottom: 12 }}>🐝</div>
-                <div style={{ fontSize: 15, fontWeight: 500, color: "var(--hive-text)", marginBottom: 6 }}>No companies yet</div>
-                <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6 }}>
-                  Trigger the Scout agent from GitHub Actions to generate business proposals.
-                  <br />Go to Actions → &quot;Hive Scout&quot; → Run workflow (mode: ideas)
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
-                {portfolioCompanies.map(c => {
-                  const m = c.latest_metrics;
-                  const isLive = ["active", "mvp"].includes(c.status);
-                  const score = getCeoScore(c.id);
-                  const cycleCount = getCycleCount(c.id);
-                  const scoreColor = score !== null ? (score >= 7 ? "var(--hive-green)" : score >= 4 ? "var(--hive-amber)" : "var(--hive-red)") : "var(--hive-text-tertiary)";
-
-                  return (
-                    <Link key={c.id} href={`/company/${c.slug}`} style={{ textDecoration: "none", color: "inherit" }}>
-                      <div style={{
-                        padding: "16px 18px", background: "var(--hive-surface)", borderRadius: 10,
-                        borderTop: "1px solid var(--hive-border)", borderRight: "1px solid var(--hive-border)",
-                        borderBottom: "1px solid var(--hive-border)",
-                        borderLeft: `3px solid ${STATUS_MAP[c.status]?.color || "#9d9da8"}`,
-                        transition: "background 0.15s", cursor: "pointer",
-                      }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface-hover)"; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--hive-surface)"; }}>
-                        {/* Top line: name + badge | CEO score */}
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--hive-text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</span>
-                            <StatusBadge status={c.status} />
-                          </div>
-                          {score !== null && (
-                            <div style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
-                              <span style={{ fontSize: 24, fontWeight: 700, fontFamily: "var(--hive-mono)", color: scoreColor, lineHeight: 1 }}>{score}</span>
-                              <span style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>CEO</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Mini metrics row */}
-                        {isLive && (
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
-                            <div>
-                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>MRR</div>
-                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums", color: (m?.mrr || 0) > 0 ? "var(--hive-green)" : "var(--hive-text-tertiary)" }}>{fmtCurrency(m?.mrr || 0)}</div>
-                            </div>
-                            <div>
-                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>{(m?.customers || 0) > 0 ? "Customers" : (m?.waitlist_total || 0) > 0 ? "Waitlist" : "Customers"}</div>
-                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums" }}>{(m?.customers || 0) > 0 ? m.customers : (m?.waitlist_total || 0) > 0 ? m.waitlist_total : 0}</div>
-                            </div>
-                            <div>
-                              <div style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 2 }}>Views</div>
-                              <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--hive-mono)", fontVariantNumeric: "tabular-nums" }}>{m?.page_views || 0}</div>
-                            </div>
-                          </div>
-                        )}
-
-                        {c.status === "provisioning" && (
-                          <div style={{ fontSize: 12, color: "var(--hive-amber)", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "var(--hive-amber)", animation: "pulse 1.5s ease infinite" }} />
-                            Provisioning...
-                          </div>
-                        )}
-
-                        {/* Task progress */}
-                        {Number(c.tasks_total) > 0 && (
-                          <div style={{ marginBottom: 12 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                              <span style={{ fontSize: 10, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Tasks</span>
-                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)" }}>
-                                {Number(c.tasks_done)}/{Number(c.tasks_total)}
-                              </span>
-                            </div>
-                            <div style={{ height: 4, borderRadius: 2, background: "var(--hive-border)", overflow: "hidden" }}>
-                              <div style={{
-                                height: "100%", borderRadius: 2, transition: "width 0.3s",
-                                width: `${Math.round((Number(c.tasks_done) / Number(c.tasks_total)) * 100)}%`,
-                                background: Number(c.tasks_done) === Number(c.tasks_total) ? "var(--hive-green)" : "var(--hive-amber)",
-                              }} />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Footer: cycles + pending approvals */}
-                        <div style={{ paddingTop: 10, borderTop: "1px solid var(--hive-border-subtle)" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
-                              {cycleCount} cycle{cycleCount !== 1 ? "s" : ""}
-                            </div>
-                            {(c.pending_approvals || 0) > 0 && (
-                              <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                                padding: "2px 8px", borderRadius: 8,
-                                background: "var(--hive-amber-bg)", color: "var(--hive-amber)", border: "1px solid var(--hive-amber-border)" }}>
-                                {c.pending_approvals} pending
-                              </span>
-                            )}
-                          </div>
-                          {(c.pending_approval_details?.length || 0) > 0 && (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
-                              {c.pending_approval_details.map((a, i) => (
-                                <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
-                                  <span style={{
-                                    fontSize: 9, fontFamily: "var(--hive-mono)", fontWeight: 600, textTransform: "uppercase",
-                                    padding: "1px 5px", borderRadius: 4, letterSpacing: "0.03em",
-                                    background: a.gate_type === "kill_company" ? "var(--hive-red-bg, rgba(239,68,68,0.1))" : "var(--hive-surface-hover)",
-                                    color: a.gate_type === "kill_company" ? "var(--hive-red)" : "var(--hive-text-secondary)",
-                                    border: `1px solid ${a.gate_type === "kill_company" ? "var(--hive-red-border, rgba(239,68,68,0.2))" : "var(--hive-border)"}`,
-                                  }}>{a.gate_type.replace(/_/g, " ")}</span>
-                                  <span style={{ color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {a.title}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Portfolio snapshot charts */}
-          {portfolioCompanies.length >= 2 && (
-            <div>
-              <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
-                letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Portfolio snapshot</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                {/* MRR by company */}
-                <div style={{ padding: "14px 16px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
-                  <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>MRR</div>
-                  {(() => {
-                    const maxMrr = Math.max(...portfolioCompanies.map(c => c.latest_metrics?.mrr || 0), 1);
-                    return portfolioCompanies.map(c => {
-                      const mrr = c.latest_metrics?.mrr || 0;
-                      const pct = (mrr / maxMrr) * 100;
-                      return (
-                        <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                          <span style={{ width: 72, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
-                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: "var(--hive-border)", overflow: "hidden" }}>
-                            <div style={{ height: "100%", width: `${Math.max(pct, mrr > 0 ? 2 : 0)}%`, borderRadius: 3, background: mrr > 0 ? "var(--hive-green)" : "var(--hive-border-subtle)" }} />
-                          </div>
-                          <span style={{ width: 44, fontSize: 10, fontFamily: "var(--hive-mono)", color: mrr > 0 ? "var(--hive-green)" : "var(--hive-text-dim)", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtCurrency(mrr)}</span>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-                {/* Cycles by company */}
-                <div style={{ padding: "14px 16px", borderRadius: 8, background: "var(--hive-surface)", border: "1px solid var(--hive-border)" }}>
-                  <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>Cycles</div>
-                  {(() => {
-                    const maxCycles = Math.max(...portfolioCompanies.map(c => getCycleCount(c.id)), 1);
-                    return portfolioCompanies.map(c => {
-                      const count = getCycleCount(c.id);
-                      const pct = (count / maxCycles) * 100;
-                      return (
-                        <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                          <span style={{ width: 72, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
-                          <div style={{ flex: 1, height: 5, borderRadius: 3, background: "var(--hive-border)", overflow: "hidden" }}>
-                            <div style={{ height: "100%", width: `${Math.max(pct, count > 0 ? 2 : 0)}%`, borderRadius: 3, background: "var(--hive-accent)" }} />
-                          </div>
-                          <span style={{ width: 44, fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-secondary)", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{count}</span>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
               </div>
             </div>
           )}
@@ -1315,56 +1337,78 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div>
-              {/* Group by time */}
+              {/* Group by time, then by cycle_id */}
               {(() => {
-                const groups: Record<string, Action[]> = {};
+                const timeGroups: Record<string, Action[]> = {};
                 filteredActions.forEach(a => {
                   const g = a.finished_at ? timeGroup(a.finished_at) : "Older";
-                  if (!groups[g]) groups[g] = [];
-                  groups[g].push(a);
+                  if (!timeGroups[g]) timeGroups[g] = [];
+                  timeGroups[g].push(a);
                 });
-                return Object.entries(groups).map(([group, acts]) => (
-                  <div key={group} style={{ marginBottom: 24 }}>
-                    <div style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-dim)",
-                      letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid var(--hive-border-subtle)" }}>
-                      {group}
-                    </div>
-                    {acts.map(a => {
-                      const isFail = a.status === "failed";
-                      return (
-                        <div key={a.id} style={{
-                          display: "flex", gap: 12, padding: "10px 14px", borderRadius: 8,
-                          background: isFail ? "var(--hive-red-bg)" : "transparent",
-                          marginBottom: 2,
-                        }}>
-                          <div style={{ minWidth: 80 }}><AgentBadge agent={a.agent} /></div>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 13, color: isFail ? "var(--hive-red)" : "var(--hive-text-secondary)", lineHeight: 1.5 }}>
-                              {a.description || ''}
+                return Object.entries(timeGroups).map(([group, acts]) => {
+                  // Sub-group by cycle_id within each time group
+                  const cycleGroups: Record<string, Action[]> = {};
+                  acts.forEach(a => {
+                    const key = a.cycle_id || "__nocycle__";
+                    if (!cycleGroups[key]) cycleGroups[key] = [];
+                    cycleGroups[key].push(a);
+                  });
+                  return (
+                    <div key={group} style={{ marginBottom: 24 }}>
+                      <div style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-dim)",
+                        letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid var(--hive-border-subtle)" }}>
+                        {group}
+                      </div>
+                      {Object.entries(cycleGroups).map(([cycleKey, cycleActs]) => (
+                        <div key={cycleKey} style={{ marginBottom: cycleKey === "__nocycle__" ? 0 : 16 }}>
+                          {cycleKey !== "__nocycle__" && (
+                            <div style={{ fontSize: 11, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)",
+                              padding: "3px 8px", marginBottom: 4, background: "var(--hive-surface)",
+                              borderRadius: 4, display: "inline-block", border: "1px solid var(--hive-border-subtle)" }}>
+                              cycle {cycleKey.slice(0, 8)}
                             </div>
-                            {isFail && a.error && (
-                              <div style={{ fontSize: 12, color: "var(--hive-red)", marginTop: 4, fontFamily: "var(--hive-mono)", opacity: 0.8 }}>{a.error}</div>
-                            )}
-                            {isFail && a.reflection && (
-                              <div style={{ fontSize: 12, color: "var(--hive-purple)", marginTop: 4, padding: "6px 10px",
-                                background: "var(--hive-purple-bg)", borderRadius: 4, borderLeft: "2px solid var(--hive-purple-border)" }}>
-                                {a.reflection}
+                          )}
+                          {cycleActs.map(a => {
+                            const isFail = a.status === "failed";
+                            const dur = fmtDuration(a.started_at, a.finished_at);
+                            return (
+                              <div key={a.id} style={{
+                                display: "flex", gap: 12, padding: "10px 14px", borderRadius: 8,
+                                background: isFail ? "var(--hive-red-bg)" : "transparent",
+                                marginBottom: 2,
+                              }}>
+                                <div style={{ minWidth: 80 }}><AgentBadge agent={a.agent} /></div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: 13, color: isFail ? "var(--hive-red)" : "var(--hive-text-secondary)", lineHeight: 1.5 }}>
+                                    {a.description || ''}
+                                  </div>
+                                  {isFail && a.error && (
+                                    <div style={{ fontSize: 12, color: "var(--hive-red)", marginTop: 4, fontFamily: "var(--hive-mono)", opacity: 0.8 }}>{a.error}</div>
+                                  )}
+                                  {isFail && a.reflection && (
+                                    <div style={{ fontSize: 12, color: "var(--hive-purple)", marginTop: 4, padding: "6px 10px",
+                                      background: "var(--hive-purple-bg)", borderRadius: 4, borderLeft: "2px solid var(--hive-purple-border)" }}>
+                                      {a.reflection}
+                                    </div>
+                                  )}
+                                </div>
+                                <div style={{ minWidth: 90, textAlign: "right" }}>
+                                  <div style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                                    {a.company_slug ? <Link href={`/company/${a.company_slug}`} style={{ color: "var(--hive-text-dim)", textDecoration: "none" }}>{a.company_slug}</Link> : "—"}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                                    {a.finished_at ? timeAgo(a.finished_at) : ""}
+                                    {dur && <span style={{ color: "var(--hive-text-tertiary)", marginLeft: 4 }}>· {dur}</span>}
+                                  </div>
+                                </div>
                               </div>
-                            )}
-                          </div>
-                          <div style={{ minWidth: 80, textAlign: "right" }}>
-                            <div style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
-                              {a.company_slug ? <Link href={`/company/${a.company_slug}`} style={{ color: "var(--hive-text-dim)", textDecoration: "none" }}>{a.company_slug}</Link> : "—"}
-                            </div>
-                            <div style={{ fontSize: 12, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
-                              {a.finished_at ? timeAgo(a.finished_at) : ""}
-                            </div>
-                          </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
-                  </div>
-                ));
+                      ))}
+                    </div>
+                  );
+                });
               })()}
             </div>
           )}
@@ -1421,6 +1465,81 @@ export default function DashboardPage() {
       )}
 
       {/* ==================== TASKS TAB ==================== */}
+
+      {/* ==================== BACKLOG TAB ==================== */}
+      {activeTab === "backlog" && (
+        <div className="animate-in">
+          {backlogItems.length === 0 ? (
+            <div style={{ padding: 48, textAlign: "center", color: "var(--hive-text-secondary)", fontSize: 13 }}>
+              No backlog items found. Add items via the MCP tools or GitHub Issues.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
+              {(["blocked", "ready", "dispatched", "in_review", "done"] as const).map(col => {
+                const colItems = backlogItems.filter(i => i.status === col);
+                const colLabels: Record<string, string> = {
+                  blocked: "Blocked", ready: "Ready", dispatched: "Dispatched",
+                  in_review: "In Review", done: "Done",
+                };
+                const colColors: Record<string, string> = {
+                  blocked: "var(--hive-red)", ready: "var(--hive-amber)", dispatched: "var(--hive-blue)",
+                  in_review: "var(--hive-purple)", done: "var(--hive-green)",
+                };
+                return (
+                  <div key={col}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: colColors[col], fontFamily: "var(--hive-mono)",
+                        textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                        {colLabels[col]}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--hive-text-dim)", fontFamily: "var(--hive-mono)" }}>
+                        {colItems.length}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {colItems.length === 0 ? (
+                        <div style={{ padding: "12px 14px", background: "var(--hive-surface)", borderRadius: 8,
+                          border: "1px solid var(--hive-border-subtle)", fontSize: 12,
+                          color: "var(--hive-text-dim)", fontStyle: "italic" }}>
+                          Empty
+                        </div>
+                      ) : colItems.map(item => (
+                        <div key={item.id} style={{ padding: "10px 14px", background: "var(--hive-surface)", borderRadius: 8,
+                          border: "1px solid var(--hive-border)", display: "flex", flexDirection: "column", gap: 4 }}>
+                          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6 }}>
+                            <div style={{ fontSize: 12, color: "var(--hive-text)", lineHeight: 1.4, flex: 1 }}>
+                              {item.title}
+                            </div>
+                            <div style={{ fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)",
+                              flexShrink: 0, marginTop: 1 }}>P{item.priority}</div>
+                          </div>
+                          {item.description && (
+                            <div style={{ fontSize: 11, color: "var(--hive-text-secondary)", lineHeight: 1.4 }}>
+                              {item.description.length > 80 ? item.description.slice(0, 80) + "…" : item.description}
+                            </div>
+                          )}
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                            <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)",
+                              background: "var(--hive-bg)", border: "1px solid var(--hive-border-subtle)",
+                              padding: "1px 5px", borderRadius: 3 }}>
+                              {item.category}
+                            </span>
+                            {item.github_issue_number && (
+                              <span style={{ fontSize: 10, fontFamily: "var(--hive-mono)", color: "var(--hive-text-dim)" }}>
+                                #{item.github_issue_number}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Footer */}
       <div style={{ marginTop: 40, paddingTop: 16, borderTop: "1px solid var(--hive-border-subtle)",
