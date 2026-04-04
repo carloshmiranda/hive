@@ -1,20 +1,29 @@
 @import "tailwindcss";
 
 :root {
+  /* Surfaces — deeper separation so cards pop off the background */
   --hive-bg: #0c0c0f;
-  --hive-surface: #131318;
-  --hive-surface-hover: #1a1a21;
-  --hive-surface-raised: #18181f;
-  --hive-border: #25252e;
-  --hive-border-subtle: #1e1e26;
+  --hive-surface: #16161e;
+  --hive-surface-hover: #1d1d27;
+  --hive-surface-raised: #1c1c26;
+  --hive-border: #26263080;
+  --hive-border-subtle: #1e1e28;
+  --hive-card-highlight: rgba(255,255,255,0.04); /* subtle top-edge lift on cards */
+
+  /* Text */
   --hive-text: #e8e8ed;
   --hive-text-secondary: #9d9da8;
   --hive-text-tertiary: #6c6c78;
   --hive-text-dim: #4a4a55;
+
+  /* Amber — brand colour, warm */
   --hive-amber: #f0b944;
+  --hive-amber-vivid: #f5c842;
   --hive-amber-muted: #c49a30;
   --hive-amber-bg: rgba(240,185,68,0.08);
   --hive-amber-border: rgba(240,185,68,0.18);
+
+  /* Semantic colours */
   --hive-green: #34d399;
   --hive-green-bg: rgba(52,211,153,0.08);
   --hive-green-border: rgba(52,211,153,0.18);
@@ -27,8 +36,13 @@
   --hive-purple: #a78bfa;
   --hive-purple-bg: rgba(167,139,250,0.08);
   --hive-purple-border: rgba(167,139,250,0.18);
-  --hive-mono: 'IBM Plex Mono', monospace;
-  --hive-sans: 'Outfit', sans-serif;
+
+  /* Accent — neutral indigo for data bars/charts */
+  --hive-accent: #818cf8;
+
+  /* Typography — next/font variables injected by layout.tsx */
+  --hive-sans: var(--font-display, 'Space Grotesk', sans-serif);
+  --hive-mono: var(--font-mono, 'IBM Plex Mono', monospace);
 }
 
 body {
@@ -48,5 +62,10 @@ body {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 .animate-in { animation: fadeIn 0.3s ease both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-in { animation: none; }
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
 
 ::selection { background: rgba(240,185,68,0.2); color: #e8e8ed; }

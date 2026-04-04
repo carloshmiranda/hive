@@ -145,7 +145,7 @@ function AgentBadge({ agent }: { agent: string }) {
 // === TAB BUTTON ===
 function TabButton({ label, active, count, onClick }: { label: string; active: boolean; count?: number; onClick: () => void }) {
   return (
-    <button onClick={onClick} style={{
+    <button role="tab" aria-selected={active} onClick={onClick} style={{
       fontSize: 13, fontFamily: "var(--hive-sans)", fontWeight: active ? 600 : 400,
       padding: "8px 16px", paddingBottom: 10, borderRadius: 0, cursor: "pointer",
       background: "transparent",
@@ -190,6 +190,7 @@ export default function DashboardPage() {
   const [showAllTodos, setShowAllTodos] = useState(false);
   const [selectedApprovals, setSelectedApprovals] = useState<Set<string>>(new Set());
   const [batchProcessing, setBatchProcessing] = useState(false);
+  const [processingApprovals, setProcessingApprovals] = useState<Set<string>>(new Set());
   const [neonUsage, setNeonUsage] = useState<NeonUsage | null>(null);
 
   const fetchAll = useCallback(async () => {
@@ -255,15 +256,20 @@ export default function DashboardPage() {
     let note: string | undefined;
     if (decision === "rejected") {
       const input = prompt("Rejection reason (helps Scout avoid similar ideas):");
-      if (input === null) return; // user cancelled
+      if (input === null) return;
       note = input || undefined;
     }
-    const res = await fetch(`/api/approvals/${id}/decide`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision, note }),
-    });
-    if (res.ok) fetchAll();
+    setProcessingApprovals(prev => new Set(prev).add(id));
+    try {
+      const res = await fetch(`/api/approvals/${id}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision, note }),
+      });
+      if (res.ok) fetchAll();
+    } finally {
+      setProcessingApprovals(prev => { const next = new Set(prev); next.delete(id); return next; });
+    }
   };
 
   const sendDirective = async () => {
@@ -421,8 +427,16 @@ export default function DashboardPage() {
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 32, height: 32, background: "linear-gradient(135deg, #f0b944, #c49a30)", borderRadius: 6,
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800, color: "#0c0c0f" }}>H</div>
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <path d="M16 3L28 10V22L16 29L4 22V10L16 3Z" fill="url(#hiveLogoGrad)" />
+            <path d="M11.5 10.5V21.5M20.5 10.5V21.5M11.5 16H20.5" stroke="#0c0c0f" strokeWidth="2.5" strokeLinecap="round" />
+            <defs>
+              <linearGradient id="hiveLogoGrad" x1="4" y1="3" x2="28" y2="29" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#f5c842"/>
+                <stop offset="100%" stopColor="#c49a30"/>
+              </linearGradient>
+            </defs>
+          </svg>
           <div style={{ fontSize: 18, fontWeight: 700, color: "var(--hive-text)", letterSpacing: "-0.02em" }}>Hive</div>
         </div>
         {portfolio && (
@@ -452,7 +466,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid var(--hive-border-subtle)" }}>
+      <div role="tablist" aria-label="Dashboard sections" style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid var(--hive-border-subtle)" }}>
         <TabButton label="Overview" active={activeTab === "overview"} onClick={() => setActiveTab("overview")} />
         <TabButton label="Inbox" active={activeTab === "inbox"} count={inboxCount} onClick={() => setActiveTab("inbox")} />
         <TabButton label="Activity" active={activeTab === "activity"} onClick={() => setActiveTab("activity")} />
@@ -460,13 +474,15 @@ export default function DashboardPage() {
         <TabButton label="Backlog" active={activeTab === "backlog"} count={backlogItems.filter(i => i.status === "ready" || i.status === "dispatched").length || undefined} onClick={() => setActiveTab("backlog")} />
       </div>
 
+      {/* ==================== TAB PANELS ==================== */}
+      <main id="main-content">
+
       {/* ==================== OVERVIEW TAB ==================== */}
       {activeTab === "overview" && (
-        <div className="animate-in">
+        <div role="tabpanel" aria-label="Overview" className="animate-in">
           {/* Portfolio */}
           <div style={{ marginBottom: 28 }}>
-            <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
-              letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 12 }}>Portfolio</div>
+            <div style={{ fontSize: 13, fontFamily: "var(--hive-sans)", fontWeight: 600, color: "var(--hive-text-secondary)", marginBottom: 12 }}>Portfolio</div>
 
             {portfolioCompanies.length === 0 ? (
               <div style={{ padding: 48, textAlign: "center", background: "var(--hive-surface)", borderRadius: 10, border: "1px solid var(--hive-border)" }}>
@@ -650,8 +666,7 @@ export default function DashboardPage() {
           {todos.length > 0 && (
             <div style={{ marginBottom: 24 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
-                  letterSpacing: "0.06em", textTransform: "uppercase" }}>Needs your attention</div>
+                <div style={{ fontSize: 13, fontFamily: "var(--hive-sans)", fontWeight: 600, color: "var(--hive-text-secondary)" }}>Needs your attention</div>
                 <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
                   padding: "1px 6px", borderRadius: 8, minWidth: 18, textAlign: "center",
                   background: blockerCount > 0 ? "var(--hive-red-bg)" : "var(--hive-amber-bg)",
@@ -703,7 +718,7 @@ export default function DashboardPage() {
                         )}
                         {todo.dismissable && (
                           <button onClick={() => dismissTodo(todo.id)} aria-label="Dismiss" style={{
-                            width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                            width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center",
                             fontSize: 16, fontFamily: "var(--hive-mono)", borderRadius: 6, cursor: "pointer",
                             border: "1px solid var(--hive-border)", background: "transparent",
                             color: "var(--hive-text-tertiary)", lineHeight: 1,
@@ -803,7 +818,7 @@ export default function DashboardPage() {
                         if (res.ok) {
                           const data = await res.json();
                           alert(`✅ Cleanup complete: expired ${data.expired_count} proposals`);
-                          window.location.reload();
+                          fetchAll();
                         } else {
                           alert('❌ Cleanup failed');
                         }
@@ -833,7 +848,7 @@ export default function DashboardPage() {
                         if (res.ok) {
                           const data = await res.json();
                           alert(`🔴 Scout reset complete: ${data.expired_proposals} proposals expired, ${data.killed_companies} companies killed`);
-                          window.location.reload();
+                          fetchAll();
                         } else {
                           alert('❌ Reset failed');
                         }
@@ -900,8 +915,7 @@ export default function DashboardPage() {
           {actions.length > 0 && (
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div style={{ fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500, color: "var(--hive-text-secondary)",
-                  letterSpacing: "0.06em", textTransform: "uppercase" }}>Recent activity</div>
+                <div style={{ fontSize: 13, fontFamily: "var(--hive-sans)", fontWeight: 600, color: "var(--hive-text-secondary)" }}>Recent activity</div>
                 <button onClick={() => setActiveTab("activity")} style={{
                   fontSize: 12, color: "var(--hive-text-secondary)", background: "none", border: "none", cursor: "pointer",
                   fontFamily: "var(--hive-sans)",
@@ -933,7 +947,7 @@ export default function DashboardPage() {
 
       {/* ==================== INBOX TAB ==================== */}
       {activeTab === "inbox" && (
-        <div className="animate-in">
+        <div role="tabpanel" aria-label="Inbox" className="animate-in">
           {/* Batch action bar */}
           {approvals.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16,
@@ -1035,6 +1049,7 @@ export default function DashboardPage() {
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <input type="checkbox" checked={selectedApprovals.has(a.id)}
                                 onChange={() => toggleApprovalSelection(a.id)}
+                                aria-label={`Select proposal: ${proposal.name || a.title}`}
                                 style={{ accentColor: "var(--hive-amber)", width: 14, height: 14, cursor: "pointer", flexShrink: 0 }} />
                               <span style={{ fontSize: 16 }}>{isPortuguese ? "🇵🇹" : "🌍"}</span>
                               <span style={{ fontSize: 15, fontWeight: 600, color: "var(--hive-text)" }}>
@@ -1170,15 +1185,19 @@ export default function DashboardPage() {
 
                           {/* Action buttons */}
                           <div style={{ display: "flex", gap: 8 }}>
-                            <button onClick={() => handleApproval(a.id, "approved")} style={{
+                            <button onClick={() => handleApproval(a.id, "approved")}
+                              disabled={processingApprovals.has(a.id)} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                              borderRadius: 6, cursor: "pointer",
+                              borderRadius: 6, cursor: processingApprovals.has(a.id) ? "wait" : "pointer",
                               border: "1px solid var(--hive-green-border)", background: "var(--hive-green-bg)", color: "var(--hive-green)",
+                              opacity: processingApprovals.has(a.id) ? 0.5 : 1,
                             }}>Approve</button>
-                            <button onClick={() => handleApproval(a.id, "rejected")} style={{
+                            <button onClick={() => handleApproval(a.id, "rejected")}
+                              disabled={processingApprovals.has(a.id)} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                              borderRadius: 6, cursor: "pointer",
+                              borderRadius: 6, cursor: processingApprovals.has(a.id) ? "wait" : "pointer",
                               border: "1px solid var(--hive-border)", background: "transparent", color: "var(--hive-text-tertiary)",
+                              opacity: processingApprovals.has(a.id) ? 0.5 : 1,
                             }}>Pass</button>
                           </div>
                         </div>
@@ -1277,6 +1296,7 @@ export default function DashboardPage() {
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                             <input type="checkbox" checked={selectedApprovals.has(a.id)}
                               onChange={() => toggleApprovalSelection(a.id)}
+                              aria-label={`Select: ${a.title}`}
                               style={{ accentColor: gc.color, width: 14, height: 14, cursor: "pointer", flexShrink: 0 }} />
                             <span style={{ fontSize: 11, fontFamily: "var(--hive-mono)", fontWeight: 500,
                               padding: "2px 8px", borderRadius: 4, color: gc.color, background: gc.bg, border: `1px solid ${gc.border}` }}>
@@ -1292,15 +1312,19 @@ export default function DashboardPage() {
                           <div style={{ fontSize: 14, fontWeight: 500, color: "var(--hive-text)", marginBottom: 4 }}>{a.title}</div>
                           <div style={{ fontSize: 13, color: "var(--hive-text-secondary)", lineHeight: 1.6, marginBottom: 14 }}>{a.description || ''}</div>
                           <div style={{ display: "flex", gap: 8 }}>
-                            <button onClick={() => handleApproval(a.id, "approved")} style={{
+                            <button onClick={() => handleApproval(a.id, "approved")}
+                              disabled={processingApprovals.has(a.id)} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                              borderRadius: 6, cursor: "pointer",
+                              borderRadius: 6, cursor: processingApprovals.has(a.id) ? "wait" : "pointer",
                               border: "1px solid var(--hive-green-border)", background: "var(--hive-green-bg)", color: "var(--hive-green)",
+                              opacity: processingApprovals.has(a.id) ? 0.5 : 1,
                             }}>Approve</button>
-                            <button onClick={() => handleApproval(a.id, "rejected")} style={{
+                            <button onClick={() => handleApproval(a.id, "rejected")}
+                              disabled={processingApprovals.has(a.id)} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
-                              borderRadius: 6, cursor: "pointer",
+                              borderRadius: 6, cursor: processingApprovals.has(a.id) ? "wait" : "pointer",
                               border: "1px solid var(--hive-red-border)", background: "var(--hive-red-bg)", color: "var(--hive-red)",
+                              opacity: processingApprovals.has(a.id) ? 0.5 : 1,
                             }}>Reject</button>
                           </div>
                         </div>
@@ -1316,7 +1340,7 @@ export default function DashboardPage() {
 
       {/* ==================== ACTIVITY TAB ==================== */}
       {activeTab === "activity" && (
-        <div className="animate-in">
+        <div role="tabpanel" aria-label="Activity" className="animate-in">
           {/* Filters */}
           <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
             {[{ key: "all", label: "All" }, { key: "failed", label: "Failures" },
@@ -1417,7 +1441,7 @@ export default function DashboardPage() {
 
       {/* ==================== INTELLIGENCE TAB ==================== */}
       {activeTab === "intelligence" && (
-        <div className="animate-in">
+        <div role="tabpanel" aria-label="Intelligence" className="animate-in">
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 16, fontWeight: 600, color: "var(--hive-text)", marginBottom: 4 }}>What&apos;s working</div>
             <div style={{ fontSize: 13, color: "var(--hive-text-secondary)" }}>Intelligence extracted across all companies. Agents reference these when making decisions.</div>
@@ -1468,7 +1492,7 @@ export default function DashboardPage() {
 
       {/* ==================== BACKLOG TAB ==================== */}
       {activeTab === "backlog" && (
-        <div className="animate-in">
+        <div role="tabpanel" aria-label="Backlog" className="animate-in">
           {backlogItems.length === 0 ? (
             <div style={{ padding: 48, textAlign: "center", color: "var(--hive-text-secondary)", fontSize: 13 }}>
               No backlog items found. Add items via the MCP tools or GitHub Issues.
@@ -1540,6 +1564,8 @@ export default function DashboardPage() {
           )}
         </div>
       )}
+
+      </main>
 
       {/* Footer */}
       <div style={{ marginTop: 40, paddingTop: 16, borderTop: "1px solid var(--hive-border-subtle)",
