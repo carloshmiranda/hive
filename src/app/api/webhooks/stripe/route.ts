@@ -173,6 +173,88 @@ export async function POST(req: Request) {
       break;
     }
 
+    case "checkout.session.completed": {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const companySlug = session.metadata?.hive_company;
+      if (!companySlug) break;
+
+      const [company] = await sql`SELECT id FROM companies WHERE slug = ${companySlug}`;
+      if (!company) break;
+      setSentryTags({ company_id: company.id });
+
+      const amount = (session.amount_total || 0) / 100;
+
+      // Only count one-time payments here; subscription payments are handled by charge.succeeded
+      if (session.mode === "payment") {
+        await sql`
+          INSERT INTO metrics (company_id, date, revenue)
+          VALUES (${company.id}, ${today}, ${amount})
+          ON CONFLICT (company_id, date) DO UPDATE SET
+            revenue = metrics.revenue + ${amount}
+        `;
+      }
+
+      // Always log signups (new customer captured via checkout)
+      await sql`
+        INSERT INTO metrics (company_id, date, signups)
+        VALUES (${company.id}, ${today}, 1)
+        ON CONFLICT (company_id, date) DO UPDATE SET
+          signups = metrics.signups + 1
+      `;
+
+      await sql`
+        INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+        VALUES (${company.id}, 'ops', 'stripe_event',
+          ${`Checkout completed: ${session.mode} — €${amount} — ${session.customer_email || "no email"}`},
+          'success', now(), now())
+      `;
+      break;
+    }
+
+    case "customer.subscription.updated": {
+      const sub = event.data.object as Stripe.Subscription;
+      const companySlug = sub.metadata?.hive_company;
+      if (!companySlug) break;
+
+      const [company] = await sql`SELECT id FROM companies WHERE slug = ${companySlug}`;
+      if (!company) break;
+      setSentryTags({ company_id: company.id });
+
+      const prevAttr = (event.data.previous_attributes as Partial<Stripe.Subscription>) || {};
+      const item = sub.items.data[0];
+      const newMrr = item?.price?.recurring?.interval === "year"
+        ? (item.price.unit_amount || 0) / 1200
+        : (item.price.unit_amount || 0) / 100;
+
+      // Trial converted to paid
+      if (prevAttr.status === "trialing" && sub.status === "active") {
+        await sql`
+          INSERT INTO metrics (company_id, date, customers, mrr)
+          VALUES (${company.id}, ${today}, 1, ${newMrr})
+          ON CONFLICT (company_id, date) DO UPDATE SET
+            customers = metrics.customers + 1,
+            mrr = metrics.mrr + ${newMrr}
+        `;
+        await sql`
+          INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+          VALUES (${company.id}, 'ops', 'stripe_event',
+            ${`Trial converted to paid: +€${newMrr.toFixed(2)}/mo MRR`},
+            'success', now(), now())
+        `;
+      }
+
+      // Plan change (upgrade / downgrade)
+      if (prevAttr.items && sub.status === "active") {
+        await sql`
+          INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+          VALUES (${company.id}, 'ops', 'stripe_event',
+            ${`Subscription updated: now €${newMrr.toFixed(2)}/mo MRR`},
+            'success', now(), now())
+        `;
+      }
+      break;
+    }
+
     case "charge.refunded": {
       const charge = event.data.object as Stripe.Charge;
       const companySlug = charge.metadata?.hive_company;
@@ -222,7 +304,7 @@ export async function POST(req: Request) {
   const { getGitHubToken } = await import("@/lib/github-app");
   const ghPat = await getGitHubToken().catch(() => null) || process.env.GH_PAT;
   const ghRepo = process.env.GITHUB_REPOSITORY || "carloshmiranda/hive";
-  if (ghPat && ["charge.succeeded", "customer.subscription.created", "customer.subscription.deleted", "charge.refunded"].includes(event.type)) {
+  if (ghPat && ["charge.succeeded", "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "charge.refunded"].includes(event.type)) {
     try {
       const metadata = (event.data.object as any).metadata || {};
       await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
