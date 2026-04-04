@@ -71,7 +71,7 @@ async function mainDashboard(sql: ReturnType<typeof getDb>) {
       // Actions — exclude large output/input JSONB columns (~50KB each)
       sql`
         SELECT a.id, a.company_id, a.cycle_id, a.agent, a.action_type, a.status,
-          a.error, a.tokens_used, a.started_at, a.finished_at,
+          a.description, a.reflection, a.error, a.tokens_used, a.started_at, a.finished_at,
           c.slug as company_slug
         FROM agent_actions a
         LEFT JOIN companies c ON c.id = a.company_id
@@ -152,7 +152,7 @@ async function companyDetail(sql: ReturnType<typeof getDb>, slug: string) {
     sql`SELECT * FROM cycles WHERE company_id = ${company.id} ORDER BY cycle_number DESC LIMIT 20`,
     sql`
       SELECT a.id, a.company_id, a.cycle_id, a.agent, a.action_type, a.status,
-        a.error, a.tokens_used, a.started_at, a.finished_at,
+        a.description, a.reflection, a.error, a.tokens_used, a.started_at, a.finished_at,
         c.slug as company_slug
       FROM agent_actions a
       LEFT JOIN companies c ON c.id = a.company_id
