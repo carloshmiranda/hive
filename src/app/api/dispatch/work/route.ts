@@ -100,6 +100,13 @@ export async function POST(req: Request) {
   }
 
   if (health.recommendation === "wait") {
+    // Schedule self-retry after budget reset window (30min)
+    await qstashPublish("/api/dispatch/work", {
+      source: "budget_reset_retry",
+    }, {
+      deduplicationId: `dispatch-work-budget-retry-${new Date().toISOString().slice(0, 13)}`,
+      delay: 1800,
+    }).catch(() => {});
     return Response.json({
       ok: true,
       dispatched: null,

@@ -2,7 +2,6 @@ import { getDb } from "@/lib/db";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getSettingValue } from "@/lib/settings";
 import { setSentryTags } from "@/lib/sentry-tags";
-import { dispatchEvent } from "@/lib/dispatch";
 
 // Sentry webhook endpoint
 // Auth: HMAC-SHA256 signature verification via SENTRY_CLIENT_SECRET
@@ -122,23 +121,26 @@ export async function POST(req: Request) {
           )
         `;
 
-        // Dispatch Healer for error-level issues on created/triggered events
-        // Only for "error" and "fatal" levels — skip "warning", "info", etc.
+        // Route healer trigger through unified dispatcher (has health gate)
+        // Fire-and-forget to stay within Sentry's 1s response timeout
         const level = issue.level || "error";
         if ((level === "error" || level === "fatal") && body.action === "created") {
-          await dispatchEvent("healer_trigger", {
-            source: "sentry_webhook",
-            scope: companyId ? "company" : "systemic",
-            company_id: companyId,
-            reason: `Sentry ${level}: ${title.slice(0, 200)}`,
-            sentry_issue_id: String(issueId),
-            culprit,
-            level,
-            project: body.data?.project?.name || body.data?.project?.slug,
-            url: issue.permalink || `https://sentry.io/organizations/${body.data?.organization?.slug}/issues/${issueId}/`,
-          }).catch((e: unknown) => {
-            console.warn("[sentry-webhook] Healer dispatch failed:", e instanceof Error ? e.message : String(e));
-          });
+          const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+          const cronSecret = process.env.CRON_SECRET;
+          // Determine companySlug for dispatch hint
+          const companySlugHint = tags.company || tags.environment || undefined;
+          fetch(`${HIVE_URL}/api/dispatch/work`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${cronSecret}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              company_slug: companySlugHint,
+              urgency_bonus: 10,
+            }),
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => {});
         }
 
       } else if (isMetricAlert) {

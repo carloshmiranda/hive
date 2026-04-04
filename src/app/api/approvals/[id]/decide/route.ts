@@ -204,6 +204,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
   }
 
+  // After side effects complete, trigger dispatch work (fire-and-forget)
+  if (decision === "approved") {
+    const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+    const cronSecret = process.env.CRON_SECRET;
+    fetch(`${HIVE_URL}/api/dispatch/work`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cronSecret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ urgency_bonus: 20 }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  }
+
   // Rejection side effects
   if (decision === "rejected") {
     switch (approval.gate_type) {

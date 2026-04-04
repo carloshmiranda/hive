@@ -118,6 +118,19 @@ async function collectMetrics(req: Request, companySlugs?: string[]) {
         })(),
       ]);
 
+      // After successful metrics write, trigger dispatch/work (fire-and-forget)
+      // Metrics changes may affect company priority scores — let dispatcher re-evaluate
+      const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+      fetch(`${HIVE_URL}/api/dispatch/work`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.CRON_SECRET}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ company_slug: company.slug }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {});
+
       return { slug: company.slug, views, pricing_clicks: pricingClicks, affiliate_clicks: affiliateClicks, smoke_test_pass: smokeTestResult, source };
     } catch (e) {
       console.error(`Failed to collect metrics for ${company.slug}:`, e);

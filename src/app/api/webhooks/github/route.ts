@@ -430,6 +430,21 @@ export async function POST(req: Request) {
                   deduplicationId: `metrics-${prRepo}-${prNumber}`,
                 }).catch(() => {});
 
+                // Trigger dispatch/work after company repo PR merge (fire-and-forget)
+                if (prRepo && prRepo !== "hive") {
+                  const HIVE_URL = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+                  const cronSecret = process.env.CRON_SECRET;
+                  fetch(`${HIVE_URL}/api/dispatch/work`, {
+                    method: "POST",
+                    headers: {
+                      Authorization: `Bearer ${cronSecret}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ company_slug: prRepo }),
+                    signal: AbortSignal.timeout(5000),
+                  }).catch(() => {});
+                }
+
                 // Telegram notification
                 import("@/lib/telegram").then(({ notifyHive }) =>
                   notifyHive({
