@@ -75,6 +75,7 @@ const PG_TYPES = new Set([
   "numeric", "decimal", "text", "varchar", "char", "boolean", "bool",
   "json", "jsonb", "date", "timestamp", "timestamptz", "interval",
   "uuid", "bytea", "inet", "cidr", "macaddr", "money",
+  "vector",  // pgvector extension type
 ]);
 
 // ─── Types ───────────────────────────────────────────────────────────

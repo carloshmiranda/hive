@@ -131,11 +131,12 @@ export async function POST(req: Request) {
 
   // --- 4a. P0 backlog items ---
   const p0Items = await sql`
-    SELECT id, slug, title, description, acceptance_criteria, company_slug
-    FROM hive_backlog
-    WHERE priority = 'P0'
-    AND status IN ('ready', 'approved')
-    ORDER BY created_at ASC
+    SELECT hb.id, hb.title, hb.description, hb.spec, c.slug as company_slug
+    FROM hive_backlog hb
+    LEFT JOIN companies c ON c.id = hb.company_id
+    WHERE hb.priority = 'P0'
+    AND hb.status IN ('ready', 'approved')
+    ORDER BY hb.created_at ASC
     LIMIT 5
   `.catch((e: any) => { console.warn("[dispatch/work] p0 query failed:", e?.message); return [] as any[]; });
 
@@ -152,18 +153,17 @@ export async function POST(req: Request) {
       await dispatchEvent("feature_request", {
         source: "unified_dispatcher",
         backlog_item_id: p0Item.id,
-        backlog_item_slug: p0Item.slug,
         title: p0Item.title,
         description: p0Item.description,
-        acceptance_criteria: p0Item.acceptance_criteria,
+        acceptance_criteria: p0Item.spec,
         company: p0Item.company_slug || null,
         priority: "P0",
         priority_score: score.total,
       });
-      console.log(`[dispatch/work] dispatched P0 backlog: ${p0Item.slug} (score ${score.total})`);
+      console.log(`[dispatch/work] dispatched P0 backlog: ${p0Item.id} (score ${score.total})`);
       return Response.json({
         ok: true,
-        dispatched: { type: "p0_backlog", target: p0Item.slug, priority_score: score.total },
+        dispatched: { type: "p0_backlog", target: p0Item.id, priority_score: score.total },
       });
     }
   }
@@ -208,11 +208,12 @@ export async function POST(req: Request) {
 
   // --- 4c. P1 backlog items ---
   const p1Items = await sql`
-    SELECT id, slug, title, description, acceptance_criteria, company_slug
-    FROM hive_backlog
-    WHERE priority = 'P1'
-    AND status IN ('ready', 'approved')
-    ORDER BY created_at ASC
+    SELECT hb.id, hb.title, hb.description, hb.spec, c.slug as company_slug
+    FROM hive_backlog hb
+    LEFT JOIN companies c ON c.id = hb.company_id
+    WHERE hb.priority = 'P1'
+    AND hb.status IN ('ready', 'approved')
+    ORDER BY hb.created_at ASC
     LIMIT 5
   `.catch((e: any) => { console.warn("[dispatch/work] p1 query failed:", e?.message); return [] as any[]; });
 
@@ -228,15 +229,14 @@ export async function POST(req: Request) {
       await dispatchEvent("feature_request", {
         source: "unified_dispatcher",
         backlog_item_id: p1Item.id,
-        backlog_item_slug: p1Item.slug,
         title: p1Item.title,
         description: p1Item.description,
-        acceptance_criteria: p1Item.acceptance_criteria,
+        acceptance_criteria: p1Item.spec,
         company: p1Item.company_slug || null,
         priority: "P1",
         priority_score: score.total,
       });
-      console.log(`[dispatch/work] dispatched P1 backlog: ${p1Item.slug} (score ${score.total})`);
+      console.log(`[dispatch/work] dispatched P1 backlog: ${p1Item.id} (score ${score.total})`);
       return Response.json({
         ok: true,
         dispatched: {
