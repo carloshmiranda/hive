@@ -121,6 +121,39 @@ Format: `[agent] action: result (context)` — consistent for Sentinel parsing.
 - NEVER put literal `${{ }}` in prompt text — GitHub evaluates ALL expressions, even in multi-line strings
 - Files: `hive-<agent>.yml` (Hive), `hive-<function>.yml` (company repos)
 
+## Model Selection
+
+Choose the right model for the task. Over-indexing on Opus burns budget; under-indexing on Haiku loses quality.
+
+| Task | Model | Rationale |
+|------|-------|-----------|
+| Codebase exploration, file reading, grep | Haiku | Fast, cheap — no reasoning needed |
+| Routine coding, bug fixes, refactoring | Sonnet | Best quality/cost for daily work |
+| Architecture, security design, complex trade-offs | Opus | Reasoning-intensive decisions justify the cost |
+| Agent dispatches (Ops, Growth, Outreach) | Haiku or Sonnet via OpenRouter | Keep Claude budget for Engineer + CEO |
+
+## Docs-Lookup Rule
+
+**Never rely on training data for external SDK or API method signatures.** APIs change. Training data is stale.
+
+Before writing code that calls any external SDK, library, or API (Stripe, Neon, Resend, QStash, Sentry, Next.js App Router internals, etc.):
+1. Check if the method signature is already used correctly in the codebase (Grep first)
+2. If uncertain: use the `make-plan` skill or `WebFetch` to verify against current official docs
+3. If a method raises a type error or behaves unexpectedly: fetch the docs before guessing a fix
+
+This rule applies to **every** external dependency — including ones you're confident about.
+
+## Build Error Minimal Intervention
+
+When fixing a TypeScript or build error, the fix must be **minimal and surgical**:
+- Fix only the breaking change — do not refactor surrounding code
+- Touch less than 5% of the modified file
+- Do not add error handling, comments, or type annotations to code you didn't break
+- Do not rename variables or restructure unrelated logic
+- If the error is in a file you don't fully understand, read the full file before touching it
+
+**The goal is a passing build with zero unintended changes.** If the minimal fix seems risky, escalate — don't expand scope.
+
 ## Code Standards
 
 - TypeScript everywhere, Next.js App Router, Tailwind CSS
