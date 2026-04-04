@@ -54,9 +54,29 @@ Verification subagent must check:
 3. No regressions — do adjacent features still work?
 4. Edge runtime compliance — no Node.js-only imports in middleware/edge routes
 
-**If any criterion FAILs**: Do NOT proceed to Step 3. Return to Step 1 with the failure details as context for a fix subagent. Retry up to 2 times before escalating to Carlos.
+**If any criterion FAILs**: Do NOT proceed to Step 3a. Return to Step 1 with the failure details as context for a fix subagent. Retry up to 2 times before escalating to Carlos.
 
-#### Step 3: Anti-Pattern Subagent
+#### Step 3a: ts-review Gate
+
+Invoke the `ts-review` skill with the diff of all changes in this phase.
+
+The skill checks: TypeScript errors (BLOCKING), edge runtime violations (BLOCKING), App Router violations (BLOCKING — route.ts exports, `<img>` tags, SQL string interpolation, `'use client'` on pages), missing error handling at API boundaries (WARN), console.log leaks (WARN).
+
+**If BLOCKED**: Do NOT proceed to Step 3b. Dispatch a fix subagent with the blocking issue list from the ts-review report. Re-run ts-review after the fix. Max 2 fix attempts before escalating to Carlos.
+
+**If PASS**: Proceed to Step 3b.
+
+#### Step 3b: security-scan Gate
+
+Invoke the `security-scan` skill with the diff of all changes in this phase.
+
+The skill runs three stages: Red Team (attack surface — injection, auth gaps, data exposure, secrets), Blue Team (defenses — input validation, sanitization, rate limiting, CSRF), Auditor (Hive standards + OWASP Top 10 quick check).
+
+**If BLOCKED on CRITICAL or HIGH**: Do NOT proceed to Step 4. Dispatch a fix subagent with the blocking issue list and the recommended fix pattern from the security-scan report. Re-run security-scan after the fix. Max 2 fix attempts before escalating to Carlos.
+
+**If PASS (or MEDIUM/LOW only)**: Proceed to Step 4.
+
+#### Step 4: Anti-Pattern Subagent
 
 Deploy an anti-pattern review subagent with:
 - The diff of all changes in this phase
@@ -65,7 +85,7 @@ Deploy an anti-pattern review subagent with:
 If findings are **HIGH severity** (security, data loss risk): block and fix before committing.
 If findings are **LOW/MEDIUM**: note them, continue.
 
-#### Step 4: Code Quality Subagent
+#### Step 5: Code Quality Subagent
 
 Deploy a code quality subagent with:
 - The diff of all changes in this phase
@@ -73,9 +93,9 @@ Deploy a code quality subagent with:
 
 If duplicates found: fix before committing.
 
-#### Step 5: Commit Subagent
+#### Step 6: Commit Subagent
 
-Only reached if Steps 2–4 pass (or only LOW severity issues found in 3–4).
+Only reached if Steps 2–5 pass (or only LOW severity issues found in Steps 4–5).
 
 Deploy a commit subagent with:
 - The list of modified files
@@ -113,6 +133,8 @@ After each phase, report:
 
 Commit: [SHA] — [message]
 Verification: all [N] criteria PASS
+ts-review: PASS / [count] WARNs noted
+security-scan: PASS / [count] MEDIUM issues noted
 Anti-patterns: CLEAN / [count] LOW severity noted
 Quality: [summary]
 
