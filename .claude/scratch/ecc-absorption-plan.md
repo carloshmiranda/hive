@@ -2,7 +2,7 @@
 
 **Source:** https://github.com/affaan-m/everything-claude-code
 **Date:** 2026-04-04
-**Status:** Phase A complete — Phase B in progress
+**Status:** Phase A complete — Phase B complete — Phase C next
 
 ## Phase A (DONE): Hook Enforcement + Model Matrix + Build Error Rule + Docs-Lookup
 - [x] PostToolUse:Write hook (console.log check, edge runtime check) — `.claude/hooks/post-write-check.sh`
@@ -13,11 +13,11 @@
 - [x] CLAUDE.md: build error minimal intervention rule
 - [x] .claude/skills/ts-guard/SKILL.md
 
-## Phase B (next PR): TypeScript Reviewer + Security Reviewer + Context Injection
-- [ ] .claude/skills/ts-review/SKILL.md
-- [ ] .claude/skills/security-scan/SKILL.md
-- [ ] Context split: dev.md, research.md, review.md carved from CLAUDE.md
-- [ ] Update /do SKILL.md: Phase 3a (TS review) + Phase 3b (security check)
+## Phase B (DONE): TypeScript Reviewer + Security Reviewer + Context Injection
+- [x] .claude/skills/ts-review/SKILL.md
+- [x] .claude/skills/security-scan/SKILL.md
+- [x] Context split: dev.md, research.md, review.md carved from CLAUDE.md
+- [x] Update /do SKILL.md: Phase 3a (TS review) + Phase 3b (security check)
 
 ## Phase C: Growth/SEO Skills + TDD for Critical Paths
 - [ ] Growth agent prompt: SEO audit, content brief, CRO checklist, email copy review
