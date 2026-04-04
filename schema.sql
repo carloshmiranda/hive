@@ -575,3 +575,60 @@ CREATE INDEX idx_qa_runs_started ON qa_runs(started_at);
 CREATE INDEX idx_qa_runs_workflow ON qa_runs(workflow_run_id) WHERE workflow_run_id IS NOT NULL;
 CREATE INDEX idx_qa_test_results_run ON qa_test_results(qa_run_id);
 CREATE INDEX idx_qa_test_results_status ON qa_test_results(status);
+
+-- ============================================================================
+-- Continuous Learning Table (ECC Phase D)
+-- ============================================================================
+
+-- learning_entries: reusable patterns discovered during agent cycles.
+-- Unlike decision_log (per-company decisions), learning_entries capture
+-- cross-company patterns and anti-patterns that improve agent quality over time.
+-- Confidence increases each time the pattern is validated; drops on contradiction.
+CREATE TABLE learning_entries (
+  id               TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+
+  -- Pattern identity
+  agent            TEXT NOT NULL CHECK (agent IN (
+                     'engineer', 'growth', 'outreach', 'ceo',
+                     'scout', 'ops', 'evolver', 'healer', 'any'
+                   )),
+  category         TEXT NOT NULL CHECK (category IN (
+                     'pattern',        -- positive pattern: do this
+                     'anti_pattern',   -- negative pattern: avoid this
+                     'gotcha',         -- silent failure / edge case
+                     'optimization'    -- speed/cost/quality improvement
+                   )),
+  title            TEXT NOT NULL,            -- short label, e.g. "always parameterize Neon queries"
+  description      TEXT NOT NULL,            -- full explanation of the pattern
+  source           TEXT NOT NULL CHECK (source IN (
+                     'cycle_output',   -- discovered in agent cycle output
+                     'mistake',        -- from MISTAKES.md additions
+                     'pr_review',      -- from PR review feedback
+                     'manual'          -- Carlos entered directly
+                   )),
+
+  -- Evidence and context
+  company_id       TEXT REFERENCES companies(id) ON DELETE SET NULL, -- nullable: cross-company patterns have no company_id
+  cycle_id         TEXT REFERENCES cycles(id) ON DELETE SET NULL,
+  evidence         TEXT,                     -- concrete example (code snippet, log line, output excerpt)
+  tags             TEXT[] DEFAULT '{}',      -- searchable tags: ['neon', 'auth', 'stripe', 'edge-runtime', ...]
+
+  -- Confidence lifecycle
+  confidence       NUMERIC(4,3) NOT NULL DEFAULT 0.500  -- 0.000–1.000; starts at 0.5
+                     CHECK (confidence >= 0 AND confidence <= 1),
+  validation_count INTEGER NOT NULL DEFAULT 0,          -- times this pattern was confirmed
+  contradiction_count INTEGER NOT NULL DEFAULT 0,        -- times this pattern was contradicted
+
+  -- Audit
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_validated_at TIMESTAMPTZ,                        -- when confidence was last updated
+  is_active        BOOLEAN NOT NULL DEFAULT true        -- false = deprecated/superseded
+);
+
+CREATE INDEX idx_learning_agent ON learning_entries(agent);
+CREATE INDEX idx_learning_category ON learning_entries(category);
+CREATE INDEX idx_learning_confidence ON learning_entries(confidence DESC) WHERE is_active = true;
+CREATE INDEX idx_learning_company ON learning_entries(company_id) WHERE company_id IS NOT NULL;
+CREATE INDEX idx_learning_tags ON learning_entries USING gin(tags);
+CREATE INDEX idx_learning_active ON learning_entries(created_at DESC) WHERE is_active = true;
