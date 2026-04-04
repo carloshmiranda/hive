@@ -137,7 +137,7 @@ export async function POST(req: Request) {
     AND status IN ('ready', 'approved')
     ORDER BY created_at ASC
     LIMIT 5
-  `.catch(() => [] as any[]);
+  `.catch((e: any) => { console.warn("[dispatch/work] p0 query failed:", e?.message); return [] as any[]; });
 
   if (p0Items.length > 0) {
     // Skip items claimed by an interactive Claude Code session
@@ -181,7 +181,7 @@ export async function POST(req: Request) {
     HAVING COUNT(*) FILTER (WHERE aa.status = 'failed') >= 3
     ORDER BY recent_failures DESC
     LIMIT 1
-  `.catch(() => [] as any[]);
+  `.catch((e: any) => { console.warn("[dispatch/work] healer query failed:", e?.message); return [] as any[]; });
 
   if (healerCandidates.length > 0) {
     const candidate = healerCandidates[0];
@@ -214,7 +214,7 @@ export async function POST(req: Request) {
     AND status IN ('ready', 'approved')
     ORDER BY created_at ASC
     LIMIT 5
-  `.catch(() => [] as any[]);
+  `.catch((e: any) => { console.warn("[dispatch/work] p1 query failed:", e?.message); return [] as any[]; });
 
   if (p1Items.length > 0) {
     let p1Item = null;
@@ -265,7 +265,7 @@ export async function POST(req: Request) {
     FROM companies c
     WHERE c.status IN ('mvp', 'active')
     ORDER BY c.created_at ASC
-  `.catch(() => [] as any[]);
+  `.catch((e: any) => { console.warn("[dispatch/work] company candidates query failed:", e?.message); return [] as any[]; });
 
   if (companyCandidates.length > 0) {
     // Filter out companies with active brain agents
@@ -274,7 +274,7 @@ export async function POST(req: Request) {
       WHERE agent IN ('ceo', 'engineer')
       AND status = 'running'
       AND started_at > NOW() - INTERVAL '2 hours'
-    `.catch(() => [] as any[]);
+    `.catch((e: any) => { console.warn("[dispatch/work] running cycles query failed:", e?.message); return [] as any[]; });
     const runningIds = new Set(runningCycles.map((r: any) => r.company_id));
 
     // Validate companySlugHint against actual company slugs
@@ -362,7 +362,7 @@ export async function POST(req: Request) {
     )
     ORDER BY c.created_at ASC
     LIMIT 1
-  `.catch(() => [] as any[]);
+  `.catch((e: any) => { console.warn("[dispatch/work] growth query failed:", e?.message); return [] as any[]; });
 
   if (growthCandidates.length > 0) {
     const growthTarget = growthCandidates[0];
