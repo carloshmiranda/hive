@@ -1021,3 +1021,10 @@ NEVER use `git push origin main`. NEVER skip the branch step.
 **Fix applied:** Refactored to CTE (`WITH relevant AS (...)`) that pre-filters the rows once. Rate/failures/total computed from the CTE — each condition appears exactly once.
 **Prevention:** Any SQL expression repeated 3+ times in the same query is a smell. Extract to CTE or derived table. Tagged template literals can't use JS variables for SQL fragments, but CTEs eliminate the need.
 **Affects:** hive
+
+### 2026-04-04 QStash `/v2/publish/{url}` with `Upstash-Cron` does not reliably create a recurring schedule
+**What happened:** Used `POST /v2/publish/https://...` with `Upstash-Cron: 0 6 * * *` header intending to create a persistent daily schedule. Response was `{"messageId": "msg_..."}` — not a `scheduleId`. Listing `/v2/schedules` showed the cron was never registered.
+**Root cause:** The `publish` endpoint delivers messages; `Upstash-Cron` on publish is meant for one-shot delayed delivery, not persistent schedules. The canonical endpoint for recurring schedules is `/v2/schedules/{url}`.
+**Fix applied:** Re-issued to `POST /v2/schedules/https://hive-phi.vercel.app/api/cron/knowledge` → received `{"scheduleId": "scd_7KCo28rVVUi8YMke7zdeS1YkFPdh"}`.
+**Prevention:** Always use `/v2/schedules/{url}` for recurring QStash schedules. Verify by calling `GET /v2/schedules` and confirming a `scd_` prefixed entry appears. A `messageId` response = one-time publish only.
+**Affects:** hive
