@@ -15,6 +15,15 @@
 
 ---
 
+### 2026-04-04 WebFetch returns placeholder/stub content (~133-139 chars) for some GitHub raw URLs
+**What happened:** During the blog skills import session, WebFetch returned placeholder-looking content (~133-139 chars) for ~5 of the 22 SKILL.md files fetched from raw.githubusercontent.com. The content appeared to be a short stub rather than the real file content.
+**Root cause:** WebFetch has a 15-minute self-cleaning cache. Fetching many URLs in rapid succession from the same domain can occasionally return cached or rate-limited stub responses. GitHub's raw content CDN may also 429 or return partial responses under burst load.
+**Fix applied:** Re-fetched affected files individually after a brief pause. Cross-checked file sizes against expected content length to detect truncation.
+**Prevention:** When bulk-fetching multiple files via WebFetch, verify response length is plausible (SKILL.md files should be 500+ chars). If content is suspiciously short (<200 chars), re-fetch. Prefer `gh api` or `curl` via Bash for bulk raw file downloads from GitHub — more reliable than WebFetch for burst requests.
+**Affects:** hive
+
+---
+
 ### 2026-04-04 MCP hive_backlog_update fails silently with truncated UUID
 **What happened:** Called `mcp__hive__hive_backlog_update` with an 8-char truncated UUID (e.g. `30f77f16`). Tool returned "item not found" with no error — silent failure.
 **Root cause:** The MCP tool uses exact UUID match in SQL. Postgres UUIDs are 36 chars (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). Partial string doesn't match.
