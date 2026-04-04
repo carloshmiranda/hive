@@ -7,7 +7,7 @@ import { flagProblemStatementsAsNeedingDecomposition, isCompanySpecific } from "
 import { qstashPublish } from "@/lib/qstash";
 import { queuePop, queueRebuild, queueSyncItem, acquireEngineerLock, releaseEngineerLock, getEngineerLock } from "@/lib/redis-cache";
 import { sanitizeTaskInput, hasSuspiciousPatterns } from "@/lib/input-sanitizer";
-import { setSentryTags, addDispatchBreadcrumb, withSpan } from "@/lib/sentry-tags";
+import { setSentryTags, addDispatchBreadcrumb } from "@/lib/sentry-tags";
 import { writeCompletionReportByDispatchId, type CompletionReport } from "@/lib/completion-report";
 import type { PRAnalysis } from "@/lib/pr-risk-scoring";
 import { markTaskAsStealable, claimStealableTask, type WorkStealingResult } from "@/lib/work-stealing";
@@ -368,6 +368,7 @@ async function handleEscalatedPR(
     retries: 2,
     deduplicationId: `ci-fix-dispatch-${pr.number}-${Date.now().toString(36)}`,
     failureCallback: true,
+    flowControl: { key: "engineer", parallelism: 1 },
   });
 
   await sql`
@@ -2408,121 +2409,88 @@ export async function POST(req: Request) {
       },
     },
   };
-  // Intent registration: announce the planned work before dispatching.
-  // Other agents reading system state will see this as "planned" and avoid conflicts.
-  await sql`
+  // Optimistic dispatch: log action + claim the item BEFORE firing QStash.
+  // QStash Flow Control (parallelism: 1) prevents two concurrent engineer dispatches
+  // from reaching chain-dispatch simultaneously. The optimistic claim provides
+  // defense-in-depth against race conditions at the DB level.
+  const [dispatchAction] = await sql`
     INSERT INTO agent_actions (agent, action_type, status, description, started_at)
-    VALUES ('engineer', 'feature_request', 'pending',
-      ${`[intent] Will dispatch: "${topItem.title}" (${topItem.priority}, attempt ${attemptCount + 1})`},
+    VALUES ('engineer', 'feature_request', 'running',
+      ${`Backlog dispatch: "${topItem.title}" (${topItem.priority})`},
       NOW())
-  `.catch(() => {});
+    RETURNING id
+  `.catch(() => [{ id: null }]);
 
-  const payloadStr = JSON.stringify(dispatchPayload);
+  // Acquire Redis engineer lock — fast path for future engineer_busy checks.
+  if (dispatchAction?.id) {
+    acquireEngineerLock(String(dispatchAction.id)).catch(() => {});
+  }
+
+  // Claim the item with race condition protection — if another process already
+  // dispatched it, the UPDATE returns 0 rows and we abort before firing QStash.
+  const updateResult = await sql`
+    UPDATE hive_backlog
+    SET status = 'dispatched', dispatched_at = NOW(),
+        dispatch_id = ${dispatchAction?.id || null}
+    WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
+    RETURNING id
+  `.catch(() => []);
+
+  if (updateResult.length === 0) {
+    console.warn(`[backlog] Race condition: item ${topItem.id} was already dispatched by another process`);
+    return Response.json({ dispatched: false, reason: "already_dispatched", item_id: topItem.id });
+  }
+
+  // Dispatch via QStash → chain-dispatch → GitHub Actions.
+  // flowControl ensures QStash delivers at most 1 engineer message at a time;
+  // excess messages queue automatically and deliver when the in-flight one completes.
+  // This replaces the direct GitHub fetch and removes the need for per-dispatch DB polling.
+  const chainPayload: Record<string, unknown> = {
+    event_type: dispatchPayload.event_type,
+    ...dispatchPayload.client_payload,
+  };
+  const payloadStr = JSON.stringify(chainPayload);
   console.log(`[backlog] Dispatch payload size: ${payloadStr.length} bytes`);
+
   addDispatchBreadcrumb({
-    message: `GitHub dispatch: repository_dispatch engineer_task for "${topItem.title}"`,
+    message: `QStash dispatch: engineer_task for "${topItem.title}"`,
     category: "github",
     data: { backlog_id: topItem.id, priority: topItem.priority, attempt: attemptCount + 1, payload_bytes: payloadStr.length },
   });
 
-  // Sentry performance span: measures GitHub API call duration for tracing
-  const res = await withSpan(
-    "GitHub: repository_dispatch",
-    "http.client",
-    {
-      "http.method": "POST",
-      "http.url": "https://api.github.com/repos/carloshmiranda/hive/dispatches",
-      "backlog.item_id": topItem.id,
-      "backlog.priority": topItem.priority,
-      "backlog.title": topItem.title.slice(0, 100),
-      "backlog.attempt": attemptCount + 1,
-    },
-    async (span) => {
-      const response = await fetch("https://api.github.com/repos/carloshmiranda/hive/dispatches", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${ghPat}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
-        body: payloadStr,
-        signal: AbortSignal.timeout(10000),
-      });
-      span?.setAttributes({ "http.status_code": response.status });
-      return response;
-    }
-  );
+  const qstashResult = await qstashPublish("/api/dispatch/chain-dispatch", chainPayload, {
+    retries: 2,
+    deduplicationId: `engineer-dispatch-${topItem.id}-${attemptCount}`,
+    failureCallback: true,
+    flowControl: { key: "engineer", parallelism: 1 },
+  });
 
-  if (res.ok || res.status === 204) {
-    // Log the dispatch as an agent_action and capture its ID for tracing
-    const [dispatchAction] = await sql`
-      INSERT INTO agent_actions (agent, action_type, status, description, started_at)
-      VALUES ('engineer', 'feature_request', 'running',
-        ${`Backlog dispatch: "${topItem.title}" (${topItem.priority})`},
-        NOW())
-      RETURNING id
-    `.catch(() => [{ id: null }]);
+  // Reset cooldown for dispatched item
+  await resetBacklogItemCooldown(topItem.id);
+  syncIssueForBacklog(sql, topItem.id, "dispatched");
 
-    // Acquire Redis engineer lock — fast path for future engineer_busy checks.
-    // If Redis is down, the DB query in the busy check is the fallback (no functionality lost).
-    if (dispatchAction?.id) {
-      acquireEngineerLock(String(dispatchAction.id)).catch(() => {});
-    }
+  const dispatchType = isChainDispatch ? "chain" : "manual";
+  console.log(`[backlog] ${dispatchType} dispatch: "${topItem.title}" (${topItem.priority}, score: ${topItem.priority_score})${attemptCount > 0 ? ` attempt ${attemptCount + 1}` : ""}${qstashResult ? ` messageId=${qstashResult.messageId}` : " (direct fallback)"}`);
 
-    // Mark as dispatched with race condition protection + link dispatch_id
-    const updateResult = await sql`
-      UPDATE hive_backlog
-      SET status = 'dispatched', dispatched_at = NOW(),
-          dispatch_id = ${dispatchAction?.id || null}
-      WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
-      RETURNING id
-    `.catch(() => []);
+  addDispatchBreadcrumb({
+    message: `Dispatch success: "${topItem.title}" → Engineer via QStash (${dispatchType})`,
+    category: "dispatch",
+    data: { backlog_id: topItem.id, dispatch_action_id: dispatchAction?.id, attempt: attemptCount + 1, qstash_message_id: qstashResult?.messageId },
+  });
 
-    if (updateResult.length === 0) {
-      console.warn(`[backlog] Race condition: item ${topItem.id} was already dispatched by another process`);
-      return Response.json({ dispatched: false, reason: "already_dispatched", item_id: topItem.id });
-    }
+  // Notify via Telegram
+  const issueRef = topItem.github_issue_number ? ` #${topItem.github_issue_number}` : "";
+  await qstashPublish("/api/notify", {
+    agent: "backlog",
+    action: "dispatch",
+    company: "_hive",
+    status: "started",
+    summary: `[${topItem.priority}] "${topItem.title}"${issueRef} dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
+  }, { retries: 2 }).catch(() => {});
 
-    // Reset cooldown for successfully dispatched item
-    await resetBacklogItemCooldown(topItem.id);
-    syncIssueForBacklog(sql, topItem.id, "dispatched");
-
-    // Log successful dispatch
-    const dispatchType = isChainDispatch ? "chain" : "manual";
-    console.log(`[backlog] ${dispatchType} dispatch: "${topItem.title}" (${topItem.priority}, score: ${topItem.priority_score})${attemptCount > 0 ? ` attempt ${attemptCount + 1}` : ""}`);
-
-    addDispatchBreadcrumb({
-      message: `Dispatch success: "${topItem.title}" → Engineer (${dispatchType})`,
-      category: "dispatch",
-      data: { backlog_id: topItem.id, dispatch_action_id: dispatchAction?.id, attempt: attemptCount + 1 },
-    });
-
-    // Notify via Telegram (QStash guarantees delivery)
-    const issueRef = topItem.github_issue_number ? ` #${topItem.github_issue_number}` : "";
-    await qstashPublish("/api/notify", {
-      agent: "backlog",
-      action: "dispatch",
-      company: "_hive",
-      status: "started",
-      summary: `[${topItem.priority}] "${topItem.title}"${issueRef} dispatched to Engineer (score: ${topItem.priority_score}${attemptCount > 0 ? `, attempt ${attemptCount + 1}` : ""})`,
-    }, { retries: 2 }).catch(() => {});
-
-    return Response.json({
-      dispatched: true,
-      item: { id: topItem.id, title: topItem.title, priority: topItem.priority, priority_score: topItem.priority_score },
-      score_breakdown: topItem.score_breakdown,
-    });
-  }
-
-  const errBody = await res.text().catch(() => "");
-  console.error(`[backlog] GitHub dispatch FAILED: status=${res.status} token=${tokenPrefix}...(${ghPat.length}) item="${topItem.title}" body=${errBody}`);
-  // Block the item that caused the 422 to prevent it from being picked again
-  if (res.status === 422) {
-    await sql`
-      UPDATE hive_backlog
-      SET status = 'blocked',
-          notes = COALESCE(notes, '') || ${` [dispatch_failed] GitHub API returned ${res.status} — needs investigation.`}
-      WHERE id = ${topItem.id} AND status IN ('ready', 'approved', 'planning')
-    `.catch(() => {});
-    syncIssueForBacklog(sql, topItem.id, "blocked");
-  }
-  await scheduleChainRetry("github_dispatch_failed", 5);
-  logDispatchCycle("github_dispatch_failed", { status: res.status, item_title: topItem.title });
-  return Response.json({ dispatched: false, reason: "github_dispatch_failed", status: res.status, item_title: topItem.title, chain_retry: true });
+  return Response.json({
+    dispatched: true,
+    item: { id: topItem.id, title: topItem.title, priority: topItem.priority, priority_score: topItem.priority_score },
+    score_breakdown: topItem.score_breakdown,
+  });
 }
