@@ -15,6 +15,27 @@
 
 ---
 
+### 2026-04-05 Vercel Web Analytics used wrong API endpoint since inception (POST /v1 vs PUT /v9)
+**What happened:** Web Analytics was never enabled on any company despite being called during every `/api/agents/provision` run. All 4 companies had zero analytics data.
+**Root cause:** Code used `POST https://api.vercel.com/v1/web-analytics/projects` with `{ projectId }` in the body — this endpoint doesn't exist and returns 404. The correct endpoint is `PUT https://api.vercel.com/v9/projects/{projectId}/web-analytics` with `{ "enabled": true }`.
+**Fix applied:** Fixed in both `src/app/api/agents/provision/route.ts` and `src/app/api/agents/analytics/route.ts`. Added daily self-healing check in sentinel-janitor that calls the correct endpoint for all active companies.
+**Prevention:** When using any Vercel API, verify the endpoint against the Vercel API docs (https://vercel.com/docs/rest-api). Never rely on training data for API endpoint paths — Vercel has had multiple API version changes.
+**Affects:** hive
+
+### 2026-04-05 vercel_project_id stored as project name string instead of prj_* ID for imported companies
+**What happened:** Vercel API calls for flolio, senhorio, and verdedesk all used wrong project IDs (e.g., `"flolio"` instead of `"prj_zSdAai8wkrWbdyW5i7IyHcWgqujj"`). Every API call to these projects returned 404.
+**Root cause:** When companies are imported or created before `provision/route.ts` records the Vercel project ID, or when the Vercel project already exists (409 path), the code records `project.name` or a slug string instead of `project.id`. The Vercel API requires the numeric `prj_*` format.
+**Fix applied:** Updated DB directly for the 3 affected companies with correct `prj_*` IDs obtained via Vercel MCP `list_projects`. Added `AND vercel_project_id LIKE 'prj_%'` filter in the sentinel analytics check to skip incorrect IDs.
+**Prevention:** After provisioning any company, verify `vercel_project_id` starts with `prj_`. If it doesn't, it's the project name (wrong). Run `SELECT slug, vercel_project_id FROM companies WHERE vercel_project_id IS NOT NULL AND vercel_project_id NOT LIKE 'prj_%'` to audit.
+**Affects:** hive
+
+### 2026-04-05 CEO score query path mismatch — Evolver/context reported 53/57 cycles unscored
+**What happened:** Evolver flagged "CEO review scores: 0 new scores since 3/25 fix — 53/57 cycles unscored". Context API reported no recent scores. Dashboard showed no score trend data for any company.
+**Root cause:** CEO stores scores at `ceo_review->'review'->>'score'` (nested JSON). But `agents/context/route.ts`, `lib/health-score.ts`, and the Evolver's own queries used `ceo_review->>'score'` (top-level JSON path). 106 cycles had valid scores; 0 were being retrieved. Both paths existed because CEO changed its output format at some point without updating all consumers.
+**Fix applied:** Added `COALESCE(ceo_review->'review'->>'score', ceo_review->>'score')` in both `agents/context/route.ts` (2 queries) and `health-score.ts`. Handles both old and new format.
+**Prevention:** When CEO changes its output JSON shape, grep for all callers of `ceo_review->>'score'` and update them. Use COALESCE to maintain backwards compatibility with existing data.
+**Affects:** hive
+
 ### 2026-04-05 Sentinel/admin bulk-killed 6 Scout idea companies without Carlos approval
 **What happened:** 6 idea-status companies (settlept, deskpicks, cancelpath, lusoprints, cashflowcraft, regulapt) were set to status='killed' at exactly the same timestamp (2026-04-04 21:00:27) with null kill_reason and null killed_at — bypassing the kill_company human gate.
 **Root cause:** `admin/scout-reset` or a related route executed a bulk UPDATE on all idea-status companies without requiring an explicit slugs list. The `kill_company` gate (one of 4 required human approval gates) was bypassed.
