@@ -2476,6 +2476,41 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check: Missing Neon DB auto-provision
+    // Detect active companies missing Neon DB and trigger provisioning
+    // -----------------------------------------------------------------------
+    let neonProvisionsTriggered = 0;
+    try {
+      const companiesMissingNeon = await sql`
+        SELECT c.id, c.slug
+        FROM companies c
+        WHERE c.status IN ('mvp', 'approved')
+        AND NOT EXISTS (
+          SELECT 1 FROM infra i
+          WHERE i.company_id = c.id AND i.service = 'neon' AND i.status = 'active'
+        )
+        AND c.neon_project_id IS NULL
+      `;
+      for (const company of companiesMissingNeon) {
+        console.warn(`[sentinel-janitor] missing Neon DB for ${company.slug}, triggering provision`);
+        fetch(`${baseUrl}/api/agents/provision`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${cronSecret}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ company_id: company.id, company_slug: company.slug }),
+        }).catch(() => {});
+        neonProvisionsTriggered++;
+      }
+      if (neonProvisionsTriggered > 0) {
+        console.log(`[sentinel-janitor] Neon self-heal: triggered provisioning for ${neonProvisionsTriggered} companies`);
+      }
+    } catch (neonHealErr: any) {
+      console.warn(`[sentinel-janitor] Neon self-heal check failed: ${neonHealErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Regenerate BACKLOG.md from database
     // -----------------------------------------------------------------------
     let backlogRegenerated = false;
@@ -2525,6 +2560,7 @@ export async function GET(request: Request) {
       db_slow_queries_found: slowQueriesFound,
       db_cache_hit_ratio_pct: cacheHitRatioPct,
       db_performance_issues: dbPerformanceIssues.length,
+      neon_provisions_triggered: neonProvisionsTriggered,
     });
 
   } catch (error: unknown) {
