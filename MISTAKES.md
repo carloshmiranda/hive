@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-04-05 CEO dispatched `cycle_complete` immediately in `isCycleStart` — race condition stalled all 4 companies
+**What happened:** Hive stopped making progress entirely. 4 companies had stuck `running` cycles with no Engineer or Growth actions logged. The unified dispatcher (`/api/dispatch/work`) saw active cycles on every company and couldn't dispatch anything.
+**Root cause:** `scripts/chain-dispatch.ts` in the `isCycleStart` block dispatched the `cycle_complete` GitHub Actions event immediately after kicking off Engineer and Growth — before either had done any work. CEO then ran the cycle review on an empty cycle, called `/api/dispatch/cycle-complete` → `/api/dispatch/work`, which saw 4 phantom running cycles and stalled.
+**Fix applied:** Removed `cycle_complete` dispatch from CEO `isCycleStart`. Engineer now dispatches `cycle_complete` unconditionally in all 3 exit paths (success, turn-guard skip, company-guard skip). 4 stuck cycles were manually force-closed to unblock immediately. PR #399.
+**Prevention:** `cycle_complete` must only be dispatched by the last agent to do real work (Engineer), never by the agent that kicks off work (CEO). Chain dispatch scripts should include a comment on which events are TRIGGER vs TERMINAL to prevent re-introduction.
+**Affects:** hive
+
 ### 2026-04-04 WebFetch returns placeholder/stub content (~133-139 chars) for some GitHub raw URLs
 **What happened:** During the blog skills import session, WebFetch returned placeholder-looking content (~133-139 chars) for ~5 of the 22 SKILL.md files fetched from raw.githubusercontent.com. The content appeared to be a short stub rather than the real file content.
 **Root cause:** WebFetch has a 15-minute self-cleaning cache. Fetching many URLs in rapid succession from the same domain can occasionally return cached or rate-limited stub responses. GitHub's raw content CDN may also 429 or return partial responses under burst load.
