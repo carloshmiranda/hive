@@ -219,7 +219,6 @@ async function dispatchWorker(
 async function dispatchToCompanyRepo(
   workflow: string,
   summary: string,
-  fallbackAgent: string,
   company: string,
   githubRepo: string,
   traceId: string,
@@ -242,17 +241,6 @@ async function dispatchToCompanyRepo(
       { ref: "main", inputs }
     );
     console.log(`  Company ${workflow}: HTTP ${status}`);
-    if (status >= 400 && fallbackAgent) {
-      await dispatchWorker(
-        fallbackAgent,
-        company,
-        traceId,
-        hiveUrl,
-        cronSecret
-      );
-    }
-  } else if (fallbackAgent) {
-    await dispatchWorker(fallbackAgent, company, traceId, hiveUrl, cronSecret);
   }
 }
 
@@ -324,7 +312,6 @@ async function main() {
     await dispatchToCompanyRepo(
       "hive-build.yml",
       `Feature build for ${company}`,
-      "",
       company,
       githubRepo,
       traceId,
@@ -342,7 +329,6 @@ async function main() {
         ? dispatchToCompanyRepo(
             "hive-growth.yml",
             `Growth cycle for ${company}`,
-            "growth",
             company,
             githubRepo,
             traceId,

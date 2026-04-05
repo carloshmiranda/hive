@@ -77,7 +77,7 @@ jobs:
         env:
           DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
-          npm install --no-save postgres 2>/dev/null
+          npm install --no-save @neondatabase/serverless 2>/dev/null
           COMPANY=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company // ""' 2>/dev/null || echo "")
           if [ -z "$COMPANY" ]; then
             COMPANY="${{ github.event.inputs.company }}"
@@ -87,10 +87,10 @@ jobs:
           # Look up github_repo from DB
           if [ -n "$COMPANY" ]; then
             REPO=$(node -e "
-              const postgres = require('postgres');
-              const sql = postgres(process.env.DATABASE_URL);
+              const { neon } = require('@neondatabase/serverless');
+              const sql = neon(process.env.DATABASE_URL);
               sql\`SELECT github_repo FROM companies WHERE slug = \${'${COMPANY}'} LIMIT 1\`
-                .then(r => { console.log(r[0]?.github_repo || ''); return sql.end(); })
+                .then(r => { console.log(r[0]?.github_repo || ''); })
                 .catch(() => process.exit(0));
             " 2>/dev/null || echo "")
             echo "company_repo=${REPO}" >> $GITHUB_OUTPUT
