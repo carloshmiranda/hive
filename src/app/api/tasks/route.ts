@@ -92,6 +92,17 @@ export async function POST(req: Request) {
       continue;
     }
 
+    // Hard cap: reject new tasks if company already has ≥ 10 open tasks
+    const [{ cnt }] = await sql`
+      SELECT COUNT(*)::int as cnt FROM company_tasks
+      WHERE company_id = ${company_id}
+      AND status NOT IN ('done', 'dismissed', 'cancelled')
+    `;
+    if (cnt >= 10) {
+      results.push({ title, skipped: true, reason: `open_task_cap_exceeded (${cnt}/10 open)` });
+      continue;
+    }
+
     // Deduplicate: skip if same company + title exists and is not done/dismissed
     const [existing] = await sql`
       SELECT id FROM company_tasks

@@ -510,6 +510,17 @@ Propose 5-10 tasks per planning phase. Tasks must be appropriate for the current
 }
 ```
 
+## Task Drain Gate (MANDATORY — check before proposing any new tasks)
+
+Before proposing ANY new tasks in a cycle, check `engineering_tasks` and `growth_tasks` from context:
+
+- If open engineering tasks ≥ 5: DO NOT propose new engineering tasks. Instead, instruct Engineer to close existing ones first. Pick the top-priority open task and dispatch it.
+- If open growth tasks ≥ 3: DO NOT propose new growth tasks. Reprioritize or close existing ones.
+- Maximum NEW tasks per cycle: 3 engineering + 2 growth (hard limit, regardless of phase).
+- If the company has more than 10 total open tasks: enter DRAIN mode — dispatch only, no new proposals until open count drops below 5.
+
+DRAIN mode message to Engineer: "Company backlog has {N} open tasks. Do not create new tasks. Pick the highest-priority open task and complete it. Report back with task ID closed."
+
 ## Decision framework
 - **In validate/seed_content phase:** distribution > building. Get eyes on the page before writing code.
 - **In test_intent/drive_traffic:** conversion signals > features. Don't build until someone shows intent to pay.

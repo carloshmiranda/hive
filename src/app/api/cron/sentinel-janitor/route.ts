@@ -2511,6 +2511,46 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check: Auto-dismiss proposed tasks stale for >14 days with no cycle assignment
+    // -----------------------------------------------------------------------
+    let staleTasksDismissed = 0;
+    try {
+      const staleTasks = await sql`
+        UPDATE company_tasks
+        SET status = 'dismissed', updated_at = NOW()
+        WHERE status = 'proposed'
+          AND created_at < NOW() - INTERVAL '14 days'
+          AND cycle_id IS NULL
+        RETURNING id, company_id, title
+      `;
+      staleTasksDismissed = staleTasks.length;
+      console.warn(`[janitor] dismissed ${staleTasksDismissed} stale proposed tasks`);
+    } catch (staleTasksErr: any) {
+      console.warn(`[janitor] stale task dismiss failed: ${staleTasksErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
+    // Check: Flag companies with >15 open tasks for CEO to drain
+    // -----------------------------------------------------------------------
+    let overflowCompanies: { slug: string; open_cnt: number }[] = [];
+    try {
+      const overflowRows = await sql`
+        SELECT c.slug, COUNT(*)::int as open_cnt
+        FROM company_tasks ct JOIN companies c ON c.id = ct.company_id
+        WHERE ct.status NOT IN ('done','dismissed','cancelled')
+        AND c.status = 'mvp'
+        GROUP BY c.slug HAVING COUNT(*) > 15
+        ORDER BY open_cnt DESC
+      `;
+      overflowCompanies = overflowRows as { slug: string; open_cnt: number }[];
+      if (overflowCompanies.length > 0) {
+        console.warn('[janitor] task overflow companies:', JSON.stringify(overflowCompanies));
+      }
+    } catch (overflowErr: any) {
+      console.warn(`[janitor] task overflow check failed: ${overflowErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Regenerate BACKLOG.md from database
     // -----------------------------------------------------------------------
     let backlogRegenerated = false;
@@ -2561,6 +2601,8 @@ export async function GET(request: Request) {
       db_cache_hit_ratio_pct: cacheHitRatioPct,
       db_performance_issues: dbPerformanceIssues.length,
       neon_provisions_triggered: neonProvisionsTriggered,
+      stale_tasks_dismissed: staleTasksDismissed,
+      task_overflow_companies: overflowCompanies,
     });
 
   } catch (error: unknown) {
