@@ -356,8 +356,6 @@ async function main() {
         : Promise.resolve(),
     ]);
 
-    // Dispatch cycle_complete once (for review/reflection after agents finish)
-    await dispatchGithub(repo, "cycle_complete", { source: "ceo", ...basePayload }, ghToken);
   }
 
   if (isGateApproved) {
