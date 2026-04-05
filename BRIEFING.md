@@ -13,7 +13,7 @@
   - VerdeDesk — status: mvp, 39 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, waitlist unverified, IRS season open until June 30
   - Senhorio — status: mvp, 11 cycles, built tax calculator at /calculadora
   - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
-  - CiberPME — status: mvp, 4 cycles, blog (converted from SaaS), Portuguese market, cybersecurity for SMBs
+  - CiberPME — status: mvp, 29 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 12 URLs live, zero traffic, GSC blocked
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[code]` 2026-04-05 — **CiberPME cycle 29 planned (CEO, scout_research trigger)** — Completed cycle 28 review (score 3/10: plan existed but engineer/growth never executed). Cycle 29 plan: 2 new articles targeting scout-identified content gaps (NIS2 vs RGPD diferenças, NIS2 cadeia fornecimento PME — both zero PT competition). Growth: distribute across PT business channels with CNCS May 4 deadline urgency. Product spec v35 saved. Engineer + growth dispatched via repository_dispatch. Key blocker: CRON_SECRET empty in env (OIDC token not propagated to Claude Code env) — used direct DB access + GH_PAT dispatch as workaround. GSC still blocked on Carlos manual setup.
 
 - `[code]` 2026-04-04 — **Senhorio design overhaul + brand consistency (PRs #61, #62 on senhoriopr repo)** — Full UI/UX audit via ui-ux-pro-max skill. Implemented: (1) `next/font/google` migration — IBM Plex Sans (display) + Source Sans 3 (body) with CSS variables; (2) globals.css — teal brand scale `--color-brand-{50–900}`, `prefers-reduced-motion` guard; (3) page.tsx rewrite — `SenhorioLogo` SVG mark, `<main id="main-content">` landmark, `sr-only` labels on all form inputs, `aria-hidden` on all decorative SVGs, `aria-expanded` FAQ accordion, benefit-framed stats, "Como funciona" 3-step section, `motion-safe:` animation prefix; (4) Brand consistency batch — 37 `.tsx` files, all `blue-*`/`indigo-*` → `brand-*` (zero legacy color classes remaining outside /admin). Stripe webhook expanded (#140): added `checkout.session.completed` (one-time payment revenue + signups), `customer.subscription.updated` (trial→paid conversion + plan change logging). Both events wired to `repository_dispatch`. Issue #140 closed.
 

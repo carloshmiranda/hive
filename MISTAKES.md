@@ -1028,3 +1028,10 @@ NEVER use `git push origin main`. NEVER skip the branch step.
 **Fix applied:** Re-issued to `POST /v2/schedules/https://hive-phi.vercel.app/api/cron/knowledge` → received `{"scheduleId": "scd_7KCo28rVVUi8YMke7zdeS1YkFPdh"}`.
 **Prevention:** Always use `/v2/schedules/{url}` for recurring QStash schedules. Verify by calling `GET /v2/schedules` and confirming a `scd_` prefixed entry appears. A `messageId` response = one-time publish only.
 **Affects:** hive
+
+### CRON_SECRET empty in Claude Code agent env (2026-04-05)
+**What happened:** CEO agent triggered via `repository_dispatch:cycle_start`. CRON_SECRET env var was empty despite being set in the workflow via OIDC `get-hive-tokens` action. Could not call Hive API endpoints that require `Authorization: Bearer $CRON_SECRET`.
+**Root cause:** The OIDC token from `.github/actions/get-hive-tokens` sets `CRON_SECRET` as a step output (`steps.auth.outputs.cron_secret`), which is then passed as env var to the Claude Code step. If the OIDC exchange fails silently, the var is empty.
+**Fix applied:** Workaround — used direct `psql $DATABASE_URL` for DB reads/writes and `GH_TOKEN=$GH_PAT gh api repos/.../dispatches` for agent dispatch. Both worked.
+**Prevention:** The workflow should validate that CRON_SECRET is non-empty before launching Claude Code. Add: `if [ -z "$CRON_SECRET" ]; then echo "::error::CRON_SECRET empty"; exit 1; fi` or fall back to DATABASE_URL path.
+**Affects:** hive (all agent workflows using OIDC tokens)
