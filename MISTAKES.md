@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-04-05 Tailwind v4 `--spacing-*` in `@theme` crushes all `max-w-*` layouts to tiny widths
+**What happened:** CiberPME site had every container rendered 80px wide — text wrapped one word per line. `max-w-3xl` resolved to 80px, `max-w-md` to 16px, etc.
+**Root cause:** Tailwind v4 uses `--spacing-*` as the internal namespace for its spacing scale, which feeds `max-w-*`, `p-*`, `gap-*`, `w-*`, and other utilities. Defining `--spacing-xs` through `--spacing-3xl` in `@theme` overrides those values project-wide. Tailwind v4 also uses `--font-size-*` for `text-*` utilities — same risk.
+**Fix applied:** Removed 15 conflicting variables (`--spacing-xs/sm/md/lg/xl/2xl/3xl` and `--font-size-xs/sm/base/lg/xl/2xl/3xl/4xl`) from `@theme` in `globals.css`. Colors, font family, radius, and shadows are safe — their namespaces (`--color-*`, `--font-display/sans`, `--radius-*`, `--shadow-*`) don't conflict with Tailwind v4 internals.
+**Prevention:** In Tailwind v4 `@theme`, NEVER define variables in these reserved namespaces: `--spacing-*`, `--font-size-*`, `--container-*`, `--inset-*`, `--translate-*`, `--scale-*`, `--rotate-*`, `--skew-*`. Use different prefixes like `--space-*`, `--size-*`, or omit them entirely if components just use numeric Tailwind utilities (`p-6`, `text-xl`). Run Playwright computed-style check after any `globals.css` change — layout bugs don't show in TypeScript errors or build output.
+**Affects:** companies
+
 ### 2026-04-05 CEO dispatched `cycle_complete` immediately in `isCycleStart` — race condition stalled all 4 companies
 **What happened:** Hive stopped making progress entirely. 4 companies had stuck `running` cycles with no Engineer or Growth actions logged. The unified dispatcher (`/api/dispatch/work`) saw active cycles on every company and couldn't dispatch anything.
 **Root cause:** `scripts/chain-dispatch.ts` in the `isCycleStart` block dispatched the `cycle_complete` GitHub Actions event immediately after kicking off Engineer and Growth — before either had done any work. CEO then ran the cycle review on an empty cycle, called `/api/dispatch/cycle-complete` → `/api/dispatch/work`, which saw 4 phantom running cycles and stalled.
