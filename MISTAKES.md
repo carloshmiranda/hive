@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-04-05 Sentinel/admin bulk-killed 6 Scout idea companies without Carlos approval
+**What happened:** 6 idea-status companies (settlept, deskpicks, cancelpath, lusoprints, cashflowcraft, regulapt) were set to status='killed' at exactly the same timestamp (2026-04-04 21:00:27) with null kill_reason and null killed_at — bypassing the kill_company human gate.
+**Root cause:** `admin/scout-reset` or a related route executed a bulk UPDATE on all idea-status companies without requiring an explicit slugs list. The `kill_company` gate (one of 4 required human approval gates) was bypassed.
+**Fix applied:** Restored 6 companies to idea status. Hardened scout-reset to require explicit `slugs[]` array — no more "kill all ideas" bulk operation. Neutered dead kill code in scout-cleanup.
+**Prevention:** Any route that changes company status to 'killed' must either: (a) go through the kill_company approval gate, or (b) require an explicit list of target slugs in the request body. Bulk status changes to 'killed' with no explicit targets are banned.
+**Affects:** hive
+
 ### 2026-04-05 Tailwind v4 `--spacing-*` in `@theme` crushes all `max-w-*` layouts to tiny widths
 **What happened:** CiberPME site had every container rendered 80px wide — text wrapped one word per line. `max-w-3xl` resolved to 80px, `max-w-md` to 16px, etc.
 **Root cause:** Tailwind v4 uses `--spacing-*` as the internal namespace for its spacing scale, which feeds `max-w-*`, `p-*`, `gap-*`, `w-*`, and other utilities. Defining `--spacing-xs` through `--spacing-3xl` in `@theme` overrides those values project-wide. Tailwind v4 also uses `--font-size-*` for `text-*` utilities — same risk.

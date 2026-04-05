@@ -83,17 +83,9 @@ export async function POST(req: Request) {
     RETURNING id, title, company_id
   `;
 
-  // Clean up orphaned idea companies for expired proposals
-  const cleanedCompanies = await sql`
-    UPDATE companies
-    SET status = 'killed',
-        killed_at = NOW(),
-        kill_reason = ${reason},
-        updated_at = NOW()
-    WHERE id = ANY(${toExpire.map(p => p.company_id).filter(Boolean)})
-    AND status = 'idea'
-    RETURNING id, slug
-  `;
+  // Kill code disabled — company status changes to 'killed' must go through the
+  // kill_company approval gate or use admin/scout-reset with an explicit slugs list.
+  const cleanedCompanies: { id: string; slug: string }[] = [];
 
   // Log the cleanup action
   await sql`

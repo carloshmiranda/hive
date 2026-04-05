@@ -19,41 +19,49 @@ export async function POST(req: Request) {
   if (!session) return err("Unauthorized", 401);
 
   const body = await req.json();
-  const { reason = "Manual Scout reset by Carlos" } = body;
+  const { reason = "Manual Scout reset by Carlos", slugs } = body;
+
+  // Require an explicit list of slugs — no more bulk "kill all ideas" operations
+  if (!slugs || !Array.isArray(slugs) || slugs.length === 0) {
+    return err("Missing required field: 'slugs' (array of company slugs to reset). Bulk operations without explicit targets are banned.", 400);
+  }
 
   const sql = getDb();
 
-  // Get all pending new_company proposals
+  // Get pending new_company proposals for the specified companies only
   const pendingProposals = await sql`
-    SELECT id, title, company_id FROM approvals
-    WHERE gate_type = 'new_company' AND status = 'pending'
+    SELECT a.id, a.title, a.company_id FROM approvals a
+    JOIN companies c ON c.id = a.company_id
+    WHERE a.gate_type = 'new_company' AND a.status = 'pending'
+    AND c.slug = ANY(${slugs})
   `;
 
   if (pendingProposals.length === 0) {
     return json({
       action: "no_proposals_found",
-      message: "No pending Scout proposals to clean up"
+      message: "No pending Scout proposals to clean up for the specified slugs"
     });
   }
 
-  // Expire all pending new_company proposals
+  // Expire pending new_company proposals for the specified companies only
   const expiredApprovals = await sql`
     UPDATE approvals
     SET status = 'expired',
         decision_note = ${reason},
         decided_at = NOW()
-    WHERE gate_type = 'new_company' AND status = 'pending'
+    WHERE id = ANY(${pendingProposals.map((p: any) => p.id)})
     RETURNING id, title, company_id
   `;
 
-  // Kill all orphaned idea companies
+  // Kill only the explicitly specified idea companies
   const killedCompanies = await sql`
     UPDATE companies
     SET status = 'killed',
         killed_at = NOW(),
         kill_reason = ${reason},
         updated_at = NOW()
-    WHERE status = 'idea'
+    WHERE slug = ANY(${slugs})
+    AND status = 'idea'
     RETURNING id, slug, name
   `;
 
