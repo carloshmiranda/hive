@@ -45,10 +45,10 @@ export async function POST(req: NextRequest) {
   const results = [];
   for (const company of companies) {
     try {
-      const res = await fetch(`https://api.vercel.com/v1/web-analytics/projects${teamParam}`, {
-        method: "POST",
+      const res = await fetch(`https://api.vercel.com/v9/projects/${company.vercel_project_id}/web-analytics${teamParam}`, {
+        method: "PUT",
         headers: { Authorization: `Bearer ${vercelToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: company.vercel_project_id }),
+        body: JSON.stringify({ enabled: true }),
       });
       results.push({ slug: company.slug, enabled: res.ok, status: res.status });
     } catch (e: any) {

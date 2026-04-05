@@ -130,10 +130,10 @@ export async function POST(req: NextRequest) {
         getSettingValue("vercel_team_id")
       ]);
       const teamParam = teamId ? `?teamId=${teamId}` : "";
-      const analyticsRes = await fetch(`https://api.vercel.com/v1/web-analytics/projects${teamParam}`, {
-        method: "POST",
+      const analyticsRes = await fetch(`https://api.vercel.com/v9/projects/${project.id}/web-analytics${teamParam}`, {
+        method: "PUT",
         headers: { Authorization: `Bearer ${vercelToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: project.id }),
+        body: JSON.stringify({ enabled: true }),
       });
       (results.vercel as Record<string, unknown>).web_analytics = analyticsRes.ok;
     } catch {

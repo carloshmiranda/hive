@@ -49,6 +49,7 @@ import {
 } from "@/lib/sentinel-helpers";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { normalizePlaybookDomain } from "@/lib/playbook-domains";
+import { getSettingValue } from "@/lib/settings";
 import { isCompanySpecific } from "@/lib/backlog-planner";
 
 export const dynamic = "force-dynamic";
@@ -2530,6 +2531,48 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check: Enable Vercel Web Analytics for companies that don't have it
+    // Runs silently — fires PUT /v9/projects/{id}/web-analytics for any company
+    // with a vercel_project_id. Idempotent — safe to re-run every day.
+    // -----------------------------------------------------------------------
+    let analyticsEnabled = 0;
+    try {
+      const [vercelToken, teamId] = await Promise.all([
+        getSettingValue("vercel_token").catch(() => null),
+        getSettingValue("vercel_team_id").catch(() => null),
+      ]);
+      if (vercelToken) {
+        const teamParam = teamId ? `?teamId=${teamId}` : "";
+        const projectsForAnalytics = await sql`
+          SELECT slug, vercel_project_id FROM companies
+          WHERE status IN ('mvp', 'active', 'idea')
+            AND vercel_project_id IS NOT NULL
+            AND vercel_project_id LIKE 'prj_%'
+        `;
+        for (const co of projectsForAnalytics) {
+          try {
+            const res = await fetch(
+              `https://api.vercel.com/v9/projects/${co.vercel_project_id}/web-analytics${teamParam}`,
+              {
+                method: "PUT",
+                headers: { Authorization: `Bearer ${vercelToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: true }),
+              }
+            );
+            if (res.ok) analyticsEnabled++;
+          } catch {
+            // Non-fatal — skip
+          }
+        }
+        if (analyticsEnabled > 0) {
+          console.log(`[janitor] enabled web analytics on ${analyticsEnabled} projects`);
+        }
+      }
+    } catch (analyticsErr: any) {
+      console.warn(`[janitor] analytics enable check failed: ${analyticsErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Check: Auto-expire stale new_company proposals pending >21 days
     // Prevents dashboard accumulation — Carlos should review within 3 weeks
     // -----------------------------------------------------------------------
@@ -2626,6 +2669,7 @@ export async function GET(request: Request) {
       neon_provisions_triggered: neonProvisionsTriggered,
       stale_tasks_dismissed: staleTasksDismissed,
       stale_proposals_expired: staleProposalsExpired,
+      analytics_enabled: analyticsEnabled,
       task_overflow_companies: overflowCompanies,
     });
 
