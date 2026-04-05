@@ -77,7 +77,7 @@ jobs:
         env:
           DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
-          npm install --no-save postgres 2>/dev/null
+          npm install --no-save @neondatabase/serverless 2>/dev/null
           COMPANY=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.company // ""' 2>/dev/null || echo "")
           if [ -z "$COMPANY" ]; then
             COMPANY="${{ github.event.inputs.company }}"
@@ -87,10 +87,10 @@ jobs:
           # Look up github_repo from DB
           if [ -n "$COMPANY" ]; then
             REPO=$(node -e "
-              const postgres = require('postgres');
-              const sql = postgres(process.env.DATABASE_URL);
+              const { neon } = require('@neondatabase/serverless');
+              const sql = neon(process.env.DATABASE_URL);
               sql\`SELECT github_repo FROM companies WHERE slug = \${'${COMPANY}'} LIMIT 1\`
-                .then(r => { console.log(r[0]?.github_repo || ''); return sql.end(); })
+                .then(r => { console.log(r[0]?.github_repo || ''); })
                 .catch(() => process.exit(0));
             " 2>/dev/null || echo "")
             echo "company_repo=${REPO}" >> $GITHUB_OUTPUT
@@ -873,6 +873,16 @@ jobs:
             fi
 
             echo "skip=true" >> $GITHUB_OUTPUT
+
+            # Chain continues: dispatch cycle_complete so CEO can score
+            COMPANY=$(echo '${{ needs.context.outputs.company }}' || echo "")
+            if [ -n "$COMPANY" ]; then
+              GH_TOKEN="${{ steps.auth.outputs.gh_pat }}"
+              curl -s -X POST "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
+                -H "Authorization: token ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                -d "{\"event_type\":\"cycle_complete\",\"client_payload\":{\"company\":\"${COMPANY}\",\"source\":\"engineer\",\"status\":\"skipped\"}}" || true
+            fi
           else
             echo "skip=false" >> $GITHUB_OUTPUT
             echo "✅ Turn budget check passed: estimated_turns=${ESTIMATED_TURNS:-"not specified"}, proceeding with Claude execution"
@@ -950,6 +960,15 @@ jobs:
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"company_slug\":\"$COMPANY\",\"agent\":\"engineer\",\"action_type\":\"${TRIGGER:-feature_request}\",\"status\":\"skipped\",\"description\":\"Skipped: company has no github_repo — needs provisioning before Engineer can run\"}" || true
+
+          # Chain continues: dispatch cycle_complete so CEO can score
+          if [ -n "$COMPANY" ]; then
+            GH_TOKEN="${{ steps.auth.outputs.gh_pat }}"
+            curl -s -X POST "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"event_type\":\"cycle_complete\",\"client_payload\":{\"company\":\"${COMPANY}\",\"source\":\"engineer\",\"status\":\"skipped\"}}" || true
+          fi
 
       - name: Run build agent (Hive-internal only)
         if: steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
@@ -1304,18 +1323,15 @@ jobs:
               -H "Content-Type: application/json" \
               -d "$CALLBACK_PAYLOAD" || echo "{}")
             echo "  Backlog result: $BACKLOG_RESULT"
-
-            # If no backlog items left, chain to next company cycle
-            # Response is wrapped: {ok: true, data: {dispatched: true, ...}}
-            DISPATCHED=$(echo "$BACKLOG_RESULT" | jq -r '.data.dispatched // .dispatched // false' 2>/dev/null || echo "false")
-            if [ "$DISPATCHED" != "true" ]; then
-              echo "No backlog items — chaining to company cycle..."
-              curl -s -X POST "$HIVE_URL/api/dispatch/cycle-complete" \
-                -H "Authorization: Bearer $OIDC_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{\"agent\":\"engineer\",\"company\":\"${COMPANY}\",\"status\":\"${STATUS}\",\"action_type\":\"self_improvement\"}" || true
-            fi
           fi
+
+          # Always dispatch cycle_complete so CEO can score the completed cycle
+          echo "Dispatching cycle_complete..."
+          GH_TOKEN="${{ steps.auth.outputs.gh_pat }}"
+          curl -s -X POST "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d "{\"event_type\":\"cycle_complete\",\"client_payload\":{\"company\":\"${COMPANY}\",\"source\":\"engineer\",\"status\":\"${STATUS}\"}}" || true
 
       - name: Log failure to Hive API
         if: failure() || cancelled()
