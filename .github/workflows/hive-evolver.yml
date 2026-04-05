@@ -83,7 +83,7 @@ jobs:
                ```sql
                SELECT COUNT(*) as pending_count FROM evolver_proposals WHERE status IN ('pending', 'deferred')
                ```
-               If pending_count > 10, output: {"analysis": {"pipeline_full": true}, "proposals": []}
+               If pending_count > 5, output: {"analysis": {"pipeline_full": true}, "proposals": []}
                and exit. The review pipeline is at capacity.
 
             5. CHECK FOR DUPLICATES — Before creating proposals:

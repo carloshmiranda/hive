@@ -777,7 +777,8 @@ async function ceoContext(sql: any, company: any, taskDescription?: string) {
       ORDER BY created_at DESC LIMIT 5
     `.catch(() => []),
     sql`
-      SELECT cycle_number, ceo_review->>'score' as score,
+      SELECT cycle_number,
+             COALESCE(ceo_review->'review'->>'score', ceo_review->>'score') as score,
              ceo_review->>'agent_grades' as agent_grades
       FROM cycles WHERE company_id = ${company.id}
         AND ceo_review IS NOT NULL
@@ -1027,7 +1028,8 @@ async function evolverContext(sql: any) {
     `.catch(() => []),
     // Cycle scores and agent grades (30 days)
     sql`
-      SELECT co.slug, c.cycle_number, c.ceo_review->>'score' as score,
+      SELECT co.slug, c.cycle_number,
+             COALESCE(c.ceo_review->'review'->>'score', c.ceo_review->>'score') as score,
              c.ceo_review->'agent_grades' as agent_grades, c.started_at
       FROM cycles c JOIN companies co ON co.id = c.company_id
       WHERE c.started_at > NOW() - INTERVAL '30 days' AND c.ceo_review IS NOT NULL

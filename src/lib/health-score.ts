@@ -125,11 +125,11 @@ export async function calculateHealthScore(
 
   // --- Cycle scores (20%) ---
   const cycleRows = await sql`
-    SELECT ceo_review->>'score' as score
+    SELECT COALESCE(ceo_review->'review'->>'score', ceo_review->>'score') as score
     FROM cycles
     WHERE company_id = ${companyId}
       AND ceo_review IS NOT NULL
-      AND ceo_review->>'score' IS NOT NULL
+      AND COALESCE(ceo_review->'review'->>'score', ceo_review->>'score') IS NOT NULL
     ORDER BY cycle_number DESC
     LIMIT 3
   `;

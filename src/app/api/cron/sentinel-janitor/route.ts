@@ -1076,19 +1076,19 @@ export async function GET(request: Request) {
         if (ventureBrainDirectives < VB_MAX_DIRECTIVES) {
           const scoreTrends = await sql`
             WITH recent AS (
-              SELECT company_id, AVG((ceo_review->>'score')::numeric) as avg_score
+              SELECT company_id, AVG((COALESCE(ceo_review->'review'->>'score', ceo_review->>'score'))::numeric) as avg_score
               FROM cycles
               WHERE status = 'complete' AND ceo_review IS NOT NULL
-                AND ceo_review->>'score' IS NOT NULL
+                AND COALESCE(ceo_review->'review'->>'score', ceo_review->>'score') IS NOT NULL
                 AND started_at > NOW() - INTERVAL '21 days'
               GROUP BY company_id
               HAVING COUNT(*) >= 2
             ),
             previous AS (
-              SELECT company_id, AVG((ceo_review->>'score')::numeric) as avg_score
+              SELECT company_id, AVG((COALESCE(ceo_review->'review'->>'score', ceo_review->>'score'))::numeric) as avg_score
               FROM cycles
               WHERE status = 'complete' AND ceo_review IS NOT NULL
-                AND ceo_review->>'score' IS NOT NULL
+                AND COALESCE(ceo_review->'review'->>'score', ceo_review->>'score') IS NOT NULL
                 AND started_at BETWEEN NOW() - INTERVAL '42 days' AND NOW() - INTERVAL '21 days'
               GROUP BY company_id
               HAVING COUNT(*) >= 2
