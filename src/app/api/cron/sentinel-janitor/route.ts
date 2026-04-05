@@ -2144,6 +2144,76 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check 53: GSC pending verification completion
+    // When Engineer closes the meta tag task, auto-complete GSC verification
+    // -----------------------------------------------------------------------
+    let gscVerificationsCompleted = 0;
+    try {
+      const pendingGscCompanies = await sql`
+        SELECT id, slug, capabilities
+        FROM companies
+        WHERE capabilities->'gsc_integration'->>'pending_verification_token' IS NOT NULL
+          AND status NOT IN ('killed', 'idea')
+      `;
+
+      for (const company of pendingGscCompanies) {
+        try {
+          // Check if the meta tag engineering task is closed
+          const [openTask] = await sql`
+            SELECT id FROM company_tasks
+            WHERE company_id = ${company.id}
+              AND title ILIKE '%site verification%'
+              AND category = 'engineering'
+              AND status NOT IN ('done', 'dismissed', 'cancelled')
+            LIMIT 1
+          `;
+
+          if (openTask) continue; // Task still open — Engineer hasn't deployed yet
+
+          // Task is done (or doesn't exist anymore) — trigger Phase B verification
+          console.log(`[sentinel-janitor] Check 53: Triggering GSC verification for ${company.slug} (meta tag task closed)`);
+
+          const verifyRes = await fetch(`${baseUrl}/api/gsc/verify-property`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${cronSecret}`,
+            },
+            body: JSON.stringify({ company_slug: company.slug, step: "verify" }),
+          });
+
+          if (verifyRes.ok) {
+            const verifyData = await verifyRes.json();
+            if (verifyData.verified) {
+              gscVerificationsCompleted++;
+              dispatches.push({
+                type: "gsc_verified",
+                target: company.slug,
+                payload: { verified: true, property_added: verifyData.property_added },
+              });
+            }
+          } else {
+            console.warn(`[sentinel-janitor] Check 53: verify-property failed for ${company.slug}: ${verifyRes.status}`);
+          }
+        } catch (perCompanyErr: any) {
+          console.warn(`[sentinel-janitor] Check 53: error for ${company.slug}: ${perCompanyErr.message}`);
+        }
+      }
+
+      if (gscVerificationsCompleted > 0) {
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, description, status, started_at, finished_at)
+          VALUES ('sentinel', 'gsc_verification_complete',
+            ${`Check 53: Auto-completed GSC property verification for ${gscVerificationsCompleted} company/companies`},
+            'success', NOW(), NOW())
+        `.catch(() => {});
+        console.log(`[sentinel-janitor] Check 53: Completed GSC verification for ${gscVerificationsCompleted} companies`);
+      }
+    } catch (check53Err: any) {
+      console.warn(`[sentinel-janitor] Check 53 failed: ${check53Err.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Telegram notification
     // -----------------------------------------------------------------------
     try {
@@ -2152,6 +2222,7 @@ export async function GET(request: Request) {
         selfImprovementProposals > 0 || agentRegressions > 0 ||
         proposalsAutoApproved > 0 || ventureBrainDirectives > 0 ||
         duplicatesRejected > 0 || staleItemsDeprioritized > 0 ||
+        gscVerificationsCompleted > 0 ||
         dbPerformanceIssues.length > 0;
       if (interesting) {
         const parts: string[] = [];
@@ -2164,6 +2235,7 @@ export async function GET(request: Request) {
         if (errorPatternsLearned > 0) parts.push(`${errorPatternsLearned} error patterns learned`);
         if (duplicatesRejected > 0) parts.push(`${duplicatesRejected} duplicates rejected`);
         if (staleItemsDeprioritized > 0) parts.push(`${staleItemsDeprioritized} stale items deprioritized`);
+        if (gscVerificationsCompleted > 0) parts.push(`${gscVerificationsCompleted} GSC properties verified`);
         if (dbPerformanceIssues.length > 0) parts.push(`${dbPerformanceIssues.length} DB performance issues`);
 
         await notifyHive({
@@ -2447,6 +2519,7 @@ export async function GET(request: Request) {
       backlog_duplicates_rejected: duplicatesRejected,
       backlog_stale_deprioritized: staleItemsDeprioritized,
       ghost_pr_fixed: ghostPrFixed,
+      gsc_verifications_completed: gscVerificationsCompleted,
       vuln_alerts_found: vulnAlertsFound,
       task_issues_backfilled: taskIssuesBackfilled,
       db_slow_queries_found: slowQueriesFound,

@@ -138,6 +138,28 @@ export const HIVE_CAPABILITIES: HiveCapability[] = [
     },
   },
   {
+    id: "verify_gsc_property",
+    endpoint: "/api/gsc/verify-property",
+    method: "POST",
+    auth: "cron_secret",
+    description:
+      "Fully automated GSC property verification: issue META tag token, create engineer task, then verify + add property to Search Console. NEVER escalate GSC setup to Carlos — use this endpoint instead.",
+    triggers: [
+      "GSC not verified",
+      "site not in Search Console",
+      "add site to GSC",
+      "GSC property missing",
+      "search console not set up",
+      "google search console setup",
+      "GSC setup needed",
+      "property not added to GSC",
+    ],
+    params: {
+      company_slug: "Company slug",
+      step: "token (issue META tag) | verify (confirm tag live + verify with Google) | full (default: token phase only, sentinel auto-completes Phase B)",
+    },
+  },
+  {
     id: "extract_patterns",
     endpoint: "/api/agents/extract",
     method: "POST",
@@ -454,7 +476,7 @@ export function getCapabilitySummary(pluginCapabilities?: HiveCapability[]): str
     "HIVE AUTONOMOUS CAPABILITIES vs HUMAN APPROVAL GATES:",
     "",
     "🤖 AUTONOMOUS SERVICES (execute directly, no approval needed):",
-    "  - Google Search Console (GSC): sitemap submission, search performance tracking",
+    "  - Google Search Console (GSC): sitemap submission, search performance tracking, property verification (FULLY AUTOMATED — call POST /api/gsc/verify-property, never escalate GSC setup to Carlos)",
     "  - GitHub: repo creation, code pushes, branch management, webhook processing",
     "  - Vercel: project creation/deletion, deployments, analytics, env vars",
     "  - Neon: database creation/deletion, schema setup, connection management",
@@ -492,7 +514,7 @@ export function getCapabilitySummary(pluginCapabilities?: HiveCapability[]): str
       groups["Infrastructure"].push(cap);
     } else if (["dispatch_worker", "agent_context", "token_exchange", "list_companies"].includes(cap.id)) {
       groups["Agent Dispatch"].push(cap);
-    } else if (["research_type", "visibility_check", "extract_patterns"].includes(cap.id)) {
+    } else if (["research_type", "visibility_check", "extract_patterns", "verify_gsc_property"].includes(cap.id)) {
       groups["Intelligence"].push(cap);
     } else if (["sentinel_urgent", "sentinel_dispatch", "sentinel_janitor", "metrics_cron", "agent_performance", "agent_costs"].includes(cap.id)) {
       groups["Health & Metrics"].push(cap);
