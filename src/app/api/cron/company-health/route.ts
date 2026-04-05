@@ -54,15 +54,26 @@ export async function GET(req: Request) {
           LIMIT 1
         `;
         if (!existingTask) {
-          await sql`
+          const statsTaskTitle = 'Fix /api/stats endpoint for metrics collection';
+          const statsTaskDesc = `The /api/stats endpoint at ${statsUrl} is broken (${e.message}). This endpoint must return JSON: { ok: true, views: number, pricing_clicks: number, affiliate_clicks: number }. Copy the boilerplate from templates/boilerplate/src/app/api/stats/route.ts. Ensure the page_views, pricing_clicks, and affiliate_clicks tables exist in the company DB. Also ensure middleware.ts tracks pageviews by POSTing to /api/stats on each page navigation.`;
+          const [statsTask] = await sql`
             INSERT INTO company_tasks (company_id, title, description, category, priority, status)
             VALUES (
               ${sc.id},
-              'Fix /api/stats endpoint for metrics collection',
-              ${`The /api/stats endpoint at ${statsUrl} is broken (${e.message}). This endpoint must return JSON: { ok: true, views: number, pricing_clicks: number, affiliate_clicks: number }. Copy the boilerplate from templates/boilerplate/src/app/api/stats/route.ts. Ensure the page_views, pricing_clicks, and affiliate_clicks tables exist in the company DB. Also ensure middleware.ts tracks pageviews by POSTing to /api/stats on each page navigation.`},
+              ${statsTaskTitle},
+              ${statsTaskDesc},
               'engineering', 2, 'proposed'
             )
+            RETURNING id
           `;
+          if (statsTask?.id && sc.github_repo) {
+            import("@/lib/github-issues").then(({ syncNewCompanyTaskIssue }) =>
+              syncNewCompanyTaskIssue(sql, statsTask.id, sc.slug, sc.github_repo, {
+                title: statsTaskTitle, description: statsTaskDesc,
+                priority: 2, category: "engineering", source: "sentinel", acceptance: null,
+              })
+            ).catch(() => {});
+          }
         }
       }
     }
@@ -75,7 +86,7 @@ export async function GET(req: Request) {
   try {
     let languageMismatches = 0;
     const langCompanies = await sql`
-      SELECT c.id, c.slug, c.content_language, COALESCE('https://' || c.domain, c.vercel_url) as app_url
+      SELECT c.id, c.slug, c.content_language, c.github_repo, COALESCE('https://' || c.domain, c.vercel_url) as app_url
       FROM companies c
       WHERE c.status IN ('mvp', 'active') AND c.vercel_url IS NOT NULL AND c.content_language IS NOT NULL
     `;
@@ -103,12 +114,21 @@ export async function GET(req: Request) {
             LIMIT 1
           `;
           if (!existingTask) {
-            await sql`
+            const langTaskTitle = 'Fix language consistency — wrong content language detected';
+            const langTaskDesc = `The deployed site at ${lc.app_url} has a language issue: ${issue}. All user-facing content must be in ${isExpectedPt ? "Portuguese" : "English"}. Check: html lang attribute, page text, meta tags, button labels, headings, error messages.`;
+            const [langTask] = await sql`
               INSERT INTO company_tasks (company_id, title, description, category, priority, status)
-              VALUES (${lc.id}, 'Fix language consistency — wrong content language detected',
-                ${`The deployed site at ${lc.app_url} has a language issue: ${issue}. All user-facing content must be in ${isExpectedPt ? "Portuguese" : "English"}. Check: html lang attribute, page text, meta tags, button labels, headings, error messages.`},
-                'engineering', 2, 'proposed')
+              VALUES (${lc.id}, ${langTaskTitle}, ${langTaskDesc}, 'engineering', 2, 'proposed')
+              RETURNING id
             `;
+            if (langTask?.id && lc.github_repo) {
+              import("@/lib/github-issues").then(({ syncNewCompanyTaskIssue }) =>
+                syncNewCompanyTaskIssue(sql, langTask.id, lc.slug, lc.github_repo, {
+                  title: langTaskTitle, description: langTaskDesc,
+                  priority: 2, category: "engineering", source: "sentinel", acceptance: null,
+                })
+              ).catch(() => {});
+            }
           }
         }
       } catch (e: any) {
@@ -277,14 +297,22 @@ export async function GET(req: Request) {
           LIMIT 1
         `;
         if (!existingTask) {
-          await sql`
+          const smokeDesc = "This company has no test files (no tests/ directory, no playwright.config.ts, no src/__tests__/). Add Playwright smoke tests that verify: 1) Homepage loads with 200 status, 2) Key pages return 200, 3) API routes respond correctly. Use the boilerplate pattern from templates/boilerplate/ as reference. Install @playwright/test as devDependency and add a post-deploy.yml workflow.";
+          const [smokeTask] = await sql`
             INSERT INTO company_tasks (company_id, title, description, category, priority, status, source)
             VALUES (
-              ${companyId}, ${taskTitle},
-              ${"This company has no test files (no tests/ directory, no playwright.config.ts, no src/__tests__/). Add Playwright smoke tests that verify: 1) Homepage loads with 200 status, 2) Key pages return 200, 3) API routes respond correctly. Use the boilerplate pattern from templates/boilerplate/ as reference. Install @playwright/test as devDependency and add a post-deploy.yml workflow."},
-              'qa', 2, 'proposed', 'sentinel'
+              ${companyId}, ${taskTitle}, ${smokeDesc}, 'qa', 2, 'proposed', 'sentinel'
             )
+            RETURNING id
           `;
+          if (smokeTask?.id && repo) {
+            import("@/lib/github-issues").then(({ syncNewCompanyTaskIssue }) =>
+              syncNewCompanyTaskIssue(sql, smokeTask.id, slug, repo, {
+                title: taskTitle, description: smokeDesc,
+                priority: 2, category: "qa", source: "sentinel", acceptance: null,
+              })
+            ).catch(() => {});
+          }
           testCoverageIssues++;
         }
       } else if (hasTestFiles && latestTestRun && latestTestRun.conclusion !== "success") {
@@ -296,14 +324,22 @@ export async function GET(req: Request) {
           LIMIT 1
         `;
         if (!existingTask) {
-          await sql`
+          const fixTestDesc = "The post-deploy.yml test workflow is failing (conclusion: " + (latestTestRun.conclusion || "unknown") + "). Investigate and fix the test suite. Common issues: 1) Playwright not installed in CI, 2) Missing env vars in workflow, 3) Tests targeting removed/changed pages, 4) Timeout issues. Check the latest GitHub Actions run logs for details.";
+          const [fixTestTask] = await sql`
             INSERT INTO company_tasks (company_id, title, description, category, priority, status, source)
             VALUES (
-              ${companyId}, ${taskTitle},
-              ${"The post-deploy.yml test workflow is failing (conclusion: " + (latestTestRun.conclusion || "unknown") + "). Investigate and fix the test suite. Common issues: 1) Playwright not installed in CI, 2) Missing env vars in workflow, 3) Tests targeting removed/changed pages, 4) Timeout issues. Check the latest GitHub Actions run logs for details."},
-              'qa', 1, 'proposed', 'sentinel'
+              ${companyId}, ${taskTitle}, ${fixTestDesc}, 'qa', 1, 'proposed', 'sentinel'
             )
+            RETURNING id
           `;
+          if (fixTestTask?.id && repo) {
+            import("@/lib/github-issues").then(({ syncNewCompanyTaskIssue }) =>
+              syncNewCompanyTaskIssue(sql, fixTestTask.id, slug, repo, {
+                title: taskTitle, description: fixTestDesc,
+                priority: 1, category: "qa", source: "sentinel", acceptance: null,
+              })
+            ).catch(() => {});
+          }
           testCoverageIssues++;
         }
       }

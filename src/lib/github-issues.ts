@@ -564,6 +564,28 @@ export function formatDecompositionContextForPrompt(
 }
 
 // ---------------------------------------------------------------------------
+// Public: Fire-and-forget sync for a newly inserted company_tasks row
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function syncNewCompanyTaskIssue(
+  sql: any,
+  taskId: string,
+  companySlug: string,
+  githubRepo: string,
+  task: { title: string; description: string; priority: number; category: string; source: string; acceptance?: string | null }
+): Promise<void> {
+  try {
+    const issue = await createCompanyTaskIssue(githubRepo, { id: taskId, ...task }, companySlug);
+    if (issue?.number) {
+      await sql`UPDATE company_tasks SET github_issue_number = ${issue.number}, github_issue_url = ${issue.url ?? ""} WHERE id = ${taskId}`;
+    }
+  } catch {
+    // fire-and-forget — never block task creation
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public: Extract "Fixes #N" references from PR body
 // ---------------------------------------------------------------------------
 

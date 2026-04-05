@@ -920,18 +920,36 @@ async function maybeCreateRevenueReadinessTask(sql: any, company: any, revenueRe
   if (existing) return false; // Already exists
 
   // Create the task in company_tasks (company-specific work belongs there, not hive_backlog)
-  await sql`
+  const taskTitle = `Add Stripe checkout to ${company.name}`;
+  const taskDescription = `Revenue readiness score is ${revenueReadinessScore}/100 — the company is ready to monetize. Add a Stripe Checkout flow: create product + price via Stripe API, add a /checkout endpoint, add a pricing page with a CTA button, and wire up the checkout.session.completed webhook to unlock access. Use payment_link for the fastest path if a full checkout is overkill.`;
+  const [newTask] = await sql`
     INSERT INTO company_tasks (company_id, category, title, description, priority, status, source)
     VALUES (
       ${company.id},
       'engineering',
-      ${`Add Stripe checkout to ${company.name}`},
-      ${`Revenue readiness score is ${revenueReadinessScore}/100 — the company is ready to monetize. Add a Stripe Checkout flow: create product + price via Stripe API, add a /checkout endpoint, add a pricing page with a CTA button, and wire up the checkout.session.completed webhook to unlock access. Use payment_link for the fastest path if a full checkout is overkill.`},
+      ${taskTitle},
+      ${taskDescription},
       1,
       'proposed',
       'sentinel'
     )
+    RETURNING id
   `;
+
+  if (newTask?.id && company.github_repo) {
+    import("@/lib/github-issues")
+      .then(({ syncNewCompanyTaskIssue }) =>
+        syncNewCompanyTaskIssue(sql, newTask.id, company.slug, company.github_repo, {
+          title: taskTitle,
+          description: taskDescription,
+          priority: 1,
+          category: "engineering",
+          source: "sentinel",
+          acceptance: null,
+        })
+      )
+      .catch(() => {});
+  }
 
   return true;
 }

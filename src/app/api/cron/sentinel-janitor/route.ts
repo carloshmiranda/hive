@@ -2336,15 +2336,23 @@ export async function GET(request: Request) {
               `;
 
               if (!existingVulnTask) {
-                await sql`
+                const vulnTitle = `Fix dependency vulnerabilities in ${company.name}`;
+                const vulnDesc = `${criticalOrHigh.length} open Dependabot alert(s) — ${summaries}`;
+                const [vulnTask] = await sql`
                   INSERT INTO company_tasks (company_id, category, title, description, priority, status, source)
                   VALUES (
-                    ${company.id}, 'engineering',
-                    ${`Fix dependency vulnerabilities in ${company.name}`},
-                    ${`${criticalOrHigh.length} open Dependabot alert(s) — ${summaries}`},
-                    0, 'proposed', 'sentinel'
+                    ${company.id}, 'engineering', ${vulnTitle}, ${vulnDesc}, 0, 'proposed', 'sentinel'
                   )
+                  RETURNING id
                 `;
+                if (vulnTask?.id && company.github_repo) {
+                  import("@/lib/github-issues").then(({ syncNewCompanyTaskIssue }) =>
+                    syncNewCompanyTaskIssue(sql, vulnTask.id, company.slug, company.github_repo, {
+                      title: vulnTitle, description: vulnDesc,
+                      priority: 0, category: "engineering", source: "sentinel", acceptance: null,
+                    })
+                  ).catch(() => {});
+                }
                 console.log(`[sentinel-janitor] Check 52: Created vuln task for ${company.slug} (${criticalOrHigh.length} alerts)`);
               }
             }
@@ -2357,6 +2365,42 @@ export async function GET(request: Request) {
       }
     } catch (check52Err: any) {
       console.warn(`[sentinel-janitor] Check 52 failed: ${check52Err?.message}`);
+    }
+
+    // -----------------------------------------------------------------------
+    // Check: backfill company task GitHub issues
+    // -----------------------------------------------------------------------
+    let taskIssuesBackfilled = 0;
+    try {
+      const unlinkedTasks = await sql`
+        SELECT ct.id, ct.title, ct.description, ct.priority, ct.category, ct.source, ct.acceptance,
+          c.slug, c.github_repo
+        FROM company_tasks ct
+        JOIN companies c ON c.id = ct.company_id
+        WHERE ct.github_issue_number IS NULL
+          AND ct.status NOT IN ('done', 'dismissed', 'cancelled')
+          AND c.github_repo IS NOT NULL
+        ORDER BY ct.priority ASC, ct.created_at ASC
+        LIMIT 5
+      ` as Array<{ id: string; title: string; description: string; priority: number; category: string; source: string; acceptance: string | null; slug: string; github_repo: string }>;
+
+      if (unlinkedTasks.length > 0) {
+        const { syncNewCompanyTaskIssue } = await import("@/lib/github-issues");
+        for (const ct of unlinkedTasks) {
+          await syncNewCompanyTaskIssue(sql, ct.id, ct.slug, ct.github_repo, {
+            title: ct.title,
+            description: ct.description,
+            priority: ct.priority,
+            category: ct.category,
+            source: ct.source,
+            acceptance: ct.acceptance,
+          }).catch(() => {});
+          taskIssuesBackfilled++;
+        }
+        console.log(`[sentinel-janitor] Backfill: linked ${taskIssuesBackfilled} company tasks to GitHub Issues`);
+      }
+    } catch (backfillErr: any) {
+      console.warn(`[sentinel-janitor] Backfill check failed: ${backfillErr?.message}`);
     }
 
     // -----------------------------------------------------------------------
@@ -2404,6 +2448,7 @@ export async function GET(request: Request) {
       backlog_stale_deprioritized: staleItemsDeprioritized,
       ghost_pr_fixed: ghostPrFixed,
       vuln_alerts_found: vulnAlertsFound,
+      task_issues_backfilled: taskIssuesBackfilled,
       db_slow_queries_found: slowQueriesFound,
       db_cache_hit_ratio_pct: cacheHitRatioPct,
       db_performance_issues: dbPerformanceIssues.length,

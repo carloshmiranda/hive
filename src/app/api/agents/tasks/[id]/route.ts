@@ -22,7 +22,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return err("Missing required field: status", 400);
   }
 
-  const valid = ["approved", "in_progress", "done"];
+  const valid = ["approved", "in_progress", "done", "dismissed", "cancelled"];
   if (!valid.includes(status)) {
     return err(`Invalid status '${status}'. Must be one of: ${valid.join(", ")}`, 400);
   }
@@ -34,9 +34,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       status = ${status},
       updated_at = NOW()
     WHERE id = ${id}
-    RETURNING id, title, status
+    RETURNING id, title, status, company_id, github_issue_number
   `;
 
   if (!task) return err("Task not found", 404);
+
+  // Fire-and-forget: close GitHub Issue when task completes
+  if (task.github_issue_number && ["done", "dismissed", "cancelled"].includes(status)) {
+    const [company] = await sql`SELECT github_repo FROM companies WHERE id = ${task.company_id} LIMIT 1`;
+    if (company?.github_repo) {
+      import("@/lib/github-issues")
+        .then(({ syncCompanyTaskStatus }) =>
+          syncCompanyTaskStatus(company.github_repo, task.github_issue_number, status)
+        )
+        .catch(() => {});
+    }
+  }
+
   return json(task);
 }

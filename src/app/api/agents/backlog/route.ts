@@ -87,6 +87,23 @@ export async function POST(req: NextRequest) {
       RETURNING *
     `;
 
+    // Fire-and-forget GitHub Issue creation in company repo
+    const companyForSync = await sql`SELECT slug, github_repo FROM companies WHERE id = ${company_id} LIMIT 1`;
+    if (companyForSync[0]?.github_repo) {
+      import("@/lib/github-issues")
+        .then(({ syncNewCompanyTaskIssue }) =>
+          syncNewCompanyTaskIssue(sql, task.id, companyForSync[0].slug, companyForSync[0].github_repo, {
+            title,
+            description,
+            priority: priorityInt,
+            category: mappedCategory,
+            source: mappedSource,
+            acceptance: null,
+          })
+        )
+        .catch(() => {});
+    }
+
     return json(task, 201);
   }
 
