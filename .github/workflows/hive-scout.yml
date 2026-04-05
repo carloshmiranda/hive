@@ -90,9 +90,9 @@ jobs:
           " 2>/dev/null || echo "0")
           echo "pending_proposals=$PENDING" >> $GITHUB_OUTPUT
           TRIGGER="${{ steps.context.outputs.trigger }}"
-          if [ "$PENDING" -ge 5 ] && [ "$TRIGGER" != "research_request" ]; then
+          if [ "$PENDING" -ge 3 ] && [ "$TRIGGER" != "research_request" ]; then
             echo "skip_ideas=true" >> $GITHUB_OUTPUT
-            echo "Scout: $PENDING pending proposals (>=5) — skipping idea generation, research only"
+            echo "Scout: $PENDING pending proposals (>=3) — skipping idea generation, research only"
           else
             echo "skip_ideas=false" >> $GITHUB_OUTPUT
           fi
@@ -116,7 +116,7 @@ jobs:
             PENDING_PROPOSALS: ${{ steps.gate.outputs.pending_proposals }}
 
             ## IDEA GENERATION GATE
-            If SKIP_IDEAS is "true", there are already 5+ business proposals pending review.
+            If SKIP_IDEAS is "true", there are already 3+ business proposals pending review.
             DO NOT generate new business ideas or create new_company approvals.
             Instead, focus ONLY on research tasks: market research, competitive analysis, SEO keywords
             for existing companies. If the trigger is pipeline_low or company_killed AND SKIP_IDEAS is true,

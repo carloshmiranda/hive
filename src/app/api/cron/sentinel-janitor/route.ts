@@ -257,7 +257,7 @@ export async function GET(request: Request) {
         SELECT id FROM approvals
         WHERE company_id = ${co.id}
           AND gate_type = 'capability_migration'
-          AND status = 'pending'
+          AND status IN ('pending', 'approved')
         LIMIT 1
       `;
       if (existingApproval) continue;
@@ -2530,6 +2530,29 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check: Auto-expire stale new_company proposals pending >21 days
+    // Prevents dashboard accumulation — Carlos should review within 3 weeks
+    // -----------------------------------------------------------------------
+    let staleProposalsExpired = 0;
+    try {
+      const expiredProposals = await sql`
+        UPDATE approvals
+        SET status = 'expired', decided_at = NOW(),
+            decision_note = 'auto-expired: pending review for >21 days'
+        WHERE gate_type = 'new_company'
+          AND status = 'pending'
+          AND created_at < NOW() - INTERVAL '21 days'
+        RETURNING id, title
+      `;
+      staleProposalsExpired = expiredProposals.length;
+      if (staleProposalsExpired > 0) {
+        console.warn(`[janitor] expired ${staleProposalsExpired} stale new_company proposals`);
+      }
+    } catch (staleProposalsErr: any) {
+      console.warn(`[janitor] stale proposal expire failed: ${staleProposalsErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Check: Flag companies with >15 open tasks for CEO to drain
     // -----------------------------------------------------------------------
     let overflowCompanies: { slug: string; open_cnt: number }[] = [];
@@ -2602,6 +2625,7 @@ export async function GET(request: Request) {
       db_performance_issues: dbPerformanceIssues.length,
       neon_provisions_triggered: neonProvisionsTriggered,
       stale_tasks_dismissed: staleTasksDismissed,
+      stale_proposals_expired: staleProposalsExpired,
       task_overflow_companies: overflowCompanies,
     });
 
