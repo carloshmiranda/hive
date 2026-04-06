@@ -11,7 +11,7 @@
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 39 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, waitlist unverified, IRS season open until June 30
-  - Senhorio — status: mvp, 11 cycles, built tax calculator at /calculadora
+  - Senhorio — status: mvp, 35 cycles, zero traffic, kill checkpoint April 15, IRS tools + 14 articles live, IndexNow integrated, social kit ready but unposted
   - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
   - CiberPME — status: mvp, 29 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 12 URLs live, zero traffic, GSC blocked
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-06 — **Senhorio cycle 35 planned (CEO, cycle_start)** — CRITICAL: 9 days to kill checkpoint (April 15). Kill evaluation triggers active: zero_traffic_90d, zero_signups, consecutive_low_scores. Plan: distribution-only cycle. Eng task 1: email capture form on /simulador-irs + /calculadora. Eng task 2: write "IRS 2026 Guia Completo" blog post (2500+ words PT, research brief ready). No Growth dispatch (playbook 0.95: Growth agent unreliable for PT content). IndexNow already live (cycle 34 PRs #69-72). Social media kit ready (PR #67) but NEVER POSTED — Carlos manual posting is the #1 action. Product spec v47 saved. Engineer dispatched.
 
 - `[code]` 2026-04-05 — **Dashboard audit + analytics self-heal (commits 6038356, 65454ad, 3eae263)** — Investigated 4 Evolver "Needs your attention" inbox items: (1) Zero metrics — self-healing as DB provisioning takes effect; (2) CEO score "53/57 unscored" — root cause was wrong JSON path `ceo_review->>'score'` vs actual `ceo_review->'review'->>'score'`; fixed with COALESCE in `agents/context/route.ts` (2 queries) and `health-score.ts`; (3) NEON_API_KEY missing — already resolved by Vercel Marketplace integration; (4) Evolver dedup exact-only — already fixed in current Evolver prompt via semantic comparison instructions. All 4 Evolver proposals marked `implemented` to clear inbox. Vercel Web Analytics never worked since inception — two root causes: (a) wrong API endpoint `POST /v1/web-analytics/projects` → 404, should be `PUT /v9/projects/{id}/web-analytics`; (b) wrong `vercel_project_id` format in DB for 3 companies (project name string instead of `prj_*` ID). Fixed endpoint in `provision/route.ts` + `analytics/route.ts`. Fixed DB for flolio/senhorio/verdedesk with correct `prj_*` IDs. Added daily self-healing check in sentinel-janitor. Scout pipeline gate tightened (pending ≥3 blocks, was 5). Evolver pipeline_full gate tightened (>5 pending, was >10). capability_migration dedup fixed (check `IN ('pending','approved')`, was `= 'pending'`). Auto-expiry added for new_company proposals >21 days old. VerdeDesk deployment fixed: `tsconfig.json` had `"ignoreDeprecations": "6.0"` (invalid) → `"5.0"`.
 
