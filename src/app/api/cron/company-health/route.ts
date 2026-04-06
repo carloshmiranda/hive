@@ -651,7 +651,27 @@ export async function GET(req: Request) {
     let codeFixesDispatched = 0;
     for (const b of brokenDeploys) {
       // Step 1: Try infrastructure repair (free, no LLM)
+      // Dedup: skip if a repair was attempted in the last 24h (prevents 35+/day loops)
+      const [recentRepair] = await sql`
+        SELECT 1 FROM agent_actions
+        WHERE company_id = (SELECT id FROM companies WHERE slug = ${b.slug} LIMIT 1)
+          AND action_type = 'infra_repair'
+          AND started_at > NOW() - INTERVAL '24 hours'
+        LIMIT 1
+      `.catch(() => [null]);
+      if (recentRepair) {
+        console.log(`[company-health] Dedup skip (infra_repair): ${b.slug}`);
+        continue;
+      }
+
       try {
+        // Log before calling so sentinel-urgent dedup also sees this
+        await sql`
+          INSERT INTO agent_actions (agent, action_type, company_id, status, description, started_at, finished_at)
+          SELECT 'sentinel', 'infra_repair', id, 'running', 'company-health Check 30 repair attempt', NOW(), NOW()
+          FROM companies WHERE slug = ${b.slug} LIMIT 1
+        `.catch(() => {});
+
         const repairRes = await fetch(`${baseUrl}/api/agents/repair-infra`, {
           method: "POST",
           headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
@@ -660,6 +680,14 @@ export async function GET(req: Request) {
         });
         const repairData = await repairRes.json();
         infraRepairsAttempted++;
+
+        // Update status to success or failed
+        await sql`
+          UPDATE agent_actions SET status = ${repairData.ok !== false ? 'success' : 'failed'}, finished_at = NOW()
+          WHERE company_id = (SELECT id FROM companies WHERE slug = ${b.slug} LIMIT 1)
+            AND action_type = 'infra_repair' AND status = 'running'
+            AND started_at > NOW() - INTERVAL '1 hour'
+        `.catch(() => {});
 
         const repaired = repairData.repairs?.vercel_duplicates?.action === "unlinked_duplicates"
           || repairData.repairs?.vercel_deploy?.action === "redeployed";
