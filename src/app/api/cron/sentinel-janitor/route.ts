@@ -2531,11 +2531,11 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
-    // Check: Enable Vercel Web Analytics for companies that don't have it
-    // Runs silently — fires PUT /v9/projects/{id}/web-analytics for any company
-    // with a vercel_project_id. Idempotent — safe to re-run every day.
+    // Check: Enable Vercel Web Analytics + ensure {slug}.vercel.app domain alias
+    // Idempotent — safe to re-run every day.
     // -----------------------------------------------------------------------
     let analyticsEnabled = 0;
+    let domainAliasesAdded = 0;
     try {
       const [vercelToken, teamId] = await Promise.all([
         getSettingValue("vercel_token").catch(() => null),
@@ -2543,13 +2543,14 @@ export async function GET(request: Request) {
       ]);
       if (vercelToken) {
         const teamParam = teamId ? `?teamId=${teamId}` : "";
-        const projectsForAnalytics = await sql`
+        const projectsForVercel = await sql`
           SELECT slug, vercel_project_id FROM companies
           WHERE status IN ('mvp', 'active', 'idea')
             AND vercel_project_id IS NOT NULL
             AND vercel_project_id LIKE 'prj_%'
         `;
-        for (const co of projectsForAnalytics) {
+        for (const co of projectsForVercel) {
+          // Enable web analytics
           try {
             const res = await fetch(
               `https://api.vercel.com/v9/projects/${co.vercel_project_id}/web-analytics${teamParam}`,
@@ -2561,7 +2562,36 @@ export async function GET(request: Request) {
             );
             if (res.ok) analyticsEnabled++;
           } catch {
-            // Non-fatal — skip
+            // Non-fatal
+          }
+
+          // Ensure {slug}.vercel.app domain alias exists (prevents DEPLOYMENT_NOT_FOUND)
+          try {
+            const domainsRes = await fetch(
+              `https://api.vercel.com/v9/projects/${co.vercel_project_id}/domains${teamParam}`,
+              { headers: { Authorization: `Bearer ${vercelToken}` } }
+            );
+            if (domainsRes.ok) {
+              const domainsData = await domainsRes.json();
+              const expectedAlias = `${co.slug}.vercel.app`;
+              const hasAlias = (domainsData.domains || []).some((d: { name: string }) => d.name === expectedAlias);
+              if (!hasAlias) {
+                const addRes = await fetch(
+                  `https://api.vercel.com/v10/projects/${co.vercel_project_id}/domains${teamParam}`,
+                  {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${vercelToken}`, "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: expectedAlias }),
+                  }
+                );
+                if (addRes.ok) {
+                  domainAliasesAdded++;
+                  console.log(`[janitor] added domain alias ${expectedAlias}`);
+                }
+              }
+            }
+          } catch {
+            // Non-fatal
           }
         }
         if (analyticsEnabled > 0) {
@@ -2569,7 +2599,7 @@ export async function GET(request: Request) {
         }
       }
     } catch (analyticsErr: any) {
-      console.warn(`[janitor] analytics enable check failed: ${analyticsErr.message}`);
+      console.warn(`[janitor] analytics/domain check failed: ${analyticsErr.message}`);
     }
 
     // -----------------------------------------------------------------------
@@ -2670,6 +2700,7 @@ export async function GET(request: Request) {
       stale_tasks_dismissed: staleTasksDismissed,
       stale_proposals_expired: staleProposalsExpired,
       analytics_enabled: analyticsEnabled,
+      domain_aliases_added: domainAliasesAdded,
       task_overflow_companies: overflowCompanies,
     });
 
