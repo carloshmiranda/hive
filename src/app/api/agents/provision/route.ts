@@ -225,5 +225,13 @@ export async function POST(req: NextRequest) {
     results.brand = { error: e.message };
   }
 
+  // Fire-and-forget assess so capabilities are populated immediately after provisioning
+  const hiveUrl = process.env.NEXT_PUBLIC_URL || "https://hive-phi.vercel.app";
+  fetch(`${hiveUrl}/api/companies/${company_id}/assess`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.CRON_SECRET}`, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(15000),
+  }).catch(() => {});
+
   return json(results);
 }

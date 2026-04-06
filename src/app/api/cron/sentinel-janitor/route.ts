@@ -355,7 +355,7 @@ export async function GET(request: Request) {
     const unassessedCompanies = await sql`
       SELECT c.id, c.slug FROM companies c
       WHERE c.status IN ('mvp', 'active') AND c.github_repo IS NOT NULL
-      AND (c.last_assessed_at IS NULL OR c.last_assessed_at < NOW() - INTERVAL '7 days')
+      AND (c.last_assessed_at IS NULL OR c.last_assessed_at < NOW() - INTERVAL '24 hours')
     `;
     for (const co of unassessedCompanies) {
       try {

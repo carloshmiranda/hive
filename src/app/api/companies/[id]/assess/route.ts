@@ -163,6 +163,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         { path: ".github/workflows/post-deploy.yml", key: "post_deploy" },
         // Data collection
         { path: "src/app/api/stats/route.ts", key: "stats_endpoint" },
+        { path: "MVP/api/stats.ts", key: "stats_endpoint_pages" }, // Pages Router (e.g. VerdeDesk)
         { path: "src/app/api/pricing-intent/route.ts", key: "pricing_intent" },
         { path: "src/app/api/affiliate-click/route.ts", key: "affiliate_tracking" },
       ];
@@ -208,6 +209,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     } catch {
       issues.push("Could not inspect repository");
     }
+  }
+
+  // Merge alternate stats endpoint paths — true if any path exists
+  if (updates.stats_endpoint_pages) {
+    updates.stats_endpoint = { exists: (updates.stats_endpoint as any)?.exists || (updates.stats_endpoint_pages as any)?.exists };
+    delete updates.stats_endpoint_pages;
   }
 
   // 4. Apply compatibility matrix
