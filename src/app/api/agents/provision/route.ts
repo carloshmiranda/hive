@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { validateOIDC } from "@/lib/oidc";
 import { getDb, json, err } from "@/lib/db";
 import { createProject as createNeonProject } from "@/lib/neon-api";
-import { createProject as createVercelProject, setEnvVars, addDomain, provisionNeonStore, hasEnvVar, getEnvVar } from "@/lib/vercel";
+import { createProject as createVercelProject, setEnvVars, addDomain, provisionNeonStore, hasEnvVar, getEnvVar, enableWebAnalytics } from "@/lib/vercel";
 import { getSettingValue } from "@/lib/settings";
 import { setSentryTags } from "@/lib/sentry-tags";
 import { getFramework, recommendFramework } from "@/lib/frameworks";
@@ -223,6 +223,11 @@ export async function POST(req: NextRequest) {
     results.brand = brand;
   } catch (e: any) {
     results.brand = { error: e.message };
+  }
+
+  // Enable Vercel Web Analytics (fire-and-forget — requires valid vercel_token in settings)
+  if (vercelProjectId) {
+    enableWebAnalytics(vercelProjectId).catch(() => {});
   }
 
   // Fire-and-forget assess so capabilities are populated immediately after provisioning

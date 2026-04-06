@@ -92,7 +92,7 @@ export async function removeDomain(projectId: string, domain: string) {
 }
 
 export async function enableWebAnalytics(projectId: string) {
-  return vercel(`/v1/web-analytics/project/${projectId}`, "POST", { enabledAt: new Date().toISOString() });
+  return vercel(`/v9/projects/${projectId}/web-analytics`, "PUT", { enabled: true });
 }
 
 export async function getLatestDeployment(projectId: string): Promise<{ id: string; url: string; state: string; readyState: string; createdAt: number } | null> {
