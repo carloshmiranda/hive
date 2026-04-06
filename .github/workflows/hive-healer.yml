@@ -73,6 +73,38 @@ jobs:
             set_output "payload" "{\"scope\":\"${{ github.event.inputs.scope }}\"}"
           fi
 
+      - name: Pre-flight validation
+        id: preflight
+        env:
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: |
+          echo "=== Healer Pre-flight Check ==="
+          echo "Event: ${{ github.event_name }}"
+          echo "Scope: ${{ github.event.client_payload.scope || github.event.inputs.scope || 'systemic' }}"
+          echo "Trigger: ${{ github.event.action || 'manual' }}"
+
+          # Check critical env vars are set (not their values)
+          echo "DATABASE_URL set: ${{ env.DATABASE_URL != '' }}"
+          echo "Auth step outcome: ${{ steps.auth.outcome }}"
+          echo "Claude token set: ${{ steps.auth.outputs.claude_token != '' }}"
+          echo "GH_PAT set: ${{ steps.auth.outputs.gh_pat != '' }}"
+
+          # Validate payload fields for repository_dispatch
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            SCOPE=$(echo "${DISPATCH_PAYLOAD}" | jq -r '.scope // "null"')
+            echo "Payload scope: ${SCOPE}"
+            PAYLOAD_KEYS=$(echo "${DISPATCH_PAYLOAD}" | jq -r 'keys | join(", ")')
+            echo "Payload fields: ${PAYLOAD_KEYS}"
+          fi
+
+          # Fail fast if auth step failed
+          if [ "${{ steps.auth.outcome }}" != "success" ]; then
+            echo "FATAL: Auth step failed (outcome=${{ steps.auth.outcome }}) — aborting before agent start"
+            exit 1
+          fi
+
+          echo "=== Pre-flight passed ==="
+
       - name: Run Healer agent
         id: agent
         env:
@@ -90,6 +122,19 @@ jobs:
 
             Read `prompts/healer.md` for your full prompt and process.
             Read `MISTAKES.md` for known patterns — don't re-investigate what's already documented.
+
+            ## STEP 0: Pre-flight DB check (skip if company has no database)
+            Before running any DB-related fixes, check company capabilities. If the target company
+            has `capabilities->>'database' = 'false'` or no `neon_project_id`, do NOT attempt
+            any database fixes for that company — they will always fail.
+            ```sql
+            SELECT slug, capabilities->>'database' as db_enabled, neon_project_id
+            FROM companies
+            WHERE status != 'killed'
+            ORDER BY slug
+            ```
+            If a company has `db_enabled = 'false'` or null, skip all DB-related error fixes
+            for that company (log them as "skipped: no database" instead).
 
             ## STEP 1: Query errors from last 48h
             ```sql
@@ -281,7 +326,7 @@ jobs:
             || echo "sentinel_urgent kick failed (non-fatal)"
 
       - name: Log failure to DB
-        if: always() && steps.agent.outcome == 'failure'
+        if: always() && steps.agent.outcome != 'success'
         uses: ./.github/actions/log-agent-failure
         with:
           agent: healer
