@@ -2626,6 +2626,106 @@ export async function GET(request: Request) {
     }
 
     // -----------------------------------------------------------------------
+    // Check: Stuck cycle guardian — dispatch cycle_complete for cycles open >6h
+    // with no recent non-CEO action. Prevents cycles staying open forever when
+    // hive-build.yml fails to dispatch cycle_complete (e.g., agent crashes).
+    // -----------------------------------------------------------------------
+    let stuckCyclesClosed = 0;
+    try {
+      const stuckCycles = await sql`
+        SELECT cy.id, cy.company_id, c.slug, cy.started_at
+        FROM cycles cy
+        JOIN companies c ON c.id = cy.company_id
+        WHERE cy.status = 'running'
+          AND cy.started_at < NOW() - INTERVAL '6 hours'
+          AND c.status IN ('mvp', 'active')
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_actions aa
+            WHERE aa.company_id = cy.company_id
+              AND aa.agent NOT IN ('ceo', 'dispatch', 'sentinel', 'ops')
+              AND aa.started_at > cy.started_at
+              AND aa.status IN ('success', 'failed')
+          )
+      `;
+      for (const cy of stuckCycles) {
+        // Only close if no cycle_complete was dispatched recently (guard against double-close)
+        await fetch(`${baseUrl}/api/dispatch/cycle-complete`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agent: "sentinel",
+            company: cy.slug,
+            status: "cycle_complete",
+            action_type: "stuck_cycle_recovery",
+          }),
+          signal: AbortSignal.timeout(15000),
+        }).catch(() => {});
+        stuckCyclesClosed++;
+        console.warn(`[janitor] closed stuck cycle for ${cy.slug} (started ${cy.started_at})`);
+      }
+    } catch (stuckCycleErr: any) {
+      console.warn(`[janitor] stuck cycle guardian failed: ${stuckCycleErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
+    // Check: Evolver proposal auto-resolution
+    // Marks pending proposals as 'implemented' when the underlying condition
+    // is no longer detected. Prevents inbox accumulation after self-healing.
+    // -----------------------------------------------------------------------
+    let proposalsAutoResolved = 0;
+    try {
+      // Auto-resolve "zero metrics" proposals if any company now has real data
+      const [hasMetrics] = await sql`
+        SELECT 1 FROM metrics
+        WHERE date > CURRENT_DATE - 7
+          AND page_views > 0
+        LIMIT 1
+      `.catch(() => [null]);
+
+      // Auto-resolve "infra_repair" proposals if repair rate dropped back to normal
+      const [recentRepairCount] = await sql`
+        SELECT COUNT(*)::int as cnt FROM agent_actions
+        WHERE action_type = 'infra_repair'
+          AND started_at > NOW() - INTERVAL '24 hours'
+      `.catch(() => [{ cnt: 0 }]);
+
+      const repairRateNormal = (recentRepairCount?.cnt || 0) <= 3;
+
+      // Auto-resolve "cycle_complete" / "cycle stuck" proposals if recent cycles are closing cleanly
+      const [recentStuckCycles] = await sql`
+        SELECT COUNT(*)::int as cnt FROM cycles
+        WHERE status = 'running'
+          AND started_at < NOW() - INTERVAL '4 hours'
+      `.catch(() => [{ cnt: 0 }]);
+
+      const cyclesCleaningUp = (recentStuckCycles?.cnt || 0) === 0;
+
+      // Mark matching proposals as implemented
+      const resolvedProposals = await sql`
+        UPDATE evolver_proposals
+        SET status = 'implemented',
+            implemented_at = NOW(),
+            notes = COALESCE(notes || ' | ', '') || 'Auto-resolved by sentinel: condition no longer detected'
+        WHERE status = 'pending'
+          AND created_at < NOW() - INTERVAL '1 hour'
+          AND (
+            (title ILIKE '%zero metrics%' AND ${hasMetrics ? true : false})
+            OR (title ILIKE '%infra_repair%' AND ${repairRateNormal})
+            OR (title ILIKE '%premature cycle_complete%' AND ${cyclesCleaningUp})
+            OR (title ILIKE '%cycle_complete%' AND title ILIKE '%premature%' AND ${cyclesCleaningUp})
+          )
+        RETURNING id, title
+      `.catch(() => []);
+
+      proposalsAutoResolved = resolvedProposals.length;
+      if (proposalsAutoResolved > 0) {
+        console.log(`[janitor] auto-resolved ${proposalsAutoResolved} evolver proposals`);
+      }
+    } catch (proposalResolveErr: any) {
+      console.warn(`[janitor] proposal auto-resolve failed: ${proposalResolveErr.message}`);
+    }
+
+    // -----------------------------------------------------------------------
     // Check: Flag companies with >15 open tasks for CEO to drain
     // -----------------------------------------------------------------------
     let overflowCompanies: { slug: string; open_cnt: number }[] = [];
@@ -2701,6 +2801,8 @@ export async function GET(request: Request) {
       stale_proposals_expired: staleProposalsExpired,
       analytics_enabled: analyticsEnabled,
       domain_aliases_added: domainAliasesAdded,
+      stuck_cycles_closed: stuckCyclesClosed,
+      proposals_auto_resolved: proposalsAutoResolved,
       task_overflow_companies: overflowCompanies,
     });
 

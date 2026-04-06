@@ -66,10 +66,25 @@ async function collectMetrics(req: Request, companySlugs?: string[]) {
           if (res.ok) {
             const data = await res.json();
             if (data.ok) {
-              views = typeof data.views === "number" ? data.views : 0;
-              pricingClicks = typeof data.pricing_clicks === "number" ? data.pricing_clicks : 0;
-              affiliateClicks = typeof data.affiliate_clicks === "number" ? data.affiliate_clicks : 0;
-              source = "company_api";
+              // Standard boilerplate format: { ok, views, pricing_clicks, affiliate_clicks }
+              if (typeof data.views === "number") {
+                views = data.views;
+                pricingClicks = typeof data.pricing_clicks === "number" ? data.pricing_clicks : 0;
+                affiliateClicks = typeof data.affiliate_clicks === "number" ? data.affiliate_clicks : 0;
+                source = "company_api";
+              }
+              // Legacy format: { ok, data: { page_views, ... } }
+              else if (data.data && typeof data.data.page_views === "number") {
+                views = data.data.page_views;
+                pricingClicks = 0;
+                affiliateClicks = 0;
+                source = "company_api";
+              }
+              // Extended stats format with no top-level views (e.g. Senhorio old format)
+              // Still counts as success so we write 0 instead of skipping
+              else {
+                source = "company_api";
+              }
             }
           }
         } catch (fetchErr: any) {
