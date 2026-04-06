@@ -863,6 +863,23 @@ async function ceoContext(sql: any, company: any, taskDescription?: string) {
     allKillEvaluationTriggers.push(learningRateKillTrigger);
   }
 
+  // Apply consensus override when it strengthens the existing recommendation
+  // kill consensus can only escalate, never de-escalate
+  const consensusResult = validation.kill_consensus;
+  let finalRecommendation = validation.recommendation;
+  if (consensusResult) {
+    const order = ["double_down", "continue", "pivot_evaluate", "kill_evaluate", "kill"] as const;
+    const baseIdx = order.indexOf(validation.recommendation);
+    const consensusIdx = order.indexOf(
+      consensusResult.recommendation === "kill" ? "kill"
+      : consensusResult.recommendation === "kill_evaluate" ? "kill_evaluate"
+      : validation.recommendation
+    );
+    if (consensusIdx > baseIdx) {
+      finalRecommendation = order[consensusIdx];
+    }
+  }
+
   return {
     company: {
       name: company.name,
@@ -874,8 +891,9 @@ async function ceoContext(sql: any, company: any, taskDescription?: string) {
       content_language: company.content_language || "en",
       market: company.market || "global",
     },
-    validation,
+    validation: { ...validation, recommendation: finalRecommendation },
     kill_evaluation_triggers: allKillEvaluationTriggers,
+    kill_consensus: consensusResult ?? null,
     cycle: cycle[0] ? {
       id: cycle[0].id,
       cycle_number: cycle[0].cycle_number,

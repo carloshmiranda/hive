@@ -4,6 +4,7 @@
 
 import { normalizeType, getTypeDefinition } from "./business-types";
 import { computeUnitEconomics } from "./unit-economics";
+import { computeKillConsensus, type KillConsensusResult } from "./kill-consensus";
 
 // Re-export for backwards compatibility
 export type BusinessType = string;
@@ -42,6 +43,8 @@ export interface ValidationResult {
   // Venture-studio recommendation: CEO uses this as primary disposition signal
   recommendation: "double_down" | "continue" | "pivot_evaluate" | "kill_evaluate" | "kill";
   recommendation_reason: string;
+  // Multi-signal consensus result — supplements single-agent recommendation
+  kill_consensus?: KillConsensusResult;
   revenue_readiness_score: number;
   revenue_readiness_message: string | null;
   unit_economics: {
@@ -638,9 +641,54 @@ export function computeValidationScore(
   const killEvaluationTriggers = checkKillEvaluationTriggers(type, metrics, companyCreatedAt, revenueReadiness.score);
 
   // Venture-studio recommendation
-  const { recommendation, reason: recommendationReason } = computeRecommendation(
+  const { recommendation: baseRecommendation, reason: recommendationReason } = computeRecommendation(
     type, metrics, companyCreatedAt, kill.signal, killEvaluationTriggers.triggers, revenueReadiness.score,
   );
+
+  // Multi-signal kill consensus (5 weighted signals)
+  const wowGrowthForConsensus = computeWoWGrowth(metrics);
+  const latestForConsensus = metrics[0] || {} as MetricsRow;
+  const hasRevenueForConsensus = (latestForConsensus.revenue || 0) > 0 || (latestForConsensus.mrr || 0) > 0;
+  const revenueGrowingForConsensus = metrics.length >= 2 &&
+    (metrics[0]?.revenue || 0) > (metrics[1]?.revenue || 0);
+
+  // Signal 1: CEO score trend (weight 0.30) — proxied via kill evaluation trigger count (no cycle data here)
+  // Value is 0 when no triggers, 1 when 2+ triggers (CEO-type signals)
+  const ceoTrendValue = killEvaluationTriggers.triggers.length >= 2 ? 1.0
+    : killEvaluationTriggers.triggers.length === 1 ? 0.5
+    : 0;
+
+  // Signal 2: Revenue trajectory (weight 0.25) — suppresses kill when revenue present and growing
+  const revenueValue = hasRevenueForConsensus ? 0 : (revenueGrowingForConsensus ? 0 : 0.7);
+
+  // Signal 3: Traffic trend (weight 0.20) — negative WoW growth signals kill
+  const trafficValue = wowGrowthForConsensus < 0 ? Math.min(1, Math.abs(wowGrowthForConsensus) * 5)
+    : wowGrowthForConsensus >= 0.05 ? 0
+    : 0.3; // flat growth
+
+  // Signal 4: Error rate proxy (weight 0.15)
+  // TODO: Replace with actual error_rate metric when added to metrics schema
+  const errorRateValue = 0;
+
+  // Signal 5: Kill evaluation trigger count (weight 0.10)
+  const killTriggerCountValue = Math.min(1, killEvaluationTriggers.triggers.length / 3);
+
+  const killConsensus = computeKillConsensus([
+    { name: "ceo_score_trend", weight: 0.30, value: ceoTrendValue, reason: ceoTrendValue > 0 ? `${killEvaluationTriggers.triggers.length} kill trigger(s) active` : undefined },
+    { name: "revenue_trajectory", weight: 0.25, value: revenueValue, reason: revenueValue > 0 ? "no revenue present" : undefined },
+    { name: "traffic_trend", weight: 0.20, value: trafficValue, reason: trafficValue > 0 ? `WoW growth ${(wowGrowthForConsensus * 100).toFixed(1)}%` : undefined },
+    { name: "error_rate", weight: 0.15, value: errorRateValue },
+    { name: "kill_trigger_count", weight: 0.10, value: killTriggerCountValue, reason: killTriggerCountValue > 0 ? `${killEvaluationTriggers.triggers.length} triggers` : undefined },
+  ]);
+
+  // Consensus may strengthen but never weaken the base recommendation
+  const recommendationOrder: ValidationResult["recommendation"][] = ["double_down", "continue", "pivot_evaluate", "kill_evaluate", "kill"];
+  const baseIdx = recommendationOrder.indexOf(baseRecommendation);
+  const consensusRec = killConsensus.recommendation === "kill" ? "kill"
+    : killConsensus.recommendation === "kill_evaluate" ? "kill_evaluate"
+    : baseRecommendation;
+  const consensusIdx = recommendationOrder.indexOf(consensusRec);
+  const recommendation: ValidationResult["recommendation"] = consensusIdx > baseIdx ? consensusRec : baseRecommendation;
 
   // Unit economics (only compute when ad spend or CAC data exists)
   const hasAcquisitionData = metrics.some(m => (m.ad_spend || 0) > 0 || (m.cac || 0) > 0);
@@ -672,6 +720,7 @@ export function computeValidationScore(
     kill_evaluation_triggers: killEvaluationTriggers.triggers,
     recommendation,
     recommendation_reason: recommendationReason,
+    kill_consensus: killConsensus,
     revenue_readiness_score: revenueReadiness.score,
     revenue_readiness_message: revenueReadiness.message,
     unit_economics: unitEcon ? {
