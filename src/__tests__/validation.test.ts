@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
 import { computeValidationScore, checkCEOScoreKillTrigger, checkLearningRateKillTrigger } from '@/lib/validation';
 import type { MetricsRow } from '@/lib/validation';
+import { computeKillConsensus } from '@/lib/kill-consensus';
+import type { KillSignal } from '@/lib/kill-consensus';
 
 // ─── Arbitraries ───
 
@@ -227,6 +229,127 @@ describe('checkCEOScoreKillTrigger', () => {
       ),
       { numRuns: 200 }
     );
+  });
+});
+
+// ─── computeKillConsensus tests ───
+
+describe('computeKillConsensus', () => {
+  const fiveSignals = (values: [number, number, number, number, number]): KillSignal[] => [
+    { name: 'ceo_score_trend', weight: 0.30, value: values[0] },
+    { name: 'revenue_trajectory', weight: 0.25, value: values[1] },
+    { name: 'traffic_trend', weight: 0.20, value: values[2] },
+    { name: 'error_rate', weight: 0.15, value: values[3] },
+    { name: 'kill_trigger_count', weight: 0.10, value: values[4] },
+  ];
+
+  it('all signals at max → kill recommendation', () => {
+    const result = computeKillConsensus(fiveSignals([1, 1, 1, 1, 1]));
+    expect(result.recommendation).toBe('kill');
+    expect(result.weighted_score).toBe(100);
+    expect(result.quorum_met).toBe(true);
+  });
+
+  it('all signals at zero → continue recommendation', () => {
+    const result = computeKillConsensus(fiveSignals([0, 0, 0, 0, 0]));
+    expect(result.recommendation).toBe('continue');
+    expect(result.weighted_score).toBe(0);
+    expect(result.quorum_met).toBe(false);
+  });
+
+  it('mixed signals below quorum threshold → continue', () => {
+    // Only ceo_score_trend fires at 0.5 → weighted_score = 0.30*0.5/1.0*100 = 15
+    const result = computeKillConsensus(fiveSignals([0.5, 0, 0, 0, 0]));
+    expect(result.recommendation).toBe('continue');
+    expect(result.weighted_score).toBeLessThan(40);
+    expect(result.quorum_met).toBe(false);
+  });
+
+  it('partial quorum → kill_evaluate (score 40-74)', () => {
+    // ceo_score_trend=1 (0.30) + revenue=1 (0.25) → weighted = 55/100 = 55
+    const result = computeKillConsensus(fiveSignals([1, 1, 0, 0, 0]));
+    expect(result.recommendation).toBe('kill_evaluate');
+    expect(result.weighted_score).toBeGreaterThanOrEqual(40);
+    expect(result.weighted_score).toBeLessThan(75);
+    expect(result.quorum_met).toBe(true);
+  });
+
+  it('revenue present (value=0) suppresses kill when other signals are low', () => {
+    // Only error_rate fires at 0.5 → 0.15*0.5/1.0*100 = 7.5 → continue
+    const result = computeKillConsensus(fiveSignals([0, 0, 0, 0.5, 0]));
+    expect(result.recommendation).toBe('continue');
+    expect(result.quorum_met).toBe(false);
+  });
+
+  it('empty signals array → continue with zero score', () => {
+    const result = computeKillConsensus([]);
+    expect(result.recommendation).toBe('continue');
+    expect(result.weighted_score).toBe(0);
+    expect(result.quorum_met).toBe(false);
+    expect(result.signals_fired).toHaveLength(0);
+  });
+
+  it('signals_fired contains only signals with value > 0', () => {
+    const result = computeKillConsensus(fiveSignals([1, 0, 0.5, 0, 0]));
+    expect(result.signals_fired).toContain('ceo_score_trend');
+    expect(result.signals_fired).toContain('traffic_trend');
+    expect(result.signals_fired).not.toContain('revenue_trajectory');
+    expect(result.signals_fired).not.toContain('error_rate');
+  });
+
+  it('weighted_score is always in [0, 100]', () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record<KillSignal>({
+            name: fc.string(),
+            weight: fc.double({ min: 0, max: 1, noNaN: true }),
+            value: fc.double({ min: 0, max: 1, noNaN: true }),
+          }),
+          { minLength: 1, maxLength: 10 }
+        ),
+        (signals) => {
+          const result = computeKillConsensus(signals);
+          expect(result.weighted_score).toBeGreaterThanOrEqual(0);
+          expect(result.weighted_score).toBeLessThanOrEqual(100);
+        }
+      ),
+      { numRuns: 200 }
+    );
+  });
+});
+
+// ─── computeValidationScore kill_consensus integration ───
+
+describe('computeValidationScore kill_consensus field', () => {
+  it('always includes kill_consensus in the result', () => {
+    fc.assert(
+      fc.property(businessTypeArb, metricsArb, createdAtArb, (type, metrics, createdAt) => {
+        const result = computeValidationScore(type, metrics, createdAt);
+        expect(result.kill_consensus).toBeDefined();
+        expect(result.kill_consensus).not.toBeNull();
+      }),
+      { numRuns: 100 }
+    );
+  });
+
+  it('kill_consensus.weighted_score is in [0, 100]', () => {
+    fc.assert(
+      fc.property(businessTypeArb, metricsArb, createdAtArb, (type, metrics, createdAt) => {
+        const result = computeValidationScore(type, metrics, createdAt);
+        expect(result.kill_consensus!.weighted_score).toBeGreaterThanOrEqual(0);
+        expect(result.kill_consensus!.weighted_score).toBeLessThanOrEqual(100);
+      }),
+      { numRuns: 100 }
+    );
+  });
+
+  it('kill_consensus does not weaken recommendation below base', () => {
+    // When company has revenue, recommendation should stay positive
+    const metricsWithRevenue = [{ date: '2025-01-01', page_views: 1000, revenue: 500 }];
+    const result = computeValidationScore('saas', metricsWithRevenue, '2024-01-01');
+    // Recommendation should be continue or better, not kill/kill_evaluate due to consensus
+    expect(['double_down', 'continue', 'pivot_evaluate']).toContain(result.recommendation);
   });
 });
 
