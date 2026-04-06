@@ -300,7 +300,7 @@ export default function DashboardPage() {
     setTodos(prev => prev.filter(t => t.id !== todoId));
   };
 
-  const handleProposalDecision = async (id: string, decision: "approved" | "rejected" | "deferred") => {
+  const handleProposalDecision = async (id: string, decision: "approved" | "rejected" | "deferred" | "implemented") => {
     if (decision === "rejected" && !confirm("Reject this prompt proposal?")) return;
     const res = await fetch("/api/evolver", {
       method: "PATCH",
@@ -1259,12 +1259,17 @@ export default function DashboardPage() {
                               Affects: {p.affected_companies.join(", ")}
                             </div>
                           )}
-                          <div style={{ display: "flex", gap: 8 }}>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                             <button onClick={() => handleProposalDecision(p.id, "approved")} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
                               borderRadius: 6, cursor: "pointer",
                               border: "1px solid var(--hive-green-border)", background: "var(--hive-green-bg)", color: "var(--hive-green)",
                             }}>Approve</button>
+                            <button onClick={() => handleProposalDecision(p.id, "implemented")} style={{
+                              padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
+                              borderRadius: 6, cursor: "pointer",
+                              border: "1px solid var(--hive-blue-border)", background: "var(--hive-blue-bg)", color: "var(--hive-blue)",
+                            }}>Mark Implemented</button>
                             <button onClick={() => handleProposalDecision(p.id, "deferred")} style={{
                               padding: "8px 20px", fontSize: 12, fontFamily: "var(--hive-mono)", fontWeight: 500,
                               borderRadius: 6, cursor: "pointer",

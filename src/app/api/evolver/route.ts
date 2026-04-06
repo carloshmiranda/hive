@@ -91,16 +91,29 @@ export async function PATCH(req: Request) {
   }
 
   if (!id || !decision) return err("id and decision required");
-  if (!["approved", "rejected", "deferred"].includes(decision)) {
-    return err("decision must be approved, rejected, or deferred");
+  if (!["approved", "rejected", "deferred", "implemented"].includes(decision)) {
+    return err("decision must be approved, rejected, deferred, or implemented");
   }
 
   const sql = getDb();
 
   const [proposal] = await sql`SELECT * FROM evolver_proposals WHERE id = ${id}`;
   if (!proposal) return err("Proposal not found", 404);
-  if (proposal.status !== "pending" && proposal.status !== "deferred") {
+  if (!["pending", "deferred"].includes(proposal.status)) {
     return err(`Proposal already ${proposal.status}`);
+  }
+
+  // Mark as implemented — manual dismissal for fixes already applied outside the approval flow
+  if (decision === "implemented") {
+    await sql`
+      UPDATE evolver_proposals
+      SET status = 'implemented',
+          reviewed_at = NOW(),
+          implemented_at = NOW(),
+          notes = COALESCE(${notes || null}, notes, 'Manually marked as implemented')
+      WHERE id = ${id}
+    `;
+    return json({ ok: true, status: "implemented" });
   }
 
   await sql`
