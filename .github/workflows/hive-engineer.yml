@@ -841,6 +841,25 @@ jobs:
           echo "model=${MODEL:-claude-sonnet-4-6}" >> $GITHUB_OUTPUT
           echo "max_turns=${MAX_TURNS}" >> $GITHUB_OUTPUT
 
+      - name: Set checkpoint flag
+        id: checkpoint_flag
+        env:
+          MAX_TURNS: ${{ steps.model.outputs.max_turns }}
+        run: |
+          # Checkpoint splits M/L/XL runs (max_turns >= 45) into stage-1 (15 turns) + stage-2 (30 turns)
+          # S complexity runs (max_turns < 45) execute uninterrupted as today
+          if [ "${MAX_TURNS:-0}" -ge 45 ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+            echo "stage1_turns=15" >> $GITHUB_OUTPUT
+            echo "stage2_turns=30" >> $GITHUB_OUTPUT
+            echo "Checkpoint enabled: max_turns=${MAX_TURNS} >= 45 — splitting into stage-1 (15) + stage-2 (30)"
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "stage1_turns=${MAX_TURNS}" >> $GITHUB_OUTPUT
+            echo "stage2_turns=0" >> $GITHUB_OUTPUT
+            echo "Checkpoint disabled: max_turns=${MAX_TURNS} < 45 — running uninterrupted"
+          fi
+
       - name: Pre-execution guard — check turn budget
         id: turn_guard
         env:
@@ -979,7 +998,7 @@ jobs:
         with:
           allowed_bots: "hive-orchestrator[bot]"
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns ${{ steps.model.outputs.max_turns }} --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns ${{ steps.checkpoint_flag.outputs.stage1_turns }} --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You are working on the Hive repo itself.
 
@@ -1101,9 +1120,130 @@ jobs:
             - If the spec has acceptance_criteria, tackle them in priority order. Each completed
               criterion is progress that survives even if you run out of turns.
 
+            ## Mandatory Checkpoint File (write as your absolute last action)
+            After completing all work (or reaching your turn limit), write this file:
+            $GITHUB_WORKSPACE/.engineer-checkpoint.json
+            Contents must be valid JSON with these exact keys:
+            {
+              "files_changed": ["array of file paths you modified"],
+              "tasks_completed": ["array of completed task descriptions"],
+              "tasks_remaining": ["array of tasks not yet done — empty if all done"],
+              "confidence": <integer 0-100 reflecting how complete the work is>,
+              "summary": "one paragraph describing what was done and what remains"
+            }
+            This file must be written even if you completed everything. It is mandatory.
+
+      - name: CEO checkpoint validation
+        id: ceo_checkpoint
+        if: steps.checkpoint_flag.outputs.enabled == 'true' && steps.agent.outcome == 'success' && steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "hive-orchestrator[bot]"
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
+          claude_args: "--model claude-sonnet-4-6 --max-turns 2 --allowedTools Bash,Read,Write"
+          prompt: |
+            You are the CEO of Hive performing a mid-execution checkpoint review.
+
+            Read the file at $GITHUB_WORKSPACE/.engineer-checkpoint.json.
+
+            Evaluate the checkpoint:
+            - Are tasks_remaining reasonable and achievable?
+            - Is confidence >= 40?
+            - Is the work aligned with the original goal (not off-task)?
+
+            Decision:
+            - CONTINUE: work is on track, tasks_remaining are coherent, confidence >= 40
+            - ABORT: agent went off-task, confidence < 20, or tasks_remaining are incoherent
+
+            Write exactly one word — CONTINUE or ABORT — to $GITHUB_WORKSPACE/.engineer-verdict.txt.
+            No other output. No explanation. No other files.
+
+      - name: Read CEO verdict
+        id: verdict
+        if: steps.checkpoint_flag.outputs.enabled == 'true'
+        env:
+          PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
+        run: |
+          VERDICT_FILE="$GITHUB_WORKSPACE/.engineer-verdict.txt"
+          if [ -f "$VERDICT_FILE" ]; then
+            VERDICT=$(cat "$VERDICT_FILE" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' | head -c 10)
+            echo "CEO verdict file found: '$VERDICT'"
+          else
+            VERDICT="CONTINUE"
+            echo "Verdict file not found — defaulting to CONTINUE"
+          fi
+
+          # Validate — only accept ABORT, everything else is CONTINUE
+          if [ "$VERDICT" = "ABORT" ]; then
+            echo "abort=true" >> $GITHUB_OUTPUT
+          else
+            echo "abort=false" >> $GITHUB_OUTPUT
+            VERDICT="CONTINUE"
+          fi
+
+          echo "Final verdict: $VERDICT"
+
+          # Get OIDC token for API calls
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
+            | jq -r '.value')
+
+          # If ABORT, append note to backlog item
+          if [ "$VERDICT" = "ABORT" ]; then
+            BACKLOG_ID=$(echo "${PAYLOAD_JSON}" | jq -r '.backlog_id // empty' 2>/dev/null || echo "")
+            if [ -n "$BACKLOG_ID" ]; then
+              curl -s -X POST "https://hive-phi.vercel.app/api/backlog/update" \
+                -H "Authorization: Bearer $OIDC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"id\":\"$BACKLOG_ID\",\"notes_append\":\" [checkpoint_abort] CEO validation aborted stage-2: agent went off-task at turn 15.\"}" || true
+              echo "Appended abort note to backlog item $BACKLOG_ID"
+            fi
+          fi
+
+          # Log verdict to agent_actions
+          curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"ceo\",\"action_type\":\"checkpoint_verdict\",\"status\":\"success\",\"description\":\"Mid-execution checkpoint verdict: ${VERDICT}\"}" || true
+
+      - name: Engineer stage-2
+        id: agent_stage2
+        if: steps.checkpoint_flag.outputs.enabled == 'true' && steps.verdict.outputs.abort != 'true' && steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
+        env:
+          GH_PAT: ${{ steps.auth.outputs.gh_pat }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "hive-orchestrator[bot]"
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 30 --allowedTools Bash,Read,Write,Edit"
+          prompt: |
+            You are the Engineer agent of Hive continuing from a mid-execution checkpoint.
+
+            FIRST: Read $GITHUB_WORKSPACE/.engineer-checkpoint.json for context on what stage-1 completed.
+
+            Complete the tasks listed in tasks_remaining. Pick up exactly where stage-1 left off.
+            Follow the same workflow as stage-1: implement, test, commit, push, create PR if not done.
+
+            TRIGGER: ${{ needs.context.outputs.trigger }}
+            PAYLOAD: ${{ needs.context.outputs.payload }}
+            COMPANY: ${{ needs.context.outputs.company }}
+
+            ## Rules
+            - Always use `GH_TOKEN="$GH_PAT"` for gh commands
+            - Write to agent_actions table: what you did, status, any errors
+            - Read files before editing them
+            - ALL self-improvement changes go through a PR — no direct pushes to main
+
+            ## Turn Budget Management
+            You have up to 30 turns. Work efficiently:
+            - Focus on completing tasks_remaining from the checkpoint
+            - Commit checkpoints periodically: `git add <files> && git commit -m "wip: checkpoint"`
+            - When done: push branch, create PR if not already open, enable auto-merge
+            - Log success to agent_actions via the Hive API
+
       - name: Verify build passes before marking success
         id: build_check
-        if: steps.agent.outcome == 'success'
+        if: steps.agent.outcome == 'success' || steps.agent_stage2.outcome == 'success'
         run: |
           CHANGED=$(git diff --name-only origin/main 2>/dev/null | wc -l | tr -d ' ')
           if [ "${CHANGED:-0}" = "0" ]; then
@@ -1124,7 +1264,7 @@ jobs:
           echo "=== Build verification PASSED ==="
 
       - name: Log success to Hive API
-        if: steps.agent.outcome == 'success' && (steps.build_check.outcome == 'success' || steps.build_check.outcome == 'skipped')
+        if: (steps.agent.outcome == 'success' || steps.agent_stage2.outcome == 'success') && (steps.build_check.outcome == 'success' || steps.build_check.outcome == 'skipped')
         env:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
@@ -1147,7 +1287,13 @@ jobs:
           OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
-          STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
+          STAGE1="${{ steps.agent.outcome }}"
+          STAGE2="${{ steps.agent_stage2.outcome }}"
+          if [ "$STAGE2" = "success" ] || [ "$STAGE1" = "success" ]; then
+            STATUS="success"
+          else
+            STATUS="failed"
+          fi
           TASK=$(echo "${PAYLOAD_JSON}" | jq -r '.task // "Hive-internal work"' 2>/dev/null || echo "Hive-internal work")
           curl -s -X POST "https://hive-phi.vercel.app/api/notify" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
@@ -1163,7 +1309,13 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
           BACKLOG_ID=$(echo "${PAYLOAD_JSON}" | jq -r '.backlog_id // empty' 2>/dev/null || echo "")
-          AGENT_OUTCOME="${{ steps.agent.outcome }}"
+          # Use stage-2 outcome when checkpoint ran, otherwise use stage-1 outcome
+          STAGE2_OUTCOME="${{ steps.agent_stage2.outcome }}"
+          if [ "$STAGE2_OUTCOME" = "success" ] || [ "$STAGE2_OUTCOME" = "failure" ]; then
+            AGENT_OUTCOME="$STAGE2_OUTCOME"
+          else
+            AGENT_OUTCOME="${{ steps.agent.outcome }}"
+          fi
           HIVE_URL="https://hive-phi.vercel.app"
           COMPANY=$(echo "${PAYLOAD_JSON}" | jq -r '.company // empty' 2>/dev/null || echo "")
           CONFIGURED_MAX_TURNS="${{ steps.model.outputs.max_turns }}"
@@ -1192,7 +1344,11 @@ jobs:
             ERROR_TYPE="build_failed"
             ERROR_DETAIL="Engineer submitted code that fails TypeScript/SQL validation. Build or lint step rejected output."
           elif [ "$AGENT_OUTCOME" != "success" ]; then
-            EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+            # Prefer stage-2 execution file when checkpoint ran; fall back to stage-1
+            EXEC_FILE="${{ steps.agent_stage2.outputs.execution_file }}"
+            if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+              EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+            fi
             if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
               EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
             fi
@@ -1259,7 +1415,11 @@ jobs:
           PR_BRANCH=""
           PR_FILES=""
           if [ "$STATUS" = "success" ] || [ "$STATUS" = "partial" ]; then
-            EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+            # Prefer stage-2 execution file for PR extraction; fall back to stage-1
+            EXEC_FILE="${{ steps.agent_stage2.outputs.execution_file }}"
+            if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+              EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+            fi
             if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
               EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
             fi
