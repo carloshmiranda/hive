@@ -15,6 +15,27 @@
 
 ---
 
+### 2026-04-06 company-health Check 30 had no dedup for repair-infra — 35+ calls/day
+**What happened:** Evolver flagged "35 infra_repair calls post-fix vs claimed 0". The sentinel-urgent dedup was added (24h guard via `agent_actions`) but company-health Check 30 fired `repair-infra` for every broken deploy without logging to `agent_actions` first, making it invisible to the dedup.
+**Root cause:** Two callers of `repair-infra`: (1) sentinel-urgent — has proper dedup via `agent_actions`. (2) company-health Check 30 — directly called `repair-infra` with no dedup guard. When fixing one caller, the other was missed.
+**Fix applied:** Added 24h dedup check to company-health before calling repair-infra. Also logs an `agent_actions` record with `action_type='infra_repair'` before the call so both callers share the same dedup view.
+**Prevention:** When adding dedup to any sentinel check that calls a shared function, grep for ALL callers of that function and ensure dedup is applied everywhere. A dedup in one caller means nothing if another caller has none.
+**Affects:** hive
+
+### 2026-04-06 hive-build.yml only dispatched ceo_review on pr_opened === true — non-PR cycles never closed
+**What happened:** Company cycles for non-PR work (content pushes, config fixes, direct commits) would stay in `running` status forever. Evolver reported "engineer finishes 1h after cycle ends" — really cycles that were stuck open.
+**Root cause:** `hive-build.yml` chain dispatch only fired `ceo_review` when `pr_opened === true`. Work that doesn't require a PR (blog content, config changes) never dispatched `cycle_complete`, leaving cycles permanently open. The PR #399 fix (adding unconditional `cycle_complete` to `hive-engineer.yml`) only affected companies without github repos — all 4 active companies use `hive-build.yml`.
+**Fix applied:** Added `else` branch to all 4 company repo `hive-build.yml` files: when `pr_opened !== true`, dispatch `cycle_complete` so the cycle closes and CEO can score.
+**Prevention:** Any chain dispatch MUST have an unconditional terminal dispatch. Never leave a success path that doesn't fire `cycle_complete` or `ceo_review`. Check both `hive-engineer.yml` (Hive repo, no-github-repo path) and `hive-build.yml` (company repos) when modifying chain dispatch.
+**Affects:** hive
+
+### 2026-04-06 Company /api/stats endpoints shape mismatch + crashes — metrics cron always returned 0
+**What happened:** Evolver flagged "zero metrics across all 4 companies — data pipeline completely broken". 3/4 company stats endpoints were broken: VerdeDesk crashed (Prisma), Senhorio returned wrong JSON shape, Flolio had a broken domain alias.
+**Root cause:** Each company got a custom `/api/stats` implementation diverging from the boilerplate format. Senhorio built extended stats (waitlist/pricing/email) without the top-level `views` field the metrics cron expects. VerdeDesk used Prisma which can't init in Vercel serverless without proper client generation. Flolio had no `flolio.vercel.app` domain alias.
+**Fix applied:** Fixed Senhorio to return `{ ok, views, pricing_clicks, affiliate_clicks, data: { ... } }`. Replaced VerdeDesk Prisma with `@neondatabase/serverless`. Added sentinel-janitor daily check to ensure `{slug}.vercel.app` domain alias exists on each Vercel project.
+**Prevention:** All company `/api/stats` endpoints must return `{ ok: true, views: number, pricing_clicks: number, affiliate_clicks: number }`. When provisioning a company, verify `/api/stats` returns 200 with the correct shape. Avoid Prisma in company serverless functions — use `@neondatabase/serverless` exclusively.
+**Affects:** both
+
 ### 2026-04-05 Vercel Web Analytics used wrong API endpoint since inception (POST /v1 vs PUT /v9)
 **What happened:** Web Analytics was never enabled on any company despite being called during every `/api/agents/provision` run. All 4 companies had zero analytics data.
 **Root cause:** Code used `POST https://api.vercel.com/v1/web-analytics/projects` with `{ projectId }` in the body — this endpoint doesn't exist and returns 404. The correct endpoint is `PUT https://api.vercel.com/v9/projects/{projectId}/web-analytics` with `{ "enabled": true }`.
