@@ -92,6 +92,9 @@ export async function removeDomain(projectId: string, domain: string) {
 }
 
 export async function enableWebAnalytics(projectId: string) {
+  // Check if already enabled — PUT returns 404 on projects where analytics exists
+  const project = await vercel(`/v9/projects/${projectId}`);
+  if (project?.webAnalytics?.id) return project.webAnalytics; // already enabled
   return vercel(`/v9/projects/${projectId}/web-analytics`, "PUT", { enabled: true });
 }
 
