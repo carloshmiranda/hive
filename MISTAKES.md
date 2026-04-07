@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-04-06 CEO/Scout chain-dispatch crashed with `Cannot find module '@neondatabase/serverless'`
+**What happened:** 8 consecutive CEO failures across all companies. All cycles stuck "running" for 8–29 hours. Sentinel was looping every 4h dispatching `cycle_start` but every CEO run failed at the chain-dispatch step.
+**Root cause:** `scripts/chain-dispatch.ts` imports `@neondatabase/serverless` (line 21) but the GitHub Actions job had `Setup Node.js` with `cache: 'npm'` and NO `npm ci` step. `cache: 'npm'` only caches the npm download cache — it does NOT install `node_modules`. So `npx tsx scripts/chain-dispatch.ts` could never find the module.
+**Fix applied:** Added `- name: Install dependencies; run: npm ci` step after `Setup Node.js` in `hive-ceo.yml`, `hive-scout.yml`, and Engineer's provision/teardown jobs. Also converted Engineer's inline DB scripts from the third-party `postgres` package to `@neondatabase/serverless` (now available via npm ci).
+**Prevention:** Any workflow step that runs `npx tsx` or `node` on project files MUST have `npm ci` or `npm install` run before it in the same job. `cache: 'npm'` does NOT install — it only speeds up future installs. When adding a new npm dependency used in a workflow script, verify the workflow actually installs deps first.
+**Affects:** hive
+
 ### 2026-04-06 company-health Check 30 had no dedup for repair-infra — 35+ calls/day
 **What happened:** Evolver flagged "35 infra_repair calls post-fix vs claimed 0". The sentinel-urgent dedup was added (24h guard via `agent_actions`) but company-health Check 30 fired `repair-infra` for every broken deploy without logging to `agent_actions` first, making it invisible to the dedup.
 **Root cause:** Two callers of `repair-infra`: (1) sentinel-urgent — has proper dedup via `agent_actions`. (2) company-health Check 30 — directly called `repair-infra` with no dedup guard. When fixing one caller, the other was missed.
