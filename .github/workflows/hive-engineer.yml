@@ -115,6 +115,9 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Install dependencies
+        run: npm ci
+
       - name: Get tokens via OIDC
         id: auth
         uses: ./.github/actions/get-hive-tokens
@@ -134,17 +137,14 @@ jobs:
             exit 0
           fi
 
-          npm install --no-save postgres 2>/dev/null
-
           BIZ_MODEL=$(node -e "
-            const postgres = require('postgres');
-            const sql = postgres(process.env.DATABASE_URL);
+            const { neon } = require('@neondatabase/serverless');
+            const sql = neon(process.env.DATABASE_URL);
             async function run() {
               const [company] = await sql\`SELECT id, company_type FROM companies WHERE slug = \${'${COMPANY_SLUG}'} LIMIT 1\`;
-              if (!company) { console.log(''); await sql.end(); return; }
+              if (!company) { console.log(''); return; }
               if (company.company_type) {
                 console.log(company.company_type);
-                await sql.end();
                 return;
               }
               const [approval] = await sql\`
@@ -160,7 +160,6 @@ jobs:
                 console.error('Set company_type=' + biz + ' market=' + market + ' lang=' + lang);
               }
               console.log(biz);
-              await sql.end();
             }
             run().catch(e => { console.error(e.message); process.exit(0); });
           " 2>&1 | tail -1)
@@ -591,6 +590,9 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Install dependencies
+        run: npm ci
+
       - name: Get tokens via OIDC
         id: auth
         uses: ./.github/actions/get-hive-tokens
@@ -604,14 +606,13 @@ jobs:
           NEON_KEY: ${{ steps.auth.outputs.neon_key }}
         run: |
           COMPANY="${{ needs.context.outputs.company }}"
-          npm install --no-save postgres 2>/dev/null
 
           echo "=== Tearing down company: $COMPANY ==="
 
           # 1. Look up infra records
           INFRA=$(node -e "
-            const postgres = require('postgres');
-            const sql = postgres(process.env.DATABASE_URL);
+            const { neon } = require('@neondatabase/serverless');
+            const sql = neon(process.env.DATABASE_URL);
             async function run() {
               const rows = await sql\`
                 SELECT i.*, c.id as cid FROM infra i
@@ -619,7 +620,6 @@ jobs:
                 WHERE c.slug = \${'${COMPANY}'} AND i.status != 'torn_down'
               \`;
               console.log(JSON.stringify(rows));
-              await sql.end();
             }
             run().catch(e => { console.error(e.message); console.log('[]'); });
           " 2>/dev/null)
@@ -665,22 +665,21 @@ jobs:
 
           # 5. Mark infra as torn down
           node -e "
-            const postgres = require('postgres');
-            const sql = postgres(process.env.DATABASE_URL);
+            const { neon } = require('@neondatabase/serverless');
+            const sql = neon(process.env.DATABASE_URL);
             async function run() {
               const [c] = await sql\`SELECT id FROM companies WHERE slug = \${'${COMPANY}'} LIMIT 1\`;
-              if (!c) { await sql.end(); return; }
+              if (!c) { return; }
               await sql\`UPDATE infra SET status = 'torn_down', torn_down_at = NOW() WHERE company_id = \${c.id} AND status != 'torn_down'\`;
               console.log('Infra marked as torn_down');
-              await sql.end();
             }
             run().catch(e => console.error(e.message));
           " 2>/dev/null
 
           # 6. Log teardown to agent_actions
           node -e "
-            const postgres = require('postgres');
-            const sql = postgres(process.env.DATABASE_URL);
+            const { neon } = require('@neondatabase/serverless');
+            const sql = neon(process.env.DATABASE_URL);
             async function run() {
               const [c] = await sql\`SELECT id FROM companies WHERE slug = \${'${COMPANY}'} LIMIT 1\`;
               await sql\`
@@ -689,7 +688,6 @@ jobs:
                   \${'Torn down infrastructure for ' + '${COMPANY}' + ': Vercel, Neon, GitHub archived'},
                   NOW(), NOW())
               \`;
-              await sql.end();
             }
             run().catch(e => console.error(e.message));
           " 2>/dev/null
