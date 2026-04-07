@@ -15,7 +15,9 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return err("Unauthorized", 401);
+    const { validateOIDC } = await import("@/lib/oidc");
+    const result = await validateOIDC(req);
+    if (result instanceof Response) return result;
   }
 
   const body = await req.json();

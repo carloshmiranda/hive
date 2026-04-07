@@ -90,11 +90,13 @@ async function getDeduplicatedPlaybook(
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  // Auth: CRON_SECRET bearer token (same as Vercel crons)
+  // Auth: CRON_SECRET bearer token or GitHub Actions OIDC
   const authHeader = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return err("Unauthorized", 401);
+    const { validateOIDC } = await import("@/lib/oidc");
+    const result = await validateOIDC(req);
+    if (result instanceof Response) return result;
   }
 
   let body = await req.json();

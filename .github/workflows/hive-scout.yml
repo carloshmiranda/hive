@@ -51,7 +51,7 @@ jobs:
         id: auth
         uses: ./.github/actions/get-hive-tokens
         with:
-          tokens: "claude:claude_token:true github_pat:gh_pat cron_secret:cron_secret"
+          tokens: "claude:claude_token:true github_pat:gh_pat"
 
       - name: Build Scout context
         id: context
@@ -100,7 +100,7 @@ jobs:
       - name: Run Scout agent
         id: agent
         env:
-          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
           HIVE_URL: https://hive-phi.vercel.app
         uses: anthropics/claude-code-action@v1
         with:
@@ -167,7 +167,7 @@ jobs:
           agent: scout
           trigger: ${{ steps.context.outputs.trigger }}
           execution_file: ${{ steps.agent.outputs.execution_file }}
-          cron_secret: ${{ steps.auth.outputs.cron_secret }}
+          cron_secret: ${{ secrets.CRON_SECRET }}
           context_payload: ${{ toJson(github.event.client_payload) }}
 
       - name: Setup Node.js
@@ -183,7 +183,7 @@ jobs:
         if: always() && steps.agent.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.auth.outputs.gh_pat }}
-          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
           HIVE_URL: https://hive-phi.vercel.app
           EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
           TRIGGER: ${{ steps.context.outputs.trigger }}

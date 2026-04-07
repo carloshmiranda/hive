@@ -40,6 +40,30 @@ async function post(
   return { status: res.status, text };
 }
 
+/**
+ * Fetch a GitHub Actions OIDC token for direct use as a Bearer token
+ * when calling Hive API endpoints. This eliminates the need for CRON_SECRET
+ * in workflow-to-Hive communication — GitHub handles rotation automatically.
+ */
+async function getOidcToken(hiveUrl: string): Promise<string> {
+  const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!requestUrl || !requestToken) {
+    console.warn("  [oidc] OIDC env vars not available — Hive API calls will be unauthenticated");
+    return "";
+  }
+  try {
+    const res = await fetch(`${requestUrl}&audience=${hiveUrl}`, {
+      headers: { Authorization: `bearer ${requestToken}` },
+    });
+    const data = await res.json() as { value?: string };
+    return data.value ?? "";
+  } catch (e) {
+    console.warn(`  [oidc] Failed to get OIDC token: ${e instanceof Error ? e.message : "unknown"}`);
+    return "";
+  }
+}
+
 // ─── Parse execution file ────────────────────────────────────────────────────
 
 function parseLastAssistantText(execFile: string): string {
@@ -251,8 +275,12 @@ async function main() {
     env("EXECUTION_FILE") ||
     "/home/runner/work/_temp/claude-execution-output.json";
   const ghToken = env("GH_TOKEN");
-  const cronSecret = env("CRON_SECRET");
   const hiveUrl = env("HIVE_URL", "https://hive-phi.vercel.app");
+
+  // Use GitHub OIDC token for all Hive API calls — no stored secret needed.
+  // Falls back to CRON_SECRET if OIDC env vars are unavailable (local dev / manual runs).
+  const oidcToken = await getOidcToken(hiveUrl);
+  const cronSecret = oidcToken || env("CRON_SECRET");
   const dbUrl = env("DATABASE_URL");
   const trigger = env("TRIGGER");
   const dispatchPayloadRaw = env("DISPATCH_PAYLOAD", "{}");

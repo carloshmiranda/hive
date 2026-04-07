@@ -82,13 +82,13 @@ jobs:
         id: auth
         uses: ./.github/actions/get-hive-tokens
         with:
-          tokens: "claude:claude_token:true github_pat:gh_pat:true cron_secret:cron_secret"
+          tokens: "claude:claude_token:true github_pat:gh_pat:true"
 
       - name: Run skill intake agent
         if: steps.detect.outputs.has_new == 'true'
         uses: anthropics/claude-code-action@v1
         env:
-          CRON_SECRET: ${{ steps.auth.outputs.cron_secret }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
           GH_PAT: ${{ steps.auth.outputs.gh_pat }}
           HIVE_URL: https://hive-phi.vercel.app
           NEW_SKILLS: ${{ steps.detect.outputs.new_skills }}
