@@ -71,8 +71,11 @@ Set `stage1_passed: false` in output and stop.
 | Touches landing page (page.tsx) | +1 |
 | Design violations found in 4b | +2 |
 | Only content/copy changes (no code) | -2 |
+| PR title starts with `feat:` AND validation_phase is `validate` or `test_intent` | +7 |
 
 Score 0-3: Auto-merge. Score 4-6: Merge + log detailed summary. Score 7+: Do NOT merge, create approval gate for Carlos.
+
+> **Phase gate**: The +7 rule above ensures any new-feature PR during `validate` or `test_intent` phase always scores ≥7 and is escalated to Carlos. New features in these phases compete with validation goals (measuring real intent/conversion) and must never auto-merge. Read the validation_phase from the context API response before scoring.
 
 ### STEP 6 — Decision
 

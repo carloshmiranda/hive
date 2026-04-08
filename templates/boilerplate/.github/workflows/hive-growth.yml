@@ -154,7 +154,34 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
           STATUS="${{ steps.agent.outcome == 'success' && 'success' || 'failed' }}"
+          COMPANY="${{ github.event.inputs.company_slug }}"
+          TRIGGER="${{ github.event.inputs.trigger }}"
+
+          # Extract task_id from payload so the log row links to the executed task
+          PAYLOAD='${{ github.event.inputs.payload }}'
+          TASK_ID=$(echo "$PAYLOAD" | jq -r '.task_id // .id // empty' 2>/dev/null || echo "")
+
+          # Extract produced content URLs from gemini output (best-effort; non-Hive URLs only)
+          PRODUCED_URLS="[]"
+          if [ -f /tmp/gemini-output.txt ]; then
+            PRODUCED_URLS=$(grep -oP 'https?://[^\s"<>]+' /tmp/gemini-output.txt \
+              | grep -v 'hive-phi\.vercel\.app\|github\.com\|googleapis\|gemini\|vercel\.app' \
+              | sort -u | head -10 \
+              | jq -R . | jq -sc '.' 2>/dev/null || echo "[]")
+          fi
+
+          # Build metadata JSON with task linkage for tracking
+          METADATA=$(jq -n \
+            --arg task_id "$TASK_ID" \
+            --arg trigger "$TRIGGER" \
+            --argjson produced_urls "$PRODUCED_URLS" \
+            '{task_id: $task_id, trigger: $trigger, produced_urls: $produced_urls}')
+
           curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"company_slug\":\"${{ github.event.inputs.company_slug }}\",\"agent\":\"growth\",\"action_type\":\"content_creation\",\"status\":\"$STATUS\",\"description\":\"Growth workflow on company repo ($STATUS)\"}" || true
+            -d "$(jq -n \
+              --arg company_slug "$COMPANY" \
+              --arg status "$STATUS" \
+              --argjson metadata "$METADATA" \
+              '{company_slug: $company_slug, agent: "growth", action_type: "content_creation", status: $status, description: ("Growth content_creation: " + $status), metadata: $metadata}')" || true

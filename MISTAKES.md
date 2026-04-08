@@ -15,6 +15,29 @@
 
 ---
 
+### 2026-04-08 Sentinel-urgent re-dispatched stale engineer tasks bypassing CEO frozen-cycle directive
+**What happened:** Sentinel-urgent Check 13c picked up any failed engineer `agent_action` from the last 12h and re-dispatched it, regardless of whether the CEO's latest cycle had set `engineering_tasks=[]` to freeze new engineering work for that company. This caused a stale failed task from a prior cycle to be re-executed even though the CEO explicitly planned no engineering work.
+**Root cause:** Check 13c only checked circuit-breaker state before re-dispatching. It had no visibility into the company's latest cycle plan. CEO encodes a freeze by writing `engineering_tasks: []` into `cycles.ceo_plan`, but sentinel never read it.
+**Fix applied:** Added a cycle check before engineer dispatch in Check 13c: query `cycles` for the company's latest non-null `ceo_plan` and call `jsonb_array_length(ceo_plan->'engineering_tasks')`. If it returns 0, skip the dispatch and log a `sentinel_retry/success` row (so dedup prevents further re-checks).
+**Prevention:** Whenever Sentinel re-dispatches any agent, it must read the current cycle plan to verify the agent was actually assigned work in the current cycle. Empty `engineering_tasks` or `growth_tasks` arrays are a CPU/budget freeze signal from the CEO — do not override them.
+**Affects:** hive
+
+### 2026-04-08 CEO pr_review auto-merge approved feat: PRs during validate/test_intent phase
+**What happened:** Engineer opened a `feat:` PR during a company's `validate` phase. CEO risk-scored it as low (touching only one file, no auth changes) and auto-merged it. The new feature competed with the validation goal (measuring real intent/conversion), contaminating the experiment.
+**Root cause:** CEO risk scoring in `ceo-review.md` had no awareness of the company's validation phase. A lightweight feature PR could score 1-3 even in `validate` phase and be auto-merged, bypassing the intent of the validation gate.
+**Fix applied:** Added `+7` to the CEO risk score table in `prompts/ceo-review.md` for any PR whose title starts with `feat:` when `validation_phase` is `validate` or `test_intent`. Score ≥7 always triggers escalation to Carlos — never auto-merge. Added a note reminding CEO to read `validation_phase` from context before scoring.
+**Prevention:** CEO must always read the company's `validation_phase` before reviewing PRs. New features (`feat:`) in validate/test_intent phases are value-trap risk — they dilute signal from the experiment. Any such PR must be escalated. Only `fix:`, `content:`, and `chore:` PRs may auto-merge in these phases.
+**Affects:** hive
+
+### 2026-04-08 Growth content_creation log rows had empty input/output — no task linkage
+**What happened:** Every Growth `content_creation` success row in `agent_actions` had null `input` and no `task_id`. The CEO and Sentinel could not tell which task was executed, making cycle tracking and dedup unreliable for growth tasks.
+**Root cause:** The `hive-growth.yml` "Log result to Hive" step sent only a plain-string `description` field to `/api/agents/log`. It did not pass `metadata` (which maps to the `input` column) or any structured output. The `payload` input containing `task_id` was never forwarded.
+**Fix applied:** Updated the Log result step in `templates/boilerplate/.github/workflows/hive-growth.yml`: extract `task_id` from `$PAYLOAD` (via `jq`), extract produced content URLs from `/tmp/gemini-output.txt` (best-effort grep), build a `metadata` JSON object with `task_id`, `trigger`, and `produced_urls`, and pass it to the log API call. The log API stores `metadata` in the `input` column.
+**Prevention:** Every workflow's log step must include structured metadata — at minimum `task_id` and `trigger`. A bare `description` string is not enough for traceability. Audit all agent log steps when adding a new workflow.
+**Affects:** hive
+
+---
+
 ### 2026-04-06 CEO/Scout chain-dispatch crashed with `Cannot find module '@neondatabase/serverless'`
 **What happened:** 8 consecutive CEO failures across all companies. All cycles stuck "running" for 8–29 hours. Sentinel was looping every 4h dispatching `cycle_start` but every CEO run failed at the chain-dispatch step.
 **Root cause:** `scripts/chain-dispatch.ts` imports `@neondatabase/serverless` (line 21) but the GitHub Actions job had `Setup Node.js` with `cache: 'npm'` and NO `npm ci` step. `cache: 'npm'` only caches the npm download cache — it does NOT install `node_modules`. So `npx tsx scripts/chain-dispatch.ts` could never find the module.
