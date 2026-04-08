@@ -244,6 +244,32 @@ export async function GET(request: Request) {
         ctx.dispatches.push({ type: "circuit_breaker", target: r.agent as string, payload: { company: r.slug, reason: "3+_failures_24h" } });
         continue;
       }
+      // Guard: if the company's latest cycle has engineering_tasks=[], the CEO has
+      // frozen new engineering work. Re-dispatching a stale failed task would bypass
+      // the freeze directive — skip and log instead.
+      if (r.agent === "engineer") {
+        const latestCycleRows = await ctx.sql`
+          SELECT jsonb_array_length(ceo_plan->'engineering_tasks') AS et_count
+          FROM cycles
+          WHERE company_id = ${r.company_id}
+          AND ceo_plan IS NOT NULL
+          AND ceo_plan ? 'engineering_tasks'
+          ORDER BY started_at DESC
+          LIMIT 1
+        `;
+        const etCount = latestCycleRows[0]?.et_count;
+        if (typeof etCount === "number" && etCount === 0) {
+          console.log(`[sentinel-urgent] Check 13c: Skipping engineer re-dispatch for ${r.slug} — latest cycle has engineering_tasks=[] (frozen directive)`);
+          await ctx.sql`
+            INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+            VALUES (${r.agent}, ${r.company_id}, 'sentinel_retry', 'success',
+              ${"Sentinel-urgent: skipped engineer re-dispatch for " + r.slug + " — engineering_tasks=[] frozen in latest cycle"},
+              NOW(), NOW())
+          `;
+          continue;
+        }
+      }
+
       if (r.github_repo && r.agent === "engineer") {
         await dispatchToCompanyWorkflow(ctx, r.github_repo as string, "hive-build.yml", {
           company_slug: r.slug as string,
