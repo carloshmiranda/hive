@@ -348,6 +348,31 @@ export async function GET(request: Request) {
         eventType = "cycle_start";
       }
 
+      // Guard (Check 14): skip engineer feature_request when latest cycle has engineering_tasks=[]
+      // Mirrors the Check 13c pattern — CEO freeze directive must be respected for rate-limit retries too
+      if (r.agent === "engineer" && eventType === "feature_request") {
+        const latestCycleRows14 = await ctx.sql`
+          SELECT jsonb_array_length(ceo_plan->'engineering_tasks') AS et_count
+          FROM cycles
+          WHERE company_id = ${r.company_id}
+          AND ceo_plan IS NOT NULL
+          AND ceo_plan ? 'engineering_tasks'
+          ORDER BY started_at DESC
+          LIMIT 1
+        `;
+        const etCount14 = latestCycleRows14[0]?.et_count;
+        if (typeof etCount14 === "number" && etCount14 === 0) {
+          console.log(`[sentinel-urgent] Check 14: Skipping engineer rate-limit retry for ${r.slug} — latest cycle has engineering_tasks=[] (frozen directive)`);
+          await ctx.sql`
+            INSERT INTO agent_actions (agent, company_id, action_type, status, description, started_at, finished_at)
+            VALUES (${r.agent}, ${r.company_id}, 'sentinel_retry', 'success',
+              ${"Sentinel-urgent: skipped rate-limit engineer retry for " + r.slug + " — engineering_tasks=[] frozen in latest cycle"},
+              NOW(), NOW())
+          `;
+          continue;
+        }
+      }
+
       // Engineer feature_request → direct to company repo (free Actions)
       if (r.github_repo && r.agent === "engineer" && eventType === "feature_request") {
         await dispatchToCompanyWorkflow(ctx, r.github_repo as string, "hive-build.yml", {
