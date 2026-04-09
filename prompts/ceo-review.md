@@ -75,7 +75,7 @@ Set `stage1_passed: false` in output and stop.
 
 Score 0-3: Auto-merge. Score 4-6: Merge + log detailed summary. Score 7+: Do NOT merge, create approval gate for Carlos.
 
-> **Phase gate**: The +7 rule above ensures any new-feature PR during `validate` or `test_intent` phase always scores ≥7 and is escalated to Carlos. New features in these phases compete with validation goals (measuring real intent/conversion) and must never auto-merge. Read the validation_phase from the context API response before scoring.
+> **Phase gate — hard reject (ADR-027 override)**: When `validation_phase` is `validate` or `test_intent` AND the PR title starts with `feat:` OR the PR adds new files not present in the current cycle's `engineering_tasks`, set `decision=reject` immediately and do NOT create an approval gate. Use: `GH_TOKEN="$GH_PAT" gh pr review <pr_number> --repo carloshmiranda/<company> --request-changes --body "PHASE GATE REJECT: feat PR blocked during validate phase — engineering_tasks=[]. ADR-027 cost-only path cannot override this hard reject."` This rejection cannot be bypassed by the ADR-027 cost-only escalation path. Read `validation_phase` from the context API response before scoring.
 
 ### STEP 6 — Decision
 

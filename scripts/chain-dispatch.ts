@@ -336,19 +336,53 @@ async function main() {
     // Look up company's GitHub repo (for free company-repo Actions)
     const githubRepo = await getCompanyGithubRepo(company, dbUrl);
 
+    // Phase gate: skip engineer dispatch when CEO signals no feature work
+    // Check 1: CEO output explicitly sets needs_feature=false
+    let skipEngineer = false;
+    if (parsed["needs_feature"] === false) {
+      console.log(`[chain-dispatch] phase_gate_blocked: skipping engineer for ${company} — needs_feature=false`);
+      skipEngineer = true;
+    }
+
+    // Check 2: DB fallback — latest cycle has engineering_tasks=[] (CEO freeze directive)
+    // Essential for gate_approved trigger path where CEO may omit needs_feature
+    if (!skipEngineer && companyId && dbUrl) {
+      try {
+        const sql = neon(dbUrl);
+        const cycleRows = await sql`
+          SELECT jsonb_array_length(ceo_plan->'engineering_tasks') AS et_count
+          FROM cycles
+          WHERE company_id = ${companyId}
+          AND ceo_plan IS NOT NULL
+          AND ceo_plan ? 'engineering_tasks'
+          ORDER BY started_at DESC
+          LIMIT 1
+        ` as { et_count: number }[];
+        const etCount = cycleRows[0]?.et_count;
+        if (typeof etCount === "number" && etCount === 0) {
+          console.log(`[chain-dispatch] phase_gate_blocked: skipping engineer for ${company} — engineering_tasks=[]`);
+          skipEngineer = true;
+        }
+      } catch (e) {
+        console.warn(`[chain-dispatch] engineering_tasks check failed: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
     // Chain to Engineer → company repo hive-build.yml (fallback: Hive feature_request)
-    await dispatchToCompanyRepo(
-      "hive-build.yml",
-      `Feature build for ${company}`,
-      company,
-      githubRepo,
-      traceId,
-      ghToken,
-      hiveUrl,
-      cronSecret
-    );
-    if (!githubRepo) {
-      await dispatchGithub(repo, "feature_request", { source: "ceo", ...basePayload }, ghToken);
+    if (!skipEngineer) {
+      await dispatchToCompanyRepo(
+        "hive-build.yml",
+        `Feature build for ${company}`,
+        company,
+        githubRepo,
+        traceId,
+        ghToken,
+        hiveUrl,
+        cronSecret
+      );
+      if (!githubRepo) {
+        await dispatchGithub(repo, "feature_request", { source: "ceo", ...basePayload }, ghToken);
+      }
     }
 
     // Parallel worker dispatches (Growth + Outreach) — these use free models, fire concurrently
