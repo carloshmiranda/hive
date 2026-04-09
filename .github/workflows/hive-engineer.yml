@@ -48,6 +48,7 @@ jobs:
       payload: ${{ steps.ctx.outputs.payload }}
       company: ${{ steps.resolve.outputs.company }}
       company_repo: ${{ steps.resolve.outputs.company_repo }}
+      engineering_frozen: ${{ steps.resolve.outputs.engineering_frozen }}
 
     steps:
       - name: Build context
@@ -84,7 +85,7 @@ jobs:
           fi
           echo "company=${COMPANY}" >> $GITHUB_OUTPUT
 
-          # Look up github_repo from DB
+          # Look up github_repo and engineering freeze from DB
           if [ -n "$COMPANY" ]; then
             REPO=$(node -e "
               const { neon } = require('@neondatabase/serverless');
@@ -94,8 +95,23 @@ jobs:
                 .catch(() => process.exit(0));
             " 2>/dev/null || echo "")
             echo "company_repo=${REPO}" >> $GITHUB_OUTPUT
+
+            # Check if the latest CEO cycle has engineering_freeze.active = true
+            FROZEN=$(node -e "
+              const { neon } = require('@neondatabase/serverless');
+              const sql = neon(process.env.DATABASE_URL);
+              sql\`SELECT ceo_plan->'engineering_freeze'->>'active' AS frozen
+                   FROM cycles
+                   WHERE company_id = (SELECT id FROM companies WHERE slug = \${'${COMPANY}'} LIMIT 1)
+                   AND ceo_plan IS NOT NULL
+                   ORDER BY started_at DESC LIMIT 1\`
+                .then(r => { console.log(r[0]?.frozen === 'true' ? 'true' : 'false'); })
+                .catch(() => { console.log('false'); });
+            " 2>/dev/null || echo "false")
+            echo "engineering_frozen=${FROZEN}" >> $GITHUB_OUTPUT
           else
             echo "company_repo=" >> $GITHUB_OUTPUT
+            echo "engineering_frozen=false" >> $GITHUB_OUTPUT
           fi
 
   # ─── Job 1: Provision new company (needs Hive repo for templates) ───
@@ -699,7 +715,8 @@ jobs:
     needs: context
     if: >
       needs.context.outputs.company_repo != '' &&
-      !contains(needs.context.outputs.payload, 'kill_teardown') && (
+      !contains(needs.context.outputs.payload, 'kill_teardown') &&
+      !(needs.context.outputs.trigger == 'feature_request' && needs.context.outputs.engineering_frozen == 'true') && (
         needs.context.outputs.trigger == 'feature_request' ||
         needs.context.outputs.trigger == 'ops_escalation' ||
         needs.context.outputs.trigger == 'deploy_drift' ||

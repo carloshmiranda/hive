@@ -15,6 +15,20 @@
 
 ---
 
+### 2026-04-09 Engineer builds forbidden features despite CEO freeze directive — dispatch-level bypass via feature_request
+**What happened:** Engineer was still executing `feature_request` dispatches for senhorio (cycle 42, engineering_freeze.active=true) because the freeze check only existed in Check 13c (sentinel retry path). Direct `feature_request` dispatches via the main engineer workflow had no gate — the `build` job dispatched to the company repo unconditionally.
+**Root cause:** The freeze enforcement in sentinel-urgent Check 13c only protects stale-task re-dispatches. Any `feature_request` arriving via a fresh dispatch (QStash schedule, direct repository_dispatch) bypassed it entirely. The CEO plan's `engineering_freeze.active` field was written but never read by the engineer workflow.
+**Fix applied:** In `hive-engineer.yml`, the `context` job now queries `cycles.ceo_plan->'engineering_freeze'->>'active'` for the company's latest cycle and outputs `engineering_frozen`. The `build` job's `if:` condition rejects `feature_request` triggers when `engineering_frozen == 'true'`. `ops_escalation` and `deploy_drift` are not blocked — those are infra fixes, not feature work.
+**Prevention:** Any workflow that accepts `feature_request` dispatches must read the latest cycle's `engineering_freeze.active` before executing. The CEO's freeze directive must be enforced at the worker level (workflow condition), not only at the retry level (sentinel check).
+**Affects:** hive
+
+### 2026-04-09 Sentinel stale_cycle_dispatch triggered duplicate cycle_start for running cycle
+**What happened:** Check 44 in `company-health/route.ts` dispatched a new `cycle_start` for a company whose cycle was already in `running` status. The guard only checked `agent_actions` for a prior dispatch within 6 hours — it never verified whether the company had an active running cycle.
+**Root cause:** Check 44 queried for `stale_cycle_dispatch` in the last 6h to deduplicate. But if company-health ran during the window between a cycle's `started_at` and the CEO writing its first `agent_actions` row, the 6h window hadn't elapsed yet and there was no `stale_cycle_dispatch` row, so the check fired. Running cycles live in the `cycles` table with `status='running'` — that table was never consulted.
+**Fix applied:** Added a running-cycle guard before the dispatch: `SELECT id FROM cycles WHERE company_id = $id AND status = 'running' LIMIT 1`. If any running cycle exists, skip the dispatch. Also extended the cooldown from 6h to 24h so a legitimately-stale company can't trigger the safety net more than once per day.
+**Prevention:** Before dispatching any `cycle_start`, always check `cycles` for `status='running'` for that company. The `agent_actions` dedup log alone is not sufficient — it only covers prior dispatches in the current cooldown window, not cycles that are in-flight.
+**Affects:** hive
+
 ### 2026-04-08 Sentinel-urgent re-dispatched stale engineer tasks bypassing CEO frozen-cycle directive
 **What happened:** Sentinel-urgent Check 13c picked up any failed engineer `agent_action` from the last 12h and re-dispatched it, regardless of whether the CEO's latest cycle had set `engineering_tasks=[]` to freeze new engineering work for that company. This caused a stale failed task from a prior cycle to be re-executed even though the CEO explicitly planned no engineering work.
 **Root cause:** Check 13c only checked circuit-breaker state before re-dispatching. It had no visibility into the company's latest cycle plan. CEO encodes a freeze by writing `engineering_tasks: []` into `cycles.ceo_plan`, but sentinel never read it.
