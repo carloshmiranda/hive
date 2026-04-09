@@ -822,14 +822,21 @@ export async function GET(req: Request) {
       if (!lastActivity) continue;
       const hoursSinceActivity = (Date.now() - new Date(lastActivity as string).getTime()) / (1000 * 60 * 60);
 
-      // Only dispatch if stale >6h AND no recent dispatch for this company
+      // Only dispatch if stale >6h AND no running cycle AND no recent dispatch in 24h
       if (hoursSinceActivity > 6) {
+        const [runningCycle] = await sql`
+          SELECT id FROM cycles
+          WHERE company_id = ${sc.id} AND status = 'running'
+          LIMIT 1
+        `;
+        if (runningCycle) continue;
+
         const [recentDispatch] = await sql`
           SELECT id FROM agent_actions
           WHERE agent = 'sentinel'
             AND action_type = 'stale_cycle_dispatch'
             AND company_id = ${sc.id}
-            AND started_at > NOW() - INTERVAL '6 hours'
+            AND started_at > NOW() - INTERVAL '24 hours'
           LIMIT 1
         `;
         if (recentDispatch) continue;
