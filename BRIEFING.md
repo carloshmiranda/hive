@@ -11,7 +11,7 @@
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 39 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, waitlist unverified, IRS season open until June 30
-  - Senhorio — status: mvp, 35 cycles, zero traffic, kill checkpoint April 15, IRS tools + 14 articles live, IndexNow integrated, social kit ready but unposted
+  - Senhorio — status: mvp, 46 cycles, zero traffic, kill checkpoint April 15 (5 days), stats pipeline live (PR #105), IRS tools + 16 articles, directory submissions dispatched, Carlos hive#415 unresponsive (deadline April 12)
   - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
   - CiberPME — status: mvp, 29 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 12 URLs live, zero traffic, GSC blocked
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-10 — **Senhorio cycle 46 planned (CEO, cycle_start) — FINAL before April 15 kill checkpoint** — Reviewed + closed cycle 45 (score 4/10: Engineer delivered PR #105 stats fix, Growth failed directory submissions). Merged PR #105 — page_views table + middleware tracking live, metrics pipeline restored. Cycle 46: distribution-only, no new tasks. Dispatched existing directory submissions task (c04e17b0) as last automated distribution path. Kill evaluation triggers active: zero_traffic_90d, zero_signups, consecutive_low_scores. Carlos hive#415 deadline April 12 (no response). April 15: if zero traffic → kill_recommendation=true. April 30: hard kill. Product spec v71 saved. Stats fix task marked done.
 
 - `[code]` 2026-04-06 — **CEO/Scout/Engineer chain dispatch fixed — npm ci was missing (commit 5f61cf6)** — Root cause of 8 consecutive CEO failures and 4 stuck cycles (verdedesk 29h+, others 8-10h): chain-dispatch.ts uses `@neondatabase/serverless` but `node_modules` were never installed. CEO/Scout/Engineer workflows had `Setup Node.js` with `cache: 'npm'` (only caches downloads, doesn't install) but NO `npm ci` step. Added `npm ci` before chain-dispatch in CEO, Scout, and Engineer (provision + teardown) workflows. Also converted Engineer provision/teardown inline DB queries from third-party `postgres` package to `@neondatabase/serverless` now that npm ci runs. Secondary issue: `CRON_SECRET` is blank in chain-dispatch env (token not stored in Hive settings), so `api/agents/consolidate` and `api/dispatch/cycle-complete` calls get 401 silently — sentinel-dispatch (every 4h) compensates by detecting stale companies. Stuck cycles will be cleared by sentinel-janitor nightly. Chain should resume within 4h of this push.
 
