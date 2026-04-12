@@ -107,29 +107,26 @@ function parseExecutionMeta(execFile: string): { turns: number; cost: number } {
 // ─── Robust JSON extraction ──────────────────────────────────────────────────
 
 /**
- * Extract the last valid JSON object from agent text output.
- * Handles: markdown code blocks (```json ... ```), bare JSON objects
- * at any nesting depth. Returns {} on failure — never throws.
+ * Extract ALL valid JSON objects from agent text output using balanced-brace
+ * scanning. Respects string literals and escape sequences. Never throws.
  */
-function extractJSONFromText(text: string): Record<string, unknown> {
-  // 1. Try markdown code block: ```json\n...\n``` or ```\n...\n```
+function extractAllCandidates(text: string): Record<string, unknown>[] {
+  const candidates: Record<string, unknown>[] = [];
+
+  // Try markdown code block first: ```json\n...\n``` or ```\n...\n```
   const codeBlockMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
   if (codeBlockMatch) {
     try {
       const parsed = JSON.parse(codeBlockMatch[1].trim());
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
+        candidates.push(parsed as Record<string, unknown>);
       }
     } catch {
-      // fall through to next strategy
+      // fall through to balanced-brace scan
     }
   }
 
-  // 2. Balanced-brace extraction — handles arbitrary nesting depth.
-  // Scan for every '{', track depth with a proper parser that respects
-  // string literals and escape sequences, collect all valid JSON objects,
-  // then return the last one (most likely the CEO's final signal output).
-  const candidates: Record<string, unknown>[] = [];
+  // Balanced-brace extraction — handles arbitrary nesting depth.
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "{") continue;
     let depth = 0;
@@ -156,18 +153,58 @@ function extractJSONFromText(text: string): Record<string, unknown> {
     }
   }
 
+  return candidates;
+}
+
+/**
+ * Extract the last valid JSON object from agent text output.
+ * Returns {} on failure — never throws.
+ */
+function extractJSONFromText(text: string): Record<string, unknown> {
+  const candidates = extractAllCandidates(text);
   return candidates[candidates.length - 1] ?? {};
 }
 
 // ─── Signal detection ────────────────────────────────────────────────────────
 
+/**
+ * Check if a dispatch signal is true anywhere in the CEO's output.
+ *
+ * CEO outputs two JSON formats:
+ *   (a) Simple summary (hive-ceo.yml prompt):
+ *       { "company": "slug", "needs_feature": true, "needs_research": false, ... }
+ *   (b) Full plan (ceo.md prompt):
+ *       { "plan": { ..., "dispatch_signals": { "dispatch_growth": true, ... } } }
+ *
+ * `parsed` (the last JSON object) is usually format (a), which lacks dispatch_growth.
+ * This function falls back to scanning all JSON objects for the signal at:
+ *   - top level of any candidate
+ *   - plan.dispatch_signals (ceo.md nested format)
+ *   - dispatch_signals directly (if the sub-object is the last extracted)
+ */
 function checkSignal(
   result: string,
   signal: string,
   parsed?: Record<string, unknown>
 ): boolean {
   const obj = parsed ?? extractJSONFromText(result);
-  return obj[signal] === true;
+  // Fast path: signal at top level of last JSON object
+  if (obj[signal] === true) return true;
+
+  // Fallback: scan all JSON candidates for the signal
+  for (const candidate of extractAllCandidates(result)) {
+    // Top-level on any candidate
+    if (candidate[signal] === true) return true;
+    // Nested: plan.dispatch_signals (ceo.md format)
+    const plan = candidate["plan"] as Record<string, unknown> | undefined;
+    const ds = plan?.["dispatch_signals"] as Record<string, unknown> | undefined;
+    if (ds?.[signal] === true) return true;
+    // Nested: dispatch_signals directly (if the sub-object is the last candidate)
+    const directDs = candidate["dispatch_signals"] as Record<string, unknown> | undefined;
+    if (directDs?.[signal] === true) return true;
+  }
+
+  return false;
 }
 
 // ─── Company extraction ──────────────────────────────────────────────────────

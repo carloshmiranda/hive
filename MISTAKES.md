@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-04-12 Growth agent never dispatched despite dispatch_growth=true in CEO plan
+**What happened:** CEO cycle 46 for ciberpme planned 2 growth_tasks and set `dispatch_signals.dispatch_growth = true` in the cycle DB. But Growth was never dispatched. Same pattern confirmed across multiple previous cycles where CEO wrote growth_tasks to DB but no growth agent_action was ever logged.
+**Root cause:** CEO outputs TWO JSON blocks in sequence: (1) a full plan in ceo.md format `{"plan": {"dispatch_signals": {"dispatch_growth": true, ...}}}` and (2) a simpler summary in hive-ceo.yml format `{"company": "slug", "needs_feature": true, ...}`. `extractJSONFromText` in `chain-dispatch.ts` returns the LAST JSON candidate — always the simple summary — which has no `dispatch_growth` key. `checkSignal` then returns false and Growth is silently skipped. No error is logged; the CEO believes it dispatched, the chain-dispatch silently no-ops.
+**Fix applied:** Refactored `extractJSONFromText` into `extractAllCandidates` which collects ALL JSON objects from the output. `checkSignal` now scans all candidates for the signal, including the nested `plan.dispatch_signals` path used by ceo.md. PR carloshmiranda/hive#442.
+**Prevention:** When chain-dispatch reads signals from agent output, NEVER assume the last JSON object contains all signals. CEO and other agents may produce multiple JSON blocks (one detailed, one summary). Signal checks must scan all candidates. Any new dispatch signal added to `ceo.md` MUST also be added to the simple output spec in `hive-ceo.yml` — OR `checkSignal` must handle the nested path.
+**Affects:** hive
+
 ### 2026-04-12 Checkpoint system was DOA from day one — stage 2 never ran
 **What happened:** The mid-execution checkpoint system (PR #404, shipped April 6) was supposed to split M/L/XL runs into stage-1 (15 turns) + CEO gate + stage-2 (30 turns). In practice, stage 2 never executed. 10 Hive platform engineer tasks failed since April 9, all capped at 15 turns and misclassified as workflow_crash. $3.50+ wasted on retries.
 **Root cause:** GitHub Actions implicit `success()` check. When stage 1 hits max_turns (which is *expected* for checkpoint runs — using the full 15-turn budget IS the design), the step fails. Subsequent steps without `always()` are skipped automatically. The CEO checkpoint, Read verdict, and Stage-2 steps all lacked `always()`. Additionally, the `steps.agent.outcome == 'success'` condition on CEO checkpoint was explicitly wrong — stage 1 completing its allocation is not "success" in GHA's terms.
