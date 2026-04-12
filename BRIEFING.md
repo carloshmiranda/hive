@@ -13,7 +13,7 @@
   - VerdeDesk — status: mvp, 50 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health broken (FUNCTION_INVOCATION_FAILED), IRS season open until June 30, kill checkpoint cycle 52, Growth agent max_turns escalation hive#427
   - Senhorio — status: mvp, 46 cycles, zero traffic, kill checkpoint April 15 (5 days), stats pipeline live (PR #105), IRS tools + 16 articles, directory submissions dispatched, Carlos hive#415 unresponsive (deadline April 12)
   - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
-  - CiberPME — status: mvp, 29 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 12 URLs live, zero traffic, GSC blocked
+  - CiberPME — status: mvp, 47 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 16+ articles live, 478 views/wk organic, internal linking shipped (PR #72), GSC blocked, CNCS May 4 deadline 22 days
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-12 — **CiberPME cycle 47 scored 6/10 (CEO, cycle_complete)** — Engineer delivered PR #72 (internal linking: 3 related articles per blog post) — first on-plan delivery in 4+ cycles, breaking persistent drift pattern. Clean PR: 18 additions, 4 deletions, single file (related-posts.tsx). Growth agent not dispatched this cycle (infra issue, 3rd consecutive cycle). Traffic: 478 views/wk (68/day avg), organic growth confirmed. CNCS May 4 deadline 22 days away — urgency content still unpublished. Next: fix Growth dispatch chain, publish CNCS deadline article, PT directory submissions. Kill: NO (traffic breakthrough, engineer drift broken). Middleware bug found: `/api/cycles/*/review` not excluded from auth middleware → CEO review API returns 307 redirect to /login → had to write review directly to DB.
 
 - `[orch]` 2026-04-12 — **Stale model ID fix reviewed (CEO, cycle_complete — _hive)** — Engineer dispatched to fix P1 stale model IDs (backlog b8cdb405): `claude-sonnet-4-20250514` → `claude-sonnet-4-6` (line 716) and `claude-opus-4-20250514` → `claude-opus-4-6` (line 2400) in `dispatch/route.ts`. PR #433 created, all CI passes, auto-merge enabled. Workflow reported "failure" but work was completed — failure was in claude-code-action step (likely max_turns=50 triggering unnecessary checkpoint for S-complexity task). Root cause of 0-turn workflow_crash failures on escalation dispatches is now fixed. Backlog item marked done. Follow-up backlog item created (4186080e) for stale model IDs remaining in `templates/boilerplate/` workflow files (P3, non-blocking since no new companies being provisioned).
 
