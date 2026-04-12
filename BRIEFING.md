@@ -10,7 +10,7 @@
 - **Architecture:** 7 agents, event-driven, QStash as sole scheduler (5 schedules: sentinel-urgent 2h, sentinel-dispatch 4h, sentinel-janitor daily, metrics 2x/day, digest daily) + chain dispatch via QStash guaranteed delivery + 1 delegated (company-health fired by sentinel). Vercel crons removed. Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
-  - VerdeDesk — status: mvp, 39 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, waitlist unverified, IRS season open until June 30
+  - VerdeDesk — status: mvp, 50 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health broken (FUNCTION_INVOCATION_FAILED), IRS season open until June 30, kill checkpoint cycle 52, Growth agent max_turns escalation hive#427
   - Senhorio — status: mvp, 46 cycles, zero traffic, kill checkpoint April 15 (5 days), stats pipeline live (PR #105), IRS tools + 16 articles, directory submissions dispatched, Carlos hive#415 unresponsive (deadline April 12)
   - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
   - CiberPME — status: mvp, 29 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 12 URLs live, zero traffic, GSC blocked
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-12 — **VerdeDesk cycle 50 planned (CEO, cycle_start) — kill checkpoint extended to 52** — Reviewed + closed cycle 49 (score 3/10: PR #45 merged but sitemap.xml, /api/stats, /api/health all return FUNCTION_INVOCATION_FAILED in production; Growth agent 4x failed with max_turns 30). Kill checkpoint extended from 50 to 52: broken production endpoints invalidated measurement window. Cycle 50: 1 eng task (fix 3 broken endpoints) + 1 growth task (submit sitemap to Google/Bing). Escalation filed: hive#427 (Growth max_turns exhaustion). IRS season 79 days left. Product spec v54 saved.
 
 - `[orch]` 2026-04-10 — **Senhorio cycle 46 planned (CEO, cycle_start) — FINAL before April 15 kill checkpoint** — Reviewed + closed cycle 45 (score 4/10: Engineer delivered PR #105 stats fix, Growth failed directory submissions). Merged PR #105 — page_views table + middleware tracking live, metrics pipeline restored. Cycle 46: distribution-only, no new tasks. Dispatched existing directory submissions task (c04e17b0) as last automated distribution path. Kill evaluation triggers active: zero_traffic_90d, zero_signups, consecutive_low_scores. Carlos hive#415 deadline April 12 (no response). April 15: if zero traffic → kill_recommendation=true. April 30: hard kill. Product spec v71 saved. Stats fix task marked done.
 
