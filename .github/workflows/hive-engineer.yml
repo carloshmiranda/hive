@@ -910,7 +910,7 @@ jobs:
 
             # Chain continues: dispatch cycle_complete so CEO can score
             COMPANY=$(echo '${{ needs.context.outputs.company }}' || echo "")
-            if [ -n "$COMPANY" ]; then
+            if [ -n "$COMPANY" ] && [ "$COMPANY" != "_hive" ]; then
               GH_TOKEN="${{ steps.auth.outputs.gh_pat }}"
               curl -s -X POST "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
                 -H "Authorization: token ${GH_TOKEN}" \
@@ -995,8 +995,8 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"company_slug\":\"$COMPANY\",\"agent\":\"engineer\",\"action_type\":\"${TRIGGER:-feature_request}\",\"status\":\"skipped\",\"description\":\"Skipped: company has no github_repo — needs provisioning before Engineer can run\"}" || true
 
-          # Chain continues: dispatch cycle_complete so CEO can score
-          if [ -n "$COMPANY" ]; then
+          # Chain continues: dispatch cycle_complete for real companies only (not _hive — no cycle row to score)
+          if [ -n "$COMPANY" ] && [ "$COMPANY" != "_hive" ]; then
             GH_TOKEN="${{ steps.auth.outputs.gh_pat }}"
             curl -s -X POST "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
               -H "Authorization: token ${GH_TOKEN}" \
@@ -1507,13 +1507,15 @@ jobs:
             echo "  Backlog result: $BACKLOG_RESULT"
           fi
 
-          # Always dispatch cycle_complete so CEO can score the completed cycle
-          echo "Dispatching cycle_complete..."
-          GH_TOKEN="${{ steps.auth.outputs.gh_pat }}"
-          curl -s -X POST "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
-            -H "Authorization: token ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -d "{\"event_type\":\"cycle_complete\",\"client_payload\":{\"company\":\"${COMPANY}\",\"source\":\"engineer\",\"status\":\"${STATUS}\"}}" || true
+          # Dispatch cycle_complete for real companies only (not _hive — no cycle row to score)
+          if [ -n "$COMPANY" ] && [ "$COMPANY" != "_hive" ]; then
+            echo "Dispatching cycle_complete..."
+            GH_TOKEN="${{ steps.auth.outputs.gh_pat }}"
+            curl -s -X POST "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"event_type\":\"cycle_complete\",\"client_payload\":{\"company\":\"${COMPANY}\",\"source\":\"engineer\",\"status\":\"${STATUS}\"}}" || true
+          fi
 
       - name: Log failure to Hive API
         if: failure() || cancelled()
