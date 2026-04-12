@@ -174,7 +174,7 @@ jobs:
         with:
           allowed_bots: '*'
           claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
-          claude_args: "--model claude-sonnet-4-20250514 --max-turns 60 --allowedTools Bash,Read,Write,Edit"
+          claude_args: "--model claude-sonnet-4-6 --max-turns 60 --allowedTools Bash,Read,Write,Edit"
           prompt: |
             You are the Engineer agent of Hive. You build features, fix bugs, and manage infrastructure.
 
