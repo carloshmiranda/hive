@@ -62,18 +62,34 @@ async function fetchInstallationToken(
 ): Promise<string> {
   const jwt = createAppJwt(appId, privateKey);
 
-  const res = await fetch(
-    `https://api.github.com/app/installations/${installationId}/access_tokens`,
-    {
+  const endpoint = `https://api.github.com/app/installations/${installationId}/access_tokens`;
+  const headers = {
+    Authorization: `Bearer ${jwt}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "Content-Type": "application/json",
+  };
+
+  // Request issues:write explicitly so CEO can post escalation comments.
+  // If the App installation doesn't have issues:write granted, GitHub returns
+  // 422 — catch that and retry without explicit permissions (uses default scopes).
+  let res = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ permissions: { issues: "write", contents: "read" } }),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (res.status === 422) {
+    console.warn(
+      "[github-app] 422 requesting issues:write — App installation may lack the scope. Retrying without explicit permissions."
+    );
+    res = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
+      headers,
       signal: AbortSignal.timeout(10000),
-    }
-  );
+    });
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");

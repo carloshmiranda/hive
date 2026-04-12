@@ -46,6 +46,35 @@ jobs:
         with:
           tokens: "claude:claude_token:true github_pat:gh_pat:true"
 
+      - name: Verify GitHub token scopes
+        id: token_check
+        continue-on-error: true
+        env:
+          GH_PAT: ${{ steps.auth.outputs.gh_pat }}
+        run: |
+          # Verify the token can reach the repo (basic connectivity)
+          if ! gh api /repos/carloshmiranda/hive --silent 2>/dev/null; then
+            echo "::error::GH_PAT lacks repo access — check token scopes or App installation permissions"
+            exit 1
+          fi
+
+          # Probe issues:write by checking the X-OAuth-Scopes header.
+          # For GitHub App tokens this header may be absent — that's OK; we log what we see.
+          SCOPES=$(curl -s -I -H "Authorization: Bearer $GH_PAT" \
+            https://api.github.com/repos/carloshmiranda/hive \
+            | grep -i "^x-oauth-scopes:" | tr -d '\r' || true)
+
+          if [ -n "$SCOPES" ]; then
+            echo "Token scopes: $SCOPES"
+            if echo "$SCOPES" | grep -qi "issues"; then
+              echo "issues:write scope confirmed"
+            else
+              echo "::warning::issues:write scope NOT present in token — CEO escalation comments will fail with 403. Grant issues:write to the GitHub App installation or update the PAT in settings."
+            fi
+          else
+            echo "No X-OAuth-Scopes header (expected for GitHub App installation tokens — fine-grained permissions apply)"
+          fi
+
       - name: Build CEO context
         id: context
         env:
