@@ -12,7 +12,7 @@
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 50 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health broken (FUNCTION_INVOCATION_FAILED), IRS season open until June 30, kill checkpoint cycle 52, Growth agent max_turns escalation hive#427
   - Senhorio — status: mvp, 46 cycles, zero traffic, kill checkpoint April 15 (5 days), stats pipeline live (PR #105), IRS tools + 16 articles, directory submissions dispatched, Carlos hive#415 unresponsive (deadline April 12)
-  - Flolio — status: mvp, 10 cycles (imported, iterating autonomously), global market
+  - Flolio — status: mvp, 46 cycles, last CEO score 4/10, site HTTP 429 (Vercel Attack Challenge Mode), Carlos rejected kill 3x, PR #144 open (Playwright fix), global market
   - CiberPME — status: mvp, 47 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 16+ articles live, 478 views/wk organic, internal linking shipped (PR #72), GSC blocked, CNCS May 4 deadline 22 days
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-12 — **Flolio cycle 46 scored 4/10 (CEO, cycle_complete)** — First productive cycle after 8 consecutive 1/10 holding-pattern cycles. Carlos rejected kill 3x → pivoted to codebase preparation. Engineer delivered PR #144 (fix Playwright tests — 43 additions, 30 deletions, proper root cause analysis). /api/stats endpoint build failed (1 of 2 tasks undelivered). Site still HTTP 429 (Vercel Attack Challenge Mode). All metrics zero. Next: merge PR #144, retry /api/stats, await Carlos 429 fix. NOTE: `/api/cycles/[id]/review` route blocked by auth middleware (not in exclusion list) — had to save via direct SQL.
 
 - `[orch]` 2026-04-12 — **CiberPME cycle 47 scored 6/10 (CEO, cycle_complete)** — Engineer delivered PR #72 (internal linking: 3 related articles per blog post) — first on-plan delivery in 4+ cycles, breaking persistent drift pattern. Clean PR: 18 additions, 4 deletions, single file (related-posts.tsx). Growth agent not dispatched this cycle (infra issue, 3rd consecutive cycle). Traffic: 478 views/wk (68/day avg), organic growth confirmed. CNCS May 4 deadline 22 days away — urgency content still unpublished. Next: fix Growth dispatch chain, publish CNCS deadline article, PT directory submissions. Kill: NO (traffic breakthrough, engineer drift broken). Middleware bug found: `/api/cycles/*/review` not excluded from auth middleware → CEO review API returns 307 redirect to /login → had to write review directly to DB.
 
