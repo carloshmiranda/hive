@@ -209,40 +209,107 @@ export async function POST(req: Request) {
 
           // Auto-merge if eligible
           if (analysis.decision === 'auto_merge') {
-            const mergeResult = await autoMergePR(prOwner, prRepo, prNumber, ghToken);
-
-            if (mergeResult.success) {
-              // Log successful auto-merge
-              await sql`
-                INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
-                VALUES (
-                  ${companyId}, 'auto_merge', 'pr_merge',
-                  ${`PR #${prNumber} auto-merged (risk ${analysis.riskScore})`},
-                  'success', now(), now()
-                )
+            // CEO rejection gate: block auto-merge if CEO rejected this PR in the last 24h.
+            // Only applies to company PRs (companyId non-null); hive self-improvement PRs skip this.
+            let blockedByCeoRejection = false;
+            if (companyId) {
+              const [ceoRejection] = await sql`
+                SELECT id, description, output FROM agent_actions
+                WHERE company_id = ${companyId}
+                  AND action_type = 'pr_review'
+                  AND started_at > NOW() - INTERVAL '24 hours'
+                  AND (
+                    (output->>'pr_number')::text = ${String(prNumber)}
+                    OR description ILIKE ${'%PR #' + prNumber + '%'}
+                  )
+                  AND (
+                    output->>'decision' IN ('rejected', 'reject', 'request_changes')
+                    OR (
+                      output IS NULL
+                      AND description ILIKE '%REJECTED%'
+                      AND description NOT ILIKE '%APPROVED%'
+                    )
+                  )
+                ORDER BY started_at DESC
+                LIMIT 1
               `;
 
-              // Telegram notification for auto-merge
-              import("@/lib/telegram").then(({ notifyHive }) =>
-                notifyHive({
-                  agent: "auto_merge",
-                  action: "pr_merged",
-                  company: prRepo === "hive" ? "_hive" : prRepo,
-                  status: "success",
-                  summary: `PR #${prNumber} auto-merged (risk ${analysis.riskScore}, CI ✅)`,
-                })
-              ).catch(() => {});
+              if (ceoRejection) {
+                blockedByCeoRejection = true;
+                const rejectionDescription = ceoRejection.description || 'CEO rejected this PR';
 
-            } else {
-              // Log merge failure
-              await sql`
-                INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
-                VALUES (
-                  ${companyId}, 'auto_merge', 'pr_merge',
-                  ${`PR #${prNumber} merge failed: ${mergeResult.message}`},
-                  'failed', ${mergeResult.message || 'Unknown error'}, now(), now()
-                )
-              `;
+                // Log the gate event
+                await sql`
+                  INSERT INTO agent_actions (company_id, agent, action_type, description, status, output, started_at, finished_at)
+                  VALUES (
+                    ${companyId}, 'sentinel', 'ceo_rejection_gate',
+                    ${`PR #${prNumber} blocked — CEO rejected in last 24h`},
+                    'success',
+                    ${JSON.stringify({ pr_number: prNumber, ceo_action_id: ceoRejection.id })}::jsonb,
+                    now(), now()
+                  )
+                `;
+
+                // Create escalation record for Carlos
+                await sql`
+                  INSERT INTO approvals (company_id, gate_type, title, description, context)
+                  VALUES (
+                    ${companyId}, 'escalation',
+                    ${`${prRepo}: PR #${prNumber} blocked by CEO rejection`},
+                    ${`Auto-merge blocked: CEO rejected PR #${prNumber} in the last 24h. Reason: ${rejectionDescription}`},
+                    ${JSON.stringify({ pr_number: prNumber, ceo_action_id: ceoRejection.id, rejection_description: rejectionDescription, company: prRepo })}
+                  )
+                `;
+
+                // Telegram notification
+                import("@/lib/telegram").then(({ notifyHive }) =>
+                  notifyHive({
+                    agent: "sentinel",
+                    action: "ceo_rejection_gate",
+                    company: prRepo,
+                    status: "started",
+                    summary: `PR #${prNumber} blocked — CEO rejected in last 24h`,
+                  })
+                ).catch(() => {});
+              }
+            }
+
+            if (!blockedByCeoRejection) {
+              const mergeResult = await autoMergePR(prOwner, prRepo, prNumber, ghToken);
+
+              if (mergeResult.success) {
+                // Log successful auto-merge
+                await sql`
+                  INSERT INTO agent_actions (company_id, agent, action_type, description, status, started_at, finished_at)
+                  VALUES (
+                    ${companyId}, 'auto_merge', 'pr_merge',
+                    ${`PR #${prNumber} auto-merged (risk ${analysis.riskScore})`},
+                    'success', now(), now()
+                  )
+                `;
+
+                // Telegram notification for auto-merge
+                import("@/lib/telegram").then(({ notifyHive }) =>
+                  notifyHive({
+                    agent: "auto_merge",
+                    action: "pr_merged",
+                    company: prRepo === "hive" ? "_hive" : prRepo,
+                    status: "success",
+                    summary: `PR #${prNumber} auto-merged (risk ${analysis.riskScore}, CI ✅)`,
+                  })
+                ).catch(() => {});
+
+              } else {
+                // Log merge failure
+                await sql`
+                  INSERT INTO agent_actions (company_id, agent, action_type, description, status, error, started_at, finished_at)
+                  VALUES (
+                    ${companyId}, 'auto_merge', 'pr_merge',
+                    ${`PR #${prNumber} merge failed: ${mergeResult.message}`},
+                    'failed', ${mergeResult.message || 'Unknown error'}, now(), now()
+                  )
+                `;
+              }
             }
           } else if (analysis.decision === 'escalate') {
             // Create approval gate for high-risk PRs
