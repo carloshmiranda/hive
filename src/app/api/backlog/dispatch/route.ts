@@ -713,7 +713,7 @@ export async function POST(req: Request) {
                   max_turns: continuationTurns,
                   meta: {
                     title: item.title,
-                    model: "claude-sonnet-4-20250514",
+                    model: "claude-sonnet-4-6",
                     github_issue: item.github_issue_number || undefined,
                     priority_score: 14,
                     continuation: true,
@@ -2397,7 +2397,7 @@ export async function POST(req: Request) {
         attempt: attemptCount + 1,
         github_issue: topItem.github_issue_number || undefined,
         ...(attemptCount >= 2
-          ? { model: "claude-opus-4-20250514" }
+          ? { model: "claude-opus-4-6" }
           : topItem.parent_id && spec?.complexity === "S"
             ? { model: "claude-haiku-4-5-20251001" }
             : {}),
