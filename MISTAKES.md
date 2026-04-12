@@ -15,6 +15,13 @@
 
 ---
 
+### 2026-04-12 Checkpoint system was DOA from day one — stage 2 never ran
+**What happened:** The mid-execution checkpoint system (PR #404, shipped April 6) was supposed to split M/L/XL runs into stage-1 (15 turns) + CEO gate + stage-2 (30 turns). In practice, stage 2 never executed. 10 Hive platform engineer tasks failed since April 9, all capped at 15 turns and misclassified as workflow_crash. $3.50+ wasted on retries.
+**Root cause:** GitHub Actions implicit `success()` check. When stage 1 hits max_turns (which is *expected* for checkpoint runs — using the full 15-turn budget IS the design), the step fails. Subsequent steps without `always()` are skipped automatically. The CEO checkpoint, Read verdict, and Stage-2 steps all lacked `always()`. Additionally, the `steps.agent.outcome == 'success'` condition on CEO checkpoint was explicitly wrong — stage 1 completing its allocation is not "success" in GHA's terms.
+**Fix applied:** Added `always()` to all 3 checkpoint pipeline steps. Removed `steps.agent.outcome == 'success'` from CEO checkpoint (the checkpoint validates quality, not completion). Added glob scan fallback to Chain dispatch step for execution file discovery.
+**Prevention:** Any GitHub Actions workflow that uses multi-step pipelines where an early step's "failure" is expected behavior MUST use `always()` on dependent steps. When designing checkpoint/split systems, test the full pipeline end-to-end before shipping — the April 6 CEO review said "verify checkpoint end-to-end on next M/L dispatch" as a next priority, but no one did it.
+**Affects:** hive
+
 ### 2026-04-09 Engineer builds forbidden features despite CEO freeze directive — dispatch-level bypass via feature_request
 **What happened:** Engineer was still executing `feature_request` dispatches for senhorio (cycle 42, engineering_freeze.active=true) because the freeze check only existed in Check 13c (sentinel retry path). Direct `feature_request` dispatches via the main engineer workflow had no gate — the `build` job dispatched to the company repo unconditionally.
 **Root cause:** The freeze enforcement in sentinel-urgent Check 13c only protects stale-task re-dispatches. Any `feature_request` arriving via a fresh dispatch (QStash schedule, direct repository_dispatch) bypassed it entirely. The CEO plan's `engineering_freeze.active` field was written but never read by the engineer workflow.

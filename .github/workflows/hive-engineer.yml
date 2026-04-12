@@ -1150,7 +1150,7 @@ jobs:
 
       - name: CEO checkpoint validation
         id: ceo_checkpoint
-        if: steps.checkpoint_flag.outputs.enabled == 'true' && steps.agent.outcome == 'success' && steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
+        if: always() && steps.checkpoint_flag.outputs.enabled == 'true' && steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           allowed_bots: "hive-orchestrator[bot]"
@@ -1175,7 +1175,7 @@ jobs:
 
       - name: Read CEO verdict
         id: verdict
-        if: steps.checkpoint_flag.outputs.enabled == 'true'
+        if: always() && steps.checkpoint_flag.outputs.enabled == 'true'
         env:
           PAYLOAD_JSON: ${{ needs.context.outputs.payload }}
         run: |
@@ -1223,7 +1223,7 @@ jobs:
 
       - name: Engineer stage-2
         id: agent_stage2
-        if: steps.checkpoint_flag.outputs.enabled == 'true' && steps.verdict.outputs.abort != 'true' && steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
+        if: always() && steps.checkpoint_flag.outputs.enabled == 'true' && steps.verdict.outputs.abort != 'true' && steps.turn_guard.outputs.skip != 'true' && steps.company_guard.outputs.skip != 'true'
         env:
           GH_PAT: ${{ steps.auth.outputs.gh_pat }}
         uses: anthropics/claude-code-action@v1
@@ -1366,6 +1366,13 @@ jobs:
             fi
             if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
               EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
+            fi
+            # Glob fallback: SDK may produce UUID-suffixed files
+            if [ ! -f "$EXEC_FILE" ] || [ ! -s "$EXEC_FILE" ]; then
+              FOUND=$(ls -t /home/runner/work/_temp/claude-execution-output*.json 2>/dev/null | head -1 || echo "")
+              if [ -n "$FOUND" ] && [ -f "$FOUND" ]; then
+                EXEC_FILE="$FOUND"
+              fi
             fi
 
             if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
