@@ -1518,17 +1518,30 @@ jobs:
             | jq -r '.value')
 
           # Extract error from Claude's execution output
-          EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          # Three-tier lookup: stage-2 → stage-1 → hardcoded path → glob scan
+          EXEC_FILE="${{ steps.agent_stage2.outputs.execution_file }}"
+          if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
+            EXEC_FILE="${{ steps.agent.outputs.execution_file }}"
+          fi
           if [ -z "$EXEC_FILE" ] || [ ! -f "$EXEC_FILE" ]; then
             EXEC_FILE="/home/runner/work/_temp/claude-execution-output.json"
           fi
+          # Glob fallback: SDK may produce UUID-suffixed files
+          if [ ! -f "$EXEC_FILE" ] || [ ! -s "$EXEC_FILE" ]; then
+            FOUND=$(ls -t /home/runner/work/_temp/claude-execution-output*.json 2>/dev/null | head -1 || echo "")
+            if [ -n "$FOUND" ] && [ -f "$FOUND" ]; then
+              EXEC_FILE="$FOUND"
+            fi
+          fi
 
+          CONFIGURED_MAX_TURNS="${{ steps.model.outputs.max_turns }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           if [ -f "$EXEC_FILE" ] && [ -s "$EXEC_FILE" ]; then
             # File exists — extract from last entry (covers all exit types: result, error, system)
             SUBTYPE=$(jq -r '.[-1].subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
             TURNS=$(jq -r '.[-1].num_turns // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
+            COST=$(jq -r '.[-1].total_cost_usd // 0' "$EXEC_FILE" 2>/dev/null || echo "0")
             # Try multiple error locations: .error on last, .result on last, scan for system/error types
             ERROR_MSG=$(jq -r '
               (.[-1].error // null) as $e1 |
@@ -1536,10 +1549,20 @@ jobs:
               ([.[] | select(.type == "system" or .type == "error")] | last | .error // .result // null) as $e3 |
               ($e1 // $e2 // $e3 // "No error message in execution output") | tostring | .[0:500]
             ' "$EXEC_FILE" 2>/dev/null || echo "Failed to parse execution file")
+
+            # Turn-threshold fallback: reclassify unknown subtypes as error_max_turns
+            # when turns >= 90% of configured max (mirrors Chain dispatch logic)
+            TURN_THRESHOLD=$(( ${CONFIGURED_MAX_TURNS:-50} * 90 / 100 ))
+            if [ "$SUBTYPE" = "unknown" ] || [ -z "$SUBTYPE" ]; then
+              if [ "$TURNS" -ge "$TURN_THRESHOLD" ] 2>/dev/null; then
+                SUBTYPE="error_max_turns"
+              fi
+            fi
           else
             # No execution file — Claude never started
             SUBTYPE="workflow_crash"
             TURNS="0"
+            COST="0"
             ERROR_MSG="No execution output file produced. Claude agent never started. Likely: payload too large, workflow syntax error, or GitHub Actions resource issue. Run: ${RUN_URL}"
           fi
 
@@ -1556,19 +1579,19 @@ jobs:
             LOG_STATUS="skipped"
           fi
 
-          echo "Logging $LOG_STATUS: subtype=$SUBTYPE turns=$TURNS error=${ERROR_MSG:0:100}"
+          echo "Logging $LOG_STATUS: subtype=$SUBTYPE turns=$TURNS cost=\$${COST:-0} error=${ERROR_MSG:0:100}"
 
           curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"${LOG_STATUS}\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns) ${RUN_URL}\"}" || true
+            -d "{\"company_slug\":\"${{ needs.context.outputs.company }}\",\"agent\":\"engineer\",\"action_type\":\"feature_request\",\"status\":\"${LOG_STATUS}\",\"description\":\"${TASK_ESCAPED}\",\"error\":\"${SUBTYPE}: ${ERROR_ESCAPED} (${TURNS} turns, \$${COST:-0}) ${RUN_URL}\"}" || true
 
           # Send enriched Telegram notification for failures (skip ghost runs)
           if [ "$LOG_STATUS" = "failed" ]; then
             curl -s -X POST "https://hive-phi.vercel.app/api/notify" \
               -H "Authorization: Bearer $OIDC_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"agent\":\"engineer\",\"action\":\"feature_request\",\"company\":\"${{ needs.context.outputs.company }}\",\"status\":\"failed\",\"summary\":\"${SUBTYPE} after ${TURNS} turns\",\"error\":\"${ERROR_ESCAPED:0:200}\",\"run_url\":\"$RUN_URL\",\"task_title\":\"${TASK_ESCAPED:0:100}\",\"duration_s\":$((TURNS * 60))}" || true
+              -d "{\"agent\":\"engineer\",\"action\":\"feature_request\",\"company\":\"${{ needs.context.outputs.company }}\",\"status\":\"failed\",\"summary\":\"${SUBTYPE} after ${TURNS} turns (\$${COST:-0})\",\"error\":\"${ERROR_ESCAPED:0:200}\",\"run_url\":\"$RUN_URL\",\"task_title\":\"${TASK_ESCAPED:0:100}\",\"duration_s\":$((TURNS * 60))}" || true
           fi
 
           # Job summary
