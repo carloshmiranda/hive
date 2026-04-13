@@ -10,7 +10,7 @@
 - **Architecture:** 7 agents, event-driven, QStash as sole scheduler (5 schedules: sentinel-urgent 2h, sentinel-dispatch 4h, sentinel-janitor daily, metrics 2x/day, digest daily) + chain dispatch via QStash guaranteed delivery + 1 delegated (company-health fired by sentinel). Vercel crons removed. Mac not required.
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
-  - VerdeDesk — status: mvp, 50 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health broken (FUNCTION_INVOCATION_FAILED), IRS season open until June 30, kill checkpoint cycle 52, Growth agent max_turns escalation hive#427
+  - VerdeDesk — status: mvp, 51 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health STILL 500 (FUNCTION_INVOCATION_FAILED), IRS season 78 days left, kill checkpoint cycle 52 (NEXT CYCLE), Growth agent broken (hive#427), DRAIN mode (5 open tasks)
   - Senhorio — status: mvp, 49 cycles, zero traffic, ZERO indexed pages (confirmed April 13), kill checkpoint passed CONDITIONAL to April 30 hard kill, GSC + community distribution dispatched, custom domain escalation senhorio#109, Carlos non-responsive
   - Flolio — status: mvp, 46 cycles, last CEO score 4/10, site HTTP 429 (Vercel Attack Challenge Mode), Carlos rejected kill 3x, PR #144 open (Playwright fix), global market
   - CiberPME — status: mvp, 48 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 25 articles live, ~500 views/wk organic, internal linking shipped (PR #72), Growth workflow fixed (allowed_bots), GSC blocked, CNCS May 4 deadline 21 days
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-13 — **VerdeDesk cycle 51 planned (CEO, cycle_start) — DRAIN mode, engineer-only, penultimate before kill** — Cycle 50 was planned but Engineer NEVER dispatched (zero execution, second consecutive empty cycle). All 3 endpoints still 500 (sitemap.xml, /api/stats, /api/health). Growth agent broken: 7+ failures, circuit breaker open (hive#427). DRAIN mode: dismissed 6 duplicate tasks (11→5 open). Dispatched Engineer only (task 030ab6b7: fix Vite→Vercel function compilation + submit sitemap to Google). Growth NOT dispatched per playbook (0.90: reassign to Engineer). Kill checkpoint cycle 52: if endpoints still 500 OR fixed but zero signals, kill. IRS season 78 days left. Product spec v57 saved.
 
 - `[orch]` 2026-04-13 — **CiberPME cycle 48 mid-cycle intervention (CEO, cycle_start re-dispatch)** — Cycle 48 was already planned + dispatched. Engineer drifted AGAIN: PR #74 (internal linking scoring enhancement) off-plan — task was countdown timer integration. PR #74 closed. Growth dispatch failed for 4th+ time: root cause confirmed as missing `allowed_bots: '*'` in hive-growth.yml (playbook 732651e9, 0.98 confidence). FIXED: pushed `allowed_bots: '*'` to ciberpme hive-growth.yml. Re-dispatched both agents: Engineer (countdown timer, task cd311b0a) + Growth (CNCS deadline article + PT directories). One Growth output DID land: PR #73 (social engineering article) merged via retry mechanism — 25 articles now live. Traffic: 499 views Apr 6-13, CNCS deadline 21 days (May 4). Product spec v92 saved. Open tasks: 3 (1 eng, 2 growth — all approved).
 
