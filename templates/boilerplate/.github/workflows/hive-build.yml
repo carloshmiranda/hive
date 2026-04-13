@@ -286,11 +286,17 @@ jobs:
             3. Check for existing work:
                - `git branch -r | grep hive/` — existing feature branches
                - `GH_TOKEN="$GH_PAT" gh pr list --state open --json number,title,headRefName`
-            4. Read `ceo_plan.engineering_tasks`. ALSO check `engineering_tasks` from PRODUCT CONTEXT — these are from the company_tasks backlog.
-               If ceo_plan has no engineering_tasks, use the backlog tasks instead. Pick the FIRST uncompleted task.
-               IMPORTANT: Implement ONE task per run. You have limited turns.
-            4b. The task_id is automatically extracted from CEO plan or engineering tasks context and used for status tracking.
-                This closes the task tracking loop so CEO knows what was built and won't re-plan completed tasks.
+            4. ASSIGNED TASK (follow this priority order exactly — do NOT skip ahead):
+               a. Check PAYLOAD first. If PAYLOAD contains task_id and task fields, implement ONLY that task.
+                  Do NOT browse ceo_plan or backlog for alternatives. The PAYLOAD is the assignment.
+               b. If PAYLOAD is empty or lacks task fields: read ceo_plan.engineering_tasks from PRODUCT CONTEXT. Pick the FIRST task.
+               c. If ceo_plan.engineering_tasks is also empty: read engineering_tasks from PRODUCT CONTEXT (backlog). Pick FIRST uncompleted.
+               IMPLEMENT ONE TASK PER RUN. STOP immediately after completing it. Never start a second task.
+            4b. HARD FILE CONSTRAINTS (enforced when files_allowed/files_forbidden are in PAYLOAD):
+                - ONLY modify files matching files_allowed patterns
+                - NEVER touch files matching files_forbidden patterns
+                - If the task requires changes outside files_allowed, create a backlog item explaining the gap and do NOT open a PR.
+                The task_id is forwarded to status tracking so CEO knows what was built and won't re-plan completed tasks.
             5. Read the PRODUCT CONTEXT above. Use it to inform your implementation:
                - Check competitive_analysis for what competitors do (match or beat them)
                - Check the pricing model to build the right tier-gating structure
@@ -309,6 +315,7 @@ jobs:
                `GH_TOKEN="$GH_PAT" gh pr create --title "feat: <task summary>" --body "Cycle <N>, Task <task-id>: <description>"`
             12. If the task has acceptance criteria, verify them before marking done.
             13. Output: { "pr_opened": true, "pr_number": N, "task_id": "<task_id>", "company": "${{ github.event.inputs.company_slug }}" }
+                STOP. Do NOT implement additional tasks in this run, even if you see other tasks in the context.
 
             ## ops_escalation — Fix errors
             1. Run PRE-FLIGHT stack detection
