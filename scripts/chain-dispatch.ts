@@ -207,6 +207,29 @@ function checkSignal(
   return false;
 }
 
+/**
+ * Extract the first engineering task from CEO output JSON candidates.
+ * Returns null if no engineering_tasks array is found.
+ */
+function extractFirstEngineeringTask(
+  result: string
+): Record<string, unknown> | null {
+  for (const candidate of extractAllCandidates(result)) {
+    // Direct: { engineering_tasks: [...] }
+    const direct = candidate["engineering_tasks"] as unknown[] | undefined;
+    if (Array.isArray(direct) && direct.length > 0) {
+      return direct[0] as Record<string, unknown>;
+    }
+    // Nested: { plan: { engineering_tasks: [...] } }
+    const plan = candidate["plan"] as Record<string, unknown> | undefined;
+    const nested = plan?.["engineering_tasks"] as unknown[] | undefined;
+    if (Array.isArray(nested) && nested.length > 0) {
+      return nested[0] as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
 // ─── Company extraction ──────────────────────────────────────────────────────
 
 function extractCompany(
@@ -285,7 +308,8 @@ async function dispatchToCompanyRepo(
   traceId: string,
   ghToken: string,
   hiveUrl: string,
-  cronSecret: string
+  cronSecret: string,
+  taskPayload?: Record<string, unknown>
 ): Promise<void> {
   if (githubRepo) {
     const inputs: Record<string, string> = {
@@ -293,6 +317,9 @@ async function dispatchToCompanyRepo(
       trigger: "ceo_plan",
       task_summary: summary,
     };
+    if (taskPayload) {
+      inputs.payload = JSON.stringify(taskPayload);
+    }
     const { status } = await post(
       `https://api.github.com/repos/${githubRepo}/actions/workflows/${workflow}/dispatches`,
       {
@@ -407,15 +434,30 @@ async function main() {
 
     // Chain to Engineer → company repo hive-build.yml (fallback: Hive feature_request)
     if (!skipEngineer) {
+      // Extract first engineering task from CEO output to pass as binding context.
+      // This prevents the engineer from browsing the backlog and implementing off-plan tasks.
+      const task = extractFirstEngineeringTask(result);
+      const taskPayload = task
+        ? {
+            task_id: task["id"],
+            task: task["task"],
+            description: task["task"],
+            files_allowed: task["files_allowed"],
+            files_forbidden: task["files_forbidden"],
+            acceptance_criteria: task["acceptance_criteria"],
+            complexity: task["complexity"],
+          }
+        : undefined;
       await dispatchToCompanyRepo(
         "hive-build.yml",
-        `Feature build for ${company}`,
+        task ? String(task["task"] ?? `Feature build for ${company}`) : `Feature build for ${company}`,
         company,
         githubRepo,
         traceId,
         ghToken,
         hiveUrl,
-        cronSecret
+        cronSecret,
+        taskPayload
       );
       if (!githubRepo) {
         await dispatchGithub(repo, "feature_request", { source: "ceo", ...basePayload }, ghToken);
