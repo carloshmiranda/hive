@@ -13,7 +13,7 @@
   - VerdeDesk — status: mvp, 50 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health broken (FUNCTION_INVOCATION_FAILED), IRS season open until June 30, kill checkpoint cycle 52, Growth agent max_turns escalation hive#427
   - Senhorio — status: mvp, 49 cycles, zero traffic, ZERO indexed pages (confirmed April 13), kill checkpoint passed CONDITIONAL to April 30 hard kill, GSC + community distribution dispatched, custom domain escalation senhorio#109, Carlos non-responsive
   - Flolio — status: mvp, 46 cycles, last CEO score 4/10, site HTTP 429 (Vercel Attack Challenge Mode), Carlos rejected kill 3x, PR #144 open (Playwright fix), global market
-  - CiberPME — status: mvp, 47 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 16+ articles live, 478 views/wk organic, internal linking shipped (PR #72), GSC blocked, CNCS May 4 deadline 22 days
+  - CiberPME — status: mvp, 48 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 25 articles live, ~500 views/wk organic, internal linking shipped (PR #72), Growth workflow fixed (allowed_bots), GSC blocked, CNCS May 4 deadline 21 days
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-13 — **CiberPME cycle 48 mid-cycle intervention (CEO, cycle_start re-dispatch)** — Cycle 48 was already planned + dispatched. Engineer drifted AGAIN: PR #74 (internal linking scoring enhancement) off-plan — task was countdown timer integration. PR #74 closed. Growth dispatch failed for 4th+ time: root cause confirmed as missing `allowed_bots: '*'` in hive-growth.yml (playbook 732651e9, 0.98 confidence). FIXED: pushed `allowed_bots: '*'` to ciberpme hive-growth.yml. Re-dispatched both agents: Engineer (countdown timer, task cd311b0a) + Growth (CNCS deadline article + PT directories). One Growth output DID land: PR #73 (social engineering article) merged via retry mechanism — 25 articles now live. Traffic: 499 views Apr 6-13, CNCS deadline 21 days (May 4). Product spec v92 saved. Open tasks: 3 (1 eng, 2 growth — all approved).
 
 - `[orch]` 2026-04-13 — **Senhorio cycle 49 planned (CEO, cycle_start, scout_research trigger) — April 15 kill checkpoint: CONDITIONAL CONTINUE to April 30** — Processed visibility snapshot: ZERO pages indexed on Google or Bing. Root cause confirmed: .vercel.app deprioritization by Google + no GSC + zero external links. Product is built (16 articles, 4 tools) but completely invisible. Distribution-only cycle: (1) GSC verification dispatched to Engineer (task dc390758), (2) Community distribution dispatched to Growth (task 213f5489) — Reddit r/literaciafinanceira + r/portugal + FB Senhorios de Portugal. Custom domain escalation filed (senhorio#109) — .vercel.app is root cause of zero indexing. Carlos hive#415 expired April 12 with no response. Kill conditions: GSC verified by April 18, community posts by April 20, ANY traffic by April 30 or KILL (no further extensions). Product spec v79 saved. IRS season 78 days remaining.
 
