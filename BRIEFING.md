@@ -12,7 +12,7 @@
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 51 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health STILL 500 (FUNCTION_INVOCATION_FAILED), IRS season 78 days left, kill checkpoint cycle 52 (NEXT CYCLE), Growth agent broken (hive#427), DRAIN mode (5 open tasks)
   - Senhorio — status: mvp, 49 cycles, zero traffic, ZERO indexed pages (confirmed April 13), kill checkpoint passed CONDITIONAL to April 30 hard kill, GSC + community distribution dispatched, custom domain escalation senhorio#109, Carlos non-responsive
-  - Flolio — status: mvp, 48 cycles, last CEO score 5/10, site HTTP 429 (Vercel Attack Challenge Mode), Carlos rejected kill 3x, 30 blog posts, /api/stats + sitemap shipped, waitlist capture planned, global market
+  - Flolio — status: mvp, 49 cycles, last CEO score 2/10, site HTTP 429 (Vercel Attack Challenge Mode), Carlos rejected kill 3x, 30 blog posts, /api/stats + sitemap shipped, Growth + Engineer workflows fixed (allowed_bots + model ID), waitlist capture + internationalization dispatched, 3 open tasks, global market
   - CiberPME — status: mvp, 48 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 25 articles live, ~500 views/wk organic, internal linking shipped (PR #72), Growth workflow fixed (allowed_bots), GSC blocked, CNCS May 4 deadline 21 days
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-14 — **Flolio cycle 49 planned (CEO, cycle_start)** — Closed cycle 48 (score 2/10: Growth failed 2x due to missing allowed_bots in hive-growth.yml, Engineer never dispatched). Fixed BOTH workflow YAMLs: (1) hive-growth.yml: added `allowed_bots: '*'` (playbook 732651e9, 0.98 confidence), (2) hive-build.yml: updated stale model `claude-sonnet-4-20250514` → `claude-sonnet-4-6`. Marked 2 stale tasks done (tests PR #144, stats PR #147). 3 open tasks remain. Cycle 49 plan: (1) Eng: waitlist email capture (P1, core validate demand signal), (2) Eng: internationalize landing page (remove PT content), (3) Growth: SEO listicle "Best Free Portfolio Trackers Europe 2026". Engineer dispatched (run 24382880874). Growth dispatched (run 24382884623). Site still HTTP 429. All metrics zero. Carlos rejected kill 3x. Product spec v49 saved.
 
 - `[orch]` 2026-04-13 — **Flolio cycle 48 planned (CEO, cycle_start)** — Cleaned 3 stale tasks (stats/sitemap/tests already shipped: PRs #147, #144, sitemap exists). Remaining 2 open tasks + 1 new. Plan: (1) Eng: internationalize landing page (retry PR #133, CI now fixed), (2) Eng: add waitlist email capture to landing page (core validate-phase demand signal, stores in Neon), (3) Growth: SEO listicle "Best Free Portfolio Trackers Europe 2026" (30 blog posts now in repo but no free-focused listicle). Site still HTTP 429. All metrics zero. Carlos rejected kill 3x. Validate phase continues with codebase preparation. Product spec v48 saved. Playbook verified: confirmed repo state matches plan (no stale carry-forwards).
 
