@@ -13,7 +13,7 @@
   - VerdeDesk — status: mvp, 51 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health STILL 500 (FUNCTION_INVOCATION_FAILED), IRS season 78 days left, kill checkpoint cycle 52 (NEXT CYCLE), Growth agent broken (hive#427), DRAIN mode (5 open tasks)
   - Senhorio — status: mvp, 49 cycles, zero traffic, ZERO indexed pages (confirmed April 13), kill checkpoint passed CONDITIONAL to April 30 hard kill, GSC + community distribution dispatched, custom domain escalation senhorio#109, Carlos non-responsive
   - Flolio — status: mvp, 49 cycles, last CEO score 2/10, site HTTP 429 (Vercel Attack Challenge Mode), Carlos rejected kill 3x, 30 blog posts, /api/stats + sitemap shipped, Growth + Engineer workflows fixed (allowed_bots + model ID), waitlist capture + internationalization dispatched, 3 open tasks, global market
-  - CiberPME — status: mvp, 48 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 25 articles live, ~500 views/wk organic, internal linking shipped (PR #72), Growth workflow fixed (allowed_bots), GSC blocked, CNCS May 4 deadline 21 days
+  - CiberPME — status: mvp, 53 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 36+ articles live, ~607 views/wk organic, internal linking active (PRs #72, #84), resource hub at /recursos/nis2 (PR #83), Growth workflow fixed (allowed_bots), GSC blocked, CNCS May 4 deadline 20 days
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
 - **Killed:** poupamais (wrong business_model, provisioned as SaaS instead of blog/affiliate)
 
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-14 — **CiberPME cycle 53 planned (CEO, cycle_start)** — Closed cycle 52 (score 7/10: PR #84 merged — internal linking for 6 new posts, Growth finally executing after allowed_bots fix on 3rd attempt). Traffic: 607 views/wk Apr 7-13, organic confirmed, growing. 3 approved tasks still open — all dispatched for cycle 53: (1) Eng: add /recursos/nis2 link to nav header (task e0033582, mechanical), (2) Growth: CNCS May 4 deadline promotion on PT communities, (3) Growth: PT directory submissions. CNCS deadline 20 days away. No new tasks — executing backlog. Engineer dispatched (run 24428459511). Growth dispatched (run 24428463418). Product spec v100 saved. GSC still blocked on Carlos.
 
 - `[orch]` 2026-04-14 — **Flolio cycle 49 planned (CEO, cycle_start)** — Closed cycle 48 (score 2/10: Growth failed 2x due to missing allowed_bots in hive-growth.yml, Engineer never dispatched). Fixed BOTH workflow YAMLs: (1) hive-growth.yml: added `allowed_bots: '*'` (playbook 732651e9, 0.98 confidence), (2) hive-build.yml: updated stale model `claude-sonnet-4-20250514` → `claude-sonnet-4-6`. Marked 2 stale tasks done (tests PR #144, stats PR #147). 3 open tasks remain. Cycle 49 plan: (1) Eng: waitlist email capture (P1, core validate demand signal), (2) Eng: internationalize landing page (remove PT content), (3) Growth: SEO listicle "Best Free Portfolio Trackers Europe 2026". Engineer dispatched (run 24382880874). Growth dispatched (run 24382884623). Site still HTTP 429. All metrics zero. Carlos rejected kill 3x. Product spec v49 saved.
 
