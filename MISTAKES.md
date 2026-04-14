@@ -15,6 +15,22 @@
 
 ---
 
+### 2026-04-14 Growth agent hit max-turns (30) limit across all company repos — systemic failure
+**What happened:** Growth workflow failed 3× each for flolio, senhorio, ciberpme, and verdedesk over 48h. Each run cost ~$1.15 and timed out after ~7 min with `error_max_turns`. Total: 10+ failed runs burning ~$12 in budget.
+**Root cause:** Company repo `hive-growth.yml` workflows had `--max-turns 30` in `claude_args`. Growth's task scope (read context → explore codebase → write 3 blog posts → build → push) regularly exceeds 30 turns. The boilerplate template in the Hive repo also had `--max-turns 30` (inherited when companies were first provisioned). When the boilerplate was migrated from Gemini CLI to `claude-code-action@v1` on 2026-04-04, the max-turns value was copied from the old template without adjusting for the scope of the task.
+**Fix applied:** Updated `--max-turns` from 30 → 45 in hive-growth.yml for all 4 active company repos (flolio, senhorio, ciberpme, verdedesk). Also fixed missing `allowed_bots: '*'` in senhorio + ciberpme that caused a secondary "non-human actor" failure for bot-triggered runs.
+**Prevention:** Any Claude Code agent workflow that does multi-step work (read context + explore codebase + write files + build + push) needs `--max-turns 45` minimum. The Growth workflow is scoped to "max 3 content pieces" but still typically uses 35–45 turns due to codebase exploration + build. When provisioning a new company, always verify `--max-turns` is ≥45 in hive-growth.yml. Any workflow triggered by a bot (hive-orchestrator, GitHub Actions) must set `allowed_bots: '*'` or list the bot explicitly.
+**Affects:** companies
+
+### 2026-04-14 Boilerplate hive-growth.yml still uses Gemini CLI while company repos use Claude
+**What happened:** The boilerplate template at `templates/boilerplate/.github/workflows/hive-growth.yml` still uses `gemini -p --yolo` and Gemini API keys, while all 4 active company repos were migrated to `anthropics/claude-code-action@v1` on 2026-04-04. New companies provisioned after April 4 would inherit the Gemini template — which may or may not work depending on whether Gemini tokens are configured.
+**Root cause:** The 2026-04-04 migration that updated company repos `"fix: replace Gemini CLI with Claude"` only modified existing company repo files directly. The Hive repo boilerplate template was never updated in sync.
+**Fix applied:** Not fixed yet — backlog item created. Boilerplate update requires replacing the entire Gemini CLI block with the claude-code-action@v1 approach including OIDC token fetch + proper `--max-turns 45`.
+**Prevention:** When modifying a workflow pattern that is sourced from a boilerplate template, ALWAYS update the boilerplate in the same PR. Use `grep -r "hive-growth.yml" templates/` to find the canonical source before changing company-specific files.
+**Affects:** hive
+
+---
+
 ### 2026-04-12 Growth agent never dispatched despite dispatch_growth=true in CEO plan
 **What happened:** CEO cycle 46 for ciberpme planned 2 growth_tasks and set `dispatch_signals.dispatch_growth = true` in the cycle DB. But Growth was never dispatched. Same pattern confirmed across multiple previous cycles where CEO wrote growth_tasks to DB but no growth agent_action was ever logged.
 **Root cause:** CEO outputs TWO JSON blocks in sequence: (1) a full plan in ceo.md format `{"plan": {"dispatch_signals": {"dispatch_growth": true, ...}}}` and (2) a simpler summary in hive-ceo.yml format `{"company": "slug", "needs_feature": true, ...}`. `extractJSONFromText` in `chain-dispatch.ts` returns the LAST JSON candidate — always the simple summary — which has no `dispatch_growth` key. `checkSignal` then returns false and Growth is silently skipped. No error is logged; the CEO believes it dispatched, the chain-dispatch silently no-ops.
