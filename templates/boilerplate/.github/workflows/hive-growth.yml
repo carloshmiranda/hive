@@ -45,9 +45,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Gemini CLI
-        run: npm install -g @google/gemini-cli
-
       - name: Get tokens via OIDC
         id: auth
         run: |
@@ -58,12 +55,15 @@ jobs:
           RESPONSE=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"token_type":"gemini"}')
-          GEMINI_KEY=$(echo "$RESPONSE" | jq -r '.data.token // empty')
-          if [ -n "$GEMINI_KEY" ]; then
-            echo "::add-mask::$GEMINI_KEY"
-            echo "gemini_key=$GEMINI_KEY" >> $GITHUB_OUTPUT
+            -d '{"token_type":"claude"}')
+
+          CLAUDE_TOKEN=$(echo "$RESPONSE" | jq -r '.data.token // empty')
+          if [ -z "$CLAUDE_TOKEN" ]; then
+            echo "Failed to get Claude token: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+            exit 1
           fi
+          echo "::add-mask::$CLAUDE_TOKEN"
+          echo "claude_token=$CLAUDE_TOKEN" >> $GITHUB_OUTPUT
 
           RESPONSE2=$(curl -s -X POST "https://hive-phi.vercel.app/api/agents/token" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
@@ -83,69 +83,68 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" \
             | jq -r '.value')
 
-          curl -s "https://hive-phi.vercel.app/api/agents/context?agent=growth&company_slug=$SLUG" \
+          CTX=$(curl -s "https://hive-phi.vercel.app/api/agents/context?agent=growth&company_slug=$SLUG" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
-            | jq -r '.data // {}' > /tmp/growth-context.json
+            | jq -r '.data // {}' | head -c 12000)
+
+          echo "growth_ctx<<CTXEOF" >> $GITHUB_OUTPUT
+          echo "$CTX" >> $GITHUB_OUTPUT
+          echo "CTXEOF" >> $GITHUB_OUTPUT
 
       - name: Run Growth agent
         id: agent
-        env:
-          GEMINI_API_KEY: ${{ steps.auth.outputs.gemini_key }}
-        run: |
-          GROWTH_CTX=""
-          if [ -f /tmp/growth-context.json ]; then
-            GROWTH_CTX=$(cat /tmp/growth-context.json | head -c 12000)
-          fi
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: '*'
+          claude_code_oauth_token: ${{ steps.auth.outputs.claude_token }}
+          claude_args: "--model claude-sonnet-4-6 --max-turns 45"
+          prompt: |
+            You are the Growth agent of Hive. You drive awareness, traffic, and conversions.
+            You are in the company repo. You can create and edit files directly (blog posts, SEO pages, meta tags, email sequences).
 
-          gemini -p --yolo \
-            -m gemini-2.5-flash \
-            "You are the Growth agent of Hive. You drive awareness, traffic, and conversions.
-          You are in the company repo. You can create and edit files directly (blog posts, SEO pages, meta tags, email sequences).
+            TRIGGER: ${{ github.event.inputs.trigger }}
+            COMPANY: ${{ github.event.inputs.company_slug }}
 
-          TRIGGER: ${{ github.event.inputs.trigger }}
-          COMPANY: ${{ github.event.inputs.company_slug }}
+            ## CONTEXT
+            ${{ steps.context.outputs.growth_ctx }}
 
-          ## CONTEXT
-          ${GROWTH_CTX}
+            ## TASK TRACKING
+            To update task status, get an OIDC token and call the Hive API:
+            ```bash
+            OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app" | jq -r '.value')
+            curl -s -X PATCH "https://hive-phi.vercel.app/api/agents/tasks/<task_id>" -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" -d '{"status":"in_progress"}'
+            ```
+            Use status "in_progress" when starting a task, "done" when finished.
 
-          ## TASK TRACKING
-          To update task status, get an OIDC token and call the Hive API:
-          \`\`\`bash
-          OIDC=\$(curl -s -H \"Authorization: bearer \$ACTIONS_ID_TOKEN_REQUEST_TOKEN\" \"\${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://hive-phi.vercel.app\" | jq -r '.value')
-          curl -s -X PATCH \"https://hive-phi.vercel.app/api/agents/tasks/<task_id>\" -H \"Authorization: Bearer \$OIDC\" -H \"Content-Type: application/json\" -d '{\"status\":\"in_progress\"}'
-          \`\`\`
-          Use status \"in_progress\" when starting a task, \"done\" when finished.
+            ## YOUR PROCESS
+            1. Read the CEO plan from context. Identify your growth_tasks.
+               ALSO check growth_tasks from CONTEXT — these are from the company_tasks backlog.
+               If CEO plan has no growth_tasks, use the backlog tasks instead.
+               If a task has an id, mark it in_progress before starting (see TASK TRACKING above).
+            2. Read research reports (market_research, competitive_analysis, seo_keywords, content_performance).
+            3. If CONTENT PERFORMANCE data exists with refresh_items, prioritize refreshing declining content BEFORE creating new content.
+            4. Read the codebase to understand the current site structure (pages, blog, meta tags).
+            5. Execute growth tasks:
+               - **Blog posts**: Create MDX/TSX files in the blog directory. Write real, useful content — no AI slop.
+               - **SEO pages**: Create comparison pages (/vs/competitor), landing pages, or feature pages.
+               - **Meta optimization**: Update page titles, descriptions, Open Graph tags for low-CTR pages.
+               - **Email sequences**: Write to the email_sequences table via SQL if the capability exists.
+               - **Sitemap/robots**: Update if needed.
+            6. After creating content, build to verify: npx next build
+            7. Commit and push:
+               git add -A && git commit -m 'content: <summary>'
+               git push origin main
+            8. Mark completed tasks as done (see TASK TRACKING above).
 
-          ## YOUR PROCESS
-          1. Read the CEO plan from context. Identify your growth_tasks.
-             ALSO check growth_tasks from CONTEXT — these are from the company_tasks backlog.
-             If CEO plan has no growth_tasks, use the backlog tasks instead.
-             If a task has an id, mark it in_progress before starting (see TASK TRACKING above).
-          2. Read research reports (market_research, competitive_analysis, seo_keywords, content_performance).
-          3. If CONTENT PERFORMANCE data exists with refresh_items, prioritize refreshing declining content BEFORE creating new content.
-          4. Read the codebase to understand the current site structure (pages, blog, meta tags).
-          5. Execute growth tasks:
-             - **Blog posts**: Create MDX/TSX files in the blog directory. Write real, useful content — no AI slop.
-             - **SEO pages**: Create comparison pages (/vs/competitor), landing pages, or feature pages.
-             - **Meta optimization**: Update page titles, descriptions, Open Graph tags for low-CTR pages.
-             - **Email sequences**: Write to the email_sequences table via SQL if the capability exists.
-             - **Sitemap/robots**: Update if needed.
-          6. After creating content, build to verify: npx next build
-          7. Commit and push:
-             git add -A && git commit -m 'content: <summary>'
-             git push origin main
-          8. Mark completed tasks as done (see TASK TRACKING above).
-
-          ## RULES
-          - Write ALL content in the language specified by the context API's language_rule field. Check context.language_rule before writing anything. Do NOT mix languages.
-          - Every blog post needs: keyword in title, H1, first paragraph, meta description <155 chars.
-          - No fluff. Every piece of content solves a specific problem.
-          - If the company has no blog directory, create one with a simple layout.
-          - Max 3 content pieces per run — quality over quantity.
-          - Push directly to main (content doesn't need PR review).
-          - Always run npx next build before pushing to catch errors.
-          - If you find SEO issues, missing pages, or broken links you can't fix now, create a backlog item via the Hive API (`POST /api/agents/backlog` with OIDC auth, `{"title":"...","description":"...","priority":"P2","source":"growth"}`).
-          " 2>&1 | tee /tmp/gemini-output.txt
+            ## RULES
+            - Write ALL content in the language specified by the context API's language_rule field. Check context.language_rule before writing anything. Do NOT mix languages.
+            - Every blog post needs: keyword in title, H1, first paragraph, meta description <155 chars.
+            - No fluff. Every piece of content solves a specific problem.
+            - If the company has no blog directory, create one with a simple layout.
+            - Max 3 content pieces per run — quality over quantity.
+            - Push directly to main (content doesn't need PR review).
+            - Always run npx next build before pushing to catch errors.
+            - If you find SEO issues, missing pages, or broken links you can't fix now, create a backlog item via the Hive API (`POST /api/agents/backlog` with OIDC auth, `{"title":"...","description":"...","priority":"P2","source":"growth"}`).
 
       - name: Log result to Hive
         if: always()
@@ -161,21 +160,11 @@ jobs:
           PAYLOAD='${{ github.event.inputs.payload }}'
           TASK_ID=$(echo "$PAYLOAD" | jq -r '.task_id // .id // empty' 2>/dev/null || echo "")
 
-          # Extract produced content URLs from gemini output (best-effort; non-Hive URLs only)
-          PRODUCED_URLS="[]"
-          if [ -f /tmp/gemini-output.txt ]; then
-            PRODUCED_URLS=$(grep -oP 'https?://[^\s"<>]+' /tmp/gemini-output.txt \
-              | grep -v 'hive-phi\.vercel\.app\|github\.com\|googleapis\|gemini\|vercel\.app' \
-              | sort -u | head -10 \
-              | jq -R . | jq -sc '.' 2>/dev/null || echo "[]")
-          fi
-
           # Build metadata JSON with task linkage for tracking
           METADATA=$(jq -n \
             --arg task_id "$TASK_ID" \
             --arg trigger "$TRIGGER" \
-            --argjson produced_urls "$PRODUCED_URLS" \
-            '{task_id: $task_id, trigger: $trigger, produced_urls: $produced_urls}')
+            '{task_id: $task_id, trigger: $trigger}')
 
           curl -s -X POST "https://hive-phi.vercel.app/api/agents/log" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
