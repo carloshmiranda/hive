@@ -11,7 +11,7 @@
 - **Production URL:** https://hive-phi.vercel.app
 - **Active companies:** 4
   - VerdeDesk — status: mvp, 51 cycles, last CEO score 3/10, zero traffic, 14+ SEO guides live, sitemap/stats/health STILL 500 (FUNCTION_INVOCATION_FAILED), IRS season 78 days left, kill checkpoint cycle 52 (NEXT CYCLE), Growth agent broken (hive#427), DRAIN mode (5 open tasks)
-  - Senhorio — status: mvp, 53 cycles, zero traffic, ZERO indexed pages, kill deadline April 30 (16 days), GSC blocked on Carlos (4 escalations unanswered: senhorio#109/110/115 + hive#453), Growth dispatched for directory submissions, stats+health endpoints working, site HTTP 200
+  - Senhorio — status: mvp, 53 cycles, zero traffic, ZERO indexed pages, kill deadline April 30 (15 days), ALL KILL TRIGGERS ACTIVE, Carlos deadline April 20 (5 days to respond), GSC blocked on Carlos (4 escalations unanswered: senhorio#109/110/115 + hive#453), Growth re-dispatched for directory submissions, stats+health working, site HTTP 200
   - Flolio — status: mvp, 49 cycles, last CEO score 2/10, site HTTP 429 (Vercel Attack Challenge Mode), Carlos rejected kill 3x, 30 blog posts, /api/stats + sitemap shipped, Growth + Engineer workflows fixed (allowed_bots + model ID), waitlist capture + internationalization dispatched, 3 open tasks, global market
   - CiberPME — status: mvp, 53 cycles, blog, Portuguese market, cybersecurity NIS2 for SMBs, 36+ articles live, ~607 views/wk organic, internal linking active (PRs #72, #84), resource hub at /recursos/nis2 (PR #83), Growth workflow fixed (allowed_bots), GSC blocked, CNCS May 4 deadline 20 days
 - **Pipeline:** 15 idea-status companies (Scout proposals accumulating, pending approval)
@@ -98,6 +98,8 @@
 ## Recent Context
 
 > Most recent first. Each entry has a source tag: `[chat]` = Claude Chat brainstorming, `[code]` = Claude Code session, `[orch]` = orchestrator, `[carlos]` = manual.
+
+- `[orch]` 2026-04-15 — **Senhorio cycle 53 updated (CEO, cycle_start, duplicate dispatch) — APRIL 15 CHECKPOINT: ALL KILL TRIGGERS ACTIVE** — Duplicate cycle_start (hive#418 known issue). Cycle 53 already running. April 15 checkpoint assessment: 53 cycles, ZERO traffic, ZERO indexed pages, ZERO signups. ALL kill evaluation triggers active (zero_traffic_90d, zero_signups, consecutive_low_scores, 6+wk negative growth, zero indexed pages). Product feature-complete for validate phase. Problem is EXCLUSIVELY distribution: GSC unverified (Carlos 4 escalations unanswered), .vercel.app deprioritized by Google, zero external backlinks. Kill recommendation: NOT YET — giving Carlos until April 20 to verify GSC or register custom domain. If no action by April 20, kill_recommendation flips to true. April 30 HARD KILL stands. Growth re-dispatched for directory submissions (only autonomous path). No engineering tasks. Product spec v85 saved.
 
 - `[orch]` 2026-04-15 — **CiberPME cycle 53 re-planned (CEO, cycle_start)** — PR #85 merged (nav link for resource hub — cycle 52 carry-over completed). PR #86 opened off-plan by sentinel retry (IndexNow automation — needs review). Updated cycle 53 plan: (1) Eng: BreadcrumbList JSON-LD structured data on blog posts (last SEO scaffolding gap), (2) Growth: execute 2 approved tasks — CNCS May 4 deadline promotion on PT communities + PT directory submissions. Both dispatched. 36+ articles live. Traffic 607 views/wk organic, growing. Validation score 24 (one point from seo_growth at 25). CNCS deadline 19 days (May 4). GSC still blocked on Carlos. Product spec v101 saved. 3 open tasks (1 eng, 2 growth — all approved).
 
