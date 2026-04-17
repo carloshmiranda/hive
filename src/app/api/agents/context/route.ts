@@ -343,7 +343,7 @@ export async function GET(req: NextRequest) {
 
   // Company-level agents
   const [company] = await sql`
-    SELECT id, name, slug, description, capabilities, company_type, framework, market, content_language, created_at
+    SELECT id, name, slug, description, capabilities, company_type, market, content_language, created_at
     FROM companies WHERE slug = ${slug} LIMIT 1
   `.catch(() => []);
 
@@ -491,7 +491,7 @@ async function buildContext(sql: any, company: any) {
   return {
     description: company.description,
     business_type: businessType,
-    framework: company.framework || "nextjs",
+    framework: company.capabilities?.repo?.framework || "nextjs",
     content_language: company.content_language || "en",
     market: company.market || "global",
     language_rule: `ALL user-facing content MUST be in ${(company.content_language || "en") === "pt" ? "Portuguese" : "English"}. This includes: page text, meta tags, alt text, error messages, button labels, headings. Do NOT mix languages.`,
@@ -615,7 +615,7 @@ async function growthContext(sql: any, company: any) {
       slug: company.slug,
       description: company.description,
       capabilities: company.capabilities,
-      framework: company.framework || "nextjs",
+      framework: company.capabilities?.repo?.framework || "nextjs",
       content_language: company.content_language || "en",
       market: company.market || "global",
     },
@@ -887,7 +887,7 @@ async function ceoContext(sql: any, company: any, taskDescription?: string) {
       description: company.description,
       capabilities: company.capabilities,
       business_type: businessType,
-      framework: company.framework || "nextjs",
+      framework: company.capabilities?.repo?.framework || "nextjs",
       content_language: company.content_language || "en",
       market: company.market || "global",
     },
